@@ -158,9 +158,9 @@ Direct Gradle tasks:
 
 ```bash
 cd apps/android
-./gradlew :app:ktlintCheck :benchmark:ktlintCheck
-./gradlew :app:ktlintFormat :benchmark:ktlintFormat
-./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug
+./gradlew :app:ktlintCheck :benchmark:ktlintCheck :wear:ktlintCheck :wear-shared:ktlintCheck
+./gradlew :app:ktlintFormat :benchmark:ktlintFormat :wear:ktlintFormat :wear-shared:ktlintFormat
+./gradlew :app:lintPlayDebug :app:lintThirdPartyDebug :wear:lintDebug :wear-shared:lintDebug
 ```
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.

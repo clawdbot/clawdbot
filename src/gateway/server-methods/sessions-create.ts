@@ -10,14 +10,20 @@ import {
   validateSessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { insideGitCheckout } from "../../agents/worktrees/git.js";
+import { slugifyWorktreeTitle } from "../../agents/worktrees/name.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
+import { generateDashboardSessionTitle } from "../dashboard-session-title.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import {
   buildDashboardSessionKey,
@@ -26,7 +32,8 @@ import {
 } from "../session-create-service.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import { resolveSessionPatchModelSelection } from "../sessions-patch.js";
 import { chatHandlers } from "./chat.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -34,6 +41,7 @@ import {
   resolveSessionCreateInitialTurn,
   shouldAttachPendingMessageSeq,
 } from "./session-create-initial-turn.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -79,7 +87,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const catalogTarget =
       catalogId && catalogAgentId
-        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId)
+        ? resolveSessionCatalogCreateTarget(catalogId, catalogAgentId, cfg)
         : undefined;
     if (catalogTarget && !catalogTarget.ok) {
       respond(
@@ -154,6 +162,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionCwd = requestedExecNode ? undefined : requestedCwd;
     let sessionSourceRoot: string | undefined;
     let provisionedSessionWorktree = false;
+    let generatedDisplayName: string | undefined;
     if (requestedCwd && !requestedExecNode && p.worktree !== true) {
       const targetAgentId = normalizeAgentId(
         sessionAgentId ??
@@ -211,7 +220,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadSessionEntry(
+        const parent = loadSessionEntryReadOnly(
           parentSessionKey,
           requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
         );
@@ -284,11 +293,52 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionWorktree = existing;
         } else {
           const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
+          if (!requestedWorktreeName && !normalizeOptionalString(p.label) && initialMessage) {
+            try {
+              const requestedTitleModel =
+                catalogTarget?.target.model ?? normalizeOptionalString(p.model);
+              let titleModelEntry:
+                | Pick<SessionEntry, "authProfileOverride" | "modelOverride" | "providerOverride">
+                | undefined;
+              if (requestedTitleModel) {
+                const defaultModel = resolveDefaultModelForAgent({
+                  cfg,
+                  agentId: target.agentId,
+                });
+                const selection = resolveSessionPatchModelSelection({
+                  cfg,
+                  catalog: await context.loadGatewayModelCatalog({ agentId: target.agentId }),
+                  raw: requestedTitleModel,
+                  defaultProvider: defaultModel.provider,
+                  defaultModel: defaultModel.model,
+                });
+                if (selection.ok) {
+                  titleModelEntry = {
+                    providerOverride: selection.provider,
+                    modelOverride: selection.model,
+                    ...(selection.profile ? { authProfileOverride: selection.profile } : {}),
+                  };
+                }
+              }
+              generatedDisplayName =
+                (await generateDashboardSessionTitle({
+                  cfg,
+                  agentId: target.agentId,
+                  entry: titleModelEntry,
+                  userMessage: stripInlineDirectiveTagsForDisplay(initialMessage).text,
+                })) ?? undefined;
+            } catch (error) {
+              sessionLog.warn(`worktree title generation failed: ${formatErrorMessage(error)}`);
+            }
+          }
           sessionWorktree = await managedWorktrees.create({
             repoRoot: workspace,
             ownerKind: "session",
             ownerId: target.canonicalKey,
             name: requestedWorktreeName,
+            suggestedName: slugifyWorktreeTitle(
+              normalizeOptionalString(p.label) ?? generatedDisplayName ?? "",
+            ),
             baseRef: requestedWorktreeBaseRef,
             // Checkout hooks and .openclaw/worktree-setup.sh run repo code; keep them
             // admin-only so this write-scoped path cannot execute gated repo scripts.
@@ -326,15 +376,25 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ADMIN_SCOPE,
       clientScopes,
     ).allowed;
+    const modelCatalogAgentId = normalizeAgentId(
+      sessionAgentId ??
+        parseAgentSessionKey(sessionKey ?? "")?.agentId ??
+        resolveDefaultAgentId(cfg),
+    );
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
       agentId: sessionAgentId,
       label: p.label,
+      generatedDisplayName,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
+      incognito: p.incognito,
+      ...(client?.connect ? { requestingOperatorScopes: clientScopes } : {}),
+      visibility: p.visibility,
       allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
+      spawnDepth: p.spawnDepth,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {
@@ -353,7 +413,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       emitCommandHooks: p.emitCommandHooks,
       resetMainWhenUnspecified: !hasInitialTurn,
       commandSource: "webchat",
-      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+      creation: resolveOperatorSessionCreation(client, { allowTrustedHint: true }),
+      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
+      loadGatewayModelCatalog: () =>
+        context.loadGatewayModelCatalog({ agentId: modelCatalogAgentId }),
       afterCreate: hasInitialTurn
         ? async ({ key, agentId, entry, storePath }) => {
             messageSeq =
@@ -429,6 +492,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           branch: sessionWorktree.branch,
         }
       : undefined;
+    const responseEntry = sessionEntryForkedFromParent(created.entry)
+      ? { ...created.entry, forkedFromParent: true as const }
+      : created.entry;
     if (created.resetExisting) {
       respond(
         true,
@@ -436,7 +502,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           ok: true,
           key: created.key,
           sessionId: created.entry.sessionId,
-          entry: created.entry,
+          entry: responseEntry,
           resolved: created.resolved,
           runStarted: false,
           ...(createdWorktree ? { worktree: createdWorktree } : {}),
@@ -464,7 +530,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         ok: true,
         key: created.key,
         sessionId: created.entry.sessionId,
-        entry: created.entry,
+        entry: responseEntry,
         runStarted,
         ...(runPayload ? runPayload : {}),
         ...(runStarted && typeof messageSeq === "number" ? { messageSeq } : {}),

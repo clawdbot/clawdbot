@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
 import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
@@ -75,15 +76,22 @@ function createApprovalText(id = "approval-123"): string {
 }
 
 describe("sendMessageIMessage receipts", () => {
+  let openClawState: OpenClawTestState;
+
   beforeEach(async () => {
+    openClawState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-imessage-send-",
+    });
     await loadFreshSendModule();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearIMessageApprovalReactionTargetsForTest();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    await openClawState.cleanup();
   });
 
   it("attaches a text receipt for native send ids", async () => {
@@ -286,11 +294,15 @@ describe("sendMessageIMessage receipts", () => {
       service: "SMS",
     });
 
-    await sendMessageIMessage("+1 (555) 000-4567", "hello", {
+    const result = await sendMessageIMessage("+1 (555) 000-4567", "hello", {
       config: IMESSAGE_TEST_CFG,
       client,
     });
 
+    expect(result).toMatchObject({
+      service: "sms",
+      chatGuid: "SMS;-;+15550004567",
+    });
     expect(
       findLatestIMessageEntryForChat({
         accountId: "default",
@@ -305,6 +317,23 @@ describe("sendMessageIMessage receipts", () => {
         isFromMe: true,
       }),
     );
+  });
+
+  it("infers the confirmed service from the provider chat GUID", async () => {
+    const client = createClient({
+      guid: "p:0/imsg-canonical-guid-only",
+      chat_guid: "SMS;-;+15550004567",
+    });
+
+    await expect(
+      sendMessageIMessage("+1 (555) 000-4567", "hello", {
+        config: IMESSAGE_TEST_CFG,
+        client,
+      }),
+    ).resolves.toMatchObject({
+      service: "sms",
+      chatGuid: "SMS;-;+15550004567",
+    });
   });
 
   it("caches the provider-resolved GUID alongside an outbound chat ID", async () => {
@@ -905,8 +934,6 @@ describe("sendMessageIMessage receipts", () => {
   });
 
   it("does not persist caption text when the caption follow-up send fails", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imessage-send-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const client = createRejectingClient(new Error("caption failed"));
     const runCliJson = vi.fn().mockResolvedValueOnce({ messageId: "p:0/dm-media-guid" });
 

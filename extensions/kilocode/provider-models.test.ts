@@ -311,6 +311,28 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
   });
 
+  it("excludes image-output models from the chat catalog", async () => {
+    const imageOutputModel = makeGatewayModel({
+      id: "google/gemini-3.1-flash-image",
+      architecture: {
+        input_modalities: ["text", "image"],
+        output_modalities: ["image", "text"],
+      },
+    });
+
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ data: [imageOutputModel, makeGatewayModel()] }));
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      expect(models.some((model) => model.id === "google/gemini-3.1-flash-image")).toBe(false);
+      expect(requireModelById(models, "anthropic/claude-sonnet-4").id).toBe(
+        "anthropic/claude-sonnet-4",
+      );
+    });
+  });
+
   it("keeps a later valid duplicate when an earlier entry is malformed", async () => {
     const malformedAutoModel = makeAutoModel({
       name: "Broken Auto Balanced",

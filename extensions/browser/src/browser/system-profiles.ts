@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import type { OpenClawConfig } from "../config/config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -142,7 +142,7 @@ function snapshotCookieDatabase(source: string): {
   fs.mkdirSync(tmpRoot, { recursive: true });
   const tempDir = fs.mkdtempSync(path.join(tmpRoot, "openclaw-system-cookies-"));
   const databasePath = path.join(tempDir, "Cookies");
-  const sourceDatabase = new DatabaseSync(source, { readOnly: true });
+  const sourceDatabase = openNodeSqliteDatabase(source, { readOnly: true });
   try {
     sourceDatabase.exec("PRAGMA busy_timeout = 5000");
     sourceDatabase.prepare("VACUUM INTO ?").run(databasePath);

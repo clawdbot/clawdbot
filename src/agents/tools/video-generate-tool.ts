@@ -1,8 +1,4 @@
-/**
- * video_generate built-in tool.
- *
- * Validates media references, resolves provider/model capabilities, and schedules video generation.
- */
+/** Runs capability-aware video generation and persistence. */
 import { Type, type TSchema } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -45,6 +41,7 @@ import {
   recordRecentMediaGenerationTaskStartForSession,
 } from "../media-generation-task-status-shared.js";
 import { getCustomProviderApiKey } from "../model-auth.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -65,13 +62,14 @@ import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
   buildTaskRunDetails,
+  createCapabilityProviderRuntimeDeps,
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
   readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
-  resolveMediaToolLocalRoots,
+  resolveMediaToolReferenceAccess,
   resolveRemoteMediaSsrfPolicy,
   resolveSelectedCapabilityProvider,
 } from "./media-tool-shared.js";
@@ -83,7 +81,6 @@ import {
 } from "./model-config.helpers.js";
 import {
   createSandboxBridgeReadFile,
-  resolveSandboxedBridgeMediaPath,
   type AnyAgentTool,
   type SandboxFsBridge,
   type ToolFsPolicy,
@@ -238,7 +235,7 @@ function resolveVideoGenerationModelConfigForTool(params: {
     workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
-    modelConfig: params.cfg?.agents?.defaults?.videoGenerationModel,
+    modelConfig: params.cfg?.agents?.defaults?.mediaModels?.video,
     providers: () => listRuntimeVideoGenerationProviders({ config: params.cfg }),
   });
 }
@@ -250,7 +247,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 }
 
 function hasExplicitVideoGenerationModelConfig(cfg?: OpenClawConfig): boolean {
-  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.videoGenerationModel));
+  return hasToolModelConfig(coerceToolModelConfig(cfg?.agents?.defaults?.mediaModels?.video));
 }
 
 function collectVideoGenerationModelProviderIds(params: {
@@ -314,7 +311,7 @@ function shouldExposeVideoReferenceAudioParams(params: {
   const audioCandidateProviderIds = new Set<string>();
   const explicitProviderIds = collectVideoGenerationModelProviderIds({
     cfg: params.cfg,
-    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.videoGenerationModel),
+    modelConfig: coerceToolModelConfig(params.cfg.agents?.defaults?.mediaModels?.video),
     ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   });
 
@@ -443,11 +440,12 @@ function normalizeReferenceInputs(params: {
 
 function resolveSelectedVideoGenerationProvider(params: {
   config?: OpenClawConfig;
+  providers?: VideoGenerationProvider[];
   videoGenerationModelConfig: ToolModelConfig;
   modelOverride?: string;
 }): VideoGenerationProvider | undefined {
   return resolveSelectedCapabilityProvider({
-    providers: listRuntimeVideoGenerationProviders({ config: params.config }),
+    providers: params.providers ?? listRuntimeVideoGenerationProviders({ config: params.config }),
     modelConfig: params.videoGenerationModelConfig,
     modelOverride: params.modelOverride,
     parseModelRef: parseVideoGenerationModelRef,
@@ -606,27 +604,12 @@ async function loadReferenceAssets(params: {
       continue;
     }
 
-    const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } = isDataUrl
-      ? { resolved: "" }
-      : params.sandboxConfig
-        ? await resolveSandboxedBridgeMediaPath({
-            sandbox: params.sandboxConfig,
-            mediaPath: resolvedInput,
-            inboundFallbackDir: "media/inbound",
-          })
-        : {
-            resolved: resolvedInput.startsWith("file://")
-              ? resolvedInput.slice("file://".length)
-              : resolvedInput,
-          };
-    const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
-    const localRoots = resolveMediaToolLocalRoots(
-      params.workspaceDir,
-      {
-        workspaceOnly: params.sandboxConfig?.workspaceOnly === true,
-      },
-      resolvedPath ? [resolvedPath] : undefined,
-    );
+    const { resolvedPath, localRoots, rewrittenFrom } = await resolveMediaToolReferenceAccess({
+      input: resolvedInput,
+      isDataUrl,
+      workspaceDir: params.workspaceDir,
+      sandbox: params.sandboxConfig,
+    });
     const media = isDataUrl
       ? params.expectedKind === "image"
         ? decodeDataUrl(resolvedInput)
@@ -658,7 +641,7 @@ async function loadReferenceAssets(params: {
         fileName,
       },
       resolvedInput,
-      ...(resolvedPathInfo.rewrittenFrom ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom } : {}),
+      ...(rewrittenFrom ? { rewrittenFrom } : {}),
     });
   }
 
@@ -706,6 +689,7 @@ async function executeVideoGenerationJob(params: {
   providerOptions?: Record<string, unknown>;
   autoProviderFallback?: boolean;
   timeoutMs?: number;
+  providers?: VideoGenerationProvider[];
 }): Promise<ExecutedVideoGeneration> {
   if (params.taskHandle) {
     recordVideoGenerationTaskProgress({
@@ -713,24 +697,27 @@ async function executeVideoGenerationJob(params: {
       progressSummary: "Generating video",
     });
   }
-  const result = await generateVideo({
-    cfg: params.effectiveCfg,
-    prompt: params.prompt,
-    agentDir: params.agentDir,
-    modelOverride: params.model,
-    size: params.size,
-    aspectRatio: params.aspectRatio,
-    resolution: params.resolution,
-    durationSeconds: params.durationSeconds,
-    audio: params.audio,
-    watermark: params.watermark,
-    inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
-    inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
-    inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
-    autoProviderFallback: params.autoProviderFallback,
-    providerOptions: params.providerOptions,
-    timeoutMs: params.timeoutMs,
-  });
+  const result = await generateVideo(
+    {
+      cfg: params.effectiveCfg,
+      prompt: params.prompt,
+      agentDir: params.agentDir,
+      modelOverride: params.model,
+      size: params.size,
+      aspectRatio: params.aspectRatio,
+      resolution: params.resolution,
+      durationSeconds: params.durationSeconds,
+      audio: params.audio,
+      watermark: params.watermark,
+      inputImages: params.loadedReferenceImages.map((entry) => entry.sourceAsset),
+      inputVideos: params.loadedReferenceVideos.map((entry) => entry.sourceAsset),
+      inputAudios: params.loadedReferenceAudios.map((entry) => entry.sourceAsset),
+      autoProviderFallback: params.autoProviderFallback,
+      providerOptions: params.providerOptions,
+      timeoutMs: params.timeoutMs,
+    },
+    createCapabilityProviderRuntimeDeps(params.providers),
+  );
   if (params.taskHandle) {
     recordVideoGenerationTaskProgress({
       handle: params.taskHandle,
@@ -940,20 +927,26 @@ export function createVideoGenerateTool(options?: {
   agentSessionKey?: string;
   requesterOrigin?: DeliveryContext;
   workspaceDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   sandbox?: VideoGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
   onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
+  const preparedProviders = options?.preparedModelRuntime?.mediaCapabilityProviders
+    ?.videoGenerationProviders
+    ? [...options.preparedModelRuntime.mediaCapabilityProviders.videoGenerationProviders]
+    : undefined;
   if (
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
       workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
-      modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      modelConfig: cfg.agents?.defaults?.mediaModels?.video,
       providerKey: "videoGenerationProviders",
+      providers: preparedProviders,
     })
   ) {
     return null;
@@ -980,7 +973,9 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      "Create video. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
+      "Create video, incl. image-to-video: image refs take first_frame/last_frame/reference_image roles; video refs condition style" +
+      (includeAudioReferences ? "; audio refs condition sound" : "") +
+      ". resolution up to 4K; audio/watermark toggles. action=list discovers providers/models. Session chat background: call once/request, await, then visible reply + structured media. status checks active task. Duration may round to provider value.",
     parameters: createVideoGenerateToolSchema({ includeAudioReferences }),
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -1092,6 +1087,7 @@ export function createVideoGenerateTool(options?: {
 
       const selectedProvider = resolveSelectedVideoGenerationProvider({
         config: effectiveCfg,
+        providers: preparedProviders,
         videoGenerationModelConfig,
         modelOverride: model,
       });
@@ -1236,6 +1232,7 @@ export function createVideoGenerateTool(options?: {
               providerOptions,
               autoProviderFallback: explicitModelConfig ? false : undefined,
               timeoutMs,
+              providers: preparedProviders,
             }),
         });
 
@@ -1299,6 +1296,7 @@ export function createVideoGenerateTool(options?: {
           providerOptions,
           autoProviderFallback: explicitModelConfig ? false : undefined,
           timeoutMs,
+          providers: preparedProviders,
         });
         completeVideoGenerationTaskRun({
           handle: taskHandle,

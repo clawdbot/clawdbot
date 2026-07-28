@@ -1,6 +1,10 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
 import {
   createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
@@ -37,7 +41,11 @@ import { buildTestCtx } from "./test-ctx.js";
 beforeAll(globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
-  beforeEach(describe0BeforeEach0);
+  beforeEach(() => {
+    clearRuntimeConfigSnapshot();
+    describe0BeforeEach0();
+  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   it("keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin", async () => {
     setNoAbort();
@@ -973,11 +981,15 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
-  it("passes the loaded config plus configOverride patch to replyResolver when provided", async () => {
+  it("applies configOverride as a patch over the runtime config for replyResolver", async () => {
     setNoAbort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
+    setRuntimeConfigSnapshot({
+      agents: { defaults: { userTimezone: "UTC" } },
+      messages: { suppressToolErrors: true },
+    });
 
     const overrideCfg = {
       agents: { defaults: { userTimezone: "America/New_York" } },
@@ -1003,14 +1015,37 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(receivedCfg).not.toBe(cfg);
     expect(receivedCfg).not.toBe(overrideCfg);
-    expect(receivedCfg).toEqual(overrideCfg);
+    expect(receivedCfg).toMatchObject({
+      agents: { defaults: { userTimezone: "America/New_York" } },
+      messages: { suppressToolErrors: true },
+    });
   });
 
-  it("passes the already loaded config to replyResolver when configOverride is not provided", async () => {
+  it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
     setNoAbort();
-    const cfg = { agents: { defaults: { userTimezone: "UTC" } } } as OpenClawConfig;
+    const cfg = {
+      plugins: {
+        entries: {
+          firecrawl: {
+            config: {
+              webFetch: {
+                apiKey: {
+                  source: "file",
+                  provider: "default",
+                  id: "/firecrawl/api-key",
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeCfg = {
+      agents: { defaults: { userTimezone: "America/Edmonton" } },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg);
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const ctx = buildTestCtx({ Provider: "discord", Surface: "discord" });
 
     let receivedCfg: OpenClawConfig | undefined;
     const replyResolver = async (
@@ -1019,12 +1054,17 @@ describe("dispatchReplyFromConfig", () => {
       cfgArg?: OpenClawConfig,
     ) => {
       receivedCfg = cfgArg;
+      if (cfgArg?.plugins?.entries?.firecrawl) {
+        throw new Error("stale Firecrawl SecretRef reached reply resolution");
+      }
       return { text: "hi" } satisfies ReplyPayload;
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
-    expect(receivedCfg).toBe(cfg);
+    expect(receivedCfg).toBe(runtimeCfg);
+    expect(receivedCfg?.plugins?.entries?.firecrawl).toBeUndefined();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hi" });
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
@@ -1177,6 +1217,156 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
     expect(blockReplySentTexts).not.toContain("thinking...");
     expect(blockReplySentTexts).toContain("The answer is 42");
+  });
+
+  it("does not redeliver a final that already settled as an identical block", async () => {
+    setNoAbort();
+    const delivered: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, text: payload.text });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "rewritten command answer" });
+      return { text: "rewritten command answer" };
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([{ kind: "block", text: "rewritten command answer" }]);
+    expect(result.counts).toEqual({ tool: 0, block: 1, final: 0 });
+  });
+
+  it("keeps the final fallback when an identical block delivery fails", async () => {
+    setNoAbort();
+    const delivered: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        if (info.kind === "block") {
+          throw new Error("block delivery failed");
+        }
+        delivered.push({ kind: info.kind, text: payload.text });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "retry this final" });
+      return { text: "retry this final" };
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([{ kind: "final", text: "retry this final" }]);
+    expect(result.counts).toEqual({ tool: 0, block: 1, final: 1 });
+  });
+
+  it("does not send the final fallback when aborted during block settlement", async () => {
+    setNoAbort();
+    let markBlockStarted: (() => void) | undefined;
+    let releaseBlock: (() => void) | undefined;
+    const blockStarted = new Promise<void>((resolve) => {
+      markBlockStarted = resolve;
+    });
+    const blockRelease = new Promise<void>((resolve) => {
+      releaseBlock = resolve;
+    });
+    const delivered: Array<{ kind: string; text?: string }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        if (info.kind === "block") {
+          markBlockStarted?.();
+          await blockRelease;
+          throw new Error("block delivery failed after abort");
+        }
+        delivered.push({ kind: info.kind, text: payload.text });
+      },
+    });
+    const abortController = new AbortController();
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "cancelled rewritten answer" });
+      return { text: "cancelled rewritten answer" };
+    };
+
+    const dispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyOptions: { abortSignal: abortController.signal },
+      replyResolver,
+    });
+    await blockStarted;
+    abortController.abort();
+    await dispatch;
+    expect(delivered).toEqual([]);
+
+    releaseBlock?.();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([]);
+  });
+
+  it("keeps final-only TTS media after deduping identical block text", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload, info) => {
+        delivered.push({ kind: info.kind, payload });
+      },
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "spoken rewritten answer" });
+      return { text: "spoken rewritten answer" };
+    };
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ Provider: "qa-channel", Surface: "qa-channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+
+    expect(delivered).toEqual([
+      { kind: "block", payload: { text: "spoken rewritten answer" } },
+      {
+        kind: "final",
+        payload: expect.objectContaining({
+          text: undefined,
+          mediaUrl: "https://example.com/tts-synth.opus",
+          audioAsVoice: true,
+        }),
+      },
+    ]);
+    expect(result.counts).toEqual({ tool: 0, block: 1, final: 1 });
   });
 
   it("delivers opted-in block reasoning payloads without applying TTS", async () => {

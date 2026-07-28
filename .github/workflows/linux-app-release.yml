@@ -46,7 +46,7 @@ jobs:
           fi
 
       - name: Checkout selected tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
@@ -81,7 +81,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout selected tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
@@ -163,11 +163,14 @@ jobs:
     name: Build unsigned macOS test bundles
     if: ${{ inputs['desktop-test-bundles'] }}
     needs: validate_release
-    runs-on: macos-14
+    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
+    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
+    # image still ships Swift 5.x, so this job could not build the plugin.
+    runs-on: macos-15
     timeout-minutes: 45
     steps:
       - name: Checkout selected tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
@@ -235,7 +238,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Checkout selected tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false

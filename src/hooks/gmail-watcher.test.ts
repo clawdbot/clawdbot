@@ -1,7 +1,7 @@
 // Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   hasBinary: vi.fn(() => true),
@@ -102,6 +102,11 @@ describe("startGmailWatcher", () => {
         killed: false,
       });
     });
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await stopGmailWatcher();
   });
 
   it("does not let a stale cancelled startup clear newer watcher config", async () => {

@@ -39,7 +39,7 @@ openclaw security audit --fix     # apply safe remediations
 openclaw security audit --json
 ```
 
-`--fix` is intentionally narrow: it flips open group policies to allowlists, restores `logging.redactSensitive: "tools"`, tightens state/config/include-file permissions (`600` files, `700` dirs), and on Windows uses ACL resets instead of POSIX `chmod`.
+`--fix` is intentionally narrow: it flips open group policies to allowlists, tightens state/config/include-file permissions (`600` files, `700` dirs), and on Windows uses ACL resets instead of POSIX `chmod`.
 
 ### What the audit checks (high level)
 
@@ -51,7 +51,7 @@ openclaw security audit --json
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
 - **Plugins** - loading without an explicit allowlist.
-- **Policy drift** - sandbox Docker settings configured but sandbox mode off; `gateway.nodes.denyCommands` entries that look effective but only match exact command IDs (for example `system.run`), not shell text inside the payload; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden per agent; plugin-owned tools reachable under a permissive policy.
+- **Policy drift** - sandbox Docker settings configured but sandbox mode off; `gateway.nodes.commands.deny` entries that look effective but only match exact command IDs (for example `system.run`), not shell text inside the payload; dangerous `gateway.nodes.commands.allow` entries; global `tools.profile="minimal"` overridden per agent; plugin-owned tools reachable under a permissive policy.
 - **Runtime expectation drift** - assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or setting `tools.exec.host="sandbox"` while sandbox mode is off.
 - **Model hygiene** - warns on legacy configured models (soft warning, not a hard block).
 
@@ -94,6 +94,12 @@ Each finding has a structured `checkId` (for example `gateway.bind_no_auth`, `to
 Keeps the Gateway local-only, isolates DMs, and disables control-plane/runtime tools by default. Re-enable tools selectively per trusted agent from there.
 
 Built-in baseline for chat-driven agent turns: non-owner senders cannot use the `cron` or `gateway` tools regardless of config.
+
+### Requester-scoped controls and prompt context
+
+`tools.toolsBySender`, sender ownership, and owner-only tool inventories are evaluated against the current turn's originating requester. They do not authenticate or sanitize other content in that model prompt, including quoted text, prior shared-room history, forwarded content, fetched content, attachments, tool results, or other prompt inputs. Content from another person can therefore influence an owner-triggered turn when it is included in that turn's context.
+
+Treat these controls as defense in depth that reduces direct capability for a requester, not as hostile multi-user isolation. Use `contextVisibility` to filter supported channel-supplied context, restrict tools and sandbox the agent, and use separate gateways and ideally separate OS users or hosts when participants are mutually adversarial.
 
 ## Trust boundary matrix
 
@@ -173,7 +179,7 @@ Treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings; prefer
 
 - **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who can DM the bot. When `dmPolicy="pairing"`, approvals write to `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) or `<channel>-<accountId>-allowFrom.json` (non-default accounts), merged with config allowlists.
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot accepts at all.
-  - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, also acts as a group allowlist (include `"*"` to keep allow-all behavior). Customize mention triggers with `agents.list[].groupChat.mentionPatterns` (for example `["@openclaw", "@mybot"]`) so `requireMention` gates on your own bot names.
+  - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, also acts as a group allowlist (include `"*"` to keep allow-all behavior). Customize mention triggers with `agents.entries.*.groupChat.mentionPatterns` (for example `["@openclaw", "@mybot"]`) so `requireMention` gates on your own bot names.
   - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot inside a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
   - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - Check order: `groupPolicy`/group allowlists first, then mention/reply activation. Replying to a bot message (implicit mention) does **not** bypass `groupAllowFrom`.
@@ -311,7 +317,7 @@ For any agent/surface handling untrusted content, deny these by default:
 If a macOS node is paired, the Gateway can invoke `system.run` on it - this is remote code execution on that Mac.
 
 - Requires node pairing (approval + token). Pairing establishes node identity/trust and token issuance; it is not a per-command approval surface.
-- The Gateway applies a coarse global node command policy via `gateway.nodes.allowCommands` / `denyCommands`. `denyCommands` matches exact node command names only (for example `system.run`), not shell text inside a command payload - a reconnecting node advertising a different command list is not, by itself, a vulnerability if the gateway global policy and the node's own exec approvals still enforce the boundary.
+- The Gateway applies a coarse global node command policy via `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`. The deny list matches exact node command names only (for example `system.run`), not shell text inside a command payload - a reconnecting node advertising a different command list is not, by itself, a vulnerability if the gateway global policy and the node's own exec approvals still enforce the boundary.
 - The per-node `system.run` policy is the node's own exec approvals file (`exec.approvals.node.*`), controlled on the Mac via Settings -> Exec approvals (security + ask + allowlist); it can be stricter or looser than the gateway's global command-ID policy.
 - A node running `security="full"` and `ask="off"` follows the default trusted-operator model - expected behavior, not a bug, unless your deployment needs a tighter stance.
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
@@ -360,7 +366,7 @@ Agent workspace access inside the sandbox (`agents.defaults.sandbox.workspaceAcc
 Extra `sandbox.docker.binds` are validated against normalized, canonicalized source paths. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and canonical home aliases are resolved through existing ancestors and re-checked, so they still fail closed if they resolve into a blocked root.
 
 <Warning>
-`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.list[].tools.elevated`. See [Elevated mode](/tools/elevated).
+`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.entries.*.tools.elevated`. See [Elevated mode](/tools/elevated).
 </Warning>
 
 ### Sub-agent delegation guardrail
@@ -368,7 +374,7 @@ Extra `sandbox.docker.binds` are validated against normalized, canonicalized sou
 If you allow session tools, treat delegated sub-agent runs as another boundary decision:
 
 - Deny `sessions_spawn` unless the agent truly needs delegation.
-- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.list[].subagents.allowAgents` overrides restricted to known-safe target agents.
+- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.entries.*.subagents.allowAgents` overrides restricted to known-safe target agents.
 - For workflows that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `"inherit"`); `"require"` fails fast when the target child runtime is not sandboxed.
 
 ### Read-only mode
@@ -657,7 +663,7 @@ Trusted proxy headers do not make node device pairing automatically trusted - `g
 The Control UI needs a secure context (HTTPS or localhost) to generate device identity.
 
 - `gateway.controlUi.allowInsecureAuth`: local compatibility toggle. On localhost, allows Control UI auth without device identity when the page loads over non-secure HTTP. Does not bypass pairing checks and does not relax remote (non-localhost) device identity requirements. Prefer HTTPS (Tailscale Serve) or open the UI on `127.0.0.1`.
-- `gateway.controlUi.dangerouslyDisableDeviceAuth`: break-glass only, disables device identity checks entirely. Severe security downgrade; keep off unless actively debugging and able to revert quickly.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`: retired break-glass input. Older configs preserve authenticated, pairing-only Control UI access for remediation until a browser reopened over HTTPS or localhost completes the bounded, explicit self-pairing migration; do not add it to current config.
 - Separate from those flags, a successful `gateway.auth.mode: "trusted-proxy"` can admit **operator** Control UI sessions without device identity - an intentional auth-mode behavior, not an `allowInsecureAuth` shortcut, and it does not extend to node-role Control UI sessions.
 
 `openclaw security audit` warns when `allowInsecureAuth` is enabled.
@@ -670,7 +676,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-    - `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+    - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
@@ -682,7 +688,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
   <Accordion title="All dangerous*/dangerously* keys in the config schema">
     Control UI and browser:
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
-    - `gateway.controlUi.dangerouslyDisableDeviceAuth`
+    - `gateway.controlUi.dangerouslyDisableDeviceAuth` (retired upgrade input)
     - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
 
     Channel name-matching (bundled and plugin channels; also per `accounts.<accountId>` where applicable):
@@ -711,7 +717,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
 
 - Full-disk encryption on the gateway host; prefer a dedicated OS user account for the Gateway if the host is shared.
 - Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/shrinkwrap).
-- Secure file operations: OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. The optional POSIX Python helper defaults **off**; set `OPENCLAW_FS_SAFE_PYTHON_MODE=auto` or `require` only when you want the extra fd-relative mutation hardening and can support a Python runtime. Details: [Secure file operations](/gateway/security/secure-file-operations).
+- Secure file operations: OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. Optional native acceleration defaults **off**; set `OPENCLAW_FS_SAFE_NATIVE_MODE=auto` to use an installed platform binding or `require` to fail closed when native support is unavailable. Details: [Secure file operations](/gateway/security/secure-file-operations).
 - Shared Slack workspace risk: if everyone in Slack can message the bot, the core risk is delegated tool authority - any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy, prompt/content injection from one sender can affect shared state/devices/outputs, and if the shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage. Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
 - Company-shared agent (acceptable pattern): fine when everyone using the agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped. Run it on a dedicated machine/VM/container, use a dedicated OS user + dedicated browser/profile/accounts, and do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles. Mixing personal and company identities on the same runtime collapses the separation and increases personal-data exposure risk.
 
@@ -774,7 +780,7 @@ OpenClaw stores session transcripts on disk under `~/.openclaw/agents/<agentId>/
 
 Gateway logs may include tool summaries, errors, and URLs; session transcripts can include pasted secrets, file contents, command output, and links.
 
-- Keep log/transcript redaction on (`logging.redactSensitive: "tools"`, default).
+- Log/transcript redaction is always on and cannot be disabled by config.
 - Add custom patterns for your environment via `logging.redactPatterns` (tokens, hostnames, internal URLs).
 - When sharing diagnostics, prefer `openclaw status --all` (pasteable, secrets redacted) over raw logs.
 - Prune old session transcripts and log files if you do not need long retention.
@@ -822,7 +828,7 @@ For phone-number-based channels, consider running the assistant on a separate nu
 
 ### Audit
 
-1. Check Gateway logs: `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (or `logging.file`).
+1. Check Gateway logs with `openclaw logs` (or `openclaw --profile <profile> logs` for a named profile). The default path is `/tmp/openclaw/openclaw-YYYY-MM-DD.log`; named profiles use `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log`, unless `logging.file` overrides it.
 2. Review the relevant transcript(s): `~/.openclaw/agents/<agentId>/sessions/*.jsonl`.
 3. Review recent config changes that could have widened access: `gateway.bind`, `gateway.auth`, DM/group policies, `tools.elevated`, plugin changes.
 4. Re-run `openclaw security audit --deep` and confirm critical findings are resolved.

@@ -168,6 +168,50 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolAllowlist).toEqual(["read", "exec"]);
   });
 
+  it("uses a scheduled owner group without reapplying sender wildcard policy", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        deny: ["exec"],
+        toolsBySender: { "*": { deny: ["write"] } },
+      },
+      channels: {
+        whatsapp: {
+          groups: {
+            team: {
+              tools: { allow: ["read", "write"] },
+              toolsBySender: { "*": { deny: ["write"] } },
+            },
+          },
+        },
+      },
+    };
+    const baseParams = {
+      config: cfg,
+      sessionKey: "agent:main:cron:job:run:session",
+      agentId: "main",
+      messageProvider: "whatsapp",
+      runtimeToolAllowlist: ["write"],
+    };
+
+    const legacy = resolveConversationCapabilityProfile(baseParams);
+    const scheduled = resolveConversationCapabilityProfile({
+      ...baseParams,
+      scheduledToolPolicy: {
+        version: 1,
+        mode: "account",
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+        ownerAccountId: "default",
+      },
+    });
+
+    expect(legacy.policy.senderPolicy).toEqual({ deny: ["write"] });
+    expect(legacy.policy.groupPolicy).toBeUndefined();
+    expect(scheduled.policy.senderPolicy).toBeUndefined();
+    expect(scheduled.policy.groupPolicy).toEqual({ allow: ["read", "write"] });
+    expect(scheduled.policy.explicitToolDenylist).toEqual(["exec"]);
+    expect(scheduled.policy.explicitToolAllowlist).toContain("write");
+  });
+
   it("keeps built-in profile grants out of explicit overrides", () => {
     const profile = resolveConversationCapabilityProfile({
       config: {
@@ -247,6 +291,34 @@ describe("resolveConversationCapabilityProfile", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps runtime allowlists local unless the caller opts into inheritance", () => {
+    const localRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    });
+
+    expect(localRuntimeProfile.policy.explicitToolAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.explicitToolOverrideAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.runtimeToolPolicyForInheritance).toBeUndefined();
+
+    const inheritedRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+      inheritRuntimeToolAllowlist: true,
+    });
+
+    expect(inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance).toEqual({
+      allow: ["sessions_spawn", "memory_search"],
+    });
+    expect(inheritedRuntimeProfile.policy.inheritancePolicies).toContain(
+      inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance,
+    );
   });
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {

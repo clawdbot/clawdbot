@@ -131,8 +131,8 @@ struct GatewaySettings: View {
                 SettingsCardGroup("Saved Gateways") {
                     ForEach(Array(self.profiles.enumerated()), id: \.element.id) { index, profile in
                         SettingsCardRow(
-                            title: profile.name,
-                            subtitle: profile.url.absoluteString,
+                            title: .verbatim(profile.name),
+                            subtitle: .verbatim(profile.url.absoluteString),
                             showsDivider: index != self.profiles.count - 1)
                         {
                             HStack(spacing: 8) {

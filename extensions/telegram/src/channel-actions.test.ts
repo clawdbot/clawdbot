@@ -34,6 +34,50 @@ describe("telegramMessageActions", () => {
     }
   });
 
+  it("classifies Telegram message ids as resources rather than delivery targets", () => {
+    for (const action of ["react", "edit", "delete"] as const) {
+      expect(telegramMessageActions.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId"],
+        deliveryTargetAliases: [],
+      });
+    }
+  });
+
+  it("forwards only host-owned mutation context to the runtime", async () => {
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "delete",
+      params: {
+        messageId: "9001",
+        to: "-1001:topic:77",
+        conversationReadOrigin: "direct-operator",
+      },
+      cfg: { channels: { telegram: { botToken: "tok" } } } as OpenClawConfig,
+      accountId: "work",
+      requesterAccountId: "work",
+      conversationReadOrigin: "delegated",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001:topic:77",
+        currentMessageId: "9001",
+      },
+    } as never);
+
+    expect(handleTelegramActionMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ conversationReadOrigin: "direct-operator" }),
+      expect.anything(),
+      expect.objectContaining({
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "work",
+        toolContext: expect.objectContaining({ currentMessageId: "9001" }),
+      }),
+    );
+    expect(handleTelegramActionMock.mock.calls[0]?.[0]).toMatchObject({
+      action: "deleteMessage",
+      messageId: "9001",
+    });
+  });
+
   it("allows interactive-only sends", async () => {
     await telegramMessageActions.handleAction!({
       action: "send",

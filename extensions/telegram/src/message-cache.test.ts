@@ -5,6 +5,7 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
+  hasProviderObservedTelegramThreadBinding,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
 } from "./message-cache.js";
@@ -19,6 +20,7 @@ type PersistedCacheValue = {
   sourceMessage: Message;
   botUserId?: number;
   promptContextProjection?: unknown;
+  threadBinding?: { kind: "provider-observed-v1"; threadId: string };
   threadId?: string;
 };
 
@@ -60,6 +62,49 @@ function createMemoryPersistentStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSIST
 }
 
 describe("telegram message cache", () => {
+  it("persists provider-observed topic bindings for messages and same-topic replies", async () => {
+    const { bucketKey, entries, store } = createMemoryPersistentStore();
+    const cache = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    await cache.record({
+      accountId: "default",
+      chatId: -1001,
+      threadId: 77,
+      providerObservedThreadId: 77,
+      msg: {
+        chat: { id: -1001, type: "supergroup", title: "QA", is_forum: true },
+        message_id: 902,
+        message_thread_id: 77,
+        is_topic_message: true,
+        date: 1_736_380_702,
+        text: "Reply",
+        from: { id: 2, is_bot: false, first_name: "Grace" },
+        reply_to_message: {
+          chat: { id: -1001, type: "supergroup", title: "QA", is_forum: true },
+          message_id: 901,
+          date: 1_736_380_701,
+          text: "Parent",
+          from: { id: 1, is_bot: false, first_name: "Ada" },
+        } as Message["reply_to_message"],
+      } as Message,
+    });
+
+    expect(entries.size).toBe(2);
+    expect(
+      Array.from(entries.values()).every(
+        (value) =>
+          value.threadBinding?.kind === "provider-observed-v1" &&
+          value.threadBinding.threadId === "77",
+      ),
+    ).toBe(true);
+
+    resetTelegramMessageCacheBucketsForTest();
+    const reloaded = createTelegramMessageCache({ bucketKey, persistentStore: store });
+    for (const messageId of ["901", "902"]) {
+      const node = await reloaded.get({ accountId: "default", chatId: -1001, messageId });
+      expect(hasProviderObservedTelegramThreadBinding(node, 77)).toBe(true);
+    }
+  });
+
   it("hydrates reply chains from persisted cached messages", async () => {
     const { bucketKey, store } = createMemoryPersistentStore();
     const firstCache = createTelegramMessageCache({ bucketKey, persistentStore: store });
@@ -740,7 +785,8 @@ describe("telegram message cache", () => {
         partIndex: 0,
         finalPart: true,
       },
-      ...(persistedValue.threadId ? { threadId: persistedValue.threadId } : {}),
+      threadBinding: { kind: "provider-observed-v1", threadId: "77" },
+      threadId: "77",
     };
     const legacyStore: TelegramMessageCachePersistentStore = {
       register: (key, value) => store.register(key, value),
@@ -762,6 +808,7 @@ describe("telegram message cache", () => {
       messageId: "9126",
     });
     expect(reloaded?.promptContextProjectionMarker).toBeUndefined();
+    expect(hasProviderObservedTelegramThreadBinding(reloaded, 77)).toBe(false);
   });
 
   it("rejects unknown future persisted cache versions", async () => {

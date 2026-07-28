@@ -8,6 +8,7 @@ import {
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   type SessionCapability,
+  type SessionArchivedFilter,
   type SessionListOptions,
   type SessionRefreshTarget,
   type SessionScopeHost,
@@ -23,7 +24,7 @@ import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-sett
 export { getPendingChatPickerPatch };
 
 type ChatSessionListHost = {
-  sessionsShowArchived?: boolean;
+  sessionsArchivedFilter?: SessionArchivedFilter;
 };
 
 type ChatSessionRefreshHost = ChatSessionListHost &
@@ -54,7 +55,7 @@ type ChatIdleSessionReconciliationHost = SessionScopeHost & {
 };
 
 function buildChatSessionListOptions(
-  _state: ChatSessionListHost,
+  state: ChatSessionListHost,
   options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): SessionListOptions {
   const result: SessionListOptions = {
@@ -63,7 +64,7 @@ function buildChatSessionListOptions(
     includeUnknown: true,
     configuredAgentsOnly: true,
     includeDerivedTitles: true,
-    showArchived: false,
+    archivedFilter: state.sessionsArchivedFilter ?? "active",
   };
   const search = normalizeOptionalString(options.search ?? undefined);
   if (search) {
@@ -263,6 +264,12 @@ function patchSessionRow(
   sessionKey: string,
   patch: Partial<SessionsListResult["sessions"][number]>,
 ) {
+  // Mirror into the capability snapshot first: publishes replace the host copy
+  // wholesale, so without the mirror any mid-flight publish reverts this patch
+  // until the post-patch list refresh lands (visible slider snap-back that can
+  // swallow the next keyboard commit). The host copy still updates directly so
+  // hosts without a live capability subscription stay coherent.
+  host.sessions.patchRowLocal(sessionKey, patch);
   const current = host.sessionsResult;
   if (!current) {
     return;

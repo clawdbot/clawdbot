@@ -57,6 +57,8 @@ export type {
 export type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
+  PluginHookInboundMessageMetadata,
+  PluginHookMediaFact,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -262,6 +264,8 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
   channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  accountId?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */
@@ -929,6 +933,14 @@ type PluginHookGatewayCronJobState = {
   lastFailureNotificationDelivered?: boolean;
   lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
+  streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
+  streamError?: string;
+  streamConsecutiveFailures?: number;
+  streamRestartExhausted?: boolean;
+  streamDroppedBatches?: number;
+  streamCoalescedBatches?: number;
+  streamLastStartedAtMs?: number;
+  streamLastExitAtMs?: number;
 };
 
 export type PluginHookGatewayCronJob = {
@@ -958,6 +970,15 @@ export type PluginHookGatewayCronJob = {
         kind: "on-exit";
         command?: string;
         cwd?: string;
+      }
+    | {
+        kind: "stream";
+        command?: string[];
+        cwd?: string;
+        mode?: "line" | "match";
+        match?: string;
+        batchMs?: number;
+        maxBatchBytes?: number;
       };
   sessionTarget?: string;
   wakeMode?: string;

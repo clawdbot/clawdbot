@@ -277,7 +277,7 @@ function subagentRunRecordToSqliteInsert(entry: SubagentRunRecord): SubagentRunS
   return {
     run_id: normalized.runId,
     child_session_key: normalized.childSessionKey,
-    controller_session_key: normalized.controllerSessionKey ?? null,
+    controller_session_key: normalized.controllerSessionKey?.trim() || null,
     requester_session_key: normalized.requesterSessionKey,
     requester_display_key: normalized.requesterDisplayKey,
     requester_origin_json: jsonStringify(normalized.requesterOrigin),
@@ -355,6 +355,68 @@ function readSubagentRegistryRows(): SubagentRunSqliteRow[] {
       .orderBy("created_at", "asc")
       .orderBy("run_id", "asc"),
   ).rows;
+}
+
+/** Loads runs controlled by one session, preserving the legacy requester fallback. */
+export function loadSubagentRunsForControllerFromSqlite(
+  controllerSessionKey: string,
+): SubagentRunRecord[] {
+  const key = controllerSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      // The write boundary canonicalizes controller keys; null/empty retains legacy fallback.
+      .where((eb) =>
+        eb.or([
+          eb("controller_session_key", "=", key),
+          eb.and([
+            eb.or([
+              eb("controller_session_key", "is", null),
+              eb("controller_session_key", "=", ""),
+            ]),
+            eb("requester_session_key", "=", key),
+          ]),
+        ]),
+      )
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
+}
+
+/** Loads all persisted generations for one child session through its existing index. */
+export function loadSubagentRunsForChildSessionFromSqlite(
+  childSessionKey: string,
+): SubagentRunRecord[] {
+  const key = childSessionKey.trim();
+  if (!key) {
+    return [];
+  }
+  const { db } = openOpenClawStateDatabase();
+  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
+  const rows = executeSqliteQuerySync(
+    db,
+    stateDb
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .where("child_session_key", "=", key)
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  return rows.flatMap((row) => {
+    const run = rowToSubagentRunRecord(row);
+    return run ? [run] : [];
+  });
 }
 
 /** Loads the canonical subagent registry from shared SQLite state. */

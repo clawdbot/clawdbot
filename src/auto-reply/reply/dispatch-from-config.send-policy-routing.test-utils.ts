@@ -287,7 +287,16 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockImplementationOnce(async () => {
       order.push("mirror");
-      return { ok: true, sessionFile: "/tmp/session.jsonl", messageId: "message-1" };
+      return {
+        ok: true,
+        target: {
+          agentId: "main",
+          sessionId: "test-session",
+          sessionKey: "agent:main",
+          storePath: "/tmp/sessions.json",
+        },
+        messageId: "message-1",
+      };
     });
 
     const firstResult = await dispatchReplyFromConfig({

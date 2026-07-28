@@ -11,10 +11,12 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
 } from "../auth-profiles.js";
-import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "../plugin-model-catalog.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
-
-const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
@@ -227,7 +229,6 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -536,15 +537,15 @@ describe("resolveModel", () => {
     const first = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
-    const catalogPath = path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
-    fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-        providers: {},
-      }),
-    );
+    replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {},
+        }),
+      },
+    });
     const second = await resolveModelAsync("zai", "glm-5.1", agentDir, undefined, {
       runtimeHooks: createRuntimeHooks(),
     });
@@ -833,6 +834,7 @@ describe("resolveModel", () => {
       modelId: "mistral-medium-3-5",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
@@ -879,6 +881,7 @@ describe("resolveModel", () => {
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "google",
@@ -1179,12 +1182,14 @@ describe("resolveModel", () => {
       modelId: "claude-haiku-4-5",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "openai",
       modelId: "gpt-4o",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1304,6 +1309,7 @@ describe("resolveModel", () => {
       modelId: "gpt-5.5-pro",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
   });
 
@@ -1499,7 +1505,7 @@ describe("resolveModel", () => {
     expect(model.baseUrl).toBe("https://aiplatform.googleapis.com");
   });
 
-  it("uses bundled static metadata for configured provider fallback token limits", () => {
+  it("clamps inherited fallback maxTokens to the configured context window", () => {
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
       provider: "xiaomi-token-plan",
       id: "mimo-v2.5-pro",
@@ -1518,6 +1524,7 @@ describe("resolveModel", () => {
           "xiaomi-token-plan": {
             baseUrl: "https://token-plan-sgp.xiaomimimo.com/v1",
             api: "openai-completions",
+            contextWindow: 16_000,
             models: [],
           },
         },
@@ -1529,8 +1536,8 @@ describe("resolveModel", () => {
 
     expect(model.name).toBe("Xiaomi MiMo V2.5 Pro");
     expect(model.baseUrl).toBe("https://token-plan-sgp.xiaomimimo.com/v1");
-    expect(model.contextWindow).toBe(1_048_576);
-    expect(model.maxTokens).toBe(32_000);
+    expect(model.contextWindow).toBe(16_000);
+    expect(model.maxTokens).toBe(16_000);
     expectRecordFields(model, { maxTokensSource: "discovered" });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "xiaomi-token-plan",
@@ -1695,7 +1702,7 @@ describe("resolveModel", () => {
     expect(model.compat).toEqual(
       expect.objectContaining({
         supportsUsageInStreaming: true,
-        supportsReasoningEffort: false,
+        supportsReasoningEffort: true,
         maxTokensField: "max_tokens",
       }),
     );
@@ -2431,18 +2438,14 @@ describe("resolveModel", () => {
     });
   });
 
-  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for native compaction", () => {
+  it("leaves dynamic GitHub Copilot request identity to runtime auth preparation", () => {
     const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
     const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(model.headers).toEqual({
-      ...buildCopilotIdeHeaders(),
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      "Openai-Organization": "github-copilot",
-    });
+    expect(model.headers).toBeUndefined();
   });
 
-  it("adds GitHub Copilot IDE headers to configured resolved model headers for native compaction", () => {
+  it("leaves configured GitHub Copilot request identity to runtime auth preparation", () => {
     const cfg = {
       models: {
         providers: {
@@ -2458,11 +2461,7 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
     const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(model.headers).toEqual({
-      ...buildCopilotIdeHeaders(),
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      "Openai-Organization": "github-copilot",
-    });
+    expect(model.headers).toBeUndefined();
   });
 
   it("includes provider headers in provider fallback model", () => {
@@ -2929,6 +2928,41 @@ describe("resolveModel", () => {
         thinkingFormat: "qwen-chat-template",
       }),
     );
+  });
+
+  it("does not derive reasoning from ignored compat on a catalog-owned vLLM route", () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      ...makeModel("Qwen/Qwen3-8B"),
+      provider: "vllm",
+      api: "openai-completions",
+      baseUrl: "http://localhost:9000",
+      reasoning: false,
+      compat: { supportsStrictMode: false },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000",
+            api: "openai-completions",
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen/Qwen3-8B",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("vllm", "Qwen/Qwen3-8B", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model?.reasoning).toBe(false);
+    expect(result.model?.compat).toEqual(expect.objectContaining({ supportsStrictMode: false }));
+    expect(result.model?.compat).not.toHaveProperty("thinkingFormat");
   });
 
   it("infers reasoning for matching vLLM Qwen compat fallback models", () => {

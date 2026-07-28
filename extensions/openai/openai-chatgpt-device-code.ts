@@ -1,3 +1,4 @@
+import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 // Openai plugin module implements openai chatgpt device code behavior.
 import {
   shouldUseEnvHttpProxyForUrl,
@@ -8,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAccessTokenExpiry } from "./openai-chatgpt-auth-identity.js";
 import { trimNonEmptyString } from "./openai-chatgpt-shared.js";
@@ -299,11 +301,22 @@ async function pollOpenAICodexDeviceCode(params: {
       });
     } catch (error) {
       rethrowIfDeviceCodeCallerAborted(params.signal, error);
-      // A stalled poll is transient; keep the overall 15-minute authorization deadline.
       if (isDeviceCodeOperationTimeoutError(error)) {
         continue;
       }
-      throw error;
+      const retryableTransportError = collectErrorGraphCandidates(error, (candidate) => [
+        candidate.cause,
+      ]).some(
+        (candidate) => classifyTransientNetworkErrorCode(extractErrorCode(candidate)) !== undefined,
+      );
+      if (!retryableTransportError) {
+        throw error;
+      }
+      await waitForDeviceCodePoll(
+        resolveNextDeviceCodePollDelayMs(params.intervalMs, deadline),
+        params.signal,
+      );
+      continue;
     }
 
     if (result.ok) {

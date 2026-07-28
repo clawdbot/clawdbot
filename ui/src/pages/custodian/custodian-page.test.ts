@@ -8,6 +8,7 @@ import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 describe("custodian page", () => {
   beforeEach(() => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    window.history.replaceState({}, "", "/");
   });
 
   afterEach(() => {
@@ -51,7 +52,12 @@ describe("custodian page", () => {
     await page.updateComplete;
     const assistantGroup = page.querySelector<HTMLElement>(".chat-group.assistant")!;
     expect(assistantGroup.querySelector("strong")?.textContent).toBe("aboard");
-    expect(assistantGroup.querySelector(".chat-avatar.assistant")?.textContent?.trim()).toBe("OC");
+    expect(
+      assistantGroup
+        .querySelector<HTMLImageElement>("img.chat-avatar.assistant")
+        ?.getAttribute("src"),
+    ).toBe("/favicon.svg");
+    expect(page.querySelector(".custodian__mark openclaw-mascot")).not.toBeNull();
     const card = page.querySelector("openclaw-option-card")!;
     await card.updateComplete;
     expect(page.querySelector(".option-card__choice--recommended")?.textContent).toContain(
@@ -73,6 +79,42 @@ describe("custodian page", () => {
     expect(userGroup.textContent).toContain("Connect WhatsApp");
     expect(connectOption.disabled).toBe(true);
   });
+
+  it.each([
+    { pathname: "/settings/channels", expectedPage: "channels" },
+    { pathname: "/not-an-openclaw-route", expectedPage: undefined },
+  ])(
+    "adds resolved page context only to user turns at $pathname",
+    async ({ pathname, expectedPage }) => {
+      window.history.replaceState({}, "", pathname);
+      const request = vi.fn().mockResolvedValue({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "All good.",
+        action: "none",
+      });
+      const { context } = createContext(request);
+      const { page } = await mountPage(context, { onboarding: false });
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("context");
+      const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+      composer.value = "What about this page?";
+      composer.dispatchEvent(new Event("input"));
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+      if (expectedPage) {
+        expect(request.mock.calls[1]?.[1]).toMatchObject({
+          message: "What about this page?",
+          context: { page: expectedPage },
+        });
+      } else {
+        expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "What about this page?" });
+        expect(request.mock.calls[1]?.[1]).not.toHaveProperty("context");
+      }
+    },
+  );
 
   it("renders advertised durable history before the live welcome with a divider", async () => {
     const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -293,11 +335,10 @@ describe("custodian page", () => {
     await page.updateComplete;
     expect(page.querySelector("openclaw-option-card")).not.toBeNull();
 
-    setGatewaySnapshot({ connected: false, reconnecting: true });
+    setGatewaySnapshot({ phase: "reconnecting" });
     await page.updateComplete;
     setGatewaySnapshot({
-      connected: true,
-      reconnecting: false,
+      phase: "connected",
     });
     await page.updateComplete;
 
@@ -537,6 +578,69 @@ describe("custodian page", () => {
     await waitForFast(() => expect(page.querySelector("openclaw-option-card")).toBeNull());
   });
 
+  it("exits onboarding locally when the question declares an exit skip action", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "What would you like to do first?",
+      action: "none",
+      question: {
+        id: "onboarding-next-step",
+        header: "Next step",
+        question: "What would you like to do first?",
+        options: [{ label: "Talk to my agent" }, { label: "Connect a channel" }],
+        isOther: true,
+        skipAction: "exit",
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    page.querySelector<HTMLButtonElement>(".option-card__skip")!.click();
+
+    expect(context.navigate).toHaveBeenCalledWith("chat");
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("does not render a silent assistant reply", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: " NO_REPLY ",
+      action: "none",
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.textContent).not.toContain("NO_REPLY");
+  });
+
+  it("keeps a structured question attached to a silent assistant reply", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "NO_REPLY",
+      action: "none",
+      question: {
+        id: "channel",
+        header: "Channel",
+        question: "Which channel?",
+        options: [{ label: "WhatsApp" }, { label: "Telegram" }],
+      },
+    });
+    const { context } = createContext(request);
+    const { page } = await mountPage(context);
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    await page.updateComplete;
+
+    expect(page.querySelector(".chat-group.assistant")).toBeNull();
+    expect(page.querySelector("openclaw-option-card")).not.toBeNull();
+    expect(page.textContent).toContain("Which channel?");
+    expect(page.textContent).not.toContain("NO_REPLY");
+  });
+
   it("retires a structured question after a freeform reply", async () => {
     const question = {
       id: "access",
@@ -680,7 +784,8 @@ describe("custodian page", () => {
     await page.updateComplete;
 
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      search: `?session=main&draft=${encodeURIComponent("Wake up, my friend!")}`,
+      pathname: "/chat/main",
+      search: `?draft=${encodeURIComponent("Wake up, my friend!")}`,
     });
   });
 

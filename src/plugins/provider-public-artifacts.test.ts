@@ -142,12 +142,43 @@ describe("provider public artifacts", () => {
       }),
     ).toEqual({
       levels: [
-        { id: "off", label: "off" },
-        { id: "max", label: "max" },
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "adaptive" },
+        { id: "xhigh" },
+        { id: "max" },
       ],
-      defaultLevel: "max",
+      defaultLevel: "high",
       preserveWhenCatalogReasoningFalse: true,
     });
+  });
+
+  it("loads OpenCode Go DeepSeek V4 thinking policy before runtime registration", () => {
+    const surface = resolveBundledProviderPolicySurface("opencode-go");
+
+    expect(
+      surface?.resolveThinkingProfile?.({
+        provider: "opencode-go",
+        modelId: "deepseek-v4-pro",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+      defaultLevel: "high",
+    });
+    expect(
+      surface?.resolveThinkingProfile?.({ provider: "opencode-go", modelId: "glm-5" }),
+    ).toBeUndefined();
   });
 
   it("loads trusted official external provider policy before runtime registration", () => {

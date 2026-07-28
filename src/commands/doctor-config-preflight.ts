@@ -68,9 +68,9 @@ async function measureStartupPreflightStep<T>(name: string, run: () => T | Promi
   } finally {
     const durationMs = performance.now() - startedAt;
     const totalMs = performance.now() - startupPreflightTraceStartedAt;
-    process.stderr.write(
-      `[gateway] startup trace: cli.bootstrap.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms\n`,
-    );
+    const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
+    const message = `[gateway] startup trace: cli.bootstrap.${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`;
+    process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message })}\n`);
   }
 }
 
@@ -311,18 +311,13 @@ async function refreshStartupPluginQuarantine(params: {
       env: params.env,
     }),
   );
-  const quarantinedPlugins = buildStartupPluginQuarantine({
+  const result = mapStartupPluginQuarantineRefresh({
     cfg: params.cfg,
     failures: smoke.failures,
   });
-  const blockingFailures = smoke.failures.filter(
-    (failure) =>
-      !failure.installPath &&
-      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
-  );
-  if (quarantinedPlugins.length > 0) {
+  if (result.quarantinedPlugins.length > 0) {
     note(
-      quarantinedPlugins
+      result.quarantinedPlugins
         .map(
           (plugin) =>
             `- ${formatStartupPluginSmokeFailure({
@@ -338,6 +333,20 @@ async function refreshStartupPluginQuarantine(params: {
       "Doctor warnings",
     );
   }
+  return result;
+}
+
+/** Map payload verification failures into startup quarantine and blocking diagnostics. */
+export function mapStartupPluginQuarantineRefresh(params: {
+  cfg: OpenClawConfig;
+  failures: readonly PluginPayloadSmokeFailure[];
+}): StartupPluginConvergenceResult {
+  const quarantinedPlugins = buildStartupPluginQuarantine(params);
+  const blockingFailures = params.failures.filter(
+    (failure) =>
+      !failure.installPath &&
+      isStartupPluginVerificationFailureActive({ cfg: params.cfg, failure }),
+  );
   return {
     blockingDiagnostic:
       blockingFailures.length > 0
@@ -425,6 +434,7 @@ export async function runDoctorConfigPreflight(
   let startupMigrationHeartbeatError: unknown;
   const startupMigrationWarnings: string[] = [];
   const cronCodexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[] = [];
+  let doctorMediaPersistenceAttempted = false;
   const noteStartupStateMigrationResult = (result: {
     changes: string[];
     warnings: string[];
@@ -605,17 +615,17 @@ export async function runDoctorConfigPreflight(
             cronCodexRuntimePolicyTargets.push(...cronCodexPlan.targets);
             noteStartupStateMigrationResult({ changes: [], warnings: cronCodexPlan.warnings });
           }
-          noteStartupStateMigrationResult(
-            await autoMigrateLegacyState({
-              cfg: stateMigrationInput.cfg,
-              ...(stateMigrationInput.pluginDoctorConfig
-                ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
-                : {}),
-              env: process.env,
-              recoverCorruptTargetStore: options.recoverCorruptTargetStore,
-              doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
-            }),
-          );
+          const legacyStateResult = await autoMigrateLegacyState({
+            cfg: stateMigrationInput.cfg,
+            ...(stateMigrationInput.pluginDoctorConfig
+              ? { pluginDoctorConfig: stateMigrationInput.pluginDoctorConfig }
+              : {}),
+            env: process.env,
+            recoverCorruptTargetStore: options.recoverCorruptTargetStore,
+            doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+          });
+          doctorMediaPersistenceAttempted = options.doctorOnlyStateMigrations === true;
+          noteStartupStateMigrationResult(legacyStateResult);
         } else if (stateMigrationInput.pluginDoctorConfig) {
           noteStartupStateMigrationResult(
             await autoMigrateLegacyPluginDoctorState({
@@ -637,7 +647,17 @@ export async function runDoctorConfigPreflight(
         );
       }
     }
-
+    if (
+      stateMigrations &&
+      stateMigrationsAllowed &&
+      freshConfigGuardAllowed &&
+      options.doctorOnlyStateMigrations === true &&
+      !doctorMediaPersistenceAttempted
+    ) {
+      noteStartupStateMigrationResult(
+        stateMigrations.migrateLegacyMediaPersistence({ env: process.env }),
+      );
+    }
     if (startupCheckpoint) {
       if (shouldRecordStartupCheckpoint) {
         if (startupMigrationHeartbeatError) {

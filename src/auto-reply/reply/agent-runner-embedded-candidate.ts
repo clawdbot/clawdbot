@@ -39,6 +39,7 @@ import type { AgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { buildEmbeddedRunExecutionParams } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
 import { isReplyOperationRestartAbort } from "./reply-operation-abort.js";
+import { markReplyOperationGlobalLaneWaitProgress } from "./reply-run-registry.js";
 
 type EmbeddedPresentation = Pick<
   ReturnType<typeof createAgentTurnPresentation>,
@@ -210,6 +211,7 @@ export async function runEmbeddedFallbackCandidate(params: {
         sandboxSessionKey: turn.runtimePolicySessionKey,
         prompt: turn.commandBody,
         transcriptPrompt: turn.transcriptCommandBody,
+        media: turn.followupRun.media,
         userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
         currentInboundEventKind: turn.followupRun.currentInboundEventKind,
         currentInboundContext: turn.followupRun.currentInboundContext,
@@ -247,6 +249,12 @@ export async function runEmbeddedFallbackCandidate(params: {
           }
         },
         onExecutionPhase: params.signalExecutionPhaseForTyping,
+        onLaneWait: ({ waiting }) => {
+          const replyOperation = turn.replyOperation;
+          if (waiting && replyOperation) {
+            markReplyOperationGlobalLaneWaitProgress(replyOperation);
+          }
+        },
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.

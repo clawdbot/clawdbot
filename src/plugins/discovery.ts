@@ -34,7 +34,9 @@ import {
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
+import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { withPluginScanExistenceCache } from "./plugin-scan-existence-cache.js";
 import { resolvePluginSourceRoots } from "./roots.js";
@@ -57,10 +59,14 @@ const SCANNED_DIRECTORY_IGNORE_NAMES = new Set([
   "node_modules",
 ]);
 const PACKAGE_MANIFEST_CACHE_MAX_ENTRIES = 512;
-const packageManifestProcessCache = new Map<
-  string,
-  { mtimeMs: number; size: number; manifest: PackageManifest | null }
->();
+const IMMUTABLE_NIX_STORE_ROOT = "/nix/store";
+const packageManifestProcessCache = new PluginLruCache<PackageManifest | null>(
+  PACKAGE_MANIFEST_CACHE_MAX_ENTRIES,
+);
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  packageManifestProcessCache.clear();
+});
 
 /** One potential plugin root discovered before manifest validation and registry normalization. */
 export type PluginCandidate = {
@@ -402,12 +408,39 @@ function mergeDiscoveryResult(
   }
 }
 
-function addMissingRequiredPluginDiagnostics(result: PluginDiscoveryResult): void {
+function addMissingRequiredPluginDiagnostics(
+  result: PluginDiscoveryResult,
+  params: { env: NodeJS.ProcessEnv; realpathCache: Map<string, string> },
+): void {
   const candidateIds = new Set(result.candidates.map((candidate) => candidate.idHint));
   const seen = new Set<string>();
+  let configuredFileManifestIds: Set<string> | undefined;
   for (const candidate of result.candidates) {
     for (const requiredPluginId of candidate.requiredPluginIds ?? []) {
       if (candidateIds.has(requiredPluginId) || requiredPluginId === candidate.idHint) {
+        continue;
+      }
+      if (!configuredFileManifestIds) {
+        configuredFileManifestIds = new Set();
+        // Explicit files keep filename hints; only a validated root manifest
+        // can establish their canonical identity for a missing dependency.
+        for (const configuredCandidate of result.candidates) {
+          if (configuredCandidate.origin !== "config" || configuredCandidate.packageDir) {
+            continue;
+          }
+          const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+            origin: configuredCandidate.origin,
+            rootDir: configuredCandidate.rootDir,
+            env: params.env,
+            realpathCache: params.realpathCache,
+          });
+          const manifest = resolveCandidateManifest(configuredCandidate.rootDir, rejectHardlinks);
+          if (manifest) {
+            configuredFileManifestIds.add(manifest.manifest.id);
+          }
+        }
+      }
+      if (configuredFileManifestIds.has(requiredPluginId)) {
         continue;
       }
       const key = `${candidate.idHint}\0${requiredPluginId}`;
@@ -569,25 +602,6 @@ function readTrustedPackageManifest(dir: string): PackageManifest | null {
   return tryReadJsonSync<PackageManifest>(path.join(dir, "package.json"));
 }
 
-function readPackageManifestStat(dir: string): { mtimeMs: number; size: number } | null {
-  try {
-    const stat = fs.statSync(path.join(dir, "package.json"));
-    return stat.isFile() ? { mtimeMs: stat.mtimeMs, size: stat.size } : null;
-  } catch {
-    return null;
-  }
-}
-
-function prunePackageManifestProcessCache(): void {
-  while (packageManifestProcessCache.size > PACKAGE_MANIFEST_CACHE_MAX_ENTRIES) {
-    const oldest = packageManifestProcessCache.keys().next().value;
-    if (oldest === undefined) {
-      return;
-    }
-    packageManifestProcessCache.delete(oldest);
-  }
-}
-
 function readCandidatePackageManifest(params: {
   dir: string;
   origin: PluginOrigin;
@@ -595,27 +609,31 @@ function readCandidatePackageManifest(params: {
   rootRealPath?: string;
   packageManifestCache?: Map<string, PackageManifest | null>;
 }): PackageManifest | null {
+  const rootRealPath = params.rootRealPath ?? safeRealpathSync(params.dir);
   const trustMode =
     params.origin === "bundled"
       ? "trusted"
       : params.rejectHardlinks
         ? "external-reject"
         : "external-allow";
-  const cacheKey = `${trustMode}:${params.rootRealPath ?? path.resolve(params.dir)}`;
+  const cacheKey = createPluginCacheKey([trustMode, rootRealPath ?? path.resolve(params.dir)]);
   const cached = params.packageManifestCache?.get(cacheKey);
   if (cached !== undefined) {
     return cached;
   }
-  const canUseProcessCache = params.origin === "bundled" || !params.rejectHardlinks;
-  const manifestStat = readPackageManifestStat(params.dir);
-  if (canUseProcessCache && manifestStat !== null) {
-    const processCached = packageManifestProcessCache.get(cacheKey);
-    if (
-      processCached?.mtimeMs === manifestStat.mtimeMs &&
-      processCached.size === manifestStat.size
-    ) {
-      params.packageManifestCache?.set(cacheKey, processCached.manifest);
-      return processCached.manifest;
+  // Relaxed hardlink validation does not make a mutable external root immutable.
+  // Only bundled plugins and verified Nix store roots survive a metadata generation.
+  const canUseProcessCache =
+    params.origin === "bundled" ||
+    (!params.rejectHardlinks &&
+      typeof rootRealPath === "string" &&
+      (rootRealPath === IMMUTABLE_NIX_STORE_ROOT ||
+        rootRealPath.startsWith(`${IMMUTABLE_NIX_STORE_ROOT}/`)));
+  if (canUseProcessCache) {
+    const processCached = packageManifestProcessCache.getResult(cacheKey);
+    if (processCached.hit) {
+      params.packageManifestCache?.set(cacheKey, processCached.value);
+      return processCached.value;
     }
   }
   const manifest =
@@ -623,9 +641,8 @@ function readCandidatePackageManifest(params: {
       ? readTrustedPackageManifest(params.dir)
       : readPackageManifest(params.dir, params.rejectHardlinks, params.rootRealPath);
   params.packageManifestCache?.set(cacheKey, manifest);
-  if (canUseProcessCache && manifestStat !== null) {
-    packageManifestProcessCache.set(cacheKey, { ...manifestStat, manifest });
-    prunePackageManifestProcessCache();
+  if (canUseProcessCache) {
+    packageManifestProcessCache.set(cacheKey, manifest);
   }
   return manifest;
 }
@@ -896,7 +913,7 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
     params.diagnostics.push({
       level: "warn",
       source: path.join(params.packageDir, "package.json"),
-      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery`,
+      message: `invalid package plugin API metadata: ${packagePluginApiRangeCheck.error}; skipping discovery (check package.json openclaw.compat.pluginApi)`,
       ...(pluginId ? { pluginId } : {}),
     });
     return true;
@@ -915,7 +932,7 @@ function shouldSkipIncompatiblePackagePluginApi(params: {
   params.diagnostics.push({
     level: "warn",
     source: path.join(params.packageDir, "package.json"),
-    message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery`,
+    message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${compatibilityHostVersion}; skipping discovery (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
     ...(pluginId ? { pluginId } : {}),
   });
   return true;
@@ -1711,7 +1728,7 @@ export function discoverOpenClawPlugins(params: {
   const seenDiagnostics = new Set<string>();
   mergeDiscoveryResult(result, scopedResult, seenSources, seenDiagnostics);
   mergeDiscoveryResult(result, sharedResult, seenSources, seenDiagnostics);
-  addMissingRequiredPluginDiagnostics(result);
+  addMissingRequiredPluginDiagnostics(result, { env, realpathCache });
   return result;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

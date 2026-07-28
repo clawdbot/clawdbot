@@ -25,6 +25,13 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                artifactId: content.artifactId,
+                url: content.url,
+                openUrl: content.openUrl,
+                alt: content.alt,
+                width: content.width,
+                height: content.height,
+                sizeBytes: content.sizeBytes,
                 durationSeconds: content.durationSeconds,
                 content: content.content,
                 id: content.id,
@@ -56,7 +63,12 @@ extension OpenClawChatViewModel {
             let id = (item.id ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let name = (item.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let fileName = (item.fileName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text, id, name, fileName].joined(separator: "\\u{001F}")
+            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let mimeType = (item.mimeType ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, id, name, fileName, artifactId, url, openUrl, mimeType]
+                .joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -64,7 +76,10 @@ extension OpenClawChatViewModel {
         message.content.map { item in
             let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            return [type, text].joined(separator: "\\u{001F}")
+            let artifactId = (item.artifactId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = (item.url ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let openUrl = (item.openUrl ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text, artifactId, url, openUrl].joined(separator: "\\u{001F}")
         }.joined(separator: "\\u{001E}")
     }
 
@@ -176,6 +191,13 @@ extension OpenClawChatViewModel {
                 thinkingSignature: content.thinkingSignature,
                 mimeType: content.mimeType,
                 fileName: content.fileName,
+                artifactId: content.artifactId,
+                url: content.url,
+                openUrl: content.openUrl,
+                alt: content.alt,
+                width: content.width,
+                height: content.height,
+                sizeBytes: content.sizeBytes,
                 durationSeconds: localDuration,
                 content: content.content,
                 id: content.id,
@@ -797,8 +819,7 @@ extension OpenClawChatViewModel {
             // The cache store writes only gateway-derived rows. It filters
             // locally retained outbox bubbles until history proves their keys.
             persistTranscriptToCache(
-                sessionKey: request.session.key,
-                agentID: request.session.agentID,
+                session: request.session,
                 messages: nextMessages,
                 canonicalMessageIdempotencyKeys: Set(incoming.compactMap(\.idempotencyKey)))
         }

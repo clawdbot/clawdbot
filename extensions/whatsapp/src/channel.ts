@@ -4,7 +4,7 @@ import { buildDmGroupAccountAllowlistAdapter } from "openclaw/plugin-sdk/allowli
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
-  createAsyncComputedAccountStatusAdapter,
+  createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
@@ -16,7 +16,10 @@ import {
   resolveWhatsAppAgentReactionGuidance,
 } from "./channel-actions.js";
 import { whatsappChannelOutbound, whatsappMessageAdapter } from "./channel-outbound.js";
-import { isWhatsAppAuthConfigured, loadWhatsAppChannelRuntime } from "./channel-runtime-loader.js";
+import {
+  loadWhatsAppChannelRuntime,
+  readWhatsAppAccountLinkState,
+} from "./channel-runtime-loader.js";
 import { whatsappCommandPolicy } from "./command-policy.js";
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { resolveWhatsAppMentionStripRegexes } from "./group-intro.js";
@@ -36,7 +39,7 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 import { sendTypingWhatsApp } from "./send.js";
 import { resolveWhatsAppOutboundSessionRoute } from "./session-route.js";
-import { whatsappSetupAdapter } from "./setup-core.js";
+import { whatsappSetupAdapter, whatsappSetupContract } from "./setup-core.js";
 import { createWhatsAppPluginBase, whatsappSetupWizardProxy } from "./shared.js";
 import { detectWhatsAppLegacyStateMigrations } from "./state-migrations.js";
 import { collectWhatsAppStatusIssues } from "./status-issues.js";
@@ -61,6 +64,11 @@ function resolveWhatsAppTargetInfo(raw: string) {
   };
 }
 
+function resolveWhatsAppMessageActionTarget(params: { args: Record<string, unknown> }) {
+  const chatJid = params.args.chatJid;
+  return typeof chatJid === "string" ? normalizeWhatsAppMessagingTarget(chatJid) : undefined;
+}
+
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
   createChatChannelPlugin<ResolvedWhatsAppAccount>({
     pairing: {
@@ -82,7 +90,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
         setupWizard: whatsappSetupWizardProxy,
         setup: whatsappSetupAdapter,
-        isConfigured: async (account) => await isWhatsAppAuthConfigured(account.authDir),
+        setupContract: whatsappSetupContract,
+        isConfigured: (account) => Boolean(account.authDir),
+        isLinked: async (account) => await readWhatsAppAccountLinkState(account.authDir),
       }),
       agentTools: () => [createWhatsAppLoginTool()],
       allowlist: buildDmGroupAccountAllowlistAdapter({
@@ -154,6 +164,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           (await loadWhatsAppDirectoryConfig()).listWhatsAppDirectoryGroupsLive(params),
       },
       actions: {
+        messageActionTargetAliases: {
+          react: {
+            aliases: ["chatJid", "messageId"],
+            deliveryTargetAliases: ["chatJid"],
+            resolveDeliveryTarget: resolveWhatsAppMessageActionTarget,
+          },
+        },
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
         supportsAction: ({ action }) => action === "react" || action === "upload-file",
@@ -210,7 +227,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
           });
         },
       },
-      status: createAsyncComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({
+      status: createComputedAccountStatusAdapter<ResolvedWhatsAppAccount>({
         defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID, {
           connected: false,
           reconnectAttempts: 0,
@@ -249,21 +266,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
                   ? "not-linked"
                   : undefined;
           const statusState = summaryAuthState === undefined ? undefined : summaryAuthState;
-          const configured =
-            auth.state === "unstable"
-              ? typeof snapshot.configured === "boolean"
-                ? snapshot.configured
-                : true
-              : typeof linked === "boolean"
-                ? linked
-                : auth.state === "linked";
           const authAgeMs = typeof linked === "boolean" && linked ? auth.authAgeMs : null;
           const self =
             typeof linked === "boolean" && linked
               ? auth.selfId
               : { e164: null, jid: null, lid: null };
           return {
-            configured,
+            configured: Boolean(account.authDir),
             ...(statusState ? { statusState } : {}),
             ...(typeof linked === "boolean" ? { linked } : {}),
             authAgeMs,
@@ -285,21 +294,13 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               : {}),
           };
         },
-        resolveAccountSnapshot: async ({ account, runtime }) => {
-          const channelRuntime = await loadWhatsAppChannelRuntime();
-          const authState = await channelRuntime.readWebAuthState(account.authDir);
+        resolveAccountSnapshot: ({ account, runtime }) => {
           return {
             accountId: account.accountId,
             name: account.name,
             enabled: account.enabled,
-            configured: true,
+            configured: Boolean(account.authDir),
             extra: {
-              statusState: authState,
-              ...(authState === "linked"
-                ? { linked: true }
-                : authState === "not-linked"
-                  ? { linked: false }
-                  : {}),
               connected: runtime?.connected ?? false,
               reconnectAttempts: runtime?.reconnectAttempts,
               lastConnectedAt: runtime?.lastConnectedAt ?? null,
@@ -318,7 +319,6 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
             },
           };
         },
-        resolveAccountState: ({ configured }) => (configured ? "linked" : "not linked"),
         logSelfId: ({ account, runtime, includeChannelPrefix }) => {
           void loadWhatsAppChannelRuntime().then((runtimeExports) =>
             runtimeExports.logWebSelfId(account.authDir, runtime, includeChannelPrefix),

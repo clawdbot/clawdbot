@@ -28,7 +28,7 @@ class AppsPage extends OpenClawLightDomElement {
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
     const canPairDevice =
-      gatewaySnapshot.connected && hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
+      (gatewaySnapshot.phase === "connected") && hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null);
     const body = renderApps({
       onNavigate: (routeId: RouteId) => this.context.navigate(routeId),
       onPairDevice: canPairDevice

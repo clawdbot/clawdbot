@@ -185,6 +185,7 @@ internal enum class SettingsRoute {
   Usage,
   Skills,
   SkillWorkshop,
+  SystemAgent,
   NodesDevices,
   Channels,
   Dreaming,
@@ -219,6 +220,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Dreaming -> DreamingSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -1491,6 +1493,9 @@ private fun PhoneCapabilitiesScreen(
           SettingsToggleRow(nativeString("Canvas Status"), nativeString("Show screen-sharing debug state."), Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
     )
+    if (SensitiveFeatureConfig.accessibilityControlEnabled) {
+      FlavorPhoneCapabilitiesSettings(viewModel)
+    }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = nativeString("Location"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -2393,7 +2398,7 @@ internal fun SettingsDetailFrame(
 /**
  * Toggle row model reused by settings sections that render simple on/off controls.
  */
-private data class SettingsToggleRow(
+internal data class SettingsToggleRow(
   val title: String,
   val subtitle: String,
   val icon: ImageVector,
@@ -3009,6 +3014,7 @@ private fun cronPayloadTextTitle(job: GatewayCronJobDetail): String =
     "systemEvent" -> nativeString("System Event Text")
     "agentTurn" -> nativeString("Agent Prompt")
     "command" -> nativeString("Command")
+    "script" -> nativeString("Script")
     else -> nativeString("Payload Text")
   }
 
@@ -3095,7 +3101,7 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 }
 
 @Composable
-private fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
+internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
       SettingsToggleListRow(row)

@@ -457,7 +457,7 @@ describe("loadBundledEntryExportSync", () => {
     const channelEntryContract = await importFreshModule<
       typeof import("./channel-entry-contract.js")
     >(import.meta.url, "./channel-entry-contract.js?scope=native-esm-race-fallback");
-    const tempRoot = tempDirs.make("openclaw-channel-entry-contract-");
+    const tempRoot = fs.realpathSync(tempDirs.make("openclaw-channel-entry-contract-"));
     const pluginRoot = path.join(tempRoot, "dist", "extensions", "whatsapp");
     fs.mkdirSync(pluginRoot, { recursive: true });
     const importerPath = path.join(pluginRoot, "setup-entry.js");

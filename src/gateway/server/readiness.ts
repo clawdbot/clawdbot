@@ -38,7 +38,14 @@ function shouldIgnoreReadinessFailure(
   // Channel restarts spend time in backoff with running=false before the next
   // lifecycle re-enters startup grace. Keep readiness green during that handoff
   // window, but still surface hard failures once restart attempts are exhausted.
-  return health.reason === "not-running" && accountSnapshot.restartPending === true;
+  // A failed ingress start lands in the same backoff window, so it gets the same
+  // grace: the next start re-proves ingress, and once the ladder stops setting
+  // restartPending the account stays red instead of hiding dead inbound.
+  const restartableReason =
+    health.reason === "not-running" || health.reason === "ingress-unavailable";
+  const inRestartHandoff =
+    accountSnapshot.restartPending === true && accountSnapshot.running !== true;
+  return restartableReason && inRestartHandoff;
 }
 
 /** Create a cached readiness checker over channel runtime health. */

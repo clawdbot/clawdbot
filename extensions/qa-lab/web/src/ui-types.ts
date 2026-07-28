@@ -1,4 +1,10 @@
 import type {
+  QaLabExecutionKind,
+  QaLabResolvedRunPlan,
+  QaLabRunnerSnapshot,
+  QaLabRunSelection,
+} from "../../runner-contract.js";
+import type {
   QaEvidenceArtifactView,
   QaEvidenceGalleryEntryView,
   QaEvidenceGalleryModel,
@@ -82,6 +88,11 @@ export type SeedScenario = {
   successCriteria: string[];
   docsRefs?: string[];
   codeRefs?: string[];
+  execution?: {
+    kind?: QaLabExecutionKind;
+    channel?: string;
+  };
+  runtimePairLane?: "core" | "extended" | "soak";
 };
 
 export type Bootstrap = {
@@ -101,6 +112,13 @@ export type Bootstrap = {
   runnerCatalog: {
     status: "loading" | "ready" | "failed";
     real: RunnerModelOption[];
+    channels: string[];
+    profiles: Array<{
+      id: string;
+      evidenceMode: "full" | "slim";
+      channelDriver: "qa-channel" | "crabline" | "live";
+      categoryIds: string[];
+    }>;
   };
 };
 
@@ -136,28 +154,9 @@ type ScenarioRun = {
   };
 };
 
-export type RunnerSelection = {
-  providerMode: "mock-openai" | "live-frontier";
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  scenarioIds: string[];
-};
-
-type RunnerSnapshot = {
-  status: "idle" | "running" | "completed" | "failed";
-  selection: RunnerSelection;
-  startedAt?: string;
-  finishedAt?: string;
-  artifacts: null | {
-    evidencePath: string;
-    outputDir: string;
-    reportPath: string;
-    summaryPath: string;
-    watchUrl: string;
-  };
-  error: string | null;
-};
+export type RunnerSelection = QaLabRunSelection;
+export type RunnerResolvedPlan = QaLabResolvedRunPlan;
+type RunnerSnapshot = QaLabRunnerSnapshot;
 
 export type RunnerModelOption = {
   key: string;
@@ -370,6 +369,7 @@ export type UiState = {
   activeTab: TabId;
   runnerDraft: RunnerSelection | null;
   runnerDraftDirty: boolean;
+  runnerPlanOverride: RunnerResolvedPlan | null;
   composer: {
     conversationKind: "direct" | "channel";
     conversationId: string;

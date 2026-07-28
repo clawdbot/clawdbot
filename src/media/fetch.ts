@@ -26,6 +26,10 @@ import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 /** Default remote media fetch cap shared by buffer reads and store writes. */
 const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
+// Large media endpoints get a generous header-only deadline. The timer is
+// cleared once headers arrive, so healthy streaming bodies keep their own limits.
+const DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS = 15 * 60_000;
+
 /** Remote media bytes plus metadata before they are persisted to the media store. */
 type FetchMediaResult = {
   buffer: Buffer;
@@ -193,7 +197,7 @@ async function fetchGuardedMediaResponse(
     requestInit,
     maxRedirects,
     timeoutMs,
-    responseHeaderTimeoutMs,
+    responseHeaderTimeoutMs = DEFAULT_MEDIA_RESPONSE_HEADER_TIMEOUT_MS,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -474,7 +478,7 @@ async function saveOkMediaResponse(params: {
     fallbackContentType: params.fallbackContentType,
   });
   const detectionFilePathHint = isGenericResponseContentType(contentType)
-    ? params.filePathHint
+    ? (params.filePathHint ?? fileName)
     : undefined;
   try {
     const saved = params.res.body

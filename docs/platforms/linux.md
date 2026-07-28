@@ -99,7 +99,7 @@ Linux v1 uses one Canvas window. HTTP and HTTPS pages are renderable, but A2UI a
 
 The CLI remains the simplest option for a headless server, a VPS, or a remote Gateway:
 
-1. Install Node 24.15+ (recommended), Node 22.22.3+ (LTS), or Node 25.9+.
+1. Install Node 26 (recommended), or another supported release: Node 22.22.3+, Node 24.15+, or Node 25.9+.
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -150,7 +150,7 @@ A node can be connected and device-paired while its effective `caps` and `comman
 
 Camera devices must be readable by the service user, commonly through the `video` group. Camera clips use the default PulseAudio or PipeWire source when `includeAudio` is true; microphone audio exists only as that clip track, not as a standalone command. Location requires the node-service user to be permitted by the host's GeoClue policy.
 
-`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.allowCommands`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
+`camera.snap` and `camera.clip` also require explicit Gateway arming through `gateway.nodes.commands.allow`. See [Camera capture](/nodes/camera) and [Location command](/nodes/location-command) for payloads, limits, and errors.
 
 ## Install
 

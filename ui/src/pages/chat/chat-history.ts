@@ -15,12 +15,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  retirePendingChatSideQuestion,
-  type ChatSideResult,
-  type ChatSideResultPending,
-} from "../../lib/chat/side-result.ts";
+import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -29,9 +24,9 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentParamsForSession,
-  unsubscribeSessionMessages,
   visibleSessionMatches,
   type SessionCapability,
+  type SessionMessageSubscription,
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -45,6 +40,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
@@ -52,14 +48,19 @@ import {
   resolveStartupRetryDelayMs,
   sleep,
 } from "./chat-history-retry.ts";
+import type { ChatRunStartupPhase, ChatRunStartupState } from "./chat-run-startup.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
+  preserveLiveAuthoritativeUserMessages,
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import {
+  isPendingInitialUserMessage,
+  reconcileInitialUserMessageHandoff,
+} from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -96,6 +97,10 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const chatBranchRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
+const pendingSessionMessageSubscriptionReleases = new WeakMap<
+  object,
+  Set<SessionMessageSubscription>
+>();
 
 type ChatHistoryRequestOwnership = {
   version: number;
@@ -180,55 +185,6 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
-function isTextOnlyContent(content: unknown): boolean {
-  if (typeof content === "string") {
-    return true;
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string") {
-      return false;
-    }
-  }
-  return sawText;
-}
-
-function isEmptyUserTextOnlyMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
-    return false;
-  }
-  const mediaPaths = Array.isArray(entry.MediaPaths)
-    ? entry.MediaPaths
-    : typeof entry.MediaPath === "string"
-      ? [entry.MediaPath]
-      : [];
-  if (mediaPaths.some((value) => typeof value === "string" && value.trim())) {
-    return false;
-  }
-  if (!isTextOnlyContent(entry.content ?? entry.text)) {
-    return false;
-  }
-  return (extractText(message)?.trim() ?? "") === "";
-}
-
 function isHeartbeatAckStream(text: string): boolean {
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
@@ -257,6 +213,7 @@ export function materializeVisibleAssistantStreamMessages(
     requirePersistedTool?: boolean;
     replacementMessages?: unknown[];
     persistCommentary?: boolean;
+    keyedStartIndex?: number;
   } = {},
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
@@ -330,6 +287,8 @@ export type ChatState = {
   chatHistoryPagination?: ChatHistoryPagination;
   chatMessages: unknown[];
   chatMessagesBySession?: ChatMessageCache;
+  /** Active leaf of the history snapshot currently rendered by this pane. */
+  chatDisplayedLeafEntryId?: string | null;
   chatThinkingLevel: string | null;
   chatVerboseLevel: string | null;
   /** Pane-owned explicit session queue override from the latest history response. */
@@ -341,18 +300,14 @@ export type ChatState = {
   chatAttachments: ChatAttachment[];
   chatQueue: ChatQueueItem[];
   chatRunId: string | null;
+  chatRunUsageById?: Map<string, number>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatRunStartup?: ChatRunStartupState | null;
   planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: { summary: string } | null;
-  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
-  chatSideChatTurns?: ChatSideResult[];
-  chatSideResultPending?: ChatSideResultPending | null;
-  chatSideResultTerminalRuns?: Set<string>;
-  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
-  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -361,6 +316,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello: GatewayHelloOk | null;
+  canvasPluginSurfaceUrl?: string | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
   sessions?: Partial<SessionCapability>;
   chatBranches?: SessionBranch[];
@@ -375,12 +331,11 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 };
 
 type ChatSessionMessageSubscriptionState = ChatState & {
-  sessions: Pick<SessionCapability, "subscribeMessages">;
+  sessions: Pick<SessionCapability, "subscribeMessages" | "unsubscribeMessages">;
   sessionsResult?: SessionsListResult | null;
   sessionsError?: string | null;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
-  chatSessionMessageSubscriptionKey?: string | null;
-  chatSessionMessageSubscriptionAgentId?: string | null;
+  chatSessionMessageSubscription?: SessionMessageSubscription | null;
 };
 
 export type ChatHistoryResult = {
@@ -541,7 +496,8 @@ export type ChatEventPayload = {
   runId?: string;
   sessionKey: string;
   agentId?: string;
-  state: "delta" | "final" | "aborted" | "error";
+  state: "status" | "delta" | "final" | "aborted" | "error";
+  phase?: ChatRunStartupPhase;
   message?: unknown;
   deltaText?: string;
   replace?: boolean;
@@ -648,18 +604,36 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
   );
 }
 
-async function unsubscribeSelectedSessionMessageBestEffort(
-  client: GatewayBrowserClient,
-  key: string,
-  agentId?: string | null,
+function rememberPendingSessionMessageSubscriptionRelease(
+  state: ChatSessionMessageSubscriptionState,
+  subscription: SessionMessageSubscription,
+): void {
+  const key = state as object;
+  const pending = pendingSessionMessageSubscriptionReleases.get(key) ?? new Set();
+  pending.add(subscription);
+  pendingSessionMessageSubscriptionReleases.set(key, pending);
+}
+
+async function retryPendingSessionMessageSubscriptionReleases(
+  state: ChatSessionMessageSubscriptionState,
 ): Promise<void> {
-  try {
-    await unsubscribeSessionMessages(client, {
-      key,
-      agentId: isUiGlobalSessionKey(key) ? agentId : null,
-    });
-  } catch {
-    // Cleanup is best effort when a stale subscription completion loses ownership.
+  const key = state as object;
+  const pending = pendingSessionMessageSubscriptionReleases.get(key);
+  if (!pending) {
+    return;
+  }
+  await Promise.all(
+    [...pending].map(async (subscription) => {
+      try {
+        await state.sessions.unsubscribeMessages(subscription);
+        pending.delete(subscription);
+      } catch {
+        // Keep the handle for the next synchronization attempt or connection cleanup.
+      }
+    }),
+  );
+  if (pending.size === 0) {
+    pendingSessionMessageSubscriptionReleases.delete(key);
   }
 }
 
@@ -675,20 +649,23 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
+  await retryPendingSessionMessageSubscriptionReleases(state);
   const generation = beginSelectedSessionMessageSubscriptionSync(state);
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
   );
-  const previousCanonicalKey = normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey);
+  const previousSubscription = state.chatSessionMessageSubscription ?? null;
+  const previousCanonicalKey = normalizeSubscriptionKey(previousSubscription?.key);
   const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
   const nextSubscriptionAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, nextKey);
   const selectedAgentChanged =
     nextSubscriptionAgentId !== null &&
     previousSelectedKey === nextKey &&
-    (state.chatSessionMessageSubscriptionAgentId ?? null) !== nextSubscriptionAgentId;
+    (previousSubscription?.agentId ?? null) !== nextSubscriptionAgentId;
   const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
   const shouldUnsubscribePrevious =
-    previousCanonicalKey !== null && (selectedKeyChanged || selectedAgentChanged);
+    previousSubscription !== null &&
+    (opts?.force === true || selectedKeyChanged || selectedAgentChanged);
   const shouldSubscribe =
     opts?.force === true ||
     selectedKeyChanged ||
@@ -706,44 +683,69 @@ export async function syncSelectedSessionMessageSubscription(
       requestedAgentId: nextSubscriptionAgentId,
     });
   try {
-    if (shouldUnsubscribePrevious && previousCanonicalKey) {
-      await unsubscribeSessionMessages(client, {
-        key: previousCanonicalKey,
-        agentId:
-          isUiGlobalSessionKey(previousCanonicalKey) && state.chatSessionMessageSubscriptionAgentId
-            ? state.chatSessionMessageSubscriptionAgentId
-            : null,
-      });
-      if (isCurrent()) {
-        state.chatSessionMessageSubscriptionKey = null;
-        state.chatSessionMessageSubscriptionRequestedKey = null;
-        state.chatSessionMessageSubscriptionAgentId = null;
-      }
+    let unsubscribePromise: Promise<void> = Promise.resolve();
+    if (shouldUnsubscribePrevious && previousSubscription) {
+      unsubscribePromise = state.sessions.unsubscribeMessages(previousSubscription);
     }
-    if (!shouldSubscribe || !isCurrent()) {
+    const subscribePromise =
+      shouldSubscribe && isCurrent()
+        ? state.sessions.subscribeMessages(nextKey, {
+            agentId: nextSubscriptionAgentId ?? undefined,
+          })
+        : Promise.resolve(null);
+    // Gateway subscriptions are independent canonical-key entries. Overlap the old
+    // release with the new acquire so a session switch pays one RTT, not two.
+    const [unsubscribeResult, subscribeResult] = await Promise.allSettled([
+      unsubscribePromise,
+      subscribePromise,
+    ]);
+    if (unsubscribeResult.status === "rejected") {
+      if (subscribeResult.status === "fulfilled" && subscribeResult.value) {
+        try {
+          await state.sessions.unsubscribeMessages(subscribeResult.value);
+        } catch (replacementReleaseError) {
+          if (isCurrent()) {
+            if (previousSubscription) {
+              // Both live handles stay owned: the replacement becomes active while the
+              // failed previous release remains queued until a later sync releases it.
+              rememberPendingSessionMessageSubscriptionRelease(state, previousSubscription);
+            }
+            state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+            state.chatSessionMessageSubscription = subscribeResult.value;
+            state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
+          } else {
+            rememberPendingSessionMessageSubscriptionRelease(state, subscribeResult.value);
+          }
+          return;
+        }
+      }
+      if (isCurrent()) {
+        state.sessionsError = String(unsubscribeResult.reason);
+      }
       return;
     }
-    const subscribed = await state.sessions.subscribeMessages(nextKey, {
-      agentId: nextSubscriptionAgentId ?? undefined,
-    });
-    if (!isCurrent()) {
-      const staleKeyChanged =
-        normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribed.key;
-      const staleAgentChanged =
-        isUiGlobalSessionKey(subscribed.key) &&
-        (state.chatSessionMessageSubscriptionAgentId ?? null) !== subscribed.agentId;
-      if (staleKeyChanged || staleAgentChanged) {
-        await unsubscribeSelectedSessionMessageBestEffort(
-          client,
-          subscribed.key,
-          subscribed.agentId,
-        );
+    if (subscribeResult.status === "rejected") {
+      if (isCurrent() && shouldUnsubscribePrevious) {
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscription = null;
       }
+      throw subscribeResult.reason;
+    }
+    const subscribed = subscribeResult.value;
+    if (!subscribed) {
+      if (isCurrent() && shouldUnsubscribePrevious) {
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscription = null;
+      }
+      return;
+    }
+    if (!isCurrent()) {
+      // Generation advances before awaiting, so only the newest lease can reach assignment below.
+      await state.sessions.unsubscribeMessages(subscribed).catch(() => undefined);
       return;
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
-    state.chatSessionMessageSubscriptionKey = subscribed.key;
-    state.chatSessionMessageSubscriptionAgentId = subscribed.agentId;
+    state.chatSessionMessageSubscription = subscribed;
   } catch (err) {
     if (isCurrent()) {
       state.sessionsError = String(err);
@@ -760,10 +762,146 @@ type InFlightChatHistoryRequest = {
 };
 
 type LoadChatHistoryOptions = {
+  deferBranches?: boolean;
   startup?: boolean;
 };
 
 const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
+
+type SharedChatHistoryRequest = {
+  consumers: Set<SharedChatHistoryConsumer>;
+  promise: Promise<ChatHistoryResult>;
+};
+
+type SharedChatHistoryRegistry = {
+  ownerRequestCounts: WeakMap<object, Map<string, number>>;
+  requests: Map<string, SharedChatHistoryRequest>;
+};
+
+type SharedChatHistoryConsumer = {
+  isCurrent: () => boolean;
+  retryDeadlineMs: number;
+};
+
+const sharedChatHistoryRequests = new WeakMap<GatewayBrowserClient, SharedChatHistoryRegistry>();
+
+function updateChatHistoryOwnerRequestCount(
+  registry: SharedChatHistoryRegistry,
+  owner: object,
+  requestKey: string,
+  delta: 1 | -1,
+) {
+  let counts = registry.ownerRequestCounts.get(owner);
+  const nextCount = (counts?.get(requestKey) ?? 0) + delta;
+  if (nextCount <= 0) {
+    counts?.delete(requestKey);
+    if (counts?.size === 0) {
+      registry.ownerRequestCounts.delete(owner);
+    }
+    return;
+  }
+  if (!counts) {
+    counts = new Map();
+    registry.ownerRequestCounts.set(owner, counts);
+  }
+  counts.set(requestKey, nextCount);
+}
+
+async function requestChatHistory(
+  client: GatewayBrowserClient,
+  method: "chat.history" | "chat.startup",
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  shouldContinue: () => boolean,
+  shouldRetry: () => boolean,
+): Promise<ChatHistoryResult> {
+  for (;;) {
+    try {
+      return await client.request<ChatHistoryResult>(method, {
+        sessionKey,
+        ...(requestAgentId ? { agentId: requestAgentId } : {}),
+        limit: CHAT_HISTORY_REQUEST_LIMIT,
+      });
+    } catch (err) {
+      if (!shouldContinue()) {
+        throw err;
+      }
+      if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
+        return await client.request<ChatHistoryResult>("chat.history", {
+          sessionKey,
+          ...(requestAgentId ? { agentId: requestAgentId } : {}),
+          limit: CHAT_HISTORY_REQUEST_LIMIT,
+        });
+      }
+      if (shouldRetry() && isRetryableStartupUnavailable(err, method)) {
+        await sleep(resolveStartupRetryDelayMs(err));
+        if (!shouldContinue()) {
+          throw err;
+        }
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+function requestSharedChatHistory(
+  client: GatewayBrowserClient,
+  requestKey: string,
+  method: "chat.history" | "chat.startup",
+  sessionKey: string,
+  requestAgentId: string | undefined,
+  consumerOwner: object,
+  isCurrentConsumer: () => boolean,
+): Promise<ChatHistoryResult> {
+  let registry = sharedChatHistoryRequests.get(client);
+  if (!registry) {
+    registry = {
+      ownerRequestCounts: new WeakMap(),
+      requests: new Map(),
+    };
+    sharedChatHistoryRequests.set(client, registry);
+  }
+  const requests = registry.requests;
+  let shared = requests.get(requestKey);
+  const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
+  const consumer = {
+    isCurrent: isCurrentConsumer,
+    retryDeadlineMs: Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS,
+  };
+  if (!shared || existingOwner) {
+    const consumers = new Set([consumer]);
+    const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
+    // A pane joining older shared work still owns a full retry window. Otherwise
+    // it could inherit the first consumer's nearly expired startup deadline.
+    const shouldRetry = () =>
+      [...consumers].some((entry) => entry.isCurrent() && Date.now() < entry.retryDeadlineMs);
+    const promise = requestChatHistory(
+      client,
+      method,
+      sessionKey,
+      requestAgentId,
+      shouldContinue,
+      shouldRetry,
+    ).finally(() => {
+      if (requests?.get(requestKey)?.promise === promise) {
+        requests.delete(requestKey);
+      }
+    });
+    shared = { consumers, promise };
+    requests.set(requestKey, shared);
+  } else {
+    shared.consumers.add(consumer);
+  }
+  updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, 1);
+  // The client owns this bounded in-flight map, while every pane remains responsible
+  // for applying the shared payload under its own session/version ownership checks.
+  // Owner counts outlive displaced map entries so overlapping refreshes never reuse stale work.
+  return shared.promise.finally(() => {
+    shared?.consumers.delete(consumer);
+    updateChatHistoryOwnerRequestCount(registry, consumerOwner, requestKey, -1);
+  });
+}
 
 function recordChatHistoryTiming(
   state: ChatState,
@@ -794,6 +932,9 @@ function replaceCachedChatMessages(state: ChatState, sessionKey: string, agentId
     state,
     { sessionKey, agentId },
     {
+      ...(state.chatDisplayedLeafEntryId !== undefined
+        ? { displayedLeafEntryId: state.chatDisplayedLeafEntryId }
+        : {}),
       messages: state.chatMessages,
       pagination: state.chatHistoryPagination ?? { hasMore: false },
       sessionId: state.currentSessionId ?? null,
@@ -904,8 +1045,6 @@ export async function clearChatHistory(
   }
   state.chatMessages = [];
   state.chatRunError = null;
-  state.chatSideChatTurns = [];
-  state.chatSideChatHidden = false;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
     outcome: hadActiveRun ? "interrupted" : undefined,
@@ -915,13 +1054,8 @@ export async function clearChatHistory(
     clearLocalRun: true,
     clearChatStream: true,
     clearToolStream: true,
-    clearSideResultTerminalRuns: true,
     clearRunStatus: !hadActiveRun,
   });
-  // After the suppression-set wipe above: retire (not just drop) a pending
-  // BTW run so its late resultless terminal event cannot re-enter the freshly
-  // cleared transcript.
-  retirePendingChatSideQuestion(state);
   await loadChatHistory(state);
   scheduleChatScroll(state);
   return "completed";
@@ -957,6 +1091,12 @@ export async function rewindChatHistory(
     if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
       return null;
     }
+    // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
+    // text-only so large payloads do not enter local storage.
+    state.chatAttachments = replaceChatAttachmentsFromEditor(
+      state.chatAttachments,
+      result.editorAttachments,
+    );
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
@@ -1061,9 +1201,9 @@ export async function loadChatHistory(
   const startupAdvertised = isGatewayMethodAdvertised(state, "chat.startup");
   const method =
     opts.startup === true && startupAdvertised !== false ? "chat.startup" : "chat.history";
-  const requestKey = `${method}\0${sessionKey}\0${requestAgentId ?? ""}`;
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
+  const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
   const inFlight = inFlightChatHistoryRequests.get(state);
   if (
     inFlight?.key === requestKey &&
@@ -1074,8 +1214,9 @@ export async function loadChatHistory(
     return inFlight.promise;
   }
   if (
-    state.chatBranchesSessionKey !== sessionKey ||
-    state.chatBranchesConnectionEpoch !== connectionEpoch
+    opts.deferBranches !== true &&
+    (state.chatBranchesSessionKey !== sessionKey ||
+      state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
   }
@@ -1176,11 +1317,11 @@ async function loadChatHistoryUncached(
     sessionKey,
     requestAgentId,
   );
-  const startedAt = Date.now();
   const startedAtMs = controlUiNowMs();
   const previousMessages = state.chatMessages;
   const previousPagination = state.chatHistoryPagination;
   const previousSessionId = state.currentSessionId ?? null;
+  const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId ?? null;
   const previousRunId = state.chatRunId;
   recordChatHistoryTiming(state, "start", startedAtMs, {
     requestSessionKey: sessionKey,
@@ -1193,45 +1334,16 @@ async function loadChatHistoryUncached(
   state.chatLoading = true;
   setChatError(state, null);
   try {
-    let res: ChatHistoryResult;
-    for (;;) {
-      try {
-        res = await client.request<ChatHistoryResult>(method, {
-          sessionKey,
-          ...(requestAgentId ? { agentId: requestAgentId } : {}),
-          limit: CHAT_HISTORY_REQUEST_LIMIT,
-        });
-        break;
-      } catch (err) {
-        if (!shouldApplyChatHistoryResult(state, ownership)) {
-          recordChatHistoryTiming(state, "stale", startedAtMs, {
-            requestSessionKey: sessionKey,
-            requestAgentId,
-            previousRunId,
-            reason: "request-version",
-          });
-          return undefined;
-        }
-        const withinStartupRetryWindow =
-          Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
-        if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
-          res = await client.request<ChatHistoryResult>("chat.history", {
-            sessionKey,
-            ...(requestAgentId ? { agentId: requestAgentId } : {}),
-            limit: CHAT_HISTORY_REQUEST_LIMIT,
-          });
-          break;
-        }
-        if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, method)) {
-          await sleep(resolveStartupRetryDelayMs(err));
-          if (!shouldApplyChatHistoryResult(state, ownership)) {
-            return undefined;
-          }
-          continue;
-        }
-        throw err;
-      }
-    }
+    const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
+    const res = await requestSharedChatHistory(
+      client,
+      requestKey,
+      method,
+      sessionKey,
+      requestAgentId,
+      state as object,
+      () => shouldApplyChatHistoryResult(state, ownership),
+    );
     if (!shouldApplyChatHistoryResult(state, ownership)) {
       recordChatHistoryTiming(state, "stale", startedAtMs, {
         requestSessionKey: sessionKey,
@@ -1266,12 +1378,31 @@ async function loadChatHistoryUncached(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
       authoritativeMessages,
+    ).filter(
+      (message) =>
+        !isPendingInitialUserMessage(state.initialUserMessage, state, sessionKey, message),
     );
-    state.chatMessages = preserveOptimisticTailMessages(
+    const preservedOptimisticMessages = preserveOptimisticTailMessages(
       authoritativeMessages,
       reconciledTerminal.previousMessages,
       shouldHideHistoryMessage,
     );
+    const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+      ? res.sessionInfo?.activeLeafEntryId?.trim() || null
+      : previousDisplayedLeafEntryId;
+    const retainsTranscriptIdentity =
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
+      (!previousDisplayedLeafEntryId || previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
+    state.chatMessages = retainsTranscriptIdentity
+      ? preserveLiveAuthoritativeUserMessages(
+          preservedOptimisticMessages,
+          reconciledTerminal.currentMessages,
+          shouldHideHistoryMessage,
+        )
+      : preservedOptimisticMessages;
+    if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
+      state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
+    }
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
@@ -1313,6 +1444,9 @@ async function loadChatHistoryUncached(
         streamReconciliation,
       );
       const liveToolIds = currentLiveToolCallIds(state);
+      if (state.chatRunId && (hasVisibleStream || liveToolIds.length > 0)) {
+        state.chatRunStartup = { state: "activity", runId: state.chatRunId };
+      }
       const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
       const historyReplacedToolStream =
         liveToolIds.length > 0 && liveToolIds.every((id) => persistedToolStreamIds.has(id));
