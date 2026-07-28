@@ -3793,6 +3793,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Per-agent OpenShell with custom gateway
   - H2: Lifecycle management
   - H2: Security hardening
+  - H2: Custom image contract
   - H2: Current limitations
   - H2: How it works
   - H2: Related
@@ -3967,6 +3968,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: What gets sandboxed
   - H2: Modes, scope, and backend
+  - H2: Supported capability matrix
   - H2: Docker backend
   - H3: Sandboxed browser
   - H2: SSH backend
@@ -9203,6 +9205,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Gateway and E2E
   - H2: Full Docker suite (pnpm test:docker:all)
   - H3: Notable Docker lanes
+  - H3: Sandbox compatibility lanes
   - H2: Local PR gate
   - H2: Test performance tooling
   - H2: Benchmarks
