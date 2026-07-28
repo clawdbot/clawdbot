@@ -817,9 +817,11 @@ compatibility fallback when the shared
 
     <Note>
     Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting
-    the chat API endpoint. OpenAI TTS and Realtime voice are both configured
-    through an OpenAI Platform API key; OAuth-only installs can still use
-    Codex-backed chat models, but not OpenAI live talk-back.
+    the chat API endpoint. OpenAI TTS and GA Realtime voice are configured
+    through an OpenAI Platform API key. OAuth-only installs can use
+    Codex-backed chat models and GPT-Live browser Talk (which works over the
+    ChatGPT subscription — see the Realtime accordion), but not TTS or GA
+    realtime talk-back.
     </Note>
 
   </Accordion>
@@ -922,6 +924,23 @@ compatibility fallback when the shared
     GPT-Live accepts these voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`,
     `echo`, `marin`, `sage`, `shimmer`, and `verse`. OpenClaw defaults to
     `marin` and maps unknown or unsupported configured voices back to it.
+
+    Prerequisites, in order:
+
+    1. A ChatGPT OAuth auth profile: `openclaw models auth login --provider openai`.
+       An existing Codex CLI (`~/.codex`) sign-in is **not** read; the profile
+       must exist in OpenClaw. A Platform API key with `/v1/live` access works
+       instead, but that access is waitlist-gated.
+    2. `talk.realtime.model` set to a `gpt-live-*` value — via **Settings →
+       Talk** in the Control UI or the config below.
+    3. The bundled `openai` plugin registered in full mode. A restrictive
+       `plugins.allow` list fails with "OpenAI GPT-Live browser session broker
+       is unavailable".
+
+    Note one asymmetric failure mode: a configured Platform API key that
+    cannot be resolved (for example a broken secret reference) suppresses the
+    OAuth fallback with "fix or remove it" — repair or delete the key rather
+    than expecting OAuth to take over silently.
 
     ```json5
     {
