@@ -203,6 +203,7 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
       allowedOrigins: configSnapshot.gateway?.controlUi?.allowedOrigins,
       allowHostHeaderOriginFallback: hostHeaderOriginFallbackEnabled,
       isLocalClient,
+      clientIp: remoteAddr,
     });
     if (!originCheck.ok) {
       const errorMessage =

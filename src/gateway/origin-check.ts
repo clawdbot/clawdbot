@@ -1,7 +1,7 @@
 // Browser Origin validator for gateway HTTP and websocket requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import { isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { isPrivateOrLoopbackIpAddress, normalizeIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -91,6 +91,7 @@ export function checkBrowserOrigin(params: {
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
   isLocalClient?: boolean;
+  clientIp?: string;
 }): OriginCheckResult {
   const parsedOrigin = parseOrigin(params.origin);
   if (!parsedOrigin) {
@@ -117,7 +118,7 @@ export function checkBrowserOrigin(params: {
   if (
     requestHost &&
     parsedOrigin.host === requestHost &&
-    isTrustedSameOriginHost(requestHost, params.isLocalClient)
+    isTrustedSameOriginHost(requestHost, params.isLocalClient, params.clientIp)
   ) {
     return { ok: true, matchedBy: "private-same-origin" };
   }
@@ -144,12 +145,17 @@ export function resolveAcceptedBrowserOrigin(params: {
     ...policy,
     origin,
     isLocalClient: isLocalDirectRequest(params.req),
+    clientIp: params.req.socket?.remoteAddress,
   }).ok
     ? origin
     : undefined;
 }
 
-function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): boolean {
+function isTrustedSameOriginHost(
+  hostHeader: string,
+  isLocalClient?: boolean,
+  clientIp?: string,
+): boolean {
   const hostname = resolveHostName(hostHeader);
   if (!hostname) {
     return false;
@@ -157,17 +163,27 @@ function isTrustedSameOriginHost(hostHeader: string, isLocalClient?: boolean): b
   if (isLoopbackHost(hostname)) {
     return isLocalClient !== false;
   }
-  // The Host header is attacker-controlled. A remote client can set both
-  // Host and Origin to any private IP or .local/.ts.net hostname to make
-  // them match. Only trust the Host-derived hostname for same-origin
-  // validation when the request actually originates from a local client.
-  // Non-local clients must use explicit allowedOrigins or the opt-in
-  // allowHostHeaderOriginFallback instead.
-  if (isLocalClient === false) {
+  // Private-IP and private-DNS (.local/.ts.net) same-origin trust preserves
+  // the documented configuration-free Control UI path for browsers on the
+  // same LAN or Tailnet. The Host header is attacker-controlled, but a
+  // public-Internet client claiming a private Origin is the actual spoof:
+  // it cannot reach a private host directly and is setting both Host and
+  // Origin to a private address it does not control. A client already on a
+  // private network (LAN/Tailnet) has legitimate same-origin access.
+  const isPrivateHost = net.isIP(hostname) !== 0
+    ? isPrivateOrLoopbackIpAddress(hostname)
+    : hostname.endsWith(".local") || hostname.endsWith(".ts.net");
+  if (!isPrivateHost) {
     return false;
   }
-  if (net.isIP(hostname) !== 0) {
-    return isPrivateOrLoopbackIpAddress(hostname);
+  if (isLocalClient) {
+    return true;
   }
-  return hostname.endsWith(".local") || hostname.endsWith(".ts.net");
+  // Non-local client: allow if the connection peer is on a private network
+  // (legitimate LAN/Tailnet browser), reject if it is on a public IP (spoof).
+  const normalizedClientIp = normalizeIpAddress(clientIp);
+  if (normalizedClientIp && isPrivateOrLoopbackIpAddress(normalizedClientIp)) {
+    return true;
+  }
+  return false;
 }

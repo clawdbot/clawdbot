@@ -37,13 +37,24 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: true as const, matchedBy: "private-same-origin" as const },
     },
     {
-      name: "rejects same-origin private LAN host for non-local clients (Host header spoof)",
+      name: "rejects same-origin private LAN host for non-local public-IP clients (Host header spoof)",
       input: {
         requestHost: "192.168.0.202:18789",
         origin: "http://192.168.0.202:18789",
         isLocalClient: false,
+        clientIp: "203.0.113.5",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "accepts same-origin private LAN host for non-local LAN clients (preserves direct-LAN access)",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+        isLocalClient: false,
+        clientIp: "192.168.1.50",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
     },
     {
       name: "accepts same-origin tailnet host for local clients",
@@ -55,22 +66,44 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: true as const, matchedBy: "private-same-origin" as const },
     },
     {
-      name: "rejects same-origin tailnet host for non-local clients (Host header spoof)",
+      name: "rejects same-origin tailnet host for non-local public-IP clients (Host header spoof)",
       input: {
         requestHost: "peters-mac-studio-1.example.ts.net:18789",
         origin: "http://peters-mac-studio-1.example.ts.net:18789",
         isLocalClient: false,
+        clientIp: "203.0.113.5",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
-      name: "rejects same-origin .local host for non-local clients (Host header spoof)",
+      name: "accepts same-origin tailnet host for non-local LAN clients (preserves Tailnet access)",
+      input: {
+        requestHost: "peters-mac-studio-1.example.ts.net:18789",
+        origin: "http://peters-mac-studio-1.example.ts.net:18789",
+        isLocalClient: false,
+        clientIp: "100.64.0.10",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "rejects same-origin .local host for non-local public-IP clients (Host header spoof)",
       input: {
         requestHost: "gateway.local:18789",
         origin: "http://gateway.local:18789",
         isLocalClient: false,
+        clientIp: "203.0.113.5",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "accepts same-origin .local host for non-local LAN clients (preserves mDNS access)",
+      input: {
+        requestHost: "gateway.local:18789",
+        origin: "http://gateway.local:18789",
+        isLocalClient: false,
+        clientIp: "192.168.1.50",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
     },
     // Migration paths for non-local clients that previously relied on implicit
     // private-host same-origin trust: explicit allowedOrigins, the opt-in
@@ -81,6 +114,7 @@ describe("checkBrowserOrigin", () => {
         requestHost: "192.168.0.202:18789",
         origin: "http://192.168.0.202:18789",
         isLocalClient: false,
+        clientIp: "203.0.113.5",
         allowHostHeaderOriginFallback: true,
       },
       expected: { ok: true as const, matchedBy: "host-header-fallback" as const },
@@ -92,16 +126,18 @@ describe("checkBrowserOrigin", () => {
         origin: "https://control.example.com",
         allowedOrigins: ["https://control.example.com"],
         isLocalClient: false,
+        clientIp: "203.0.113.5",
       },
       expected: { ok: true as const, matchedBy: "allowlist" as const },
     },
     {
-      name: "rejects non-local spoofed private host when allowedOrigins does not match the spoof",
+      name: "rejects non-local public-IP spoofed private host when allowedOrigins does not match the spoof",
       input: {
         requestHost: "192.168.0.202:18789",
         origin: "http://192.168.0.202:18789",
         allowedOrigins: ["https://control.example.com"],
         isLocalClient: false,
+        clientIp: "203.0.113.5",
       },
       expected: { ok: false as const, reason: "origin not allowed" },
     },
@@ -112,6 +148,7 @@ describe("checkBrowserOrigin", () => {
         origin: "http://192.168.0.202:18789",
         allowedOrigins: ["*"],
         isLocalClient: false,
+        clientIp: "203.0.113.5",
       },
       expected: { ok: true as const, matchedBy: "allowlist" as const },
     },

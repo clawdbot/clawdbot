@@ -115,6 +115,7 @@ function rejectsBrowserLoopbackRequest(req: IncomingMessage): boolean {
     requestHost: getHeader(req, "host"),
     origin,
     isLocalClient: isLoopbackAddress(req.socket?.remoteAddress),
+    clientIp: req.socket?.remoteAddress,
   }).ok;
 }
 

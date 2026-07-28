@@ -86,6 +86,7 @@ type AuthorizeGatewayConnectParams = {
     origin?: string;
     allowedOrigins?: string[];
     allowHostHeaderOriginFallback?: boolean;
+    clientIp?: string;
   };
 };
 
@@ -348,6 +349,7 @@ function authorizeHttpBrowserOrigin(params: {
     allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
+    clientIp: params.browserOriginPolicy?.clientIp,
   });
   if (originCheck.ok) {
     return null;
@@ -513,7 +515,9 @@ async function authorizeGatewayConnectCore(
   if (auth.mode === "none") {
     const originResult = authorizeHttpBrowserOrigin({
       authSurface,
-      browserOriginPolicy: params.browserOriginPolicy,
+      browserOriginPolicy: params.browserOriginPolicy
+        ? { ...params.browserOriginPolicy, clientIp: ip }
+        : undefined,
       isLocalClient: localDirect,
       reason: "origin_not_allowed",
     });
