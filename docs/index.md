@@ -146,7 +146,8 @@ The Gateway is the single source of truth for sessions, routing, and channel con
     npm install -g openclaw@latest --allow-scripts openclaw
     ```
 
-    npm 11+ requires explicit package-script approval for global installs. See
+    `--allow-scripts openclaw` is the npm-supported global-install allowlist path
+    for npm 11+ configurations that warn on or enforce package-script review. See
     [Install](/install#npm-pnpm-or-bun) for package-manager notes.
 
   </Step>

@@ -83,9 +83,10 @@ If you already manage Node yourself:
     <Note>
     The hosted installer clears npm freshness filters such as `min-release-age`
     for the OpenClaw package install. If you install manually with npm, your own
-    npm policy still applies. npm 11+ also requires package install scripts to
-    be allowlisted; use `--allow-scripts openclaw` for global installs instead
-    of `npm approve-scripts openclaw`, which is project-scoped.
+    npm policy still applies. npm 11+ configurations can warn on or enforce
+    review of package install scripts. For global installs, use
+    `--allow-scripts openclaw` to allowlist OpenClaw's hooks inline instead of
+    `npm approve-scripts openclaw`, which is project-scoped.
     </Note>
 
   </Tab>
