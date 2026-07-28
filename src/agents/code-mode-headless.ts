@@ -298,6 +298,8 @@ export async function runCodeModeScriptHeadless(params: {
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
+      // Node discovery invokes the generic nodes tool for live status too;
+      // excluding list/get would bypass the same headless tool-call budget.
       const requestedToolCalls = newRequests.filter(
         (request) =>
           request.method === "call" ||
