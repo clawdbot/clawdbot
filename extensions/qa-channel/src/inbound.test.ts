@@ -196,6 +196,59 @@ describe("handleQaInbound", () => {
     );
   });
 
+  it("suppresses an identical normalized tool-call snapshot", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onToolStart?.({
+      phase: "start",
+      name: "search",
+      args: { second: 2, first: 1 },
+    });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    const toolCalls = vi.mocked(sendQaBusMessage).mock.calls[0]?.[0].toolCalls;
+    if (!toolCalls?.[0]) {
+      throw new Error("expected durable tool-call trace");
+    }
+    toolCalls[0].arguments = { first: 1, second: 2 };
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+  });
+
+  it("delivers a same-count final when its tool-call record changes", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.replyOptions?.onToolStart?.({
+      phase: "start",
+      name: "search",
+      args: { attempt: 1 },
+    });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    const toolCalls = vi.mocked(sendQaBusMessage).mock.calls[0]?.[0].toolCalls;
+    if (!toolCalls?.[0]) {
+      throw new Error("expected durable tool-call trace");
+    }
+    toolCalls[0] = { name: "search", arguments: { attempt: 2 } };
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        text: "single answer",
+        toolCalls: [{ name: "search", arguments: { attempt: 2 } }],
+      }),
+    );
+  });
+
   it("clears an active preview before suppressing an identical final", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);

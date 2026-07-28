@@ -111,6 +111,33 @@ function formatQaErrorForLog(error: unknown): string {
   return escaped;
 }
 
+function normalizeQaToolCallSnapshotValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(normalizeQaToolCallSnapshotValue);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+        .map(([key, entry]) => [key, normalizeQaToolCallSnapshotValue(entry)]),
+    );
+  }
+  return value;
+}
+
+function serializeQaToolCallSnapshot(toolCalls: QaBusToolCall[]): string {
+  // Call order is chronological trace data; nested argument keys are the
+  // unordered surface that must be canonicalized before comparison.
+  return JSON.stringify(
+    toolCalls.map((toolCall) => ({
+      name: toolCall.name,
+      ...(toolCall.arguments
+        ? { arguments: normalizeQaToolCallSnapshotValue(toolCall.arguments) }
+        : {}),
+    })),
+  );
+}
+
 function createQaReplyPreview(params: {
   account: ResolvedQaChannelAccount;
   inbound: QaBusMessage;
@@ -120,7 +147,7 @@ function createQaReplyPreview(params: {
   let messageId: string | null = null;
   let currentText = "";
   let lastDurableText = "";
-  let lastDurableToolCallCount = 0;
+  let lastDurableToolCallSnapshot = "[]";
   let pending = Promise.resolve();
 
   const write = (text: string) => {
@@ -172,6 +199,7 @@ function createQaReplyPreview(params: {
     if (!text.trim()) {
       return;
     }
+    const toolCallSnapshot = serializeQaToolCallSnapshot(params.toolCalls);
     await sendQaBusMessage({
       baseUrl: params.account.baseUrl,
       accountId: params.account.accountId,
@@ -184,7 +212,7 @@ function createQaReplyPreview(params: {
       toolCalls: params.toolCalls,
     });
     lastDurableText = text;
-    lastDurableToolCallCount = params.toolCalls.length;
+    lastDurableToolCallSnapshot = toolCallSnapshot;
   };
 
   return {
@@ -196,8 +224,10 @@ function createQaReplyPreview(params: {
       if (
         kind === "final" &&
         text === lastDurableText &&
-        params.toolCalls.length === lastDurableToolCallCount
+        serializeQaToolCallSnapshot(params.toolCalls) === lastDurableToolCallSnapshot
       ) {
+        // Count equality is not record equality: a same-count final with changed
+        // tool records must still be delivered.
         await clear();
         return;
       }
