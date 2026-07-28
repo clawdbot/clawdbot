@@ -967,7 +967,7 @@ describe("SystemAgentChatEngine", () => {
       ...structuredClone(sharedVerifiedInferenceConfig),
       gateway: { mode: "local" },
     };
-    let currentConfig = structuredClone(baseConfig);
+    const currentConfig = structuredClone(baseConfig);
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     mocks.readSetupConfigFileSnapshot.mockResolvedValue({
