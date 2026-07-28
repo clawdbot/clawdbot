@@ -8,6 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
@@ -35,6 +36,16 @@ export type PreparedMessageToolCatalog = Readonly<{
   channels: readonly PreparedMessageToolCatalogEntry[];
   getChannel: (id: string) => PreparedMessageToolCatalogEntry | undefined;
 }>;
+
+/** Lists message-action adapters from the caller's exact prepared registry. */
+export function listMessageActionDiscoveryChannels(
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog,
+) {
+  return (
+    (preparedMessageToolCatalog ?? getPreparedMessageToolCatalog())?.channels ??
+    listChannelPlugins()
+  );
+}
 
 /**
  * Input used to discover channel message actions for agent tool schemas.
@@ -194,11 +205,12 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
   if (!channelId) {
     return null;
   }
-  const prepared = preparedMessageToolCatalog?.getChannel(channelId);
+  const catalog = preparedMessageToolCatalog ?? getPreparedMessageToolCatalog();
+  const prepared = catalog?.getChannel(channelId);
   if (prepared?.actions) {
     return { pluginId: prepared.id, actions: prepared.actions };
   }
-  if (!preparedMessageToolCatalog) {
+  if (!catalog) {
     const loadedPlugin = getLoadedChannelPlugin(
       channelId as Parameters<typeof getChannelPlugin>[0],
     );
@@ -218,17 +230,10 @@ export function resolveCurrentChannelMessageToolDiscoveryAdapter(
       actions: bundledActions,
     };
   }
-  if (preparedMessageToolCatalog) {
-    return null;
-  }
-  const plugin = getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
-  if (!plugin?.actions) {
-    return null;
-  }
-  return {
-    pluginId: plugin.id,
-    actions: plugin.actions,
-  };
+  const plugin = catalog
+    ? undefined
+    : getChannelPlugin(channelId as Parameters<typeof getChannelPlugin>[0]);
+  return plugin?.actions ? { pluginId: plugin.id, actions: plugin.actions } : null;
 }
 
 /**
@@ -333,7 +338,7 @@ function listChannelMessageCapabilities(params: {
   preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 }): ChannelMessageCapability[] {
   const capabilities = new Set<ChannelMessageCapability>();
-  const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
+  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
     for (const capability of resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
@@ -403,7 +408,7 @@ export function resolveChannelMessageToolSchemaProperties(
   const discoveryBase = createMessageActionDiscoveryContext(params);
   const seenPluginIds = new Set<string>();
 
-  const channels = params.preparedMessageToolCatalog?.channels ?? listChannelPlugins();
+  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
   for (const plugin of channels) {
     if (!plugin.actions) {
       continue;
