@@ -52,7 +52,6 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
   const {
     codeModeControlsEnabledForRun,
     codeModeSkills,
-    localModelLeanEnabled,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolSearchConfig,
