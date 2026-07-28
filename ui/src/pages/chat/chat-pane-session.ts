@@ -17,7 +17,7 @@ import {
   refreshChatMetadata,
   refreshRouteSessionOptions,
   resetChatStateForRouteSession,
-  resetChatThreadPresentationState,
+  resetChatThreadSessionPresentationState,
   retryChatComposerMemoryFallback,
   resolveChatAgentId,
   resolveSessionDisplayName,
@@ -174,13 +174,13 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     // Close old-session listener owners before the next render detaches their
     // DOM; thread-global portals and caches are reset separately.
     dismissConfirmedActionPopovers(this);
-    resetChatThreadPresentationState(this.paneId);
+    resetChatThreadSessionPresentationState(this.paneId);
     this.sessionDiscussionOpenUrls.clear();
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
     this.cancelHeaderRename();
-    this.resetOlderMessagesViewport();
+    const restoredPosition = this.resetOlderMessagesViewport(nextSessionKey);
     const catalogKey = parseCatalogSessionKey(nextSessionKey);
     const previousAgentId = resolveChatAgentId(state);
     const previousSessionsResult = state.sessionsResult;
@@ -266,7 +266,11 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
         return;
       }
       state.requestUpdate();
-      scheduleChatScroll(state, true);
+      if (restoredPosition === null || restoredPosition.anchorToEnd) {
+        scheduleChatScroll(state, true);
+      } else {
+        this.restoreOlderMessagesViewport(nextSessionKey, restoredPosition.scrollTop);
+      }
     };
     void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
     void historyLoad.then(

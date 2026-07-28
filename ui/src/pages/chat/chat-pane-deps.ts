@@ -273,6 +273,7 @@ export type { SessionDiscussionPanelConfig } from "./components/session-discussi
 export {
   ChatTranscriptController,
   resetChatThreadPresentationState,
+  resetChatThreadSessionPresentationState,
 } from "./components/chat-thread.ts";
 export { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 export {
@@ -289,7 +290,14 @@ export {
   reconcileStaleChatRunAfterSessionStatePublication,
   replayPendingChatAbort,
 } from "./run-lifecycle.ts";
-export { scheduleChatScroll } from "./scroll.ts";
+export {
+  captureChatSessionScrollPosition,
+  getChatSessionScrollPosition,
+  restoreChatScroll,
+  saveChatSessionScrollPosition,
+  scheduleChatScroll,
+  type ChatSessionScrollPosition,
+} from "./scroll.ts";
 export {
   clearChatMessagesFromCache,
   readChatSessionSnapshot,
