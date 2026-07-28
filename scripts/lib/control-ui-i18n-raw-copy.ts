@@ -78,6 +78,28 @@ function pushRawCopySegments(
   }
 }
 
+function collectStaticStringSegments(node: ts.Expression): string[] {
+  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+    return [node.text];
+  }
+  if (ts.isTemplateExpression(node)) {
+    return [node.head.text, ...node.templateSpans.map((span) => span.literal.text)];
+  }
+  if (ts.isParenthesizedExpression(node)) {
+    return collectStaticStringSegments(node.expression);
+  }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    return [...collectStaticStringSegments(node.left), ...collectStaticStringSegments(node.right)];
+  }
+  if (ts.isConditionalExpression(node)) {
+    return [
+      ...collectStaticStringSegments(node.whenTrue),
+      ...collectStaticStringSegments(node.whenFalse),
+    ];
+  }
+  return [];
+}
+
 async function walkSourceFiles(dir: string): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
   const files: string[] = [];
@@ -154,16 +176,17 @@ export function collectControlUiRawCopyFromSource(params: {
         nameArg &&
         valueArg &&
         (ts.isStringLiteral(nameArg) || ts.isNoSubstitutionTemplateLiteral(nameArg)) &&
-        RAW_COPY_ATTRIBUTE_NAMES.has(nameArg.text) &&
-        (ts.isStringLiteral(valueArg) || ts.isNoSubstitutionTemplateLiteral(valueArg))
+        RAW_COPY_ATTRIBUTE_NAMES.has(nameArg.text)
       ) {
-        pushRawCopyFinding(findings, {
-          kind: "html-attribute",
-          line: toLine(valueArg.getStart(sourceFile)),
-          name: nameArg.text,
-          path: repoPath,
-          text: valueArg.text,
-        });
+        for (const text of collectStaticStringSegments(valueArg)) {
+          pushRawCopyFinding(findings, {
+            kind: "html-attribute",
+            line: toLine(valueArg.getStart(sourceFile)),
+            name: nameArg.text,
+            path: repoPath,
+            text,
+          });
+        }
       }
     }
     if (ts.isTaggedTemplateExpression(node) && node.tag.getText(sourceFile) === "html") {
