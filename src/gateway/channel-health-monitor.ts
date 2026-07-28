@@ -149,6 +149,13 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             );
             continue;
           }
+          // The channel supervisor owns the account while its own backoff restart
+          // is in flight. Restarting here cannot start anything (the supervisor
+          // still holds the account task) and only resets the attempt ladder, so
+          // a crash-looping channel would never reach its give-up terminal state.
+          if (channelManager.isAutoRestartScheduled(channelId as ChannelId, accountId)) {
+            continue;
+          }
 
           const record = restartRecords.get(key) ?? {
             lastRestartAt: 0,
