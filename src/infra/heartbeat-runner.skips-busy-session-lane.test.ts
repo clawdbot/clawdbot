@@ -90,6 +90,7 @@ describe("heartbeat runner skips when target session lane is busy", () => {
   it("defers automatic heartbeat while main-session restart recovery owns the session", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
+      cfg.session = { store: storePath };
       await seedMainSessionStore(storePath, cfg, {
         lastChannel: "telegram",
         lastProvider: "telegram",
