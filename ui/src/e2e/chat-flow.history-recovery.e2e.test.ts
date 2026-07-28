@@ -306,7 +306,9 @@ suite.define(() => {
       });
 
       await sessionB.click();
-      await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
+      // Returning preserves the reading position at the loaded-history start;
+      // the user can still use the normal jump-to-end control for message 140.
+      await page.getByText(/^older retained message 1\n/).waitFor({ timeout: 10_000 });
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 800);
       });

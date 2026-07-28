@@ -305,6 +305,7 @@ export async function resolveModelAsync(
         modelId: normalizedRef.model,
         cfg,
         workspaceDir,
+        includeRuntimeDiscovery: true,
       });
       if (manifestModel) {
         return manifestModel;

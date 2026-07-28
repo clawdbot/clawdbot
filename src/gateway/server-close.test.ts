@@ -281,6 +281,45 @@ describe("createGatewayCloseHandler", () => {
     expect(stopChannel).toHaveBeenCalledWith("discord");
   });
 
+  it("clears the secrets runtime snapshot only after channels stop (#112681)", async () => {
+    const events: string[] = [];
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const clearSecretsRuntimeSnapshot = vi.fn(() => {
+      events.push("clear-secrets");
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram"],
+        stopChannel,
+        clearSecretsRuntimeSnapshot,
+      }),
+    );
+
+    await close({ reason: "test" });
+
+    expect(events).toEqual(["channel:telegram", "clear-secrets"]);
+  });
+
+  it("clears the secrets runtime snapshot even when a channel stop fails", async () => {
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram"],
+        stopChannel: vi.fn(async () => {
+          throw new Error("stop failed");
+        }),
+        clearSecretsRuntimeSnapshot,
+      }),
+    );
+
+    const result = await close({ reason: "test" });
+
+    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
+    expect(result.warnings).toContain("channel/telegram");
+  });
+
   it("awaits post-ready sidecars before plugin services and channels", async () => {
     const events: string[] = [];
     let releaseSidecar!: () => void;
