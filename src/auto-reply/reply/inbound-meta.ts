@@ -10,6 +10,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildSkillOpportunityContext } from "../../skills/workshop/opportunity.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
@@ -43,13 +44,28 @@ export function formatActiveGoalContext(sessionEntry?: SessionEntry): string | u
 }
 
 function formatPendingSkillSuggestionContext(sessionEntry?: SessionEntry): string | undefined {
-  const rawSkillName = normalizeOptionalString(sessionEntry?.pendingSkillSuggestion?.skillName);
-  if (!rawSkillName) {
+  const suggestion = sessionEntry?.pendingSkillSuggestion;
+  if (!suggestion) {
     return undefined;
   }
-  const normalizedSkillName = rawSkillName.replace(/\s+/gu, " ").replaceAll('"', "'");
-  const skillName = truncateUtf16Safe(normalizedSkillName, MAX_SKILL_SUGGESTION_NAME_CHARS);
-  return `A reusable workflow ("${skillName}") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.`;
+  const skillName = normalizeOptionalString(suggestion.skillName);
+  if (skillName === undefined) {
+    return undefined;
+  }
+  const { observedWorkflow, expectedBenefit, evidence, source, proposalId, opportunityKey } =
+    suggestion;
+  return buildSkillOpportunityContext({
+    candidateSkillName: truncateUtf16Safe(
+      skillName.replace(/\s+/gu, " ").replaceAll('"', "'"),
+      MAX_SKILL_SUGGESTION_NAME_CHARS,
+    ),
+    observedWorkflow,
+    expectedBenefit,
+    evidence,
+    source,
+    proposalId,
+    opportunityKey,
+  });
 }
 
 function isQueuedGoalOnlyBlock(block: string, injectedGoals: ReadonlySet<string>): boolean {

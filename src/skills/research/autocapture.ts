@@ -316,6 +316,9 @@ export async function runSkillResearchAutoCapture(params: {
           skillName: proposal.skillName,
           signalHash,
           relatedSignalHashes: [...allInstructionSignalHashes, ...signalHashes.slice(0, -1)],
+          observedWorkflow: proposal.goal,
+          expectedBenefit: proposal.description,
+          evidence: proposal.evidence,
         });
         if (recorded) {
           log.info(`skill research queued suggestion ${proposal.skillName}`);

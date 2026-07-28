@@ -842,12 +842,15 @@ describe("buildAgentSystemPrompt", () => {
   });
 
   it("instructs models to use skill_workshop only when the tool is available", () => {
-    const section = buildSkillWorkshopPromptSection();
+    const section = buildSkillWorkshopPromptSection({ workboardAvailable: false });
     expect(section).toEqual([
       "## Skill Workshop",
       "Durable reusable skill/playbook/workflow work: `skill_workshop`; never write proposal/skill files directly.",
       "Generated = pending proposal. Apply/reject/quarantine only explicit user ask.",
       "proposal_content = complete final skill body, never plan/diff; update/revise preserves unchanged content.",
+      "When the current-turn context contains `✨ SKILL OPPORTUNITY`, place that block near the top of the reply before ordinary narrative.",
+      "For a genuine opportunity, Workboard capture is unavailable; show that failure explicitly in the opportunity block and do not imply a card exists.",
+      "Never conflate a recommendation, a pending proposal, and a live skill; keep the explicit approval boundary visible.",
       "",
     ]);
 
@@ -866,6 +869,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(withTool).toContain("## Skill Workshop");
     expect(withTool).toContain("Durable reusable skill/playbook/workflow work");
     expect(withTool).toContain("Generated = pending proposal");
+
+    const withWorkboard = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "skill_workshop", "workboard_create"],
+    });
+    expect(withWorkboard).toContain("call `workboard_create` once before replying");
+    expect(withWorkboard).not.toContain("Workboard capture is unavailable");
   });
 
   it("appends available skills when provided", () => {

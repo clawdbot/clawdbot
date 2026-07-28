@@ -405,10 +405,12 @@ describe("buildInboundUserContextPrefix", () => {
 
     const text = buildInboundUserContextPrefix({} as TemplateContext, undefined, entry);
 
-    expect(text).toBe(
-      'A reusable workflow ("github-pr-workflow") was detected last turn — offer to save it as a skill via skill_workshop if the user agrees.',
-    );
-    expect(text.split("\n")).toHaveLength(1);
+    expect(text).toContain("✨ SKILL OPPORTUNITY");
+    expect(text).toContain("Candidate skill: github-pr-workflow");
+    expect(text).toContain("Approval: Recommendation only");
+    expect(text).toContain("Workboard idempotency key: unavailable");
+    expect(text).toContain("If `workboard_create` is unavailable or fails");
+    expect(text.split("\n").length).toBeGreaterThan(5);
   });
 
   it("injects an active goal into the current user-role context", () => {

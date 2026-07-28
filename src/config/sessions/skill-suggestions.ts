@@ -1,3 +1,4 @@
+import { buildSkillOpportunityIdempotencyKey } from "../../skills/workshop/opportunity.js";
 // Session skill suggestions are one-shot hints consumed by the next interactive turn.
 import {
   loadSessionEntryReadOnly,
@@ -121,6 +122,11 @@ export async function recordSessionSkillSuggestion(
     skillName: string;
     signalHash: string;
     relatedSignalHashes?: readonly string[];
+    observedWorkflow?: string;
+    expectedBenefit?: string;
+    evidence?: string;
+    source?: "openclaw" | "skill_workshop";
+    proposalId?: string;
     detectedAt?: number;
   },
 ): Promise<boolean> {
@@ -150,6 +156,20 @@ export async function recordSessionSkillSuggestion(
         pendingSkillSuggestion: {
           skillName,
           detectedAt: options.detectedAt ?? Date.now(),
+          ...(options.observedWorkflow?.trim()
+            ? { observedWorkflow: options.observedWorkflow.trim() }
+            : {}),
+          ...(options.expectedBenefit?.trim()
+            ? { expectedBenefit: options.expectedBenefit.trim() }
+            : {}),
+          ...(options.evidence?.trim() ? { evidence: options.evidence.trim() } : {}),
+          ...(options.source ? { source: options.source } : {}),
+          ...(options.proposalId?.trim() ? { proposalId: options.proposalId.trim() } : {}),
+          opportunityKey: buildSkillOpportunityIdempotencyKey({
+            candidateSkillName: skillName,
+            triggerHash: signalHash,
+            context: options.observedWorkflow,
+          }),
         },
         skillCaptureSignalHashes: appendSignalHashes(entry, signalHashes),
       };
