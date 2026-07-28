@@ -72,6 +72,8 @@ export type ChatStreamSegment = {
   runId?: string;
   toolCallId?: string;
   itemId?: string;
+  /** Identifies preamble snapshots so optional item IDs can appear or disappear safely. */
+  preamble?: true;
 };
 
 export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {

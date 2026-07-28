@@ -22,6 +22,13 @@ type AgentEventPayload = {
   data: Record<string, unknown>;
 };
 
+type PreambleProgressSnapshot = {
+  text: string;
+  itemId?: string;
+  runId?: string;
+  ts?: number;
+};
+
 type SessionOperationEventPayload = {
   operationId?: string;
   operation?: string;
@@ -791,9 +798,6 @@ function readPreambleProgressEvent(
         : null;
   const itemId = rawItemId?.trim();
   const progressText = normalizePreambleProgressText(data.progressText);
-  if (!progressText && !itemId) {
-    return null;
-  }
   return {
     text: progressText,
     ...(itemId ? { itemId } : {}),
@@ -814,39 +818,68 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!progress) {
     return false;
   }
-  if (progress.itemId && !progress.text.trim()) {
-    host.chatStreamSegments = host.chatStreamSegments.filter(
-      (segment) => segment.itemId !== progress.itemId,
-    );
-    return true;
+  applyPreambleProgressSnapshot(host, { ...progress, runId: payload.runId, ts: payload.ts });
+  return true;
+}
+
+export function applyPreambleProgressSnapshot(
+  host: Pick<ToolStreamHost, "chatStreamSegments">,
+  progress: PreambleProgressSnapshot,
+): void {
+  const text = normalizePreambleProgressText(progress.text);
+  if (!text && !progress.itemId) {
+    host.chatStreamSegments = host.chatStreamSegments.filter((segment) => !segment.preamble);
+    return;
   }
-  const existingIndex = progress.itemId
+  if (progress.itemId && !text) {
+    host.chatStreamSegments = host.chatStreamSegments.filter(
+      (segment) => segment.itemId !== progress.itemId && !(segment.preamble && !segment.itemId),
+    );
+    return;
+  }
+  const exactItemIndex = progress.itemId
     ? host.chatStreamSegments.findIndex((segment) => segment.itemId === progress.itemId)
     : -1;
+  const existingIndex =
+    exactItemIndex >= 0
+      ? exactItemIndex
+      : host.chatStreamSegments.findIndex(
+          (segment) => segment.preamble && (!progress.itemId || !segment.itemId),
+        );
   if (existingIndex >= 0) {
     const existing = host.chatStreamSegments[existingIndex];
     if (!existing) {
-      return true;
+      return;
     }
-    host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
-      index === existingIndex ? { ...segment, text: progress.text, runId: payload.runId } : segment,
-    );
-    return true;
+    host.chatStreamSegments = host.chatStreamSegments.map((segment, index) => {
+      if (index !== existingIndex) {
+        return segment;
+      }
+      const { itemId: _previousItemId, ...rest } = existing;
+      return {
+        ...rest,
+        text,
+        preamble: true,
+        ...(progress.runId ? { runId: progress.runId } : {}),
+        ...(progress.itemId ? { itemId: progress.itemId } : {}),
+      };
+    });
+    return;
   }
   const last = host.chatStreamSegments[host.chatStreamSegments.length - 1];
-  if (!progress.itemId && last && !last.toolCallId && last.text === progress.text) {
-    return true;
+  if (!progress.itemId && last && !last.toolCallId && last.text === text) {
+    return;
   }
   host.chatStreamSegments = [
     ...host.chatStreamSegments,
     {
-      text: progress.text,
-      ts: Date.now(),
-      runId: payload.runId,
+      text,
+      ts: progress.ts ?? Date.now(),
+      preamble: true,
+      ...(progress.runId ? { runId: progress.runId } : {}),
       ...(progress.itemId ? { itemId: progress.itemId } : {}),
     },
   ];
-  return true;
 }
 
 function parsePlanSteps(value: unknown): PlanStatus["steps"] {

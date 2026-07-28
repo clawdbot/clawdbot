@@ -55,6 +55,7 @@ describe("session observer", () => {
         stream: "item",
         data: {
           kind: "preamble",
+          itemId: "commentary-1",
           phase: "update",
           progressText: "**Checking** the [gateway](https://example.com) [[reply_to_current]]",
         },
@@ -71,6 +72,16 @@ describe("session observer", () => {
       runId: "run-1",
     });
     expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(harness.observer.getPreambleReplay("agent:main:session-1")).toEqual({
+      runId: "run-1",
+      itemId: "commentary-1",
+      progressText: "**Checking** the [gateway](https://example.com) [[reply_to_current]]",
+      updatedAt: 1_000,
+    });
+    harness.observer.removeConnection("conn-1");
+    expect(harness.observer.getPreambleReplay("agent:main:session-1")).toEqual(
+      expect.objectContaining({ itemId: "commentary-1" }),
+    );
     harness.observer.dispose();
   });
 

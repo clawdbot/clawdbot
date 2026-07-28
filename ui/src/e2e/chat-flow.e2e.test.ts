@@ -39,6 +39,12 @@ const channelStopProofDir = path.join(
   "control-ui-e2e",
   "channel-stop",
 );
+const preambleHandoffProofDir = path.join(
+  process.cwd(),
+  ".artifacts",
+  "control-ui-e2e",
+  "preamble-handoff",
+);
 
 let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
@@ -4085,6 +4091,100 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
           textOverflow: getComputedStyle(label).textOverflow,
         })),
       ).toEqual({ textIndent: "0px", textOverflow: "ellipsis" });
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
+  it("hands a background session preamble from the sidebar into Chat", async () => {
+    if (captureUiProofEnabled) {
+      await mkdir(preambleHandoffProofDir, { recursive: true });
+    }
+    const context = await newBrowserContext({
+      locale: "en-US",
+      ...(captureUiProofEnabled
+        ? { recordVideo: { dir: preambleHandoffProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:session-b";
+    const runId = "run-session-b";
+    const preamble = "Checking the gateway subscription handoff";
+    const updatedAt = Date.now();
+    const sessions = chatSessionListResponse([
+      {
+        key: "agent:main:session-a",
+        kind: "direct",
+        label: "Session A",
+        updatedAt: updatedAt + 1,
+      },
+      {
+        key: sessionKey,
+        kind: "direct",
+        label: "Session B",
+        updatedAt,
+        hasActiveRun: true,
+        status: "running",
+        activeRunIds: [runId],
+        observerDigest: {
+          sessionKey,
+          runId,
+          revision: 1,
+          updatedAt,
+          headline: preamble,
+          health: "on-track",
+        },
+      },
+    ]);
+    await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessions,
+        "sessions.messages.subscribe": {
+          cases: [
+            {
+              match: { key: sessionKey },
+              response: {
+                key: sessionKey,
+                preambleReplay: {
+                  runId,
+                  itemId: "commentary-1",
+                  progressText: preamble,
+                  updatedAt,
+                },
+              },
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:session-a",
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+      await row.locator(".sidebar-recent-session__subtitle").getByText(preamble).waitFor({
+        timeout: 10_000,
+      });
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(preambleHandoffProofDir, "sidebar.png"),
+        });
+      }
+
+      await row.locator("a.sidebar-recent-session__link").click();
+
+      await page.locator(".chat-thread-inner").getByText(preamble, { exact: true }).waitFor({
+        timeout: 10_000,
+      });
+      if (captureUiProofEnabled) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(preambleHandoffProofDir, "chat.png"),
+        });
+      }
     } finally {
       await closeBrowserContext(context);
     }

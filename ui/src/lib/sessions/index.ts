@@ -189,6 +189,15 @@ type SessionCreateReconciliation = "blocking" | "background";
 export type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
+  /** `null` is an authoritative empty snapshot; `undefined` means unsupported. */
+  preambleReplay?: SessionPreambleReplay | null;
+};
+
+export type SessionPreambleReplay = {
+  runId: string;
+  itemId?: string;
+  progressText: string;
+  updatedAt: number;
 };
 
 export type SessionCapability = {
@@ -541,9 +550,40 @@ async function requestSessionMessageSubscription(
     result && typeof result === "object" && typeof (result as { key?: unknown }).key === "string"
       ? (result as { key: string }).key.trim()
       : "";
+  const hasPreambleReplay =
+    result !== null &&
+    typeof result === "object" &&
+    Object.prototype.hasOwnProperty.call(result, "preambleReplay");
+  const replayCandidate =
+    hasPreambleReplay &&
+    result &&
+    typeof result === "object" &&
+    (result as { preambleReplay?: unknown }).preambleReplay !== null
+      ? (result as { preambleReplay?: Record<string, unknown> }).preambleReplay
+      : undefined;
+  const replayRunId =
+    typeof replayCandidate?.runId === "string" ? replayCandidate.runId.trim() : "";
+  const replayProgressText =
+    typeof replayCandidate?.progressText === "string" ? replayCandidate.progressText.trim() : "";
+  const replayUpdatedAt = replayCandidate?.updatedAt;
+  const replayItemId =
+    typeof replayCandidate?.itemId === "string" ? replayCandidate.itemId.trim() : "";
+  const preambleReplay =
+    replayRunId &&
+    replayProgressText &&
+    typeof replayUpdatedAt === "number" &&
+    Number.isFinite(replayUpdatedAt)
+      ? {
+          runId: replayRunId,
+          ...(replayItemId ? { itemId: replayItemId } : {}),
+          progressText: replayProgressText,
+          updatedAt: replayUpdatedAt,
+        }
+      : undefined;
   return {
     key: subscribedKey || key.trim(),
     agentId: options.agentId?.trim() || null,
+    ...(hasPreambleReplay ? { preambleReplay: preambleReplay ?? null } : {}),
   };
 }
 
@@ -602,18 +642,26 @@ async function acquireSessionMessageSubscription(
     (candidate) =>
       candidate.agentId === agentId && areUiSessionKeysEquivalent(candidate.key, normalizedKey),
   );
+  let result: Promise<SessionMessageSubscription>;
   if (!entry) {
-    const result = requestSessionMessageSubscription(client, normalizedKey, { agentId });
+    result = requestSessionMessageSubscription(client, normalizedKey, { agentId });
     entry = { key: normalizedKey, agentId, owners: 0, result };
     registry.add(entry);
     void result.catch(() => registry.delete(entry!));
+  } else {
+    // The sidebar may already own this transport subscription. Renewing the
+    // idempotent subscribe request gives a newly opened Chat the latest replay.
+    result = entry.result.then(() =>
+      requestSessionMessageSubscription(client, normalizedKey, { agentId }),
+    );
   }
   entry.owners += 1;
   try {
-    const resolved = await entry.result;
+    const resolved = await result;
     const subscription: SessionMessageSubscription = {
       key: resolved.key,
       agentId: resolved.agentId ?? null,
+      ...(resolved.preambleReplay !== undefined ? { preambleReplay: resolved.preambleReplay } : {}),
     };
     sessionMessageSubscriptionOwners.set(subscription, { client, entry, registry, onRelease });
     return subscription;

@@ -28,6 +28,7 @@ import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import type { SessionPreambleReplay } from "./session-observer-contract.js";
 
 const HEADLINE_MAX_CHARS = 120;
 const ASSESSMENT_MAX_CHARS = 320;
@@ -61,6 +62,7 @@ export type SessionObserverState = SessionActivityNoteState & {
   lastDigestNoteSequence: number;
   lastPreambleHeadline?: string;
   lastPublishedPreambleHeadline?: string;
+  preambleReplay?: SessionPreambleReplay;
   previousDigest?: SessionObserverDigest;
   preparedPromise?: Promise<PreparedModel>;
   activeController?: AbortController;
@@ -83,6 +85,7 @@ export type DormantSessionObserverRun = Pick<
   | "digestCount"
   | "consecutiveFailures"
   | "lastPreambleHeadline"
+  | "preambleReplay"
   | "planProgress"
   | "previousDigest"
 >;
@@ -185,6 +188,7 @@ export function createDormantSessionObserverRun(
     ...(state.lastPublishedPreambleHeadline
       ? { lastPreambleHeadline: state.lastPublishedPreambleHeadline }
       : {}),
+    ...(state.preambleReplay ? { preambleReplay: state.preambleReplay } : {}),
     planProgress: state.planProgress,
     previousDigest: state.previousDigest,
   };

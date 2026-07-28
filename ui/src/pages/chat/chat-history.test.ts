@@ -4,6 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   loadChatHistory,
   rewindChatHistory,
+  syncSelectedSessionMessageSubscription,
   switchChatHistoryBranch,
   type ChatHistoryResult,
   type ChatState,
@@ -79,6 +80,235 @@ function activeHistory(
     },
   } satisfies ChatHistoryResult;
 }
+
+describe("selected-session preamble handoff", () => {
+  it("renders the replay in Chat and replaces it by item id", async () => {
+    const state = createState({}) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: null;
+    };
+    state.sessionKey = "agent:main:session-1";
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscription = null;
+    state.chatStreamSegments = [
+      { text: "Assistant text", ts: 40 },
+      { text: "Stale preamble", ts: 41, itemId: "commentary-old", preamble: true },
+    ];
+    state.sessions = {
+      subscribeMessages: vi.fn().mockResolvedValue({
+        key: state.sessionKey,
+        agentId: null,
+        preambleReplay: {
+          runId: "run-1",
+          itemId: "commentary-1",
+          progressText: "Checking the gateway subscription handoff [[reply_to_current]]",
+          updatedAt: 42,
+        },
+      }),
+      unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
+      setModelOverride: vi.fn(),
+    } as never;
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 40 },
+      {
+        text: "Checking the gateway subscription handoff",
+        ts: 42,
+        runId: "run-1",
+        itemId: "commentary-1",
+        preamble: true,
+      },
+    ]);
+    handleAgentEvent(state, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: 43,
+      sessionKey: state.sessionKey,
+      data: {
+        kind: "preamble",
+        itemId: "commentary-1",
+        progressText: "Checking the gateway subscription handoff and tests",
+      },
+    });
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 40 },
+      {
+        text: "Checking the gateway subscription handoff and tests",
+        ts: 42,
+        runId: "run-1",
+        itemId: "commentary-1",
+        preamble: true,
+      },
+    ]);
+  });
+
+  it("clears a stale preamble when the authoritative subscription replay is empty", async () => {
+    const state = createState({}) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: null;
+    };
+    state.sessionKey = "agent:main:session-1";
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscription = null;
+    state.chatStreamSegments = [
+      { text: "Assistant text", ts: 41 },
+      { text: "Disconnected preamble", ts: 42, itemId: "commentary-1", preamble: true },
+    ];
+    state.sessions = {
+      subscribeMessages: vi.fn().mockResolvedValue({
+        key: state.sessionKey,
+        agentId: null,
+        preambleReplay: null,
+      }),
+      unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
+      setModelOverride: vi.fn(),
+    } as never;
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.chatStreamSegments).toEqual([{ text: "Assistant text", ts: 41 }]);
+    expect(state.requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("preserves live preamble state when replay support is unavailable", async () => {
+    const state = createState({}) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: null;
+    };
+    state.sessionKey = "agent:main:session-1";
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscription = null;
+    state.chatStreamSegments = [
+      { text: "Live preamble", ts: 42, itemId: "commentary-1", preamble: true },
+    ];
+    state.sessions = {
+      subscribeMessages: vi.fn().mockResolvedValue({
+        key: state.sessionKey,
+        agentId: null,
+      }),
+      unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
+      setModelOverride: vi.fn(),
+    } as never;
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Live preamble", ts: 42, itemId: "commentary-1", preamble: true },
+    ]);
+    expect(state.requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("clears an itemless replay without removing assistant stream text", async () => {
+    const state = createState({}) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: null;
+    };
+    state.sessionKey = "agent:main:session-1";
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscription = null;
+    state.chatStreamSegments = [{ text: "Assistant text", ts: 41 }];
+    state.sessions = {
+      subscribeMessages: vi.fn().mockResolvedValue({
+        key: state.sessionKey,
+        agentId: null,
+        preambleReplay: {
+          runId: "run-1",
+          progressText: "Checking files",
+          updatedAt: 42,
+        },
+      }),
+      unsubscribeMessages: vi.fn().mockResolvedValue(undefined),
+      setModelOverride: vi.fn(),
+    } as never;
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 41 },
+      { text: "Checking files", ts: 42, runId: "run-1", preamble: true },
+    ]);
+    handleAgentEvent(state, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: 43,
+      sessionKey: state.sessionKey,
+      data: { kind: "preamble", progressText: "Checking files and tests" },
+    });
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 41 },
+      { text: "Checking files and tests", ts: 42, runId: "run-1", preamble: true },
+    ]);
+    handleAgentEvent(state, {
+      runId: "run-1",
+      seq: 3,
+      stream: "item",
+      ts: 44,
+      sessionKey: state.sessionKey,
+      data: {
+        kind: "preamble",
+        itemId: "commentary-1",
+        progressText: "Checking files, tests, and identity",
+      },
+    });
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 41 },
+      {
+        text: "Checking files, tests, and identity",
+        ts: 42,
+        runId: "run-1",
+        itemId: "commentary-1",
+        preamble: true,
+      },
+    ]);
+    handleAgentEvent(state, {
+      runId: "run-1",
+      seq: 4,
+      stream: "item",
+      ts: 45,
+      sessionKey: state.sessionKey,
+      data: { kind: "preamble", progressText: "Finishing verification" },
+    });
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 41 },
+      { text: "Finishing verification", ts: 42, runId: "run-1", preamble: true },
+    ]);
+    handleAgentEvent(state, {
+      runId: "run-1",
+      seq: 5,
+      stream: "item",
+      ts: 46,
+      sessionKey: state.sessionKey,
+      data: {
+        kind: "preamble",
+        itemId: "commentary-2",
+        progressText: "Final identity-bearing update",
+      },
+    });
+    expect(state.chatStreamSegments).toEqual([
+      { text: "Assistant text", ts: 41 },
+      {
+        text: "Final identity-bearing update",
+        ts: 42,
+        runId: "run-1",
+        itemId: "commentary-2",
+        preamble: true,
+      },
+    ]);
+    handleAgentEvent(state, {
+      runId: "run-1",
+      seq: 6,
+      stream: "item",
+      ts: 47,
+      sessionKey: state.sessionKey,
+      data: { kind: "preamble", progressText: "" },
+    });
+    expect(state.chatStreamSegments).toEqual([{ text: "Assistant text", ts: 41 }]);
+  });
+});
 
 describe("rewindChatHistory", () => {
   it("clears the cached snapshot, refetches, and returns the composer text", async () => {

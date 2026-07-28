@@ -11,6 +11,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationInitialUserMessageHandoff } from "../../app/context.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -86,7 +87,11 @@ import {
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
-import { normalizePlanSnapshot, type PlanStatus } from "./tool-stream.ts";
+import {
+  applyPreambleProgressSnapshot,
+  normalizePlanSnapshot,
+  type PlanStatus,
+} from "./tool-stream.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
@@ -319,6 +324,7 @@ export type ChatState = {
   chatBranchesConnectionEpoch?: number | null;
   chatBranchesLoading?: boolean;
   requestUpdate?: () => void;
+  chatStreamSegments?: ChatStreamSegment[];
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -664,6 +670,21 @@ export async function syncSelectedSessionMessageSubscription(
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;
     state.chatSessionMessageSubscription = subscribed;
+    if (subscribed.preambleReplay !== undefined && Array.isArray(state.chatStreamSegments)) {
+      // The gateway subscribes before taking this snapshot, so later live
+      // updates remain ordered after it. Reconcile instead of merging stale UI state.
+      const streamHost = state as { chatStreamSegments: ChatStreamSegment[] };
+      applyPreambleProgressSnapshot(streamHost, { text: "" });
+      if (subscribed.preambleReplay) {
+        applyPreambleProgressSnapshot(streamHost, {
+          text: subscribed.preambleReplay.progressText,
+          itemId: subscribed.preambleReplay.itemId,
+          runId: subscribed.preambleReplay.runId,
+          ts: subscribed.preambleReplay.updatedAt,
+        });
+      }
+      state.requestUpdate?.();
+    }
   } catch (err) {
     if (isCurrent()) {
       state.sessionsError = String(err);

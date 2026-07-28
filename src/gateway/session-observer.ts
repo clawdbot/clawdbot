@@ -94,6 +94,23 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       notes: [],
     };
   };
+  const latestDormantRunForSession = (sessionKey: string) => {
+    let latest: DormantSessionObserverRun | undefined;
+    for (const run of dormantRuns.values()) {
+      // Dormant map order is the recency tie-breaker when runs share a start timestamp.
+      if (run.sessionKey === sessionKey && (!latest || run.startedAt >= latest.startedAt)) {
+        latest = run;
+      }
+    }
+    return latest;
+  };
+  const getPreambleReplay = (sessionKey: string) => {
+    const activeState = states.get(sessionKey);
+    if (activeState) {
+      return activeState.terminalHealth ? undefined : activeState.preambleReplay;
+    }
+    return latestDormantRunForSession(sessionKey)?.preambleReplay;
+  };
   const audience = createSessionObserverAudience({
     subscribers: deps.subscribers,
     sessionEventSubscribers: deps.sessionEventSubscribers,
@@ -578,6 +595,34 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
       return;
     }
+    const stateAtEventStart = states.get(sessionKey);
+    const latestDormantAtEventStart = stateAtEventStart
+      ? undefined
+      : latestDormantRunForSession(sessionKey);
+    const terminalStartedAt = readFiniteNumber(event.data.startedAt);
+    const latestKnownStartedAt =
+      stateAtEventStart?.startedAt ?? latestDormantAtEventStart?.startedAt;
+    const terminalEndsLatestRun =
+      terminal &&
+      (stateAtEventStart?.runId === event.runId ||
+        (!stateAtEventStart &&
+          (latestDormantAtEventStart?.runId === event.runId ||
+            latestDormantAtEventStart === undefined)) ||
+        (terminalStartedAt !== undefined &&
+          latestKnownStartedAt !== undefined &&
+          terminalStartedAt > latestKnownStartedAt));
+    if (terminalEndsLatestRun) {
+      // Terminal states are intentionally not dormant. Clear only their older
+      // transient replay payloads so deleting the latest run cannot expose stale text.
+      if (stateAtEventStart) {
+        stateAtEventStart.preambleReplay = undefined;
+      }
+      for (const run of dormantRuns.values()) {
+        if (run.sessionKey === sessionKey) {
+          run.preambleReplay = undefined;
+        }
+      }
+    }
     const agentId = eventAgentId || knownRun?.agentId;
     if (terminal) {
       contextlessTerminalRuns.delete(event.runId);
@@ -723,6 +768,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       }
     },
     getCompanionSnapshot,
+    getPreambleReplay,
     dispose() {
       disposed = true;
       preamblePublisher.dispose();

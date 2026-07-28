@@ -17,10 +17,18 @@ export type SessionObserverCompanionSnapshot = {
   notes: Array<{ sequence: number; text: string }>;
 };
 
+export type SessionPreambleReplay = {
+  runId: string;
+  itemId?: string;
+  progressText: string;
+  updatedAt: number;
+};
+
 export type SessionObserverService = {
   handleEvent: (event: SessionObserverEvent) => void;
   setConnectionVisibility: (connId: string, visible: boolean) => void;
   removeConnection: (connId: string) => void;
   getCompanionSnapshot: (sessionKey: string) => SessionObserverCompanionSnapshot;
+  getPreambleReplay: (sessionKey: string) => SessionPreambleReplay | undefined;
   dispose: () => void;
 };

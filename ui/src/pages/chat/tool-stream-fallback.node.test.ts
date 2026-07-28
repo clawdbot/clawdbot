@@ -299,6 +299,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         ts: TOOL_STREAM_TEST_NOW,
         runId: "run-1",
         itemId: "msg-preamble-1",
+        preamble: true,
       },
     ]);
     expect(host.chatStream).toBeNull();
@@ -320,6 +321,35 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         itemId: "msg-preamble-1",
         progressText: "Checking",
       },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("clears itemless preamble progress when the empty update introduces identity", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: { kind: "preamble", progressText: "Checking" },
     });
     handleAgentEvent(host, {
       runId: "run-1",

@@ -98,6 +98,73 @@ describe("session observer preamble publisher", () => {
     publisher.dispose();
   });
 
+  it.each([undefined, "commentary-1"])(
+    "clears a replay with item id %s when an empty update omits identity",
+    (itemId) => {
+      const session = state("Earlier headline");
+      const publisher = createSessionObserverPreamblePublisher({
+        now: () => 1_000,
+        setTimeoutFn: setTimeout,
+        clearTimeoutFn: clearTimeout,
+        isCurrent: () => true,
+        publish: vi.fn(),
+      });
+      const preamble = (sequence: number, progressText: string) => ({
+        runId: "run-1",
+        seq: sequence,
+        stream: "item" as const,
+        ts: 1_000 + sequence,
+        sessionKey: session.sessionKey,
+        agentId: session.agentId,
+        data: {
+          kind: "preamble" as const,
+          ...(sequence === 1 && itemId ? { itemId } : {}),
+          progressText,
+        },
+      });
+
+      publisher.handle(session, preamble(1, "Checking files"));
+      expect(session.preambleReplay?.progressText).toBe("Checking files");
+
+      publisher.handle(session, preamble(2, ""));
+      expect(session.preambleReplay).toBeUndefined();
+      publisher.dispose();
+    },
+  );
+
+  it("clears an itemless replay when the empty update introduces identity", () => {
+    const session = state("Earlier headline");
+    const publisher = createSessionObserverPreamblePublisher({
+      now: () => 1_000,
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
+      isCurrent: () => true,
+      publish: vi.fn(),
+    });
+
+    publisher.handle(session, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: 1_001,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      data: { kind: "preamble", progressText: "Checking files" },
+    });
+    publisher.handle(session, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: 1_002,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      data: { kind: "preamble", itemId: "commentary-1", progressText: "" },
+    });
+
+    expect(session.preambleReplay).toBeUndefined();
+    publisher.dispose();
+  });
+
   it("remembers a preamble that matches a restored digest", () => {
     const session = state("Checking files");
     const publish = vi.fn();
@@ -195,7 +262,7 @@ describe("session observer preamble publisher", () => {
       ts: Date.now(),
       sessionKey: original.sessionKey,
       agentId: original.agentId,
-      data: { kind: "preamble" as const, progressText },
+      data: { kind: "preamble" as const, itemId: "commentary-1", progressText },
     });
 
     publisher.handle(original, preamble(1, "Published headline"));
@@ -205,6 +272,12 @@ describe("session observer preamble publisher", () => {
     publisher.clear(original);
 
     expect(dormant.lastPreambleHeadline).toBe("Published headline");
+    expect(dormant.preambleReplay).toEqual({
+      runId: "run-1",
+      itemId: "commentary-1",
+      progressText: "Queued headline",
+      updatedAt: 1_100,
+    });
     const revived = state("Published headline");
     revived.lastPreambleHeadline = dormant.lastPreambleHeadline;
     publisher.handle(revived, {

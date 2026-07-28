@@ -1,9 +1,11 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { normalizeSessionPreambleText } from "../agents/session-preamble.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import type { SessionObserverState } from "./session-observer-model.js";
 
 const PREAMBLE_HEADLINE_MAX_CHARS = 120;
+const PREAMBLE_REPLAY_MAX_CHARS = 8_000;
 const PREAMBLE_PUBLISH_INTERVAL_MS = 2_000;
 
 type PreambleEntry = {
@@ -71,13 +73,34 @@ export function createSessionObserverPreamblePublisher(params: {
       if (event.stream !== "item" || event.data.kind !== "preamble") {
         return false;
       }
-      const headline = normalizeSessionPreambleText(
-        event.data.progressText,
-        PREAMBLE_HEADLINE_MAX_CHARS,
-      );
+      const rawProgressText =
+        typeof event.data.progressText === "string" ? event.data.progressText.trim() : "";
+      const rawItemId =
+        typeof event.data.itemId === "string"
+          ? event.data.itemId.trim()
+          : typeof event.data.id === "string"
+            ? event.data.id.trim()
+            : "";
+      const headline = normalizeSessionPreambleText(rawProgressText, PREAMBLE_HEADLINE_MAX_CHARS);
       if (!headline) {
+        if (
+          state.preambleReplay &&
+          (!rawItemId || !state.preambleReplay.itemId || state.preambleReplay.itemId === rawItemId)
+        ) {
+          state.preambleReplay = undefined;
+        }
         return true;
       }
+      // Keep the full item snapshot for a selected-session handoff. The digest
+      // headline is intentionally truncated and cannot reconstruct Chat text.
+      state.preambleReplay = {
+        runId: state.runId,
+        ...(rawItemId ? { itemId: rawItemId } : {}),
+        // Match the existing bounded Chat history projection while retaining
+        // far more context than the 120-character sidebar headline.
+        progressText: truncateUtf16Safe(rawProgressText, PREAMBLE_REPLAY_MAX_CHARS),
+        updatedAt: event.ts,
+      };
       const existing = entries.get(state);
       const previousHeadline =
         state.lastPreambleHeadline ??

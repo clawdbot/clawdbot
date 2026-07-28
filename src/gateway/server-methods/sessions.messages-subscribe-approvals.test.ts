@@ -44,6 +44,13 @@ function createContext(params: {
   replayError?: Error;
   globalScope?: boolean;
   agents?: Array<{ id: string; default?: boolean }>;
+  observerAvailable?: boolean;
+  preambleReplay?: {
+    runId: string;
+    itemId?: string;
+    progressText: string;
+    updatedAt: number;
+  };
 }) {
   const rollbackSubscription = vi.fn();
   const subscribeSessionMessageEvents = vi.fn(() => rollbackSubscription);
@@ -54,6 +61,7 @@ function createContext(params: {
     return params.replay;
   });
   const logError = vi.fn();
+  const getPreambleReplay = vi.fn(() => params.preambleReplay);
   const context = {
     getRuntimeConfig: () => ({
       agents: { list: params.agents ?? [{ id: "main", default: true }] },
@@ -61,10 +69,12 @@ function createContext(params: {
     }),
     listSessionPendingApprovals,
     logGateway: { error: logError },
+    ...(params.observerAvailable === false ? {} : { sessionObserver: { getPreambleReplay } }),
     subscribeSessionMessageEvents,
   } as unknown as GatewayRequestContext;
   return {
     context,
+    getPreambleReplay,
     listSessionPendingApprovals,
     logError,
     rollbackSubscription,
@@ -96,6 +106,34 @@ describe("sessions.messages.subscribe approval opt-in", () => {
   beforeEach(() => {
     loadSessionEntryMock.mockReset();
     loadSessionEntryMock.mockImplementation((sessionKey: string) => ({ canonicalKey: sessionKey }));
+  });
+
+  it("returns the active preamble after installing the message subscription", async () => {
+    const preambleReplay = {
+      runId: "run-1",
+      itemId: "commentary-1",
+      progressText: "Checking the gateway subscription handoff",
+      updatedAt: 42,
+    };
+    const { context, getPreambleReplay, subscribeSessionMessageEvents } = createContext({
+      preambleReplay,
+    });
+
+    const respond = await subscribe({
+      body: { key: "agent:main:session-1" },
+      client: createClient({ scopes: ["operator.read"], connId: "conn-chat" }),
+      context,
+    });
+
+    expect(subscribeSessionMessageEvents).toHaveBeenCalledWith("conn-chat", "agent:main:session-1");
+    expect(subscribeSessionMessageEvents.mock.invocationCallOrder[0]).toBeLessThan(
+      getPreambleReplay.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, key: "agent:main:session-1", preambleReplay },
+      undefined,
+    );
   });
 
   it("allows an admin without a paired device and uses the exact scoped subscription key", async () => {
@@ -131,7 +169,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     });
     expect(respond).toHaveBeenCalledWith(
       true,
-      { subscribed: true, key: "global", approvalReplay },
+      { subscribed: true, key: "global", preambleReplay: null, approvalReplay },
       undefined,
     );
   });
@@ -159,7 +197,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
     expect(respond).toHaveBeenCalledWith(
       true,
-      { subscribed: true, key: "agent:main:child", approvalReplay },
+      { subscribed: true, key: "agent:main:child", preambleReplay: null, approvalReplay },
       undefined,
     );
   });
@@ -196,7 +234,7 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     );
   });
 
-  it("keeps the non-approval response shape and skips replay", async () => {
+  it("returns an authoritative empty preamble snapshot without approval replay", async () => {
     loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
     const { context, listSessionPendingApprovals, subscribeSessionMessageEvents } = createContext(
       {},
@@ -216,10 +254,28 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     ]);
     expect(respond).toHaveBeenCalledWith(
       true,
-      { subscribed: true, key: "agent:main:child" },
+      { subscribed: true, key: "agent:main:child", preambleReplay: null },
       undefined,
     );
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("approvalReplay");
+  });
+
+  it("omits the preamble snapshot when observer replay support is unavailable", async () => {
+    loadSessionEntryMock.mockReturnValueOnce({ canonicalKey: "agent:main:child" });
+    const { context, getPreambleReplay } = createContext({ observerAvailable: false });
+
+    const respond = await subscribe({
+      body: { key: "child" },
+      client: createClient({ scopes: ["operator.read"] }),
+      context,
+    });
+
+    expect(getPreambleReplay).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { subscribed: true, key: "agent:main:child" },
+      undefined,
+    );
   });
 
   it.each([

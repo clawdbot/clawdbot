@@ -105,11 +105,17 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       } else {
         context.subscribeSessionMessageEvents(connId, subscriptionKey);
       }
+      // Subscribe first, then snapshot. A later live item update stays ordered
+      // after this replay on the same WebSocket connection.
+      const preambleReplay = context.sessionObserver?.getPreambleReplay(subscriptionKey);
       respond(
         true,
         {
           subscribed: true,
           key: canonicalKey,
+          // `null` is an authoritative empty snapshot; omission is reserved
+          // for servers that do not expose replay support.
+          ...(context.sessionObserver ? { preambleReplay: preambleReplay ?? null } : {}),
           ...(p.includeApprovals === true
             ? {
                 approvalReplay,
