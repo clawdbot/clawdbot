@@ -2051,4 +2051,25 @@ export async function runDreamingSweepPhases(params: {
     }
   }
 }
+
+// Session backfill is a batch driver over the live-ingestion primitives. Keep
+// these exports narrow so both paths share caps, hashing, state, and rendering.
+export {
+  SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
+  SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
+  SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
+  SESSION_INGESTION_MIN_SNIPPET_CHARS,
+  SESSION_INGESTION_SCORE,
+  appendSessionCorpusLines,
+  buildSessionFileScopeKey,
+  buildSessionRenderedLine,
+  buildSqliteDreamingSessionPath,
+  hashSessionMessageId,
+  mergeTrackedMessageHashes,
+  normalizeSessionCorpusSnippet,
+  readSessionIngestionState,
+  trimTrackedSessionScopes,
+  writeSessionIngestionState,
+};
+export type { SessionIngestionMessage };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
