@@ -911,6 +911,22 @@ describe("config cli", () => {
       );
     });
 
+    it("rejects deleting plugin install records via real config unset (not just --dry-run)", async () => {
+      const resolved = {
+        plugins: {
+          installs: { "openclaw-web-search": { spec: "@ollama/openclaw-web-search@0.2.2" } },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", 'plugins.installs["openclaw-web-search"]']),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("openclaw plugins install <spec>");
+    });
+
     it("rejects plugin install record config updates", async () => {
       await expect(
         runConfigCommand([

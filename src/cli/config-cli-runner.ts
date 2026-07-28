@@ -141,6 +141,18 @@ export function assertConfigPathIsNotAutoManaged(path: PathSegment[]): void {
   }
 }
 
+/**
+ * Rejects a mutation targeting a plugin-index-managed record (`plugins.installs.*`). Mirrors the
+ * guard runConfigOperations enforces for set/patch/--dry-run, but as a path check so the real
+ * `config unset` path (which writes via replaceConfigFile, bypassing runConfigOperations) enforces
+ * it too instead of silently deleting plugin-index-managed records.
+ */
+export function assertConfigPathIsNotPluginInstallRecord(path: PathSegment[]): void {
+  if (pathStartsWith(path, PLUGIN_INSTALL_RECORD_PATH_PREFIX)) {
+    throw new Error(formatPluginInstallConfigSetError());
+  }
+}
+
 function pruneInactiveGatewayAuthCredentials(params: {
   root: Record<string, unknown>;
   operations: ConfigSetOperation[];

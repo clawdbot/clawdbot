@@ -38,6 +38,7 @@ import {
 } from "./config-cli-path.js";
 import {
   assertConfigPathIsNotAutoManaged,
+  assertConfigPathIsNotPluginInstallRecord,
   configApplyHintForOperations,
   handleConfigMutationError,
   runConfigOperations,
@@ -202,6 +203,7 @@ export async function runConfigUnset(opts: {
     }
     const parsedPath = parseConfigSetPath(opts.path);
     assertConfigPathIsNotAutoManaged(parsedPath);
+    assertConfigPathIsNotPluginInstallRecord(parsedPath);
     const snapshot = await loadValidConfig(runtime);
     // Mutate resolved config so runtime defaults never leak into the authored file.
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
