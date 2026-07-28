@@ -28,7 +28,17 @@ private final class WebSocketPingContinuationGate: @unchecked Sendable {
     }
 }
 
+/// Failure modes owned by the ping wrapper rather than by URLSession.
+public enum WebSocketPingError: Error, Equatable {
+    /// URLSession never delivered a pong result for a ping it accepted.
+    case timedOut
+}
+
 public struct WebSocketTaskBox: @unchecked Sendable {
+    /// Bounds a ping whose pong handler URLSession may never invoke. Long enough that a
+    /// slow-but-live link still pongs, short enough that a wedged keepalive recovers.
+    public static let pingTimeout: Duration = .seconds(10)
+
     public let task: any WebSocketTasking
     public init(task: any WebSocketTasking) {
         self.task = task
@@ -60,10 +70,28 @@ public struct WebSocketTaskBox: @unchecked Sendable {
         self.task.receive(completionHandler: completionHandler)
     }
 
-    public func sendPing() async throws {
+    public func sendPing(timeout: Duration = WebSocketTaskBox.pingTimeout) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let gate = WebSocketPingContinuationGate()
+            // URLSession drops the pong handler entirely when the task is cancelled or
+            // closed mid-flight, which orphans this continuation and wedges the keepalive
+            // loop forever on an await that can never return. The deadline guarantees the
+            // continuation always resumes; the gate keeps that resume exactly once.
+            let deadline = Task {
+                do {
+                    try await Task.sleep(for: timeout)
+                } catch {
+                    // Cancelled because a pong arrived first; that callback owns the resume.
+                    // Swallowing this error instead would race the gate and report a healthy
+                    // ping as timed out.
+                    return
+                }
+                gate.resumeOnce {
+                    ThrowingContinuationSupport.resumeVoid(continuation, error: WebSocketPingError.timedOut)
+                }
+            }
             self.task.sendPing { error in
+                deadline.cancel()
                 // URLSession can race ping callbacks with cancellation; only the first
                 // pong result owns this checked continuation or Swift traps the app.
                 gate.resumeOnce {
