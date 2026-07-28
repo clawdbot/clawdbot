@@ -1307,6 +1307,109 @@ describe("executeNodeHostCommand", () => {
 
   it.each([
     {
+      name: "direct full/off",
+      security: "full" as const,
+      ask: "off" as const,
+      autoReview: false,
+    },
+    {
+      name: "prepared allowlist/off",
+      security: "allowlist" as const,
+      ask: "off" as const,
+      autoReview: false,
+    },
+    {
+      name: "inline auto-review approval",
+      security: "allowlist" as const,
+      ask: "on-miss" as const,
+      autoReview: true,
+    },
+  ])("cancels $name node execution after gateway dispatch", async (testCase) => {
+    resolveExecHostApprovalContextMock.mockReturnValue({
+      approvals: { allowlist: [], file: { version: 1, agents: {} } },
+      hostSecurity: testCase.security,
+      hostAsk: testCase.ask,
+      askFallback: "deny",
+    });
+    usePolicyApprovalRequirementMock();
+
+    const originalGatewayCall = callGatewayToolMock.getMockImplementation();
+    if (!originalGatewayCall) {
+      throw new Error("expected default gateway mock implementation");
+    }
+    callGatewayToolMock.mockImplementation(
+      async (
+        method: string,
+        options: unknown,
+        params: MockNodeInvokeParams | undefined,
+        callOptions?: { signal?: AbortSignal },
+      ) => {
+        if (method !== "node.invoke" || params?.command !== "system.run") {
+          return originalGatewayCall(method, options, params);
+        }
+
+        const signal = callOptions?.signal;
+        if (!signal) {
+          throw new Error("node execution did not receive the initiating abort signal");
+        }
+        return await new Promise<never>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              const reason = signal.reason;
+              reject(
+                reason instanceof Error
+                  ? reason
+                  : new Error("Node execution aborted", { cause: reason }),
+              );
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+
+    const abortController = new AbortController();
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "safe read",
+    }));
+    const execution = executeNodeHostCommand({
+      command: "bun ./script.ts",
+      workdir: "/tmp/work",
+      env: {},
+      security: testCase.security,
+      ask: testCase.ask,
+      ...(testCase.autoReview ? { autoReview: true, autoReviewer } : {}),
+      signal: abortController.signal,
+      defaultTimeoutSec: 30,
+      approvalRunningNoticeMs: 0,
+      warnings: [],
+      agentId: "requested-agent",
+      sessionKey: "requested-session",
+    }).then(
+      () => ({ status: "fulfilled" as const }),
+      (error: unknown) => ({ status: "rejected" as const, error }),
+    );
+
+    await vi.waitFor(() => {
+      expect(requireGatewayCommand("system.run").callOptions).toEqual({
+        ...(testCase.autoReview ? { scopes: ["operator.write", "operator.approvals"] } : {}),
+        signal: abortController.signal,
+      });
+    });
+
+    abortController.abort(new Error("cancelled after node dispatch"));
+
+    await expect(execution).resolves.toMatchObject({
+      status: "rejected",
+      error: expect.objectContaining({ message: "cancelled after node dispatch" }),
+    });
+  });
+
+  it.each([
+    {
       name: "throws synchronously",
       reviewer: () => {
         throw new Error("provider\n\u001b[31mfailed\u001b[0m\u202e");
