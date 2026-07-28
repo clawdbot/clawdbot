@@ -25,7 +25,7 @@ export type DeliveryQueueCompletionRetention =
     }>;
 
 /** Indexed metadata extracted from queue payloads for diagnostics and recovery. */
-export type DeliveryQueueRowMetadata = {
+type DeliveryQueueRowMetadata = {
   entryKind?: string;
   sessionKey?: string;
   channel?: string;
