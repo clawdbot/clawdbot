@@ -83,8 +83,15 @@ function appendAsrCustomizations(form: FormData, query: AudioTranscriptionReques
   }
 }
 
-function isOggOpus(buffer: Buffer): boolean {
-  return buffer.subarray(0, OGG_HEADER.length).equals(OGG_HEADER) && buffer.includes(OPUS_HEADER);
+function isMonoOggOpus(buffer: Buffer): boolean {
+  if (!buffer.subarray(0, OGG_HEADER.length).equals(OGG_HEADER)) {
+    return false;
+  }
+  const opusHeadOffset = buffer.indexOf(OPUS_HEADER);
+  const channelCountOffset = opusHeadOffset + OPUS_HEADER.length + 1;
+  return (
+    opusHeadOffset >= 0 && channelCountOffset < buffer.length && buffer[channelCountOffset] === 1
+  );
 }
 
 function isMonoPcm16Wav(buffer: Buffer): boolean {
@@ -117,7 +124,7 @@ function isMonoPcm16Wav(buffer: Buffer): boolean {
 async function normalizeNvidiaAsrAudio(
   req: AudioTranscriptionRequest,
 ): Promise<AudioTranscriptionRequest> {
-  if (isOggOpus(req.buffer) || isMonoPcm16Wav(req.buffer)) {
+  if (isMonoOggOpus(req.buffer) || isMonoPcm16Wav(req.buffer)) {
     return req;
   }
   const buffer = await transcodeAudioBufferToOpus({
@@ -136,7 +143,7 @@ async function normalizeNvidiaAsrAudio(
   };
 }
 
-type AsrEndpoint = { baseUrl: string; model: string };
+type AsrEndpoint = { baseUrl: string; model: string; sendModel: boolean };
 
 function resolveAsrTranscriptionUrl(baseUrl: string): string {
   return baseUrl.endsWith("/v1")
@@ -150,18 +157,28 @@ function resolveTtsSynthesisUrl(baseUrl: string): string {
 
 function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
-  if (requestBaseUrl && requestBaseUrl !== NVIDIA_CHAT_BASE_URL) {
+  const envBaseUrl = process.env.NVIDIA_ASR_BASE_URL?.trim() || undefined;
+  const customBaseUrl =
+    requestBaseUrl && requestBaseUrl !== NVIDIA_CHAT_BASE_URL
+      ? requestBaseUrl
+      : envBaseUrl
+        ? normalizeNvidiaBaseUrl(envBaseUrl)
+        : undefined;
+  if (customBaseUrl) {
+    const model = req.model?.trim() || NVIDIA_DEFAULT_ASR_MODEL;
     return {
-      baseUrl: requestBaseUrl,
-      model: req.model?.trim() || NVIDIA_DEFAULT_ASR_MODEL,
+      baseUrl: customBaseUrl,
+      model,
+      sendModel: model !== NVIDIA_DEFAULT_ASR_MODEL,
     };
   }
   if (req.model && req.model !== NVIDIA_DEFAULT_ASR_MODEL) {
     throw new Error(`NVIDIA ASR model ${req.model} requires an explicit HTTP base URL`);
   }
   return {
-    baseUrl: normalizeNvidiaBaseUrl(process.env.NVIDIA_ASR_BASE_URL ?? NVIDIA_ASR_BASE_URL),
+    baseUrl: NVIDIA_ASR_BASE_URL,
     model: NVIDIA_DEFAULT_ASR_MODEL,
+    sendModel: false,
   };
 }
 
@@ -170,7 +187,7 @@ async function transcribeAtEndpoint(
   endpoint: AsrEndpoint,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = req.fetchFn ?? fetch;
-  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+  const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy, requestConfig } =
     resolveProviderHttpRequestConfig({
       baseUrl: endpoint.baseUrl,
       defaultBaseUrl: endpoint.baseUrl,
@@ -189,6 +206,7 @@ async function transcribeAtEndpoint(
     fields: {
       language: req.language?.trim() || "en-US",
       response_format: "json",
+      ...(endpoint.sendModel ? { model: endpoint.model } : {}),
     },
   });
   appendAsrCustomizations(form, req.query);
@@ -201,6 +219,9 @@ async function transcribeAtEndpoint(
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
+    ssrfPolicy: requestConfig.privateNetworkExplicitlyDenied
+      ? undefined
+      : ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     auditContext: `NVIDIA ${endpoint.model} ASR`,
   });
   try {

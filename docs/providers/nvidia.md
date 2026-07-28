@@ -88,7 +88,7 @@ Provider-specific ASR options are passed through `providerOptions.nvidia`; word
 boosting accepts a JSON array or a comma-separated string. To use another ASR
 NIM such as Parakeet TDT, configure both its model and an HTTP-capable base URL.
 
-NVIDIA accepts mono 16-bit PCM WAV and Ogg Opus directly. OpenClaw converts
+NVIDIA accepts mono 16-bit PCM WAV and mono Ogg Opus directly. OpenClaw converts
 other inbound formats, including MP3, M4A, and stereo WAV, to mono Opus with a
 system-installed FFmpeg binary before upload.
 

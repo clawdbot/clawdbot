@@ -51,6 +51,15 @@ function monoPcm16Wav(): Buffer {
   return wav;
 }
 
+function oggOpus(channelCount: number): Buffer {
+  const buffer = Buffer.alloc(40);
+  buffer.write("OggS", 0, "ascii");
+  buffer.write("OpusHead", 12, "ascii");
+  buffer[20] = 1;
+  buffer[21] = channelCount;
+  return buffer;
+}
+
 function okJson(text: string) {
   return {
     response: new Response(JSON.stringify({ text }), {
@@ -102,14 +111,42 @@ describe("NVIDIA speech HTTP runtime", () => {
     const result = await transcribeNvidiaAudio(
       transcriptionRequest({
         model: "nvidia/parakeet-tdt-0.6b-v2",
-        baseUrl: "https://speech.example/v1",
+        baseUrl: "http://10.0.0.5:9000/v1",
       }),
     );
 
     expect(result.model).toBe("nvidia/parakeet-tdt-0.6b-v2");
     expect(mocks.postTranscriptionRequest).toHaveBeenCalledTimes(1);
     expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toBe(
+      "http://10.0.0.5:9000/v1/audio/transcriptions",
+    );
+    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.ssrfPolicy).toEqual({
+      allowedOrigins: ["http://10.0.0.5:9000"],
+    });
+    const form = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.body as FormData;
+    expect(form.get("model")).toBe("nvidia/parakeet-tdt-0.6b-v2");
+  });
+
+  it("uses a nonblank ASR environment endpoint and ignores a blank one", async () => {
+    mocks.postTranscriptionRequest.mockImplementation(async () => okJson("environment transcript"));
+    process.env.NVIDIA_ASR_BASE_URL = " https://speech.example/v1/ ";
+
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        baseUrl: "https://integrate.api.nvidia.com/v1",
+        model: "nvidia/parakeet-tdt-0.6b-v2",
+      }),
+    );
+
+    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toBe(
       "https://speech.example/v1/audio/transcriptions",
+    );
+
+    mocks.postTranscriptionRequest.mockClear();
+    process.env.NVIDIA_ASR_BASE_URL = "   ";
+    await transcribeNvidiaAudio(transcriptionRequest());
+    expect(mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.url).toContain(
+      "1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com",
     );
   });
 
@@ -155,6 +192,29 @@ describe("NVIDIA speech HTTP runtime", () => {
     const file = form.get("file") as File;
     expect(file.name).toBe("audio.opus");
     expect(file.type).toBe("audio/ogg");
+  });
+
+  it("transcodes stereo Ogg Opus but uploads mono Ogg Opus directly", async () => {
+    mocks.postTranscriptionRequest.mockImplementation(async () => okJson("opus transcript"));
+
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        buffer: oggOpus(2),
+        fileName: "stereo.opus",
+        mime: "audio/ogg",
+      }),
+    );
+    expect(mocks.transcodeAudioBufferToOpus).toHaveBeenCalledOnce();
+
+    mocks.transcodeAudioBufferToOpus.mockClear();
+    await transcribeNvidiaAudio(
+      transcriptionRequest({
+        buffer: oggOpus(1),
+        fileName: "mono.opus",
+        mime: "audio/ogg",
+      }),
+    );
+    expect(mocks.transcodeAudioBufferToOpus).not.toHaveBeenCalled();
   });
 
   it("sends Magpie customization fields and returns the WAV response unchanged", async () => {
