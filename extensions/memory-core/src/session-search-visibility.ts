@@ -257,9 +257,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
 
   const expandRecallAliasKeys = (keys: string[]): string[] => {
-    // Alias resolution by session id can miss a group/channel alias that shares
-    // the same transcript file under a different session id. Recall must judge
-    // every alias, so expand candidates by stored transcript identity.
+    // Recall must judge every store key for the canonical transcript identity,
+    // including group/channel aliases that were not in the initial key set.
     const expanded = new Set(keys);
     for (const key of keys) {
       const entry = combinedSessionStore[key];
