@@ -47,7 +47,13 @@ export type ChannelHealthPolicy = {
   channelConnectGraceMs: number;
 };
 
-type ChannelRestartReason = "gave-up" | "stopped" | "stale-socket" | "stuck" | "disconnected";
+type ChannelRestartReason =
+  | "gave-up"
+  | "stopped"
+  | "stale-socket"
+  | "stuck"
+  | "disconnected"
+  | "ingress-unavailable";
 
 function isManagedAccount(snapshot: ChannelHealthSnapshot): boolean {
   return snapshot.enabled !== false && snapshot.configured !== false && snapshot.linked !== false;
@@ -163,6 +169,12 @@ export function resolveChannelRestartReason(
   // categories, while detailed channel state stays in the health snapshot.
   if (evaluation.reason === "stale-socket") {
     return "stale-socket";
+  }
+  // Restarting is also the only way to re-prove ingress: `ingressUnavailable`
+  // describes the last start attempt and is cleared by the next one. Naming the
+  // reason keeps a repeating restart readable as dead inbound rather than "stuck".
+  if (evaluation.reason === "ingress-unavailable") {
+    return "ingress-unavailable";
   }
   if (evaluation.reason === "not-running") {
     return snapshot.reconnectAttempts && snapshot.reconnectAttempts >= 10 ? "gave-up" : "stopped";

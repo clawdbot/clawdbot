@@ -365,23 +365,10 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
-  it("does not restart a channel whose ingress monitor could not start", async () => {
-    // Restarting cannot reopen a denied durable queue; looping here would burn the
-    // per-hour restart budget forever instead of leaving the failure visible.
-    const manager = createSnapshotManager({
-      slack: {
-        default: {
-          running: false,
-          enabled: true,
-          configured: true,
-          ingressUnavailable: true,
-        },
-      },
-    });
-    await expectNoRestart(manager);
-  });
-
-  it("does not restart a running channel with a live socket but dead ingress", async () => {
+  it("restarts a running channel with a live socket but dead ingress", async () => {
+    // A restart is the only way to re-prove ingress, so recovery from a transient
+    // queue-open failure must stay automatic. Without the ingress dimension this
+    // account evaluated as healthy and was never touched at all.
     const manager = createSnapshotManager({
       slack: {
         default: {
@@ -393,7 +380,10 @@ describe("channel-health-monitor", () => {
         },
       },
     });
-    await expectNoRestart(manager);
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
+    expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");
+    monitor.stop();
   });
 
   it("restarts a stopped channel without terminalDisconnect", async () => {

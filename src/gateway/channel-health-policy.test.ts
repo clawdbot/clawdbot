@@ -341,6 +341,14 @@ describe("resolveChannelRestartReason", () => {
     expect(reason).toBe("gave-up");
   });
 
+  it("maps dead ingress to its own reason instead of stuck", () => {
+    const reason = resolveChannelRestartReason(
+      runningAccount({ connected: true, ingressUnavailable: true }),
+      { healthy: false, reason: "ingress-unavailable" },
+    );
+    expect(reason).toBe("ingress-unavailable");
+  });
+
   it("maps disconnected to disconnected instead of stuck", () => {
     const reason = resolveChannelRestartReason(
       runningAccount({
