@@ -397,7 +397,7 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
     scripts/sandbox-browser-setup.sh
     ```
 
-    From an npm install, build using [`scripts/docker/sandbox/Dockerfile.browser`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.browser) from the repository.
+    The npm package does not include the browser Dockerfile or entrypoint. Use a source checkout to build this image.
 
   </Step>
 </Steps>
@@ -432,7 +432,7 @@ image or `sandbox.docker.env`.
     - `--password-store=basic`
     - `--use-mock-keychain`
     - `--headless=new` when `browser.headless` is enabled.
-    - `--no-sandbox --disable-setuid-sandbox` when `browser.noSandbox` is enabled.
+    - `--no-sandbox --disable-setuid-sandbox` (always enabled in the sandbox browser container).
     - `--disable-3d-apis`, `--disable-gpu`, `--disable-software-rasterizer` by default; these graphics-hardening flags help containers without GPU support. Set `OPENCLAW_BROWSER_DISABLE_GRAPHICS_FLAGS=0` if your workload needs WebGL or other 3D features.
     - `--disable-extensions` by default; set `OPENCLAW_BROWSER_DISABLE_EXTENSIONS=0` for extension-reliant flows.
     - `--renderer-process-limit=2` by default; controlled by `OPENCLAW_BROWSER_RENDERER_PROCESS_LIMIT=<N>`, where `0` keeps Chromium's default.

@@ -147,17 +147,11 @@ For custom images, bake Chromium into the image:
 OPENCLAW_INSTALL_BROWSER=1 ./scripts/docker/setup.sh
 ```
 
-For an existing image, install through the bundled CLI instead:
-
-```bash
-docker compose run --rm openclaw-cli \
-  node /app/node_modules/playwright-core/cli.js install chromium
-```
-
-To persist browser downloads, set `PLAYWRIGHT_BROWSERS_PATH` (for example,
-`/home/node/.cache/ms-playwright`) and make sure `/home/node` is persisted via
-`OPENCLAW_HOME_VOLUME` or a bind mount. OpenClaw auto-detects the persisted
-Chromium on Linux. See [Docker](/install/docker).
+The browser also needs system libraries, so installing Chromium in a one-off
+Compose container is not durable. Rebuild the image with
+`OPENCLAW_INSTALL_BROWSER=1` instead. To persist browser downloads and other
+caches, persist `/home/node` with `OPENCLAW_HOME_VOLUME` or a bind mount. See
+[Docker](/install/docker).
 
 ## How it works (internal)
 

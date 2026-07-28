@@ -791,7 +791,7 @@ Optional sandboxing for the embedded agent. See [Sandboxing](/gateway/sandboxing
           vncPort: 5900,
           noVncPort: 6080,
           headless: false,
-          enableNoVnc: true,
+          noVncEnabled: true,
           allowHostControl: false,
           autoStart: true,
           autoStartTimeoutMs: 12000,
@@ -921,8 +921,8 @@ Codex app-server turns in an active OpenClaw sandbox use this same egress settin
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 
-**Sandboxed browser** (`sandbox.browser.enabled`, default `false`): Chromium + CDP in a container. noVNC URL injected into system prompt. Does not require `browser.enabled` in `openclaw.json`.
-noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived token URL (instead of exposing the password in the shared URL).
+**Sandboxed browser** (`sandbox.browser.enabled`, default `false`): Chromium + CDP in a container. Does not require `browser.enabled` in `openclaw.json`.
+noVNC observer access is password-protected and brokered through a one-time, authenticated bootstrap URL. The observer URL is deliberately omitted from model-visible system prompt context.
 
 - `allowHostControl: false` (default) blocks sandboxed sessions from targeting the host browser.
 - `network` defaults to `openclaw-sandbox-browser` (dedicated bridge network). Set to `bridge` only when you explicitly want global bridge connectivity. `"host"` is blocked here too.
