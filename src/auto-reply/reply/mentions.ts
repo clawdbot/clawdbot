@@ -23,7 +23,17 @@ type ResolvedMentionPatterns = {
   unicode: boolean;
 };
 
-const UNICODE_WORD_CHAR = String.raw`[\p{L}\p{M}\p{N}\p{Pc}\u200C\u200D]`;
+// Word runs carry a name's identity. ZWJ/ZWNJ are word characters for the
+// boundary assertions below but stay out of the token class: mention text is
+// normalized with those characters stripped, so a derived name may never
+// require them.
+const NAME_TOKEN_CHARS = String.raw`\p{L}\p{M}\p{N}\p{Pc}`;
+const UNICODE_WORD_CHAR = String.raw`[${NAME_TOKEN_CHARS}\u200C\u200D]`;
+// Anything between word runs (emoji, flags, symbols, punctuation) is display
+// decoration members rarely type: it may be typed as shown, replaced by
+// whitespace, or omitted. A flat class keeps safe-regex satisfied.
+const NAME_SEPARATOR = String.raw`[^${NAME_TOKEN_CHARS}]`;
+const NAME_TOKEN_SPLIT = new RegExp(String.raw`([${NAME_TOKEN_CHARS}]+)`, "gu");
 
 function wrapDerivedMentionPattern(pattern: string): string {
   // JavaScript \b is ASCII-oriented. Derived identity names need Unicode word
@@ -31,13 +41,31 @@ function wrapDerivedMentionPattern(pattern: string): string {
   return `(?:@|(?<!${UNICODE_WORD_CHAR}))${pattern}(?!${UNICODE_WORD_CHAR})`;
 }
 
+function deriveNamePattern(name: string): string {
+  // Odd indices are captured word tokens; even indices are the gaps around them.
+  const segments = name.split(NAME_TOKEN_SPLIT);
+  const tokens = segments.filter((_, index) => index % 2 === 1);
+  if (tokens.length === 0) {
+    // Decoration-only name (e.g. a bare emoji): match it literally.
+    return escapeRegExp(name);
+  }
+  let pattern = `${NAME_SEPARATOR}*`;
+  for (const [index, token] of tokens.entries()) {
+    if (index > 0) {
+      const gap = segments[index * 2] ?? "";
+      // Plain spacing stays required; decorated gaps are optional separators.
+      pattern += /^\s+$/.test(gap) ? String.raw`\s+` : `${NAME_SEPARATOR}*`;
+    }
+    pattern += escapeRegExp(token);
+  }
+  return `${pattern}${NAME_SEPARATOR}*`;
+}
+
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
   if (name) {
-    const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
-    const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
-    patterns.push(wrapDerivedMentionPattern(re));
+    patterns.push(wrapDerivedMentionPattern(deriveNamePattern(name)));
   }
   const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 // Tests mention detection and command trigger matching.
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import {
   buildMentionRegexes,
@@ -108,6 +109,112 @@ describe("derived Unicode mention matching", () => {
     });
 
     expect(regexes[0]?.flags).toBe("i");
+  });
+});
+
+describe("derived mention matching with decorated identity names", () => {
+  function configForName(name: string): OpenClawConfig {
+    return {
+      agents: {
+        list: [{ id: "decorated-agent", identity: { name } }],
+      },
+    };
+  }
+
+  it("matches a trailing-emoji name with the emoji typed or omitted", () => {
+    const regexes = buildMentionRegexes(configForName("小蝶🦋"), "decorated-agent");
+
+    expect(matchesMentionPatterns("小蝶🦋 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns("@小蝶 幫我查一下", regexes)).toBe(true);
+  });
+
+  it("matches interior decoration typed as emoji, a space, or nothing", () => {
+    const regexes = buildMentionRegexes(configForName("Papillon🦋Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("Papillon🦋Bot help", regexes)).toBe(true);
+    expect(matchesMentionPatterns("papillon bot help", regexes)).toBe(true);
+    expect(matchesMentionPatterns("PapillonBot help", regexes)).toBe(true);
+  });
+
+  it("treats flags, symbols, and punctuation as omissible decoration too", () => {
+    // 🇹🇼 is a Regional_Indicator pair, ★ and ・ are plain symbols — none are
+    // Extended_Pictographic, so a class limited to emoji would miss them.
+    expect(
+      matchesMentionPatterns(
+        "小蝶 幫我查一下",
+        buildMentionRegexes(configForName("小蝶🇹🇼"), "decorated-agent"),
+      ),
+    ).toBe(true);
+    expect(
+      matchesMentionPatterns(
+        "小蝶 幫我查一下",
+        buildMentionRegexes(configForName("小蝶★"), "decorated-agent"),
+      ),
+    ).toBe(true);
+    expect(
+      matchesMentionPatterns(
+        "小蝶 BOT 幫我查一下",
+        buildMentionRegexes(configForName("小蝶・BOT"), "decorated-agent"),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches an Indic name typed without its ZWJ (text normalization strips it)", () => {
+    const regexes = buildMentionRegexes(configForName("क‍ख"), "decorated-agent");
+
+    expect(matchesMentionPatterns("क‍ख नमस्ते", regexes)).toBe(true);
+    expect(matchesMentionPatterns("कख नमस्ते", regexes)).toBe(true);
+  });
+
+  it("matches a leading-emoji name with the emoji typed or omitted", () => {
+    const regexes = buildMentionRegexes(configForName("🦋小蝶"), "decorated-agent");
+
+    expect(matchesMentionPatterns("🦋小蝶 幫我查一下", regexes)).toBe(true);
+    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
+  });
+
+  it("treats a multi-codepoint ZWJ emoji sequence as one omissible decoration", () => {
+    const regexes = buildMentionRegexes(configForName("小蝶👩‍👧"), "decorated-agent");
+
+    expect(matchesMentionPatterns("小蝶 幫我查一下", regexes)).toBe(true);
+  });
+
+  it("still rejects the undecorated name inside another word", () => {
+    const regexes = buildMentionRegexes(configForName("小蝶🦋"), "decorated-agent");
+
+    expect(matchesMentionPatterns("前小蝶後", regexes)).toBe(false);
+    expect(matchesMentionPatterns("小蝶子好", regexes)).toBe(false);
+  });
+
+  it("keeps an emoji-only identity name matching literally", () => {
+    const regexes = buildMentionRegexes(configForName("🦋"), "decorated-agent");
+
+    expect(matchesMentionPatterns("🦋 status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("hello there", regexes)).toBe(false);
+  });
+
+  it("never requires a decoration-only leading token", () => {
+    const regexes = buildMentionRegexes(configForName("🦋 Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("bot 早安", regexes)).toBe(true);
+    expect(matchesMentionPatterns("🦋 bot 早安", regexes)).toBe(true);
+  });
+
+  it("keeps whitespace between plain words required (unchanged contract)", () => {
+    const regexes = buildMentionRegexes(configForName("Clawd Bot"), "decorated-agent");
+
+    expect(matchesMentionPatterns("clawd bot status", regexes)).toBe(true);
+    expect(matchesMentionPatterns("clawdbot status", regexes)).toBe(false);
+  });
+
+  it("strips the whole decorated name including adjacent emoji", () => {
+    const cfg = configForName("小蝶🦋");
+
+    expect(stripMentions("@小蝶🦋 查天氣", {} as MsgContext, cfg, "decorated-agent")).toBe(
+      "查天氣",
+    );
+    expect(stripMentions("小蝶 查天氣", {} as MsgContext, cfg, "decorated-agent")).toBe("查天氣");
   });
 });
 
