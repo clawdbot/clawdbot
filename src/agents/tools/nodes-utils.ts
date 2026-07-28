@@ -91,14 +91,14 @@ function compareNewestTimestamp(a?: number, b?: number): number {
   return bValue - aValue;
 }
 
-function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const connectedOrder = compareNewestTimestamp(a.connectedAtMs, b.connectedAtMs);
-  if (connectedOrder !== 0) {
-    return connectedOrder;
-  }
-  const lastSeenOrder = compareNewestTimestamp(a.lastSeenAtMs, b.lastSeenAtMs);
-  if (lastSeenOrder !== 0) {
-    return lastSeenOrder;
+function compareDefaultNodeOrder(
+  a: NodeListNode,
+  b: NodeListNode,
+  recencyField: "connectedAtMs" | "lastSeenAtMs",
+): number {
+  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
+  if (recencyOrder !== 0) {
+    return recencyOrder;
   }
   return a.nodeId.localeCompare(b.nodeId);
 }
@@ -135,9 +135,10 @@ export function selectDefaultNodeFromList(
     return null;
   }
 
-  const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
-  // Connected nodes were preferred above. For an all-offline set, durable
-  // last-seen recency picks the most likely wake target before stable id order.
+  // Once the pool is known to be offline, stale connection timestamps must not
+  // outrank the durable last-seen signal used to choose the wake target.
+  const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
+  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
   return ordered[0] ?? null;
 }
 

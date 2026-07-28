@@ -79,14 +79,14 @@ describe("resolveNodeIdFromList defaults", () => {
         nodeId: "abc123-desktop",
         platform: "macos",
         connected: false,
-        connectedAtMs: undefined,
+        connectedAtMs: 9000,
         lastSeenAtMs: 1000,
       }),
       node({
         nodeId: "def456-phone",
         platform: "ios",
         connected: false,
-        connectedAtMs: undefined,
+        connectedAtMs: 1000,
         lastSeenAtMs: 5000,
       }),
     ];
@@ -96,11 +96,17 @@ describe("resolveNodeIdFromList defaults", () => {
 
   it("prefers node with lastSeenAtMs over node without when all disconnected", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "abc-no-seen", platform: "ios", connected: false }),
+      node({
+        nodeId: "abc-no-seen",
+        platform: "ios",
+        connected: false,
+        connectedAtMs: 9000,
+      }),
       node({
         nodeId: "def-has-seen",
         platform: "android",
         connected: false,
+        connectedAtMs: 1000,
         lastSeenAtMs: 3000,
       }),
     ];
@@ -113,8 +119,20 @@ describe("resolveNodeIdFromList defaults", () => {
     (lastSeenAtMs) => {
       // Deterministic tie-breaking keeps repeated wake attempts on one target.
       const nodes: NodeListNode[] = [
-        node({ nodeId: "z-node", platform: "ios", connected: false, lastSeenAtMs }),
-        node({ nodeId: "a-node", platform: "android", connected: false, lastSeenAtMs }),
+        node({
+          nodeId: "z-node",
+          platform: "ios",
+          connected: false,
+          connectedAtMs: 9000,
+          lastSeenAtMs,
+        }),
+        node({
+          nodeId: "a-node",
+          platform: "android",
+          connected: false,
+          connectedAtMs: 1000,
+          lastSeenAtMs,
+        }),
       ];
 
       expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("a-node");
