@@ -11,40 +11,28 @@ export type ConfigPageId =
   | "ai-agents"
   | "advanced";
 
-export const COMMUNICATION_SECTION_KEYS = ["messages", "talk", "tts"] as const;
+const COMMUNICATION_SECTION_KEYS = ["messages", "talk", "tts"] as const;
 
-export const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
+const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 
 const NOTIFICATION_SECTION_KEYS = ["__notifications__"] as const;
 
 // Curated Privacy & Security home: the schema-backed security/approvals policy
 // sections render here, below the curated status rows (security.ts).
-export const SECURITY_SECTION_KEYS = ["security", "approvals"] as const;
+const SECURITY_SECTION_KEYS = ["security", "approvals"] as const;
 
-export const AUTOMATION_SECTION_KEYS = [
-  "commands",
-  "hooks",
-  "bindings",
-  "cron",
-  "plugins",
-] as const;
+const AUTOMATION_SECTION_KEYS = ["commands", "hooks", "bindings", "cron", "plugins"] as const;
 
-export const INFRASTRUCTURE_SECTION_KEYS = [
-  "gateway",
-  "browser",
-  "nodeHost",
-  "discovery",
-  "acp",
-] as const;
+const INFRASTRUCTURE_SECTION_KEYS = ["gateway", "browser", "nodeHost", "discovery", "acp"] as const;
 
-export const MCP_SECTION_KEYS = ["mcp"] as const;
+const MCP_SECTION_KEYS = ["mcp"] as const;
 
 // Curated Memory home: engine/backend/add-on rows plus the Dreaming tab render
 // above the memory schema section (memory.ts). Memory left AI & Agents because
 // the engine choice and dreaming's global cron are not agent defaults.
-export const MEMORY_SECTION_KEYS = ["memory"] as const;
+const MEMORY_SECTION_KEYS = ["memory"] as const;
 
-export const AI_AGENTS_SECTION_KEYS = ["agents", "skills", "tools", "session"] as const;
+const AI_AGENTS_SECTION_KEYS = ["agents", "skills", "tools", "session"] as const;
 
 // "config" (the curated General hub) and "advanced" render without an include
 // list: General shows no schema sections at all, Advanced shows every section

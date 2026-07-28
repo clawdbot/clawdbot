@@ -3,17 +3,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
-  AI_AGENTS_SECTION_KEYS,
-  APPEARANCE_SECTION_KEYS,
-  AUTOMATION_SECTION_KEYS,
-  COMMUNICATION_SECTION_KEYS,
   configPageForSection,
   configSectionKeysForPage,
-  INFRASTRUCTURE_SECTION_KEYS,
-  MCP_SECTION_KEYS,
-  MEMORY_SECTION_KEYS,
   SCOPED_CONFIG_SECTION_KEYS,
-  SECURITY_SECTION_KEYS,
   type ConfigPageId,
 } from "./config-sections.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
@@ -110,15 +102,15 @@ describe("settings search target manifest", () => {
 
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", COMMUNICATION_SECTION_KEYS],
-    ["appearance", APPEARANCE_SECTION_KEYS],
+    ["communications", ["messages", "talk", "tts"]],
+    ["appearance", ["__appearance__", "ui", "wizard"]],
     ["notifications", ["__notifications__"]],
-    ["security", SECURITY_SECTION_KEYS],
-    ["automation", AUTOMATION_SECTION_KEYS],
-    ["mcp", MCP_SECTION_KEYS],
-    ["memory", MEMORY_SECTION_KEYS],
-    ["infrastructure", INFRASTRUCTURE_SECTION_KEYS],
-    ["ai-agents", AI_AGENTS_SECTION_KEYS],
+    ["security", ["security", "approvals"]],
+    ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
+    ["mcp", ["mcp"]],
+    ["memory", ["memory"]],
+    ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
+    ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];
 
   it.each(pages)("routes every %s section back to its rendering page", (pageId, sections) => {
@@ -130,7 +122,7 @@ describe("settings config section ownership", () => {
   });
 
   it("assigns each curated section to exactly one page", () => {
-    const sections = pages.flatMap(([, pageSections]) => [...pageSections]);
+    const sections = pages.flatMap(([, pageSections]) => pageSections);
 
     expect(new Set(sections).size).toBe(sections.length);
     expect([...SCOPED_CONFIG_SECTION_KEYS].toSorted()).toEqual(sections.toSorted());
