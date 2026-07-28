@@ -1,6 +1,12 @@
 // Runtime task-flow tests cover plugin task-flow registration and execution behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createTaskFlowForTask, getTaskFlowById } from "../../tasks/task-flow-registry.js";
+import { CONTINUATION_DELEGATE_CONTROLLER_ID } from "../../auto-reply/continuation/delegate-flow-store.js";
+import {
+  createManagedTaskFlow,
+  createTaskFlowForTask,
+  getTaskFlowById,
+} from "../../tasks/task-flow-registry.js";
+import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import { getTaskById } from "../../tasks/task-registry.js";
 import {
   installRuntimeTaskDeliveryMock,
@@ -16,6 +22,14 @@ function requireCreatedFlow<T>(flow: T | null): T {
     throw new Error("expected managed TaskFlow creation to succeed");
   }
   return flow;
+}
+
+function expectPublicContinuationState(flow: TaskFlowRecord | undefined) {
+  expect(flow).toBeDefined();
+  const state = flow?.stateJson as Record<string, unknown>;
+  expect(state.phase).toBe("queued");
+  expect(Object.keys(state)).not.toContain("attachments");
+  expect(Object.keys(state)).not.toContain("attachAs");
 }
 
 afterEach(() => {
@@ -139,6 +153,227 @@ describe("runtime TaskFlow", () => {
     }
     expect(summary.total).toBe(1);
     expect(summary.active).toBe(1);
+  });
+
+  it("does not persist continuation input through generic plugin creation", async () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const created = requireCreatedFlow(
+      taskFlow.createManaged({
+        controllerId: ` ${CONTINUATION_DELEGATE_CONTROLLER_ID} `,
+        goal: "Continue delegated work",
+        stateJson: {
+          phase: "queued",
+          attachments: [{ name: "brief.md", content: "input-marker" }],
+          attachAs: { mountPath: "handoff" },
+        },
+      }),
+    );
+
+    expectPublicContinuationState(created);
+    const queuedState = getTaskFlowById(created.flowId)?.stateJson as Record<string, unknown>;
+    expect(Object.keys(queuedState)).not.toContain("attachments");
+    expect(Object.keys(queuedState)).not.toContain("attachAs");
+    expectPublicContinuationState(taskFlow.get(created.flowId));
+    expectPublicContinuationState(taskFlow.list()[0]);
+    expectPublicContinuationState(taskFlow.findLatest());
+    expectPublicContinuationState(taskFlow.resolve("agent:main:main"));
+
+    const cancelled = await taskFlow.cancel({ flowId: created.flowId, cfg: {} });
+
+    expect(cancelled).toMatchObject({ found: true, cancelled: true });
+    expectPublicContinuationState(cancelled.flow);
+    const terminal = getTaskFlowById(created.flowId);
+    expect(terminal?.status).toBe("cancelled");
+    const terminalState = terminal?.stateJson as Record<string, unknown>;
+    expect(terminalState.phase).toBe("queued");
+    expect(Object.keys(terminalState)).not.toContain("attachments");
+    expect(Object.keys(terminalState)).not.toContain("attachAs");
+  });
+
+  it("persistently scrubs pre-existing continuation input before cancellation", async () => {
+    const secret = "PREEXISTING_CONTINUATION_ATTACHMENT_SECRET";
+    const seeded = requireCreatedFlow(
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: CONTINUATION_DELEGATE_CONTROLLER_ID,
+        goal: "Cancel a pre-existing continuation",
+        stateJson: {
+          phase: "queued",
+          attachments: [{ name: "brief.md", content: secret }],
+          attachAs: { mountPath: "handoff" },
+        },
+      }),
+    );
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+
+    const cancelled = await taskFlow.cancel({ flowId: seeded.flowId, cfg: {} });
+
+    expect(cancelled).toMatchObject({ found: true, cancelled: true });
+    const stored = getTaskFlowById(seeded.flowId);
+    expect(stored?.status).toBe("cancelled");
+    expect(stored?.stateJson).toEqual({ phase: "queued" });
+    expect(JSON.stringify(stored?.stateJson)).not.toContain(secret);
+  });
+
+  it("atomically scrubs persisted continuation input when cancellation is requested", () => {
+    const secret = "REQUEST_CANCEL_CONTINUATION_ATTACHMENT_SECRET";
+    const seeded = requireCreatedFlow(
+      createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: CONTINUATION_DELEGATE_CONTROLLER_ID,
+        goal: "Request cancellation for a pre-existing continuation",
+        stateJson: {
+          phase: "queued",
+          attachments: [{ name: "brief.md", content: secret }],
+          attachAs: { mountPath: "handoff" },
+        },
+      }),
+    );
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+
+    const cancelRequested = taskFlow.requestCancel({
+      flowId: seeded.flowId,
+      expectedRevision: seeded.revision,
+      cancelRequestedAt: 60,
+    });
+
+    expect(cancelRequested).toEqual({
+      applied: true,
+      flow: expect.objectContaining({
+        flowId: seeded.flowId,
+        revision: seeded.revision + 1,
+        cancelRequestedAt: 60,
+        stateJson: { phase: "queued" },
+      }),
+    });
+    const stored = getTaskFlowById(seeded.flowId);
+    expect(stored).toMatchObject({
+      revision: seeded.revision + 1,
+      cancelRequestedAt: 60,
+      stateJson: { phase: "queued" },
+    });
+    expect(JSON.stringify(stored?.stateJson)).not.toContain(secret);
+  });
+
+  it("does not persist continuation input through plugin waiting or resume transitions", () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const created = requireCreatedFlow(
+      taskFlow.createManaged({
+        controllerId: CONTINUATION_DELEGATE_CONTROLLER_ID,
+        goal: "Update delegate state through plugin runtime",
+        stateJson: { phase: "queued" },
+      }),
+    );
+
+    const waiting = taskFlow.setWaiting({
+      flowId: created.flowId,
+      expectedRevision: 0,
+      currentStep: "waiting",
+      stateJson: {
+        phase: "waiting",
+        attachments: [{ name: "brief.md", content: "WAITING_PLUGIN_ATTACHMENT_SECRET" }],
+        attachAs: { mountPath: "handoff" },
+      },
+    });
+    expect(waiting.applied).toBe(true);
+    const waitingState = getTaskFlowById(created.flowId)?.stateJson as Record<string, unknown>;
+    expect(waitingState.phase).toBe("waiting");
+    expect(Object.keys(waitingState)).not.toContain("attachments");
+    expect(Object.keys(waitingState)).not.toContain("attachAs");
+    expect(JSON.stringify(waitingState)).not.toContain("WAITING_PLUGIN_ATTACHMENT_SECRET");
+
+    const resumed = taskFlow.resume({
+      flowId: created.flowId,
+      expectedRevision: 1,
+      status: "running",
+      currentStep: "resumed",
+      stateJson: {
+        phase: "running",
+        attachments: [{ name: "brief.md", content: "RESUME_PLUGIN_ATTACHMENT_SECRET" }],
+        attachAs: { mountPath: "handoff" },
+      },
+    });
+    expect(resumed.applied).toBe(true);
+    const resumedState = getTaskFlowById(created.flowId)?.stateJson as Record<string, unknown>;
+    expect(resumedState.phase).toBe("running");
+    expect(Object.keys(resumedState)).not.toContain("attachments");
+    expect(Object.keys(resumedState)).not.toContain("attachAs");
+    expect(JSON.stringify(resumedState)).not.toContain("RESUME_PLUGIN_ATTACHMENT_SECRET");
+  });
+
+  it("scrubs continuation input from bound terminal transitions", () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const transitions = [
+      {
+        name: "finish",
+        run: (flowId: string) => taskFlow.finish({ flowId, expectedRevision: 0 }),
+        status: "succeeded",
+      },
+      {
+        name: "fail",
+        run: (flowId: string) =>
+          taskFlow.fail({
+            flowId,
+            expectedRevision: 0,
+            stateJson: {
+              phase: "failed",
+              attachments: [{ name: "result.md", content: "private-input" }],
+              attachAs: { mountPath: "handoff" },
+            },
+          }),
+        status: "failed",
+      },
+    ] as const;
+
+    for (const transition of transitions) {
+      const created = requireCreatedFlow(
+        taskFlow.createManaged({
+          controllerId: CONTINUATION_DELEGATE_CONTROLLER_ID,
+          goal: `Terminal ${transition.name}`,
+          stateJson: {
+            phase: "queued",
+            attachments: [{ name: "brief.md", content: "private-input" }],
+            attachAs: { mountPath: "handoff" },
+          },
+        }),
+      );
+
+      const result = transition.run(created.flowId);
+      expect(result.applied, transition.name).toBe(true);
+      if (!result.applied) {
+        throw new Error(`expected ${transition.name} to apply`);
+      }
+
+      const terminal = getTaskFlowById(created.flowId);
+      expect(terminal?.status, transition.name).toBe(transition.status);
+      const terminalState = terminal?.stateJson as Record<string, unknown>;
+      expect(Object.keys(terminalState), transition.name).not.toContain("attachments");
+      expect(Object.keys(terminalState), transition.name).not.toContain("attachAs");
+    }
+  });
+
+  it("preserves explicit null terminal state for continuation flows", () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const created = requireCreatedFlow(
+      taskFlow.createManaged({
+        controllerId: CONTINUATION_DELEGATE_CONTROLLER_ID,
+        goal: "Clear terminal state",
+        stateJson: {
+          phase: "queued",
+          attachments: [{ name: "brief.md", content: "private-input" }],
+          attachAs: { mountPath: "handoff" },
+        },
+      }),
+    );
+
+    const finished = taskFlow.finish({
+      flowId: created.flowId,
+      expectedRevision: 0,
+      stateJson: null,
+    });
+
+    expect(finished.applied).toBe(true);
+    expect(getTaskFlowById(created.flowId)?.stateJson).toBeNull();
   });
 
   it("applies each managed transition exactly once with its explicit payload", () => {

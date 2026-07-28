@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 
 // Logger mock for corrupt-payload breadcrumb assertions.
 // Mirrors the shape used in sibling delegate-dispatch.test.ts so log.warn
@@ -154,6 +155,7 @@ import { getDiagnosticContinuationQueueMetrics } from "../../logging/diagnostic-
 import {
   CONTINUATION_DELEGATE_CONTROLLER_ID,
   CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+  delegateFlowRecords,
 } from "./delegate-flow-store.js";
 import { registerDelegateStoreConsumptionSuite } from "./delegate-store-consumption.test-harness.js";
 import {
@@ -170,6 +172,7 @@ import {
   finalizeStagedPostCompactionDelegates,
   hasRecoverablePendingDelegate,
   listRecoverableStagedPostCompactionDelegates,
+  listPendingDelegateSessionKeysForRecovery,
   markPendingDelegateFailed,
   markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
@@ -199,6 +202,9 @@ function queueRawPendingFlow(sessionKey: string, stateJson: unknown): string {
 }
 
 beforeEach(() => {
+  setRuntimeConfigSnapshot({
+    tools: { sessions_spawn: { attachments: { enabled: true } } },
+  });
   mockFlows.clear();
   loggerRecords.length = 0;
   flowIdCounter = 0;
@@ -342,7 +348,7 @@ describe("delegate store — TaskFlow-backed", () => {
     enqueuePendingDelegate("session-1", {
       task: "attachment task",
       attachments: [
-        { name: "brief.md", content: "read me", mimeType: "text/markdown" },
+        { name: "  brief.md  ", content: "read me", mimeType: "  text/markdown  " },
         { name: "data.bin", content: "AQID", encoding: "base64" },
       ],
       attachAs: { mountPath: "  handoff/path  " },
@@ -427,6 +433,25 @@ describe("delegate store — TaskFlow-backed", () => {
     expect(flow.stateJson).not.toHaveProperty("attachAs");
     expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
     expect(JSON.stringify(flow.stateJson)).not.toContain("receipts");
+  });
+
+  it("dead-letters unsafe or noncanonical recovered mount paths", () => {
+    const mountPaths = ["/absolute", "handoff/../outside", "handoff//nested", " handoff/path "];
+
+    for (const [index, mountPath] of mountPaths.entries()) {
+      const sessionKey = `session-invalid-recovered-mount-${index}`;
+      const flowId = queueRawPendingFlow(sessionKey, {
+        kind: "continuation_delegate",
+        task: "reject invalid recovered mount path",
+        attachAs: { mountPath },
+      });
+
+      expect(consumePendingDelegates(sessionKey), mountPath).toEqual([]);
+      const flow = expectDefined(mockFlows.get(flowId), "failed invalid mount flow");
+      expect(flow.status, mountPath).toBe("failed");
+      expect(flow.stateJson, mountPath).not.toHaveProperty("attachAs");
+      expect(JSON.stringify(flow.stateJson), mountPath).not.toContain(mountPath);
+    }
   });
 
   it("dead-letters semantically invalid recovered attachment snapshots and scrubs raw bytes", () => {
@@ -537,6 +562,148 @@ describe("delegate store — TaskFlow-backed", () => {
       expect(flow.stateJson).toEqual({});
       expect(JSON.stringify(flow.stateJson)).not.toContain(secret);
     }
+  });
+
+  it("rejects invalid attachment snapshots at every direct TaskFlow writer before persistence", () => {
+    const enabled = {
+      tools: {
+        sessions_spawn: {
+          attachments: { enabled: true, maxFiles: 1, maxFileBytes: 4, maxTotalBytes: 4 },
+        },
+      },
+    };
+    const disabled = { tools: { sessions_spawn: { attachments: { enabled: false } } } };
+    const attempts: Array<{
+      name: string;
+      write: () => void;
+      expected: string;
+      secret: string;
+    }> = [
+      {
+        name: "disabled policy through enqueuePendingDelegate",
+        secret: "DISABLED_POLICY_SECRET",
+        expected: "attachments are disabled",
+        write: () =>
+          enqueuePendingDelegate(
+            "direct-disabled",
+            {
+              task: "disabled",
+              attachments: [{ name: "brief.md", content: "DISABLED_POLICY_SECRET" }],
+            },
+            { attachmentConfig: disabled },
+          ),
+      },
+      {
+        name: "oversized utf8 through stagePostCompactionTaskFlowDelegate",
+        secret: "OVERSIZED_ATTACHMENT_SECRET",
+        expected: "attachments_file_bytes_exceeded",
+        write: () =>
+          stagePostCompactionTaskFlowDelegate(
+            "direct-oversized",
+            {
+              task: "oversized",
+              stagedAt: Date.now(),
+              attachments: [{ name: "brief.md", content: "OVERSIZED_ATTACHMENT_SECRET" }],
+            },
+            { attachmentConfig: enabled },
+          ),
+      },
+      {
+        name: "malformed base64 through delegateFlowRecords.create",
+        secret: "%%%NOT_BASE64%%",
+        expected: "attachments_invalid_base64_or_too_large",
+        write: () =>
+          delegateFlowRecords.create({
+            ownerKey: "direct-base64",
+            controller: "pending",
+            delegate: {
+              task: "base64",
+              attachments: [{ name: "brief.bin", content: "%%%NOT_BASE64%%", encoding: "base64" }],
+            },
+            currentStep: "test",
+            attachmentConfig: enabled,
+          }),
+      },
+      {
+        name: "duplicate names",
+        secret: "DUPLICATE_NAME_SECRET",
+        expected: "attachments_duplicate_name",
+        write: () =>
+          enqueuePendingDelegate(
+            "direct-duplicate",
+            {
+              task: "duplicate",
+              attachments: [
+                { name: "brief.md", content: "one" },
+                { name: "brief.md", content: "DUPLICATE_NAME_SECRET" },
+              ],
+            },
+            {
+              attachmentConfig: {
+                tools: {
+                  sessions_spawn: {
+                    attachments: {
+                      enabled: true,
+                      maxFiles: 2,
+                      maxFileBytes: 64,
+                      maxTotalBytes: 64,
+                    },
+                  },
+                },
+              },
+            },
+          ),
+      },
+      {
+        name: "unsafe names",
+        secret: "UNSAFE_NAME_SECRET",
+        expected: "attachments_invalid_name",
+        write: () =>
+          enqueuePendingDelegate(
+            "direct-unsafe-name",
+            {
+              task: "unsafe",
+              attachments: [{ name: "../brief.md", content: "UNSAFE_NAME_SECRET" }],
+            },
+            { attachmentConfig: enabled },
+          ),
+      },
+      {
+        name: "invalid attachAs",
+        secret: "INVALID_ATTACH_AS_SECRET",
+        expected: "invalid continuation delegate attachment mount path",
+        write: () =>
+          stagePostCompactionTaskFlowDelegate(
+            "direct-unsafe-mount",
+            {
+              task: "unsafe mount",
+              stagedAt: Date.now(),
+              attachments: [{ name: "brief.md", content: "INVALID_ATTACH_AS_SECRET" }],
+              attachAs: { mountPath: "../outside" },
+            },
+            {
+              attachmentConfig: {
+                tools: {
+                  sessions_spawn: {
+                    attachments: {
+                      enabled: true,
+                      maxFiles: 1,
+                      maxFileBytes: 64,
+                      maxTotalBytes: 64,
+                    },
+                  },
+                },
+              },
+            },
+          ),
+      },
+    ];
+
+    for (const attempt of attempts) {
+      expect(attempt.write, attempt.name).toThrow(attempt.expected);
+      expect(JSON.stringify([...mockFlows.values()])).not.toContain(attempt.secret);
+    }
+    expect(mockFlows.size).toBe(0);
   });
 
   it("scrubs attachment bytes when a delegate reaches a terminal state", () => {
@@ -1092,6 +1259,32 @@ describe("consume-paths corrupt-payload breadcrumbs", () => {
     expect(warningText).not.toContain(attachmentContent);
     expect(warningText).not.toContain(maliciousKey);
     expect(mockFlows.get(flowId)?.stateJson).not.toHaveProperty("attachments");
+  });
+
+  it("terminalizes a malformed legacy attachment row without replaying or retaining content", () => {
+    const secret = "LEGACY_MALFORMED_ATTACHMENT_SECRET";
+    const flowId = queueRawPendingFlow("session-legacy-attachment", {
+      kind: "continuation_delegate",
+      task: "legacy malformed attachment",
+      attachments: [{ name: "../brief.md", content: secret }],
+    });
+
+    expect(consumePendingDelegates("session-legacy-attachment")).toEqual([]);
+    expect(mockFlows.get(flowId)?.status).toBe("failed");
+    expect(JSON.stringify(mockFlows.get(flowId)?.stateJson)).not.toContain(secret);
+  });
+
+  it("terminalizes malformed attachment state while enumerating startup recovery owners", () => {
+    const secret = "RECOVERY_OWNER_ENUMERATION_ATTACHMENT_SECRET";
+    const flowId = queueRawPendingFlow("session-missing-owner", {
+      kind: "continuation_delegate",
+      task: "malformed before owner lookup",
+      attachments: [{ name: "../brief.md", content: secret }],
+    });
+
+    expect(listPendingDelegateSessionKeysForRecovery()).toEqual([]);
+    expect(mockFlows.get(flowId)?.status).toBe("failed");
+    expect(JSON.stringify(mockFlows.get(flowId)?.stateJson)).not.toContain(secret);
   });
 
   it("fails multiple corrupt rows in a single consume call without aborting later valid ones", () => {

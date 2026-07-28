@@ -81,6 +81,59 @@ describe("redactTranscriptMessage", () => {
     expect(text).toContain("end");
   });
 
+  it("redacts continue_delegate inline snapshots at the canonical transcript boundary", () => {
+    const secret = "CANONICAL_TRANSCRIPT_CONTINUATION_ATTACHMENT_SECRET";
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "delegate-call",
+          name: " continue_delegate ",
+          partialJson: JSON.stringify({
+            task: "carry the streaming snapshot",
+            attachments: [{ name: "streaming.md", content: secret }],
+          }),
+          arguments: {
+            task: "carry the snapshot",
+            attachments: [{ name: "brief.md", content: secret }],
+          },
+        },
+        {
+          type: "toolUse",
+          id: "delegate-use",
+          name: "continue_delegate",
+          input: {
+            task: "carry the alternate snapshot",
+            attachments: [{ name: "alternate.md", content: secret }],
+          },
+        },
+        {
+          type: "function_call",
+          id: "delegate-function-call",
+          name: "continue_delegate",
+          arguments: JSON.stringify({
+            task: "carry the legacy snapshot",
+            attachments: [{ name: "legacy.md", content: secret }],
+          }),
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const persistedBytes = JSON.stringify(result);
+    expect(persistedBytes).not.toContain(secret);
+    expect(persistedBytes).toContain("__OPENCLAW_REDACTED__");
+    const blocks = msgContent(result) as Array<{ name: string; partialJson?: string }>;
+    expect(blocks).toHaveLength(3);
+    expect(blocks.map((block) => block.name)).toEqual([
+      "continue_delegate",
+      "continue_delegate",
+      "continue_delegate",
+    ]);
+    expect(blocks[0]).not.toHaveProperty("partialJson");
+  });
+
   it("keeps pagination cursors readable while still masking credential tool args (#104992)", () => {
     const msg = {
       role: "assistant",

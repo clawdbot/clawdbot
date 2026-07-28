@@ -82,3 +82,38 @@ export function stripQueuedAttachmentMountWithoutAttachments<
   delete normalized.attachAs;
   return normalized;
 }
+
+export function isAttachmentRef(value: unknown): value is AttachmentRef {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.kind !== "blob-sha256" ||
+    typeof record.sha256 !== "string" ||
+    record.sha256.length === 0 ||
+    (record.mediaType !== undefined && typeof record.mediaType !== "string")
+  ) {
+    return false;
+  }
+  // AttachmentRef is intentionally a descriptor-only contract. Reject unknown
+  // keys as well as `content`, so a legacy inline snapshot cannot be carried in
+  // a generic event under a nested or extension field.
+  return Object.keys(record).every(
+    (key) => key === "kind" || key === "sha256" || key === "mediaType",
+  );
+}
+
+export function hasOnlyGenericAttachmentRefs(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const record = entry as Record<string, unknown>;
+  if (Object.hasOwn(record, "attachAs")) {
+    return false;
+  }
+  if (!Object.hasOwn(record, "attachments")) {
+    return true;
+  }
+  return Array.isArray(record.attachments) && record.attachments.every(isAttachmentRef);
+}

@@ -1,6 +1,7 @@
 /** Canonical continuation-delegate business transitions over TaskFlow. */
 
 import type { SessionPostCompactionDelegate } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   decodeDelegateFlow,
@@ -30,7 +31,11 @@ const log = createSubsystemLogger("continuation/delegate-store");
 type DelegateFlowRecord = ReturnType<typeof delegateFlowRecords.listAll>[number];
 
 /** Enqueue a delegate from the `continue_delegate` tool. */
-export function enqueuePendingDelegate(sessionKey: string, delegate: PendingContinuationDelegate) {
+export function enqueuePendingDelegate(
+  sessionKey: string,
+  delegate: PendingContinuationDelegate,
+  options: { attachmentConfig?: OpenClawConfig } = {},
+) {
   const isPostCompaction = delegate.mode === "post-compaction";
   return delegateFlowRecords.create({
     ownerKey: sessionKey,
@@ -39,22 +44,33 @@ export function enqueuePendingDelegate(sessionKey: string, delegate: PendingCont
     currentStep: isPostCompaction
       ? "Staged for release after compaction"
       : "Queued for continuation dispatch",
+    attachmentConfig: options.attachmentConfig,
   });
 }
 
 export function listPendingDelegateSessionKeysForRecovery(
   options: Omit<PendingDelegateCutoffOptions, "includeRunning"> = {},
 ): string[] {
-  const sessionKeys = delegateFlowRecords
-    .listAll()
-    .filter((flow) =>
-      isRecoverablePendingFlowWithinCutoffs(flow, {
+  const sessionKeys: string[] = [];
+  for (const flow of delegateFlowRecords.listAll()) {
+    if (
+      !isRecoverablePendingFlowWithinCutoffs(flow, {
         includeRunning: true,
         queuedCreatedAtOrBefore: options.queuedCreatedAtOrBefore,
         includeRunningUpdatedAtOrBefore: options.includeRunningUpdatedAtOrBefore,
-      }),
-    )
-    .map((flow) => flow.ownerKey);
+      })
+    ) {
+      continue;
+    }
+    // Validate before the recovery dispatcher attempts to load the owning
+    // session. A missing/deleted session must not leave malformed inline bytes
+    // in a recoverable TaskFlow row forever.
+    if (!decodeDelegateFlow(flow)) {
+      rejectCorruptDelegateFlow(flow, { kind: "pending", sessionKey: flow.ownerKey });
+      continue;
+    }
+    sessionKeys.push(flow.ownerKey);
+  }
   return [...new Set(sessionKeys)].toSorted();
 }
 
@@ -288,6 +304,7 @@ export function peekSoonestUnmaturedDelegateDueAt(
     }
     const delegate = decodeDelegateFlow(flow);
     if (!delegate) {
+      rejectCorruptDelegateFlow(flow, { kind: "pending", sessionKey });
       continue;
     }
     const dueAt = delegateDueAt(flow, delegate);
@@ -405,13 +422,14 @@ export function cancelPendingDelegates(sessionKey: string): void {
 export function stagePostCompactionTaskFlowDelegate(
   sessionKey: string,
   delegate: StagedPostCompactionDelegate,
+  options: { attachmentConfig?: OpenClawConfig } = {},
 ) {
   const pendingDelegate: PendingContinuationDelegate = {
     task: delegate.task,
     mode: "post-compaction",
     firstArmedAt: delegate.firstArmedAt ?? delegate.stagedAt,
-    ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
-    ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
+    ...(delegate.attachments !== undefined ? { attachments: delegate.attachments } : {}),
+    ...(delegate.attachAs !== undefined ? { attachAs: delegate.attachAs } : {}),
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),
@@ -425,6 +443,7 @@ export function stagePostCompactionTaskFlowDelegate(
     controller: "post-compaction",
     delegate: pendingDelegate,
     currentStep: "Staged for release after compaction",
+    attachmentConfig: options.attachmentConfig,
   });
 }
 
@@ -442,10 +461,11 @@ export function requeueReleasedPostCompactionTaskFlowDelegate(
   if (!flow || !isPostCompactionDelegateFlow(flow) || flow.status !== "running") {
     return false;
   }
-  const currentDelegate = decodeDelegateFlow(flow) ?? {
-    task: delegate.task,
-    mode: "post-compaction" as const,
-  };
+  const currentDelegate = decodeDelegateFlow(flow);
+  if (!currentDelegate) {
+    rejectCorruptDelegateFlow(flow, { kind: "post-compaction", sessionKey: flow.ownerKey });
+    return false;
+  }
   const result = delegateFlowRecords.update({
     flowId: flow.flowId,
     expectedRevision: delegate.expectedRevision,
@@ -645,6 +665,9 @@ export function listRecoverableStagedPostCompactionDelegates(options?: {
     }
     const delegate = decodeDelegateFlow(flow);
     if (!delegate) {
+      // A recoverable row with invalid attachment state must not remain a
+      // warning-only replay candidate: rejectCorrupt uses the terminal scrub
+      // path, removing any legacy inline bytes before a later restart sees it.
       rejectCorruptDelegateFlow(flow, { kind: "post-compaction", sessionKey: flow.ownerKey });
       continue;
     }
@@ -666,8 +689,8 @@ export function stagePostCompactionDelegate(
     task: delegate.task,
     stagedAt,
     firstArmedAt: delegate.firstArmedAt ?? stagedAt,
-    ...(delegate.attachments ? { attachments: delegate.attachments } : {}),
-    ...(delegate.attachAs ? { attachAs: delegate.attachAs } : {}),
+    ...(delegate.attachments !== undefined ? { attachments: delegate.attachments } : {}),
+    ...(delegate.attachAs !== undefined ? { attachAs: delegate.attachAs } : {}),
     ...(delegate.targetSessionKey ? { targetSessionKey: delegate.targetSessionKey } : {}),
     ...(delegate.targetSessionKeys ? { targetSessionKeys: delegate.targetSessionKeys } : {}),
     ...(delegate.fanoutMode ? { fanoutMode: delegate.fanoutMode } : {}),

@@ -5,6 +5,12 @@ import {
   runTaskInFlowForOwner,
 } from "../../tasks/task-executor.js";
 import {
+  CONTINUATION_DELEGATE_CONTROLLER_ID,
+  CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+  isContinuationDelegateFlow,
+  scrubStoredDelegateAttachmentState,
+} from "../../tasks/task-flow-continuation-state.js";
+import {
   findLatestTaskFlowForOwner,
   getTaskFlowByIdForOwner,
   listTaskFlowsForOwner,
@@ -19,6 +25,7 @@ import {
   requestFlowCancel,
   resumeFlow,
   setFlowWaiting,
+  updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
 import type { TaskDeliveryState } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -46,6 +53,28 @@ function asManagedTaskFlowRecord(
   return flow as ManagedTaskFlowRecord;
 }
 
+function isContinuationDelegateControllerId(controllerId: string): boolean {
+  const normalized = controllerId.trim();
+  return (
+    normalized === CONTINUATION_DELEGATE_CONTROLLER_ID ||
+    normalized === CONTINUATION_POST_COMPACTION_CONTROLLER_ID
+  );
+}
+
+function projectTaskFlowForPublicView(flow: TaskFlowRecord): TaskFlowRecord {
+  if (!isContinuationDelegateFlow(flow)) {
+    return flow;
+  }
+  return {
+    ...flow,
+    stateJson: scrubStoredDelegateAttachmentState(flow.stateJson),
+  };
+}
+
+function projectManagedTaskFlowForPublicView(flow: ManagedTaskFlowRecord): ManagedTaskFlowRecord {
+  return projectTaskFlowForPublicView(flow) as ManagedTaskFlowRecord;
+}
+
 function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutationResult {
   if (result.applied) {
     const managed = asManagedTaskFlowRecord(result.flow);
@@ -53,25 +82,25 @@ function mapFlowUpdateResult(result: TaskFlowUpdateResult): ManagedTaskFlowMutat
       return {
         applied: false,
         code: "not_managed",
-        current: result.flow,
+        current: projectTaskFlowForPublicView(result.flow),
       };
     }
     return {
       applied: true,
-      flow: managed,
+      flow: projectManagedTaskFlowForPublicView(managed),
     };
   }
   return {
     applied: false,
     code: result.reason,
-    ...(result.current ? { current: result.current } : {}),
+    ...(result.current ? { current: projectTaskFlowForPublicView(result.current) } : {}),
   };
 }
 
 function applyManagedFlowMutationForOwner(params: {
   flowId: string;
   ownerKey: string;
-  mutate: (flowId: string) => TaskFlowUpdateResult;
+  mutate: (flow: ManagedTaskFlowRecord) => TaskFlowUpdateResult;
 }): ManagedTaskFlowMutationResult {
   // Authorization and mode checks must complete before the mutation can touch persistence.
   const flow = getTaskFlowByIdForOwner({
@@ -85,7 +114,7 @@ function applyManagedFlowMutationForOwner(params: {
   if (!managed) {
     return { applied: false, code: "not_managed", current: flow };
   }
-  return mapFlowUpdateResult(params.mutate(managed.flowId));
+  return mapFlowUpdateResult(params.mutate(managed));
 }
 
 function createBoundTaskFlowRuntime(params: {
@@ -108,14 +137,20 @@ function createBoundTaskFlowRuntime(params: {
       notifyPolicy: input.notifyPolicy,
       goal: input.goal,
       currentStep: input.currentStep,
-      stateJson: input.stateJson,
+      // Plugin runtime callers are not a continuation attachment persistence
+      // path. Core delegate writers own validated snapshot persistence; a
+      // generic plugin write may only carry the redacted state projection.
+      stateJson: isContinuationDelegateControllerId(input.controllerId)
+        ? scrubStoredDelegateAttachmentState(input.stateJson)
+        : input.stateJson,
       waitJson: input.waitJson,
       cancelRequestedAt: input.cancelRequestedAt,
       createdAt: input.createdAt,
       updatedAt: input.updatedAt,
       endedAt: input.endedAt,
     });
-    return asManagedTaskFlowRecord(flow ?? undefined) ?? null;
+    const managed = asManagedTaskFlowRecord(flow ?? undefined);
+    return managed ? projectManagedTaskFlowForPublicView(managed) : null;
   };
 
   return {
@@ -129,24 +164,30 @@ function createBoundTaskFlowRuntime(params: {
       return flow;
     },
     tryCreateManaged,
-    get: (flowId) =>
-      getTaskFlowByIdForOwner({
+    get: (flowId) => {
+      const flow = getTaskFlowByIdForOwner({
         flowId,
         callerOwnerKey: ownerKey,
-      }),
+      });
+      return flow ? projectTaskFlowForPublicView(flow) : undefined;
+    },
     list: () =>
       listTaskFlowsForOwner({
         callerOwnerKey: ownerKey,
-      }),
-    findLatest: () =>
-      findLatestTaskFlowForOwner({
+      }).map(projectTaskFlowForPublicView),
+    findLatest: () => {
+      const flow = findLatestTaskFlowForOwner({
         callerOwnerKey: ownerKey,
-      }),
-    resolve: (token) =>
-      resolveTaskFlowForLookupTokenForOwner({
+      });
+      return flow ? projectTaskFlowForPublicView(flow) : undefined;
+    },
+    resolve: (token) => {
+      const flow = resolveTaskFlowForLookupTokenForOwner({
         token,
         callerOwnerKey: ownerKey,
-      }),
+      });
+      return flow ? projectTaskFlowForPublicView(flow) : undefined;
+    },
     getTaskSummary: (flowId) => {
       const flow = getTaskFlowByIdForOwner({
         flowId,
@@ -158,12 +199,16 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        mutate: (flowId) =>
+        mutate: (flow) =>
           setFlowWaiting({
-            flowId,
+            flowId: flow.flowId,
             expectedRevision: input.expectedRevision,
             currentStep: input.currentStep,
-            stateJson: input.stateJson,
+            stateJson: isContinuationDelegateFlow(flow)
+              ? scrubStoredDelegateAttachmentState(
+                  input.stateJson === undefined ? flow.stateJson : input.stateJson,
+                )
+              : input.stateJson,
             waitJson: input.waitJson,
             blockedTaskId: input.blockedTaskId,
             blockedSummary: input.blockedSummary,
@@ -174,13 +219,17 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        mutate: (flowId) =>
+        mutate: (flow) =>
           resumeFlow({
-            flowId,
+            flowId: flow.flowId,
             expectedRevision: input.expectedRevision,
             status: input.status,
             currentStep: input.currentStep,
-            stateJson: input.stateJson,
+            stateJson: isContinuationDelegateFlow(flow)
+              ? scrubStoredDelegateAttachmentState(
+                  input.stateJson === undefined ? flow.stateJson : input.stateJson,
+                )
+              : input.stateJson,
             updatedAt: input.updatedAt,
           }),
       }),
@@ -188,11 +237,15 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        mutate: (flowId) =>
+        mutate: (flow) =>
           finishFlow({
-            flowId,
+            flowId: flow.flowId,
             expectedRevision: input.expectedRevision,
-            stateJson: input.stateJson,
+            stateJson: isContinuationDelegateFlow(flow)
+              ? scrubStoredDelegateAttachmentState(
+                  input.stateJson === undefined ? flow.stateJson : input.stateJson,
+                )
+              : input.stateJson,
             updatedAt: input.updatedAt,
             endedAt: input.endedAt,
           }),
@@ -201,11 +254,15 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        mutate: (flowId) =>
+        mutate: (flow) =>
           failFlow({
-            flowId,
+            flowId: flow.flowId,
             expectedRevision: input.expectedRevision,
-            stateJson: input.stateJson,
+            stateJson: isContinuationDelegateFlow(flow)
+              ? scrubStoredDelegateAttachmentState(
+                  input.stateJson === undefined ? flow.stateJson : input.stateJson,
+                )
+              : input.stateJson,
             blockedTaskId: input.blockedTaskId,
             blockedSummary: input.blockedSummary,
             updatedAt: input.updatedAt,
@@ -216,19 +273,33 @@ function createBoundTaskFlowRuntime(params: {
       applyManagedFlowMutationForOwner({
         flowId: input.flowId,
         ownerKey,
-        mutate: (flowId) =>
-          requestFlowCancel({
-            flowId,
-            expectedRevision: input.expectedRevision,
-            cancelRequestedAt: input.cancelRequestedAt,
-          }),
+        mutate: (flow) =>
+          isContinuationDelegateFlow(flow)
+            ? updateFlowRecordByIdExpectedRevision({
+                flowId: flow.flowId,
+                expectedRevision: input.expectedRevision,
+                patch: {
+                  stateJson: scrubStoredDelegateAttachmentState(flow.stateJson),
+                  cancelRequestedAt: input.cancelRequestedAt ?? Date.now(),
+                },
+              })
+            : requestFlowCancel({
+                flowId: flow.flowId,
+                expectedRevision: input.expectedRevision,
+                cancelRequestedAt: input.cancelRequestedAt,
+              }),
       }),
-    cancel: ({ flowId, cfg }) =>
-      cancelFlowByIdForOwner({
+    cancel: async ({ flowId, cfg }) => {
+      const result = await cancelFlowByIdForOwner({
         cfg,
         flowId,
         callerOwnerKey: ownerKey,
-      }),
+      });
+      return {
+        ...result,
+        ...(result.flow ? { flow: projectTaskFlowForPublicView(result.flow) } : {}),
+      };
+    },
     runTask: (input) => {
       const created = runTaskInFlowForOwner({
         flowId: input.flowId,
@@ -254,16 +325,24 @@ function createBoundTaskFlowRuntime(params: {
           created: false,
           found: created.found,
           reason: created.reason ?? "Task was not created.",
-          ...(created.flow ? { flow: created.flow } : {}),
+          ...(created.flow ? { flow: projectTaskFlowForPublicView(created.flow) } : {}),
         };
       }
-      const managed = asManagedTaskFlowRecord(created.flow);
+      const flow = created.flow;
+      if (!flow) {
+        return {
+          created: false,
+          found: true,
+          reason: "TaskFlow was not returned after child-task creation.",
+        };
+      }
+      const managed = asManagedTaskFlowRecord(flow);
       if (!managed) {
         return {
           created: false,
           found: true,
           reason: "TaskFlow does not accept managed child tasks.",
-          flow: created.flow,
+          flow: projectTaskFlowForPublicView(flow),
         };
       }
       if (!created.task) {
@@ -271,12 +350,12 @@ function createBoundTaskFlowRuntime(params: {
           created: false,
           found: true,
           reason: "Task was not created.",
-          flow: created.flow,
+          flow: projectTaskFlowForPublicView(flow),
         };
       }
       return {
         created: true,
-        flow: managed,
+        flow: projectManagedTaskFlowForPublicView(managed),
         task: created.task,
       };
     },

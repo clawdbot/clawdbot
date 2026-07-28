@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { validateSubagentAttachments } from "../../agents/subagent-attachments.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   DIAGNOSTIC_TRACEPARENT_PATTERN,
   normalizeDiagnosticTraceparent,
@@ -6,9 +9,16 @@ import {
 import { registerDiagnosticContinuationQueueMetricsProvider } from "../../logging/diagnostic-continuation-queues.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
-  validateInlineAttachmentSnapshots,
   parseInlineAttachmentMountPath,
+  validateInlineAttachmentSnapshots,
+  type InlineAttachment,
 } from "../../shared/inline-attachments.js";
+import {
+  CONTINUATION_DELEGATE_CONTROLLER_ID,
+  CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+  isContinuationDelegateFlow,
+  scrubStoredDelegateAttachmentState,
+} from "../../tasks/task-flow-continuation-state.js";
 import type { TaskFlowRecord } from "../../tasks/task-flow-registry.types.js";
 import {
   createManagedTaskFlow,
@@ -20,7 +30,6 @@ import {
   listTaskFlowsForOwnerKey,
   updateFlowRecordByIdExpectedRevision,
 } from "../../tasks/task-flow-runtime-internal.js";
-import type { JsonValue } from "../../tasks/task-registry.types.js";
 import { createContinuationQueueDiagnostics } from "./delegate-flow-diagnostics.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
@@ -31,8 +40,12 @@ import type { ChainState, PendingContinuationDelegate } from "./types.js";
 
 const log = createSubsystemLogger("continuation/delegate-store");
 
-export const CONTINUATION_DELEGATE_CONTROLLER_ID = "core/continuation-delegate";
-export const CONTINUATION_POST_COMPACTION_CONTROLLER_ID = "core/continuation-post-compaction";
+export {
+  CONTINUATION_DELEGATE_CONTROLLER_ID,
+  CONTINUATION_POST_COMPACTION_CONTROLLER_ID,
+  isContinuationDelegateFlow,
+  scrubStoredDelegateAttachmentState,
+};
 
 const TraceparentStateSchema = z
   .preprocess(
@@ -57,17 +70,48 @@ const InlineAttachmentStateSchema = z
   })
   .strict();
 
+function parseDelegateAttachmentMountPath(
+  value: unknown,
+  options: { requireCanonicalInput?: boolean } = {},
+) {
+  const parsed = parseInlineAttachmentMountPath(value);
+  if (parsed.status !== "valid") {
+    if (
+      parsed.status === "absent" &&
+      options.requireCanonicalInput === true &&
+      value !== undefined &&
+      value !== null
+    ) {
+      return { status: "invalid" } as const;
+    }
+    return parsed;
+  }
+  if (
+    (options.requireCanonicalInput === true && value !== parsed.mountPath) ||
+    parsed.mountPath.startsWith("/") ||
+    parsed.mountPath.endsWith("/") ||
+    parsed.mountPath.includes("//") ||
+    !/^[A-Za-z0-9._\-/]+$/.test(parsed.mountPath) ||
+    parsed.mountPath.split("/").some((segment) => segment === "." || segment === "..")
+  ) {
+    return { status: "invalid" } as const;
+  }
+  return parsed;
+}
+
 const InlineAttachmentMountStateSchema = z
   .object({
     mountPath: z.string().optional(),
   })
   .strict()
   .transform((mount, ctx) => {
-    const parsed = parseInlineAttachmentMountPath(mount.mountPath);
+    const parsed = parseDelegateAttachmentMountPath(mount.mountPath, {
+      requireCanonicalInput: true,
+    });
     if (parsed.status === "invalid") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: "attachAs.mountPath contains unsupported characters",
+        message: "attachAs.mountPath is unsafe or noncanonical",
       });
       return z.NEVER;
     }
@@ -200,16 +244,49 @@ function delegateGoal(delegate: PendingContinuationDelegate): string {
     : `Continuation delegate: ${excerpt}`;
 }
 
-function encodeDelegateState(delegate: PendingContinuationDelegate): PendingDelegateState {
+function canonicalizeDelegateAttachments(
+  config: OpenClawConfig,
+  attachments: InlineAttachment[] | undefined,
+): InlineAttachment[] | undefined {
+  if (!attachments || attachments.length === 0) {
+    return undefined;
+  }
+  const canonical = attachments.map((attachment) => ({
+    name: attachment.name.trim(),
+    content: attachment.content,
+    ...(attachment.encoding ? { encoding: attachment.encoding } : {}),
+    ...(attachment.mimeType !== undefined ? { mimeType: attachment.mimeType.trim() } : {}),
+  }));
+  const error = validateSubagentAttachments({ config, attachments: canonical });
+  if (error) {
+    throw new Error(error);
+  }
+  return canonical;
+}
+
+function encodeDelegateState(
+  delegate: PendingContinuationDelegate,
+  attachmentConfig: OpenClawConfig = getRuntimeConfig(),
+): PendingDelegateState {
+  // Durable TaskFlow writers are also called outside the tool surface. Apply
+  // the exact sessions_spawn attachment policy before any stateJson write.
+  const attachments = canonicalizeDelegateAttachments(attachmentConfig, delegate.attachments);
   const targetSessionKey = normalizeContinuationTargetKey(delegate.targetSessionKey);
   const targetSessionKeys = normalizeContinuationTargetKeys(delegate.targetSessionKeys);
   const traceparent = normalizeDiagnosticTraceparent(delegate.traceparent);
-  const parsedMountPath = parseInlineAttachmentMountPath(delegate.attachAs?.mountPath);
+  const rawAttachAs = delegate.attachAs;
+  if (
+    rawAttachAs !== undefined &&
+    (!rawAttachAs || typeof rawAttachAs !== "object" || Array.isArray(rawAttachAs))
+  ) {
+    throw new Error("invalid continuation delegate attachment mount path");
+  }
+  const parsedMountPath = parseDelegateAttachmentMountPath(rawAttachAs?.mountPath);
   if (parsedMountPath.status === "invalid") {
     throw new Error("invalid continuation delegate attachment mount path");
   }
   const attachAs =
-    delegate.attachments?.length && parsedMountPath.status === "valid"
+    attachments?.length && parsedMountPath.status === "valid"
       ? { mountPath: parsedMountPath.mountPath }
       : undefined;
   return {
@@ -222,9 +299,7 @@ function encodeDelegateState(delegate: PendingContinuationDelegate): PendingDele
     ...(delegate.firstArmedAt !== undefined || delegate.delayMs !== undefined
       ? { firstArmedAt: delegate.firstArmedAt ?? Date.now() }
       : {}),
-    ...(delegate.attachments && delegate.attachments.length > 0
-      ? { attachments: delegate.attachments }
-      : {}),
+    ...(attachments ? { attachments } : {}),
     ...(attachAs ? { attachAs } : {}),
     ...(targetSessionKey ? { targetSessionKey } : {}),
     ...(targetSessionKeys.length > 0 ? { targetSessionKeys } : {}),
@@ -295,24 +370,19 @@ function resolveUpdatedDelegateState(params: {
   return state ? applyDelegateStateChanges(state, params.changes) : undefined;
 }
 
-function scrubStoredDelegateAttachmentState(
-  stateJson: JsonValue | null | undefined,
-): JsonValue | null | undefined {
-  if (stateJson === undefined || stateJson === null) {
-    return stateJson;
-  }
-  if (typeof stateJson !== "object" || Array.isArray(stateJson)) {
-    return {};
-  }
-  const scrubbed = { ...stateJson };
-  delete scrubbed.attachments;
-  delete scrubbed.attachAs;
-  return scrubbed;
-}
-
 function decodeDelegateState(flow: TaskFlowRecord): PendingDelegateState | undefined {
   const parsed = PendingDelegateStateSchema.safeParse(flow.stateJson);
-  return parsed.success ? parsed.data : undefined;
+  if (!parsed.success) {
+    return undefined;
+  }
+  // Legacy rows predate the persistence boundary above. They must satisfy the
+  // same live policy before recovery may return their raw bytes to a spawn;
+  // callers terminalize an undefined decode through the scrubbed fail path.
+  const attachmentError = validateSubagentAttachments({
+    config: getRuntimeConfig(),
+    attachments: parsed.data.attachments,
+  });
+  return attachmentError ? undefined : parsed.data;
 }
 
 export function decodeDelegateFlow(flow: TaskFlowRecord): PendingContinuationDelegate | undefined {
@@ -377,10 +447,6 @@ export function isPostCompactionDelegateFlow(flow: TaskFlowRecord): boolean {
   return (
     flow.syncMode === "managed" && flow.controllerId === CONTINUATION_POST_COMPACTION_CONTROLLER_ID
   );
-}
-
-export function isContinuationDelegateFlow(flow: TaskFlowRecord): boolean {
-  return isPendingDelegateFlow(flow) || isPostCompactionDelegateFlow(flow);
 }
 
 export function isTerminalDelegateFlow(flow: TaskFlowRecord): boolean {
@@ -475,6 +541,8 @@ export const delegateFlowRecords = {
     controller: "pending" | "post-compaction";
     delegate: PendingContinuationDelegate;
     currentStep: string;
+    /** Tests and non-tool producers can inject their resolved runtime policy. */
+    attachmentConfig?: OpenClawConfig;
   }) {
     return createManagedTaskFlow({
       ownerKey: params.ownerKey,
@@ -485,7 +553,7 @@ export const delegateFlowRecords = {
       notifyPolicy: "silent",
       goal: delegateGoal(params.delegate),
       currentStep: params.currentStep,
-      stateJson: encodeDelegateState(params.delegate),
+      stateJson: encodeDelegateState(params.delegate, params.attachmentConfig),
     });
   },
   update(params: {

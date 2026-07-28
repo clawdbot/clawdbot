@@ -100,6 +100,46 @@ describe("createCliDispatchTranscriptRecorder", () => {
     });
   });
 
+  it("redacts continue_delegate attachment bytes at the transcript persistence boundary", async () => {
+    const recorder = createCliDispatchTranscriptRecorder(recorderParams());
+    const secret = "CLI_TRANSCRIPT_CONTINUATION_ATTACHMENT_SECRET";
+    recorder.noteToolEvent({
+      phase: "start",
+      toolName: "continue_delegate",
+      toolCallId: "continue-attachment-call",
+      args: {
+        task: "carry this snapshot",
+        attachments: [{ name: "brief.md", content: secret, mimeType: "text/markdown" }],
+      },
+    });
+    // sessions_spawn owns its regular transcript semantics; only continuation
+    // snapshot input is redacted at this durable transcript boundary.
+    recorder.noteToolEvent({
+      phase: "start",
+      toolName: "sessions_spawn",
+      toolCallId: "spawn-attachment-call",
+      args: { attachments: [{ name: "brief.md", content: secret }] },
+    });
+    await recorder.finalize();
+
+    // appendTranscriptMessage is the canonical persistence accessor. Serialize
+    // the exact message objects it received rather than asserting replay output.
+    const calls = appendedRecords().map((record) => record.message);
+    const persistedContinueDelegateBytes = JSON.stringify(calls[1]);
+    expect(persistedContinueDelegateBytes).not.toContain(secret);
+    expect(persistedContinueDelegateBytes).toContain("__OPENCLAW_REDACTED__");
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        content: [
+          expect.objectContaining({
+            name: "sessions_spawn",
+            arguments: { attachments: [{ name: "brief.md", content: secret }] },
+          }),
+        ],
+      }),
+    );
+  });
+
   it("keeps bare-array tool_result content as claude stream-json echoes it", async () => {
     // Live claude -p runs deliver MCP tool results as `block.content` — a bare
     // content-block array with no {content} wrapper. Dropping it made every

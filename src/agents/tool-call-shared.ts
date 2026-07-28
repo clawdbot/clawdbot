@@ -9,6 +9,25 @@ import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 const CONTINUE_DELEGATE_ATTACHMENT_METADATA_KEYS = ["name", "encoding", "mimeType"] as const;
+const TRANSCRIPT_TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "toolUse",
+  "functionCall",
+  "tool_call",
+  "tool_use",
+  "function_call",
+]);
+
+/** Return whether a transcript content block carries a persisted tool call. */
+export function isTranscriptToolCallBlock(
+  value: unknown,
+): value is { type: string; name?: unknown; input?: unknown; arguments?: unknown } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const type = (value as { type?: unknown }).type;
+  return typeof type === "string" && TRANSCRIPT_TOOL_CALL_BLOCK_TYPES.has(type);
+}
 
 /** Normalize an optional iterable of allowed tool names for lookup. */
 export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
@@ -51,6 +70,18 @@ export function isAllowedToolCallName(
 }
 
 function redactContinueDelegateAttachmentContent(value: unknown): unknown {
+  if (typeof value === "string") {
+    // Some providers persist function-call arguments as serialized JSON. Keep
+    // the exact string when it is not a matching object, but redact before the
+    // canonical transcript writer stores a JSON-encoded continuation snapshot.
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      const redacted = redactContinueDelegateAttachmentContent(parsed);
+      return redacted === parsed ? value : JSON.stringify(redacted);
+    } catch {
+      return value;
+    }
+  }
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
   }
@@ -166,7 +197,7 @@ function redactContinueDelegateAttachment(value: unknown): Record<string, unknow
 
 /** Normalize a transcript tool-call name and redact continuation snapshot bytes. */
 export function sanitizeTranscriptToolCallBlock<
-  T extends { name?: unknown; input?: unknown; arguments?: unknown },
+  T extends { name?: unknown; input?: unknown; arguments?: unknown; partialJson?: unknown },
 >(block: T): T {
   // sessions_spawn payloads remain trusted transcript-owned state. Continuation
   // snapshots are durable queue input and are redacted once the call is recorded.
@@ -181,8 +212,9 @@ export function sanitizeTranscriptToolCallBlock<
   const args = isContinueDelegate
     ? redactContinueDelegateAttachmentContent(block.arguments)
     : block.arguments;
+  const removePartialJson = isContinueDelegate && Object.hasOwn(block, "partialJson");
 
-  if (!nameChanged && input === block.input && args === block.arguments) {
+  if (!nameChanged && input === block.input && args === block.arguments && !removePartialJson) {
     return block;
   }
   const next = { ...block } as T;
@@ -194,6 +226,9 @@ export function sanitizeTranscriptToolCallBlock<
   }
   if ("arguments" in block) {
     next.arguments = args;
+  }
+  if (removePartialJson) {
+    delete next.partialJson;
   }
   return next;
 }

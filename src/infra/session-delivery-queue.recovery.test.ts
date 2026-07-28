@@ -81,6 +81,51 @@ describe("session-delivery queue recovery", () => {
     });
   });
 
+  it("does not deliver seeded generic rows containing inline attachment bytes", async () => {
+    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
+      for (const kind of ["systemEvent", "agentTurn"] as const) {
+        const id =
+          kind === "systemEvent"
+            ? await enqueueSessionDelivery(
+                { kind, sessionKey: "agent:main:main", text: "unsafe generic seed" },
+                tempDir,
+              )
+            : await enqueueSessionDelivery(
+                {
+                  kind,
+                  sessionKey: "agent:main:main",
+                  message: "unsafe generic seed",
+                  messageId: `unsafe-generic-${kind}`,
+                },
+                tempDir,
+              );
+        const secret = `GENERIC_RECOVERY_${kind.toUpperCase()}_SECRET`;
+        const row = readSessionQueueRow(tempDir, id);
+        const corrupted = JSON.parse(row?.entry_json ?? "{}") as Record<string, unknown>;
+        corrupted.attachments = [{ name: "brief.md", content: secret }];
+        const { db } = openOpenClawStateDatabase({
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        });
+        db.prepare(
+          `UPDATE delivery_queue_entries
+              SET entry_json = ?
+            WHERE queue_name = 'session' AND id = ?`,
+        ).run(JSON.stringify(corrupted), id);
+
+        const deliver = vi.fn(async () => undefined);
+        await recoverPendingSessionDeliveries({
+          deliver,
+          stateDir: tempDir,
+          log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+        });
+        expect(deliver).not.toHaveBeenCalled();
+        const terminal = readSessionQueueRow(tempDir, id);
+        expect(terminal?.status).toBe("failed");
+        expect(terminal?.entry_json).not.toContain(secret);
+      }
+    });
+  });
+
   it("lets the delivery owner persist its fence at the side-effect boundary", async () => {
     await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
       const id = await enqueueSessionDelivery(

@@ -19,7 +19,10 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
-import { scrubTerminalQueuedAttachments } from "./session-delivery-queue-attachment-metadata.js";
+import {
+  hasOnlyGenericAttachmentRefs,
+  scrubTerminalQueuedAttachments,
+} from "./session-delivery-queue-attachment-metadata.js";
 import {
   decodeSessionDeliveryResult,
   normalizeQueuedSessionDeliveryTraceparent,
@@ -448,11 +451,15 @@ export async function failSessionDelivery(
 ): Promise<void> {
   updateDeliveryQueueEntry(QUEUE_NAME, id, stateDir, (entry) => {
     const queued = entry as QueuedSessionDelivery;
+    const safeQueued =
+      queued.kind === "postCompactionDelegate" || hasOnlyGenericAttachmentRefs(queued)
+        ? queued
+        : scrubTerminalQueuedAttachments(queued);
     return {
-      ...queued,
+      ...safeQueued,
       retryCount: queued.retryCount + 1,
-      ...(queued.kind === "agentTurn"
-        ? { lastChargedAgentRunAttempt: queued.agentRunAttempt ?? 0 }
+      ...(safeQueued.kind === "agentTurn"
+        ? { lastChargedAgentRunAttempt: safeQueued.agentRunAttempt ?? 0 }
         : {}),
       ...(options?.releaseAttemptOwnership === true ? { deliveryStartedAt: undefined } : {}),
       lastAttemptAt: Date.now(),
@@ -495,6 +502,24 @@ export async function loadPendingSessionDeliveries(
 /** Move an exhausted session delivery out of the pending queue. */
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
   try {
+    const entry = await loadPendingSessionDelivery(id, stateDir);
+    if (entry) {
+      const failedEntry = scrubTerminalQueuedAttachments(entry);
+      const moved = upsertDeliveryQueueEntry({
+        queueName: QUEUE_NAME,
+        entry: failedEntry,
+        metadata: queuedSessionDeliveryMetadata(failedEntry),
+        status: "failed",
+        stateDir,
+        updatePendingOnly: true,
+      });
+      if (moved) {
+        return;
+      }
+    }
+    if (getDeliveryQueueEntryStatus(QUEUE_NAME, id, stateDir) === "failed") {
+      return;
+    }
     moveDeliveryQueueEntryToFailed(QUEUE_NAME, id, stateDir);
   } catch (error) {
     try {

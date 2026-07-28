@@ -14,6 +14,7 @@ import {
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import { isTranscriptToolCallBlock, sanitizeTranscriptToolCallBlock } from "./tool-call-shared.js";
 import {
   sanitizeTranscriptImageDataUrlField,
   sanitizeTranscriptImageRecord,
@@ -504,8 +505,14 @@ function redactTranscriptStructuredValue(
   }
 
   seen.add(value);
-  const sanitizedImageRecord = sanitizeTranscriptImageRecord(value);
-  const source = sanitizedImageRecord ?? value;
+  // Continuation attachment snapshots are durable handoff input, not replayable
+  // transcript content. Apply the shared tool-call projection before any
+  // canonical writer serializes an assistant message (not only CLI mirroring).
+  const sanitizedToolCall: Record<string, unknown> = isTranscriptToolCallBlock(value)
+    ? sanitizeTranscriptToolCallBlock(value)
+    : value;
+  const sanitizedImageRecord = sanitizeTranscriptImageRecord(sanitizedToolCall);
+  const source = sanitizedImageRecord ?? sanitizedToolCall;
   const currentAssistantRoute =
     location === "root" && source.role === "assistant"
       ? resolveTranscriptAssistantRoute(source, cfg)

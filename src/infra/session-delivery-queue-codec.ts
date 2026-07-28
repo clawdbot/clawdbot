@@ -24,6 +24,7 @@ import type {
 } from "./delivery-queue-sqlite.js";
 import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
 import {
+  hasOnlyGenericAttachmentRefs,
   normalizeQueuedAttachmentRefs,
   stripQueuedAttachmentMountWithoutAttachments,
   type QueuedSessionDeliveryCommonMetadata,
@@ -451,7 +452,7 @@ function decodeLoadedSessionDelivery(
       return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_SHAPE);
     }
     const normalized = normalizeQueuedAttachmentRefs(result.entry as QueuedSessionDelivery);
-    if (normalized !== result.entry) {
+    if (normalized !== result.entry || !hasOnlyGenericAttachmentRefs(normalized)) {
       return invalidSessionDelivery(result.entry, INVALID_GENERIC_DELIVERY_ATTACHMENTS);
     }
     return { status: "loaded", entry: normalized };
@@ -484,6 +485,9 @@ export function normalizeSessionDeliveryForPersistence(
     const parsed = QueuedGenericDeliverySchema.safeParse(normalized);
     if (!parsed.success) {
       throw new Error(INVALID_GENERIC_DELIVERY_SHAPE);
+    }
+    if (!hasOnlyGenericAttachmentRefs(parsed.data)) {
+      throw new Error(INVALID_GENERIC_DELIVERY_ATTACHMENTS);
     }
     return parsed.data as QueuedSessionDelivery;
   }
