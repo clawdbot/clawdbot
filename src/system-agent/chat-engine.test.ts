@@ -978,19 +978,7 @@ describe("SystemAgentChatEngine", () => {
       sourceConfig: baseConfig,
     });
     mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
-    const engine = new SystemAgentChatEngine({
-      surface: "gateway",
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      deps: {
-        loadOverview: fakeOverviewLoader(),
-        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
-      },
-    });
-
-    const { tokenStep } = await advanceGatewayWizardToToken(engine);
-    expect(tokenStep.sensitive).toBe(true);
-    currentConfig = {
+    const changedConfig: OpenClawConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
       models: {
         providers: {
@@ -1003,6 +991,26 @@ describe("SystemAgentChatEngine", () => {
         },
       },
     };
+    // The route flips between the final turn's entry gate and the
+    // persistent-apply recheck; only the apply boundary can catch it.
+    let baseReadsRemaining = Number.POSITIVE_INFINITY;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => {
+          const config = baseReadsRemaining > 0 ? currentConfig : changedConfig;
+          baseReadsRemaining -= 1;
+          return configSnapshot(config);
+        }) as never,
+      },
+    });
+
+    const { tokenStep } = await advanceGatewayWizardToToken(engine);
+    expect(tokenStep.sensitive).toBe(true);
+    baseReadsRemaining = 1;
 
     const stopped = await engine.handle("gateway-secret-value");
 

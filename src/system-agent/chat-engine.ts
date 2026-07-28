@@ -1404,7 +1404,9 @@ export class SystemAgentChatEngine {
       label: "gateway",
       run: (prompter) => runWizard(prompter, beforePersistentApply),
     });
-    if (this.opts.surface !== "gateway") {
+    // Warn only while an interactive wizard is actually pending; a refusal
+    // (remote mode, invalid snapshot) already finished and needs no lockout note.
+    if (this.opts.surface !== "gateway" || this.wizardBridge === null) {
       return firstStep;
     }
     const warning = [
