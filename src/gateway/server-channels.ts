@@ -47,6 +47,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   assertSecretOwnerAvailable,
   clearActiveCredentialDegradedOwner,
+  SecretSurfaceUnavailableError,
   setActiveCredentialDegradedOwner,
 } from "../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
@@ -1306,6 +1307,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           hadCallerHandoff,
         );
         if (!hadLiveState && !plugin?.gateway?.stopAccount) {
+          if (manual) {
+            manuallyStopped.add(rKey);
+            restartDeferredToCaller.delete(rKey);
+            knownAccountDeferredToCaller.delete(rKey);
+          }
           return { status: "fulfilled" };
         }
         const accountRestartPending = markRestartPending && hadLiveState;

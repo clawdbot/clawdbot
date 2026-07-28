@@ -3689,6 +3689,42 @@ describe("server-channels auto restart", () => {
     expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
   });
 
+  it("records manual stops for inactive listed accounts without plugin stop hooks", async () => {
+    const accountIds = ["account-a", "account-b"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: (_cfg, accountId) => ({
+          enabled: true,
+          configured: accountId !== "account-b",
+        }),
+        isConfigured: (account) => account.configured !== false,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-b"]).toMatchObject({
+      running: false,
+      configured: false,
+    });
+
+    await manager.stopChannel("discord", "account-b");
+
+    expect(manager.isManuallyStopped("discord", "account-b")).toBe(true);
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+  });
+
   it("clears private known-account handoffs when autostart suppression rejects the paired start", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(

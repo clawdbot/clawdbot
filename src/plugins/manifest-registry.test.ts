@@ -2684,6 +2684,44 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("drops account-index reload markers outside the owning channel config", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "matrix",
+      channels: ["matrix"],
+      configSchema: { type: "object" },
+      channelConfigs: {
+        matrix: {
+          schema: { type: "object" },
+          reload: {
+            configPrefixes: ["channels.matrix"],
+            accountIndexReloadPaths: [
+              "channels.matrix.channelConfigUpdatedAt",
+              "channels.matrix.accounts",
+              "channels.telegram.channelConfigUpdatedAt",
+              "gateway.auth",
+              "channels.matrixish.channelConfigUpdatedAt",
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "matrix",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.channelConfigs?.matrix?.reload).toEqual({
+      configPrefixes: ["channels.matrix"],
+      accountIndexReloadPaths: [
+        "channels.matrix.channelConfigUpdatedAt",
+        "channels.matrix.accounts",
+      ],
+    });
+  });
+
   it("normalizes config hint presentation values at the manifest boundary", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
