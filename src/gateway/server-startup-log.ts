@@ -16,6 +16,7 @@ import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
 
 type StartupThinkLevel =
@@ -33,6 +34,7 @@ type StartupThinkLevel =
 export async function logGatewayStartup(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
+  manifestRecords: readonly PluginManifestRecord[];
   bindHost: string;
   bindHosts?: string[];
   port: number;
@@ -48,14 +50,13 @@ export async function logGatewayStartup(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const modelRef = `${agentProvider}/${agentModel}`;
-  const modelDetails = formatAgentModelStartupDetails({
+  const agentModelLog = formatAgentModelStartupLogLine({
     cfg: params.cfg,
     provider: agentProvider,
     model: agentModel,
   });
-  params.log.info(`agent model: ${modelRef} (${modelDetails})`, {
-    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
+  params.log.info(agentModelLog.message, {
+    consoleMessage: agentModelLog.consoleMessage,
   });
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
@@ -73,6 +74,7 @@ export async function logGatewayStartup(params: {
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     ambientEnvTriggers: params.ambientEnvTriggers,
+    manifestRecords: params.manifestRecords,
   })) {
     params.log.warn(warning);
   }
@@ -88,6 +90,20 @@ export async function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+/** Format the startup model line from the model ref already selected by the caller. */
+export function formatAgentModelStartupLogLine(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): { message: string; consoleMessage: string } {
+  const modelRef = `${params.provider}/${params.model}`;
+  const modelDetails = formatAgentModelStartupDetails(params);
+  return {
+    message: `agent model: ${modelRef} (${modelDetails})`,
+    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
+  };
 }
 
 /** Normalize model thinking values that are useful in the compact startup log. */
@@ -186,23 +202,18 @@ async function collectConfiguredChannelStartupWarnings(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  manifestRecords: readonly PluginManifestRecord[];
 }): Promise<string[]> {
-  const [blockerModule, presencePolicyModule, pluginRegistryModule] = await Promise.all([
+  const [blockerModule, presencePolicyModule] = await Promise.all([
     import("../commands/doctor/shared/channel-plugin-blockers.js"),
     import("../plugins/channel-presence-policy.js"),
-    import("../plugins/plugin-registry.js"),
   ]);
-  const manifestRegistry = pluginRegistryModule.loadPluginManifestRegistryForPluginRegistry({
-    config: params.cfg,
-    env: process.env,
-    includeDisabled: true,
-  });
   const hits = blockerModule.scanConfiguredChannelPluginBlockers(
     params.cfg,
     process.env,
     params.activationSourceConfig,
     {
-      manifestRecords: manifestRegistry.plugins,
+      manifestRecords: params.manifestRecords,
       ambientEnvTriggers: params.ambientEnvTriggers,
     },
   );
@@ -215,7 +226,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
       activationSourceConfig: params.activationSourceConfig,
       includePersistedAuthState: false,
       ambientEnvTriggers: params.ambientEnvTriggers,
-      manifestRecords: manifestRegistry.plugins,
+      manifestRecords: params.manifestRecords,
     })
     .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
     .map(formatConfiguredChannelMissingOwnerStartupWarning);
@@ -226,7 +237,7 @@ async function collectConfiguredChannelStartupWarnings(params: {
           activationSourceConfig: params.activationSourceConfig,
           env: process.env,
           includePersistedAuthState: false,
-          manifestRecords: manifestRegistry.plugins,
+          manifestRecords: params.manifestRecords,
         })
       : [];
   const suppressionWarning =
