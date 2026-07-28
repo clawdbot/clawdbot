@@ -148,6 +148,87 @@ describe("chat media resource lifecycle", () => {
     ).toBe(blobUrl);
   });
 
+  it("releases replaced managed images while keeping one pane callback stable", async () => {
+    const NativeUrl = URL;
+    let blobIndex = 0;
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends NativeUrl {
+        static override createObjectURL = vi.fn(() => `blob:replaced-managed-image-${blobIndex++}`);
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    const sources = Array.from({ length: 65 }, () => managedImageSource());
+    let currentSource = sources[0];
+    if (!currentSource) {
+      throw new Error("expected a managed image source");
+    }
+    const rerender = observeSubscriber(() =>
+      renderManagedImage(container, currentSource, { onRequestUpdate: rerender }),
+    );
+    const resources = [];
+
+    for (const source of sources) {
+      currentSource = source;
+      rerender();
+      resources.push(observeChatMediaResource<string | null>("managed-image", `${source}::::`));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(65);
+    expect(resources.filter((resource) => isChatMediaResourceCurrent(resource))).toHaveLength(1);
+    expect(resources.at(-1)).toSatisfy(isChatMediaResourceCurrent);
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:replaced-managed-image-0");
+  });
+
+  it("keeps simultaneous managed images until their individual render parts disappear", async () => {
+    installManagedImageUrls();
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    const firstSource = managedImageSource();
+    const secondSource = managedImageSource();
+    let sources = [firstSource, secondSource];
+    const rerender = observeSubscriber(() => {
+      const images = sources.map((source) => ({
+        url: source,
+        displayUrl: source,
+        alt: "Managed image",
+      }));
+      render(renderMessageImages(images, { onRequestUpdate: rerender }), container);
+    });
+
+    rerender();
+    const firstResource = observeChatMediaResource<string | null>(
+      "managed-image",
+      `${firstSource}::::`,
+    );
+    const secondResource = observeChatMediaResource<string | null>(
+      "managed-image",
+      `${secondSource}::::`,
+    );
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(isChatMediaResourceCurrent(firstResource)).toBe(true);
+    expect(isChatMediaResourceCurrent(secondResource)).toBe(true);
+    expect(container.querySelectorAll(".chat-message-image")).toHaveLength(2);
+
+    sources = [firstSource];
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(isChatMediaResourceCurrent(firstResource)).toBe(true);
+    expect(isChatMediaResourceCurrent(secondResource)).toBe(false);
+    expect(container.querySelectorAll(".chat-message-image")).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts settled subscriber-free resources with their managed image blobs", async () => {
     const NativeUrl = URL;
     let blobIndex = 0;

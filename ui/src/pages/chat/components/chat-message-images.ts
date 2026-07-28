@@ -1,4 +1,5 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { AsyncDirective, directive } from "lit/async-directive.js";
 import { until } from "lit/directives/until.js";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -18,7 +19,9 @@ import {
   isChatMediaResourceCurrent,
   notifyChatMediaResourceSubscribers,
   observeChatMediaResource,
+  observeChatMediaResourceSubscriber,
   readManagedImageBlobUrl,
+  releaseChatMediaResourceSubscriber,
   retainManagedImageBlobUrl,
   scheduleChatMediaResourceRefresh,
   trimManagedImageMissResources,
@@ -30,6 +33,57 @@ import {
 
 const MANAGED_OUTGOING_IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
+
+class ManagedImageResourceDirective extends AsyncDirective {
+  private cacheKey: string | undefined;
+  private onRequestUpdate: (() => void) | undefined;
+  private readonly requestUpdate = () => this.onRequestUpdate?.();
+
+  override render(
+    image: RenderableImageBlock,
+    options: ImageRenderOptions | undefined,
+    renderImageElement: (image: RenderableImageBlock, previewUrl: string) => TemplateResult,
+  ) {
+    const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(
+      image.displayUrl,
+      options,
+      image.artifactId,
+    );
+    if (
+      (this.cacheKey !== undefined && this.cacheKey !== cacheKey) ||
+      this.onRequestUpdate !== options?.onRequestUpdate
+    ) {
+      releaseChatMediaResourceSubscriber(this.requestUpdate);
+    }
+    this.cacheKey = cacheKey;
+    this.onRequestUpdate = options?.onRequestUpdate;
+
+    // A transcript shares one pane callback across many guarded rows. Lit owns
+    // each image part, so only disconnecting that part may release its resource.
+    if (this.onRequestUpdate) {
+      observeChatMediaResourceSubscriber(this.onRequestUpdate, this.requestUpdate);
+    }
+    const subscriptionOptions = this.onRequestUpdate
+      ? { ...options, onRequestUpdate: this.requestUpdate }
+      : options;
+    const preview = resolveManagedOutgoingImageBlobUrl(
+      image.displayUrl,
+      subscriptionOptions,
+      image.artifactId,
+    ).then((previewUrl) => (previewUrl ? renderImageElement(image, previewUrl) : nothing));
+    return until(preview, nothing);
+  }
+
+  protected override disconnected() {
+    releaseChatMediaResourceSubscriber(this.requestUpdate);
+  }
+
+  protected override reconnected() {
+    this.onRequestUpdate?.();
+  }
+}
+
+const renderManagedImageResource = directive(ManagedImageResourceDirective);
 
 export function resolveRenderableMessageImages(
   images: ImageBlock[],
@@ -138,15 +192,7 @@ export function renderMessageImages(images: RenderableImageBlock[], opts?: Image
     if (!isManagedOutgoingImageSource(img.displayUrl)) {
       return renderImageElement(img, img.displayUrl);
     }
-    const preview = resolveManagedOutgoingImageBlobUrl(img.displayUrl, opts, img.artifactId).then(
-      (previewUrl) => {
-        if (!previewUrl) {
-          return nothing;
-        }
-        return renderImageElement(img, previewUrl);
-      },
-    );
-    return until(preview, nothing);
+    return renderManagedImageResource(img, opts, renderImageElement);
   };
 
   return html` <div class="chat-message-images">${images.map((img) => renderImage(img))}</div> `;

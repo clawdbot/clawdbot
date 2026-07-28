@@ -61,6 +61,8 @@ export type ChatMediaResource<Value> = {
 
 const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
 const chatMediaSubscriberResources = new Map<() => void, Map<string, ChatMediaResource<unknown>>>();
+const chatMediaSubscriberChildren = new Map<() => void, Set<() => void>>();
+const chatMediaSubscriberOwners = new Map<() => void, () => void>();
 const managedImageBlobUrlResolvedCache = new Map<string, string>();
 const managedImageBlobUrlRetainCounts = new Map<string, number>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
@@ -178,9 +180,46 @@ export function scheduleChatMediaResourceRefresh<Value>(
   resource.refresh = refresh;
 }
 
+export function observeChatMediaResourceSubscriber(owner: () => void, subscriber: () => void) {
+  const previousOwner = chatMediaSubscriberOwners.get(subscriber);
+  if (previousOwner === owner) {
+    return;
+  }
+  if (previousOwner) {
+    const previousChildren = chatMediaSubscriberChildren.get(previousOwner);
+    previousChildren?.delete(subscriber);
+    if (previousChildren?.size === 0) {
+      chatMediaSubscriberChildren.delete(previousOwner);
+    }
+  }
+  let children = chatMediaSubscriberChildren.get(owner);
+  if (!children) {
+    children = new Set();
+    chatMediaSubscriberChildren.set(owner, children);
+  }
+  children.add(subscriber);
+  chatMediaSubscriberOwners.set(subscriber, owner);
+}
+
 export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | undefined) {
   if (!subscriber) {
     return;
+  }
+  const children = chatMediaSubscriberChildren.get(subscriber);
+  if (children) {
+    chatMediaSubscriberChildren.delete(subscriber);
+    for (const child of children) {
+      releaseChatMediaResourceSubscriber(child);
+    }
+  }
+  const owner = chatMediaSubscriberOwners.get(subscriber);
+  if (owner) {
+    chatMediaSubscriberOwners.delete(subscriber);
+    const ownerChildren = chatMediaSubscriberChildren.get(owner);
+    ownerChildren?.delete(subscriber);
+    if (ownerChildren?.size === 0) {
+      chatMediaSubscriberChildren.delete(owner);
+    }
   }
   const subscriptions = chatMediaSubscriberResources.get(subscriber);
   if (!subscriptions) {
