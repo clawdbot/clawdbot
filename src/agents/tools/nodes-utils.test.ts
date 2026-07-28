@@ -37,17 +37,37 @@ describe("resolveNodeIdFromList defaults", () => {
 
   it("falls back to most recently connected node when multiple non-Mac candidates exist", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1 }),
-      node({ nodeId: "android-1", platform: "android", connectedAtMs: 2 }),
+      node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1, lastSeenAtMs: 5000 }),
+      node({ nodeId: "android-1", platform: "android", connectedAtMs: 2, lastSeenAtMs: 1000 }),
     ];
 
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("android-1");
   });
 
+  it("ignores offline recency when any eligible node is connected", () => {
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "offline-phone",
+        platform: "ios",
+        connected: false,
+        lastSeenAtMs: 5000,
+      }),
+      node({
+        nodeId: "connected-desktop",
+        platform: "android",
+        connected: true,
+        connectedAtMs: 1000,
+        lastSeenAtMs: 1000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("connected-desktop");
+  });
+
   it("preserves local Mac preference when exactly one local Mac candidate exists", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "ios-1", platform: "ios" }),
-      node({ nodeId: "mac-1", platform: "macos" }),
+      node({ nodeId: "ios-1", platform: "ios", lastSeenAtMs: 5000 }),
+      node({ nodeId: "mac-1", platform: "macos", lastSeenAtMs: 1000 }),
     ];
 
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("mac-1");
@@ -58,12 +78,14 @@ describe("resolveNodeIdFromList defaults", () => {
       node({
         nodeId: "abc123-desktop",
         platform: "macos",
+        connected: false,
         connectedAtMs: undefined,
         lastSeenAtMs: 1000,
       }),
       node({
         nodeId: "def456-phone",
         platform: "ios",
+        connected: false,
         connectedAtMs: undefined,
         lastSeenAtMs: 5000,
       }),
@@ -74,11 +96,11 @@ describe("resolveNodeIdFromList defaults", () => {
 
   it("prefers node with lastSeenAtMs over node without when all disconnected", () => {
     const nodes: NodeListNode[] = [
-      node({ nodeId: "abc-no-seen", platform: "ios", connectedAtMs: undefined }),
+      node({ nodeId: "abc-no-seen", platform: "ios", connected: false }),
       node({
         nodeId: "def-has-seen",
         platform: "android",
-        connectedAtMs: undefined,
+        connected: false,
         lastSeenAtMs: 3000,
       }),
     ];
@@ -86,16 +108,18 @@ describe("resolveNodeIdFromList defaults", () => {
     expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def-has-seen");
   });
 
-  it("uses stable nodeId ordering when both connectedAtMs and lastSeenAtMs are unavailable", () => {
-    // Deterministic tie-breaking keeps repeated tool calls from bouncing
-    // between connected nodes.
-    const nodes: NodeListNode[] = [
-      node({ nodeId: "z-node", platform: "ios", connectedAtMs: undefined }),
-      node({ nodeId: "a-node", platform: "android", connectedAtMs: undefined }),
-    ];
+  it.each([undefined, 3000])(
+    "uses stable nodeId ordering when disconnected-node lastSeenAtMs ties at %s",
+    (lastSeenAtMs) => {
+      // Deterministic tie-breaking keeps repeated wake attempts on one target.
+      const nodes: NodeListNode[] = [
+        node({ nodeId: "z-node", platform: "ios", connected: false, lastSeenAtMs }),
+        node({ nodeId: "a-node", platform: "android", connected: false, lastSeenAtMs }),
+      ];
 
-    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("a-node");
-  });
+      expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("a-node");
+    },
+  );
 });
 
 describe("listNodes", () => {

@@ -85,16 +85,20 @@ function isLocalMacNode(node: NodeListNode): boolean {
   );
 }
 
+function compareNewestTimestamp(a?: number, b?: number): number {
+  const aValue = Number.isFinite(a) ? (a ?? 0) : -1;
+  const bValue = Number.isFinite(b) ? (b ?? 0) : -1;
+  return bValue - aValue;
+}
+
 function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
-  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
-  if (aConnectedAt !== bConnectedAt) {
-    return bConnectedAt - aConnectedAt;
+  const connectedOrder = compareNewestTimestamp(a.connectedAtMs, b.connectedAtMs);
+  if (connectedOrder !== 0) {
+    return connectedOrder;
   }
-  const aLastSeen = Number.isFinite(a.lastSeenAtMs) ? (a.lastSeenAtMs ?? 0) : -1;
-  const bLastSeen = Number.isFinite(b.lastSeenAtMs) ? (b.lastSeenAtMs ?? 0) : -1;
-  if (aLastSeen !== bLastSeen) {
-    return bLastSeen - aLastSeen;
+  const lastSeenOrder = compareNewestTimestamp(a.lastSeenAtMs, b.lastSeenAtMs);
+  if (lastSeenOrder !== 0) {
+    return lastSeenOrder;
   }
   return a.nodeId.localeCompare(b.nodeId);
 }
@@ -132,9 +136,8 @@ export function selectDefaultNodeFromList(
   }
 
   const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
-  // Multiple candidates — pick the first connected canvas-capable node.
-  // For A2UI and other canvas operations, any node works since multi-node
-  // setups broadcast surfaces across devices.
+  // Connected nodes were preferred above. For an all-offline set, durable
+  // last-seen recency picks the most likely wake target before stable id order.
   return ordered[0] ?? null;
 }
 
