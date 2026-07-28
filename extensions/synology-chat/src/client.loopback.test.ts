@@ -95,8 +95,17 @@ describe("Synology Chat user_list loopback", () => {
       if (delivery === "outbound") {
         const result = await sendTextMediaPayload({
           channel: "synology-chat",
-          ctx: { cfg, to: "42", payload: { text } },
-          adapter: synologyChatPlugin.outbound,
+          ctx: { cfg, to: "42", text, payload: { text } },
+          adapter: {
+            chunker: synologyChatPlugin.outbound.chunker,
+            textChunkLimit: synologyChatPlugin.outbound.textChunkLimit,
+            sendText: (sendContext) =>
+              synologyChatPlugin.outbound.sendText({
+                cfg: sendContext.cfg ?? cfg,
+                to: sendContext.to,
+                text: sendContext.text,
+              }),
+          },
         });
         expect(result.channel).toBe("synology-chat");
       } else {
