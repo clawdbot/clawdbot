@@ -7,15 +7,17 @@ type SlackBlocksText = {
   hasNativeData: boolean;
 };
 
+type SlackMessageTextAttachment = {
+  blocks?: unknown[];
+  app_unfurl_url?: string;
+  is_app_unfurl?: boolean;
+  is_msg_unfurl?: boolean;
+};
+
 type SlackMessageTextSource = {
   text?: string;
   blocks?: unknown[];
-  attachments?: Array<{
-    blocks?: unknown[];
-    app_unfurl_url?: string;
-    is_app_unfurl?: boolean;
-    is_msg_unfurl?: boolean;
-  }>;
+  attachments?: SlackMessageTextAttachment[];
 };
 
 function readSlackBlockType(block: unknown): unknown {
@@ -31,7 +33,17 @@ export function hasSlackTableBlock(blocks: unknown[] | undefined): boolean {
 export function hasSlackMessageTableBlock(message: SlackMessageTextSource): boolean {
   return (
     hasSlackTableBlock(message.blocks) ||
-    message.attachments?.some((attachment) => hasSlackTableBlock(attachment.blocks)) === true
+    message.attachments?.some(
+      (attachment) => !isSlackUnfurlAttachment(attachment) && hasSlackTableBlock(attachment.blocks),
+    ) === true
+  );
+}
+
+export function isSlackUnfurlAttachment(attachment: SlackMessageTextAttachment): boolean {
+  return (
+    attachment.is_msg_unfurl === true ||
+    attachment.is_app_unfurl === true ||
+    (typeof attachment.app_unfurl_url === "string" && attachment.app_unfurl_url.trim().length > 0)
   );
 }
 
@@ -73,11 +85,7 @@ function resolveSlackAttachmentTableTexts(
   const seen = new Set<string>();
   const texts: string[] = [];
   for (const attachment of attachments ?? []) {
-    if (
-      attachment.is_msg_unfurl === true ||
-      attachment.is_app_unfurl === true ||
-      (typeof attachment.app_unfurl_url === "string" && attachment.app_unfurl_url.trim().length > 0)
-    ) {
+    if (isSlackUnfurlAttachment(attachment)) {
       continue;
     }
     for (const block of attachment.blocks ?? []) {

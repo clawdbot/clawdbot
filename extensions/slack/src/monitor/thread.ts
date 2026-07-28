@@ -11,6 +11,7 @@ import { formatSlackFileReferenceList } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
 import {
   hasSlackTableBlock,
+  isSlackUnfurlAttachment,
   resolveSlackBlocksText,
   resolveSlackMessageText as resolveSharedSlackMessageText,
 } from "./block-text.js";
@@ -79,6 +80,9 @@ function resolveSlackAttachmentFallbackText(
 
   const parts: string[] = [];
   for (const attachment of attachments) {
+    const excludeTableBlocks = isSlackUnfurlAttachment(attachment);
+    const fallbackBlocks = (blocks: unknown[] | undefined) =>
+      excludeTableBlocks ? blocks?.filter((block) => !hasSlackTableBlock([block])) : blocks;
     pushUniqueText(parts, attachment.pretext);
     pushUniqueText(parts, attachment.title);
     pushUniqueText(parts, attachment.text);
@@ -92,12 +96,14 @@ function resolveSlackAttachmentFallbackText(
       pushUniqueText(parts, field.title);
       pushUniqueText(parts, field.value);
     }
-    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.blocks), {
+    pushUniqueText(parts, resolveSlackBlocksFallbackText(fallbackBlocks(attachment.blocks)), {
       preserveWhitespace: true,
     });
-    pushUniqueText(parts, resolveSlackBlocksFallbackText(attachment.message_blocks), {
-      preserveWhitespace: true,
-    });
+    pushUniqueText(
+      parts,
+      resolveSlackBlocksFallbackText(fallbackBlocks(attachment.message_blocks)),
+      { preserveWhitespace: true },
+    );
   }
   return parts.length > 0 ? parts.join("\n") : undefined;
 }
