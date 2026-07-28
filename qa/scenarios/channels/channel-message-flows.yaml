@@ -40,7 +40,7 @@ scenario:
       finalMarker: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890
       telegramThrottleMs: 1000
       telegramFinalFlushMaxMs: 2000
-      prompt: "Final-only marker streaming QA check. Reply exactly: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
+      prompt: "@openclaw Final-only marker streaming QA check. Reply exactly: QA-CHANNEL-STREAMING-PREVIEW-FINAL-OK-1234567890"
 
 flow:
   steps:
