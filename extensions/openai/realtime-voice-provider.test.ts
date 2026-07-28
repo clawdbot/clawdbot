@@ -131,6 +131,13 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   resolveProviderAuthProfileApiKey: resolveProviderAuthProfileApiKeyMock,
 }));
 
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  // Route through the lightweight base64 submodule so the test does not pull
+  // in the full media-runtime barrel (ffmpeg/native deps) at collection time.
+  const { canonicalizeBase64 } = await import("@openclaw/media-core/base64");
+  return { canonicalizeBase64 };
+});
+
 type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
 type SentRealtimeEvent = {
   type: string;
