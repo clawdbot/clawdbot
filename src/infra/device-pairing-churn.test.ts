@@ -92,6 +92,9 @@ describe("device pairing requestId churn", () => {
 
     expect(approveReconnect.created).toBe(true);
     expect(approveReconnect.request.requestId).not.toBe(readRepair.request.requestId);
+    expect(approveReconnect.superseded).toEqual([
+      { requestId: readRepair.request.requestId, deviceId: DEVICE_ID },
+    ]);
 
     const staleApprove = await approveDevicePairing(
       readRepair.request.requestId,

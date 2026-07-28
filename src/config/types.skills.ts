@@ -30,8 +30,6 @@ export type SkillsLoadConfig = {
   allowSymlinkTargets?: string[];
   /** Watch skill folders for changes and refresh the skills snapshot. */
   watch?: boolean;
-  /** Debounce for the skills watcher (ms). */
-  watchDebounceMs?: number;
 };
 
 /** Skill installation preferences and upload policy. */

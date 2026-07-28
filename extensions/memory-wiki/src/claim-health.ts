@@ -136,8 +136,8 @@ export function assessClaimFreshness(params: {
   claim: WikiClaim;
   now?: Date;
 }): WikiFreshness {
-  let hasClaimTimestamp = typeof params.claim.updatedAt === "string" &&
-    params.claim.updatedAt.trim().length > 0;
+  let hasClaimTimestamp =
+    typeof params.claim.updatedAt === "string" && params.claim.updatedAt.trim().length > 0;
   let latestTimestamp = resolveLatestTimestamp([params.claim.updatedAt]);
   let latestMs = parseTimestamp(latestTimestamp) ?? -1;
   for (const evidence of params.claim.evidence) {

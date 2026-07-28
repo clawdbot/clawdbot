@@ -1,12 +1,15 @@
 // Runtime task-flow tests cover plugin task-flow registration and execution behavior.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getTaskFlowById } from "../../tasks/task-flow-registry.js";
+import { createTaskFlowForTask, getTaskFlowById } from "../../tasks/task-flow-registry.js";
 import { getTaskById } from "../../tasks/task-registry.js";
 import {
   installRuntimeTaskDeliveryMock,
   resetRuntimeTaskTestState,
 } from "./runtime-task-test-harness.js";
 import { createRuntimeTaskFlow } from "./runtime-taskflow.js";
+
+type BoundTaskFlow = ReturnType<ReturnType<typeof createRuntimeTaskFlow>["bindSession"]>;
+type MutationName = "setWaiting" | "resume" | "finish" | "fail" | "requestCancel";
 
 function requireCreatedFlow<T>(flow: T | null): T {
   if (!flow) {
@@ -136,5 +139,120 @@ describe("runtime TaskFlow", () => {
     }
     expect(summary.total).toBe(1);
     expect(summary.active).toBe(1);
+  });
+
+  it("applies each managed transition exactly once with its explicit payload", () => {
+    const taskFlow = createRuntimeTaskFlow().bindSession({ sessionKey: "agent:main:main" });
+    const created = requireCreatedFlow(
+      taskFlow.createManaged({
+        controllerId: "tests/runtime-taskflow/transitions",
+        goal: "Apply transitions",
+      }),
+    );
+    const transitions: Array<[name: MutationName, input: Record<string, unknown>, status: string]> =
+      [
+        [
+          "setWaiting",
+          {
+            currentStep: "await_review",
+            stateJson: { phase: "waiting" },
+            waitJson: { kind: "approval" },
+            blockedTaskId: "task-review",
+            blockedSummary: "Review required",
+            updatedAt: 20,
+          },
+          "blocked",
+        ],
+        [
+          "resume",
+          {
+            status: "running",
+            currentStep: "continue_work",
+            stateJson: { phase: "running" },
+            updatedAt: 30,
+          },
+          "running",
+        ],
+        ["finish", { stateJson: { phase: "done" }, updatedAt: 40, endedAt: 41 }, "succeeded"],
+        [
+          "fail",
+          {
+            stateJson: { phase: "failed" },
+            blockedTaskId: "task-failed",
+            blockedSummary: "Task failed",
+            updatedAt: 50,
+            endedAt: 51,
+          },
+          "failed",
+        ],
+        ["requestCancel", { cancelRequestedAt: 60 }, "failed"],
+      ];
+
+    for (const [index, [name, input, status]] of transitions.entries()) {
+      const mutate = taskFlow[name] as BoundTaskFlow["setWaiting"];
+      const result = mutate({
+        flowId: created.flowId,
+        expectedRevision: index,
+        ...input,
+      });
+      expect(result.applied, name).toBe(true);
+      if (!result.applied) {
+        throw new Error(`expected ${name} to apply`);
+      }
+      expect(result.flow, name).toMatchObject({
+        ...input,
+        status,
+        flowId: created.flowId,
+        revision: index + 1,
+      });
+      expect(getTaskFlowById(created.flowId)?.revision, name).toBe(index + 1);
+    }
+  });
+
+  it("rejects invalid mutation targets before writing and preserves conflict mapping", () => {
+    const runtime = createRuntimeTaskFlow();
+    const ownerTaskFlow = runtime.bindSession({ sessionKey: "agent:main:main" });
+    const otherTaskFlow = runtime.bindSession({ sessionKey: "agent:main:other" });
+    const managed = requireCreatedFlow(
+      ownerTaskFlow.createManaged({
+        controllerId: "tests/runtime-taskflow/auth",
+        goal: "Keep ownership",
+      }),
+    );
+
+    const denied = otherTaskFlow.setWaiting({
+      flowId: managed.flowId,
+      expectedRevision: managed.revision,
+    });
+    expect(denied).toEqual({ applied: false, code: "not_found" });
+    expect(getTaskFlowById(managed.flowId)?.revision).toBe(0);
+
+    const mirrored = requireCreatedFlow(
+      createTaskFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-mirrored",
+          notifyPolicy: "done_only",
+          status: "running",
+          task: "Mirror this task",
+          createdAt: 10,
+          lastEventAt: 10,
+        },
+      }),
+    );
+    const wrongMode = ownerTaskFlow.resume({
+      flowId: mirrored.flowId,
+      expectedRevision: mirrored.revision,
+    });
+    expect(wrongMode).toMatchObject({ applied: false, code: "not_managed" });
+
+    const conflict = ownerTaskFlow.finish({ flowId: managed.flowId, expectedRevision: 1 });
+    expect(conflict).toMatchObject({ applied: false, code: "revision_conflict" });
+    expect(getTaskFlowById(managed.flowId)).toMatchObject({
+      revision: 0,
+      status: "queued",
+    });
+    expect(getTaskFlowById(managed.flowId)?.endedAt).toBeUndefined();
+    expect(getTaskFlowById(mirrored.flowId)?.revision).toBe(0);
   });
 });

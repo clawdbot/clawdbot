@@ -1,12 +1,13 @@
 // Tests reply payload helper behavior and delivery metadata.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { shouldDedupeMessagingToolRepliesForRoute } from "./reply-payloads-dedupe.js";
 import {
   filterMessagingToolMediaDuplicates,
   resolveMessagingToolPayloadDedupe,
-  shouldDedupeMessagingToolRepliesForRoute,
 } from "./reply-payloads.js";
 
 function targetsMatchTelegramReplySuppression(params: {
@@ -77,6 +78,41 @@ describe("filterMessagingToolMediaDuplicates", () => {
     expect(result).toEqual([{ text: "gallery", mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
+  it("preserves media for payloads with delivery operations", () => {
+    const delivery = { pin: { enabled: true, required: true } };
+    const payload = { mediaUrl: "file:///tmp/photo.jpg", delivery };
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [payload],
+      sentMediaUrls: ["file:///tmp/photo.jpg"],
+    });
+    expect(result).toEqual([payload]);
+  });
+
+  it.each([{ delivery: { pin: false } }, { delivery: { pin: { enabled: false } } }])(
+    "dedupes media for disabled delivery metadata: $delivery",
+    ({ delivery }) => {
+      const result = filterMessagingToolMediaDuplicates({
+        payloads: [{ mediaUrl: "file:///tmp/photo.jpg", delivery }],
+        sentMediaUrls: ["file:///tmp/photo.jpg"],
+      });
+      expect(result).toEqual([{ mediaUrl: undefined, mediaUrls: undefined, delivery }]);
+    },
+  );
+
+  it("clears audioAsVoice when dedupe removes all media", () => {
+    const result = filterMessagingToolMediaDuplicates({
+      payloads: [{ mediaUrl: "file:///tmp/voice.ogg", audioAsVoice: true }],
+      sentMediaUrls: ["file:///tmp/voice.ogg"],
+    });
+    expect(result).toEqual([
+      {
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        audioAsVoice: undefined,
+      },
+    ]);
+  });
+
   it("returns payloads unchanged when no media present", () => {
     const payloads = [{ text: "plain text" }];
     const result = filterMessagingToolMediaDuplicates({
@@ -104,10 +140,13 @@ describe("filterMessagingToolMediaDuplicates", () => {
   });
 
   it("dedupes encoded file:// paths against local paths", () => {
-    const result = filterMessagingToolMediaDuplicates({
-      payloads: [{ text: "hello", mediaUrl: "/tmp/photo one.jpg" }],
-      sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
-    });
+    const result = expectDefined(
+      filterMessagingToolMediaDuplicates({
+        payloads: [{ text: "hello", mediaUrl: "/tmp/photo one.jpg" }],
+        sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
+      }),
+      'filterMessagingToolMediaDuplicates({ payloads: [{ text: "hello", medi... test invariant',
+    );
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
   });
 
@@ -121,7 +160,7 @@ describe("filterMessagingToolMediaDuplicates", () => {
       sentMediaUrls: ["file:///tmp/photo.jpg"],
     });
 
-    expect(getReplyPayloadMetadata(result)).toEqual({
+    expect(getReplyPayloadMetadata(expectDefined(result, "result test invariant"))).toEqual({
       assistantTranscriptOwned: true,
     });
   });
@@ -320,7 +359,7 @@ describe("resolveMessagingToolPayloadDedupe", () => {
     });
   });
 
-  it("preserves global evidence fallback for legacy multi-target records", () => {
+  it("rejects global evidence fallback for legacy mixed-route records", () => {
     expect(
       resolveMessagingToolPayloadDedupe({
         messageProvider: "slack",
@@ -328,6 +367,26 @@ describe("resolveMessagingToolPayloadDedupe", () => {
         messagingToolSentTargets: [
           { tool: "slack", provider: "slack", to: "channel:C1" },
           { tool: "discord", provider: "discord", to: "channel:C2" },
+        ],
+      }),
+    ).toEqual({
+      shouldDedupePayloads: true,
+      matchingRoute: true,
+      routeSentTexts: [],
+      routeSentMediaUrls: [],
+      useGlobalSentTextEvidenceFallback: false,
+      useGlobalSentMediaUrlEvidenceFallback: false,
+    });
+  });
+
+  it("preserves global evidence fallback when every legacy target matches", () => {
+    expect(
+      resolveMessagingToolPayloadDedupe({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        messagingToolSentTargets: [
+          { tool: "slack", provider: "slack", to: "channel:C1" },
+          { tool: "message", provider: "slack", to: "channel:C1" },
         ],
       }),
     ).toEqual({

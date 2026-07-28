@@ -1,12 +1,15 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
 import type { SessionGoal } from "../config/sessions/types.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayAgentRuntime } from "../shared/session-types.js";
+import type { TuiPendingSubmit } from "./tui-submit-state.js";
 
 export type TuiOptions = {
   local?: boolean;
   url?: string;
   token?: string;
   password?: string;
+  tlsFingerprint?: string;
   session?: string;
   deliver?: boolean;
   thinking?: string;
@@ -20,17 +23,22 @@ export type TuiOptions = {
   forceProcessExitOnReturn?: boolean;
 };
 
-export type TuiExitReason = "exit" | "return-to-crestodian";
+type TuiExitReason = "exit" | "return-to-system-agent";
 
 export type TuiResult = {
   exitReason: TuiExitReason;
-  crestodianMessage?: string;
+  systemAgentMessage?: string;
 };
+
+export type TuiHistoryLoadResult =
+  | { loaded: true; inFlightRunId: string | null }
+  | { loaded: false };
 
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
   agentId?: string;
+  seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
@@ -54,6 +62,14 @@ export type SessionChangedEvent = {
   reason?: string;
   phase?: string;
   runId?: string;
+  clientRunId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+};
+
+export type SessionMessageEvent = {
+  sessionKey?: string;
+  agentId?: string;
   sessionId?: string;
   updatedAt?: number | null;
 };
@@ -80,6 +96,7 @@ export type SessionInfo = {
   reasoningLevel?: string;
   model?: string;
   modelProvider?: string;
+  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
@@ -102,12 +119,13 @@ export type SessionScope = "per-sender" | "global";
 
 export type AgentSummary = {
   id: string;
+  kind?: "agent" | "system";
   name?: string;
 };
 
-export type QueuedMessageMode = "steer" | "followUp";
+type QueuedMessageMode = "steer" | "followUp";
 
-export type QueuedMessage = {
+type QueuedMessage = {
   runId: string;
   text: string;
   mode: QueuedMessageMode;
@@ -161,9 +179,7 @@ export type TuiStateAccess = {
   currentSessionKey: string;
   currentSessionId: string | null;
   activeChatRunId: string | null;
-  pendingOptimisticUserMessage?: boolean;
-  pendingChatRunId?: string | null;
-  pendingSubmitDraft?: { runId: string; text: string } | null;
+  pendingSubmit: TuiPendingSubmit | null;
   queuedMessages?: QueuedMessage[];
   historyLoaded: boolean;
   sessionInfo: SessionInfo;

@@ -1,6 +1,7 @@
 // Voice Call plugin module implements outbound behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKeyForCall,
@@ -144,6 +145,7 @@ export async function initiateCall(
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
   const dtmfSequence = opts.dtmfSequence;
   const requesterSessionKey = opts.requesterSessionKey?.trim();
+  const agentId = normalizeAgentId(opts.agentId ?? ctx.config.agentId);
   if (dtmfSequence) {
     const validationError = validateDtmfDigits(dtmfSequence);
     if (validationError) {
@@ -188,12 +190,13 @@ export async function initiateCall(
     from,
     to,
     sessionKey: resolveVoiceCallSessionKey({
-      config: ctx.config,
+      config: { ...ctx.config, agentId },
       callId,
       phone: to,
       explicitSessionKey: sessionKey,
       coreSession: ctx.coreSession,
     }),
+    agentId,
     startedAt: Date.now(),
     transcript: [],
     processedEventIds: [],
@@ -268,10 +271,15 @@ export async function initiateCall(
   }
 }
 
+export type SpeakOptions = {
+  listenAfterPlayback?: boolean;
+};
+
 export async function speak(
   ctx: SpeakContext,
   callId: CallId,
   text: string,
+  options?: SpeakOptions,
 ): Promise<{ success: boolean; error?: string }> {
   const connected = requireConnectedCall(ctx, callId);
   if (!connected.ok) {
@@ -295,11 +303,13 @@ export async function speak(
     const voice = resolvePreferredTtsVoice(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
+    const playbackOptions = options?.listenAfterPlayback ? { listenAfterPlayback: true } : {};
     await provider.playTts({
       callId,
       providerCallId,
       text,
       voice,
+      ...playbackOptions,
     });
 
     addTranscriptEntry(call, "bot", text);

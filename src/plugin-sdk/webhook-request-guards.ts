@@ -9,6 +9,7 @@ import {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
@@ -275,6 +276,25 @@ export function beginWebhookRequestPipelineOrReject(params: {
       }
     },
   };
+}
+
+/**
+ * Run post-ack webhook processing on its own admitted gateway work root.
+ *
+ * Ack-first handlers respond before processing events, so the continued work
+ * outlives the HTTP request admission it inherited; once that admission is
+ * released, queue enqueues from the inherited chain are refused as if the
+ * gateway were draining. Call this synchronously from the request handler
+ * (while the request is still admitted): it reserves an independent root that
+ * keeps the detached processing accepted and lets a restart drain wait for it.
+ */
+export function runDetachedWebhookWork<T>(run: () => Promise<T>): Promise<T> {
+  return runWithGatewayIndependentRootWorkContinuation(async () => {
+    // Reserve the root now, but let the request handler write its acknowledgement
+    // before any synchronous prefix in the detached callback can run.
+    await Promise.resolve();
+    return await run();
+  });
 }
 
 /** Read a webhook request body with bounded size/time limits and translate failures into responses. */

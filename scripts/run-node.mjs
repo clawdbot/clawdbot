@@ -21,6 +21,7 @@ import {
   writeBuildStamp as writeDistBuildStamp,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mjs";
+import { sleep } from "./lib/sleep.mjs";
 import {
   discoverStaticExtensionAssets,
   listStaticExtensionAssetSources,
@@ -46,7 +47,6 @@ const RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS = 5_000;
 
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
-  "scripts/copy-plugin-sdk-root-alias.mjs",
   "scripts/lib",
   "scripts/lib/local-build-metadata.mjs",
   "scripts/lib/local-build-metadata-paths.mjs",
@@ -57,7 +57,6 @@ const runtimePostBuildWatchedPaths = [
   "scripts/stage-bundled-plugin-runtime.mjs",
   "scripts/windows-cmd-helpers.mjs",
   "scripts/write-official-channel-catalog.mjs",
-  "src/plugin-sdk/root-alias.cjs",
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
 const runtimePostBuildScriptPaths = new Set(
@@ -172,9 +171,6 @@ const hasDirtySourceTree = (deps) => {
 
 const isRuntimePostBuildRelevantPath = (repoPath) => {
   const normalizedPath = normalizePath(repoPath).replace(/^\.\/+/, "");
-  if (normalizedPath === "src/plugin-sdk/root-alias.cjs") {
-    return true;
-  }
   if (runtimePostBuildStaticAssetPaths.has(normalizedPath)) {
     return true;
   }
@@ -433,10 +429,6 @@ const readPackageJsonPluginSdkAliasFileNames = (deps) => {
 
   const fileNames = new Set();
   for (const exportKey of Object.keys(packageExports)) {
-    if (exportKey === "./plugin-sdk") {
-      fileNames.add("index.js");
-      continue;
-    }
     if (!exportKey.startsWith("./plugin-sdk/")) {
       continue;
     }
@@ -685,11 +677,6 @@ const parsePositiveIntegerEnv = (env, name, fallback) => {
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
-
-const sleep = (ms) =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -1331,6 +1318,7 @@ const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
+  args[0] === "dashboard" ||
   (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
   (args[0] === "agent" && !args.includes("--local"));
 
@@ -1511,6 +1499,9 @@ export async function runNodeMain(params = {}) {
     }
 
     const buildExitCode = await withRunNodeBuildLock(deps, async () => {
+      if (shouldFastPathExistingDistForGatewayClient(deps)) {
+        return 0;
+      }
       const lockedBuildRequirement = resolveBuildRequirement(deps);
       if (!lockedBuildRequirement.shouldBuild) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);

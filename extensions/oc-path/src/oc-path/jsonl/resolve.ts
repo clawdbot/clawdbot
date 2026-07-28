@@ -22,7 +22,7 @@ import { isQuotedSeg, splitRespectingBrackets, unquoteSeg } from "../oc-path.js"
 import type { JsonlAst, JsonlLine } from "./ast.js";
 import { pickJsonlLine } from "./line.js";
 
-export type JsonlOcPathMatch =
+type JsonlOcPathMatch =
   | { readonly kind: "root"; readonly node: JsonlAst }
   | { readonly kind: "line"; readonly node: JsonlLine }
   | {

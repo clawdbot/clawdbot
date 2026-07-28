@@ -114,9 +114,7 @@ func splitFrontMatter(content string) (string, string) {
 	}
 	front := strings.Join(lines[1:endIndex], "\n")
 	body := strings.Join(lines[endIndex+1:], "\n")
-	if strings.HasPrefix(body, "\n") {
-		body = body[1:]
-	}
+	body = strings.TrimPrefix(body, "\n")
 	return front, body
 }
 
@@ -130,6 +128,7 @@ func encodeFrontMatter(frontData map[string]any, relPath string, source []byte) 
 		"provider":            docsI18nProvider(),
 		"model":               docsI18nModel(),
 		"workflow":            workflowVersion,
+		"prompt_version":      promptVersion,
 		"generated_at":        time.Now().UTC().Format(time.RFC3339),
 		"postprocess_version": localizedLinkPostprocessPending,
 	}

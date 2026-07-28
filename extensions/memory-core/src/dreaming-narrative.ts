@@ -15,6 +15,8 @@ import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -277,7 +279,7 @@ function buildNarrativeSessionKey(params: {
 
 // ── Prompt building ────────────────────────────────────────────────────
 
-export function buildNarrativePrompt(data: NarrativePhaseData): string {
+function buildNarrativePrompt(data: NarrativePhaseData): string {
   const lines: string[] = [];
   lines.push("Write a dream diary entry from these memory fragments:\n");
 
@@ -325,7 +327,7 @@ export function buildNarrativePrompt(data: NarrativePhaseData): string {
 
 // ── Message extraction ─────────────────────────────────────────────────
 
-export function extractNarrativeText(messages: unknown[]): string | null {
+function extractNarrativeText(messages: unknown[]): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
@@ -399,7 +401,7 @@ async function readSettledNarrativeText(params: {
 
 // ── Date formatting ────────────────────────────────────────────────────
 
-export function formatNarrativeDate(epochMs: number, timezone?: string): string {
+function formatNarrativeDate(epochMs: number, timezone?: string): string {
   const opts: Intl.DateTimeFormatOptions = {
     timeZone: timezone ?? process.env.TZ,
     year: "numeric",
@@ -455,7 +457,7 @@ function clampDiaryContextEntry(entry: string): string {
   if (normalized.length <= RECENT_DIARY_CONTEXT_MAX_CHARS) {
     return normalized;
   }
-  return `${normalized.slice(0, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
+  return `${truncateUtf16Safe(normalized, RECENT_DIARY_CONTEXT_MAX_CHARS).trimEnd()}...`;
 }
 
 function normalizeDiaryBlockBody(block: string): string {
@@ -577,7 +579,7 @@ function stripBackfillDiaryBlocks(existing: string): { updated: string; removed:
   };
 }
 
-export function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
+function formatBackfillDiaryDate(isoDay: string, _timezone?: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDay);
   if (!match) {
     return isoDay;
@@ -611,7 +613,7 @@ async function withNarrativeSessionLock<T>(sessionKey: string, fn: () => Promise
   }
 }
 
-export function buildBackfillDiaryEntry(params: {
+function buildBackfillDiaryEntry(params: {
   isoDay: string;
   bodyLines: string[];
   sourcePath?: string;
@@ -731,11 +733,11 @@ export async function dedupeDreamDiaryEntries(params: {
   });
 }
 
-export function buildDiaryEntry(narrative: string, dateStr: string): string {
+function buildDiaryEntry(narrative: string, dateStr: string): string {
   return `\n---\n\n*${dateStr}*\n\n${narrative}\n`;
 }
 
-export async function appendNarrativeEntry(params: {
+async function appendNarrativeEntry(params: {
   workspaceDir: string;
   narrative: string;
   nowMs: number;
@@ -996,44 +998,21 @@ export async function generateAndAppendDreamNarrative(params: {
 // write-lock while it runs and burns a model slot, which caused lock
 // contention (>30 s) and cascading narrative timeouts (#73198).
 //
-// `runDetachedDreamNarrative` wraps `generateAndAppendDreamNarrative` with a
-// FIFO queue capped at `DETACHED_NARRATIVE_CONCURRENCY` so the total in-flight
-// detached narratives across phases/workspaces stays bounded.
+// `runDetachedDreamNarrative` caps total in-flight detached narratives across
+// phases/workspaces so cron sweeps cannot exhaust model and session-lock slots.
 const DETACHED_NARRATIVE_CONCURRENCY = 3;
-
-let activeDetachedNarratives = 0;
-const detachedNarrativeQueue: Array<() => void> = [];
-
-function releaseDetachedNarrativeSlot(): void {
-  activeDetachedNarratives -= 1;
-  detachedNarrativeQueue.shift()?.();
-}
-
-async function acquireDetachedNarrativeSlot(): Promise<void> {
-  if (activeDetachedNarratives >= DETACHED_NARRATIVE_CONCURRENCY) {
-    await new Promise<void>((resolve) => {
-      detachedNarrativeQueue.push(resolve);
-    });
-  }
-  activeDetachedNarratives += 1;
-}
+const detachedNarrativeLimit = pLimit(DETACHED_NARRATIVE_CONCURRENCY);
 
 export function runDetachedDreamNarrative(
   params: Parameters<typeof generateAndAppendDreamNarrative>[0],
 ): void {
   queueMicrotask(() => {
-    void (async () => {
-      await acquireDetachedNarrativeSlot();
-      try {
-        await generateAndAppendDreamNarrative(params);
-      } catch {
-        // Detached narratives intentionally swallow errors — callers (cron
-        // sweeps) cannot recover, and surfacing here would only cause noisy
-        // unhandled rejections. Logging happens inside
-        // generateAndAppendDreamNarrative.
-      } finally {
-        releaseDetachedNarrativeSlot();
-      }
-    })();
+    void detachedNarrativeLimit(() => generateAndAppendDreamNarrative(params)).catch(() => {
+      // Detached narratives intentionally swallow errors — callers (cron
+      // sweeps) cannot recover, and surfacing here would only cause noisy
+      // unhandled rejections. Logging happens inside
+      // generateAndAppendDreamNarrative.
+    });
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

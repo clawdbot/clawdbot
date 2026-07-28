@@ -93,13 +93,12 @@ async function extractPdfContent(
     try {
       const images: DocumentExtractedImage[] = [];
       let remainingPixels = request.maxPixels;
-      for (let index = 0; index < imagePages.length; index += 1) {
+      for (const [index, pageNumber] of imagePages.entries()) {
         if (remainingPixels <= 0) {
           break;
         }
         const pagesRemaining = imagePages.length - index;
         const maxPixelsPerPage = Math.max(1, Math.ceil(remainingPixels / pagesRemaining));
-        const pageNumber = imagePages[index];
         const imageResult = await pdf.extract({
           mode: "images",
           pages: [pageNumber],

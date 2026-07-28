@@ -1,7 +1,9 @@
 // Mock OpenAI-compatible server for broader E2E scenarios.
 import { createHash } from "node:crypto";
 import http from "node:http";
-import { readTcpPortEnv } from "./lib/env-limits.mjs";
+import { setTimeout as delay } from "node:timers/promises";
+import { escapeRegExp } from "../lib/regexp.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -17,8 +19,21 @@ const port =
     : readTcpPortEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
+const responseChunkDelayMs = process.env.MOCK_RESPONSE_CHUNK_DELAY_MS
+  ? readPositiveIntEnv("MOCK_RESPONSE_CHUNK_DELAY_MS", undefined)
+  : 0;
 
-function responseEvents(text) {
+function splitResponseText(text) {
+  if (text.length < 2) {
+    return [text];
+  }
+  const midpoint = Math.floor(text.length / 2);
+  const whitespace = text.lastIndexOf(" ", midpoint);
+  const splitAt = whitespace > 0 ? whitespace : Math.max(1, midpoint);
+  return [text.slice(0, splitAt), text.slice(splitAt)];
+}
+
+function responseEvents(text, deltas = [text]) {
   const itemId = "msg_e2e_1";
   return [
     {
@@ -31,13 +46,13 @@ function responseEvents(text) {
         status: "in_progress",
       },
     },
-    {
+    ...deltas.map((delta) => ({
       type: "response.output_text.delta",
       item_id: itemId,
       output_index: 0,
       content_index: 0,
-      delta: text,
-    },
+      delta,
+    })),
     {
       type: "response.output_text.done",
       item_id: itemId,
@@ -78,6 +93,31 @@ function responseEvents(text) {
       },
     },
   ];
+}
+
+async function writeDefaultResponseEvents(res, text) {
+  if (responseChunkDelayMs === 0) {
+    writeSse(res, responseEvents(text));
+    return;
+  }
+  const events = responseEvents(text, splitResponseText(text));
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  let deltaCount = 0;
+  for (const event of events) {
+    if (event.type === "response.output_text.delta" && deltaCount > 0) {
+      await delay(responseChunkDelayMs);
+    }
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (event.type === "response.output_text.delta") {
+      deltaCount += 1;
+    }
+  }
+  res.write("data: [DONE]\n\n");
+  res.end();
 }
 
 function buildMockFunctionCall(name, args) {
@@ -195,7 +235,7 @@ function writeImageGeneration(res) {
 }
 
 function resolveResponseText(bodyText) {
-  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_OK(?:_\d+)?\b/gu));
+  const matches = Array.from(bodyText.matchAll(/\bOPENCLAW_E2E_[A-Z0-9]+(?:_[A-Z0-9]+)*\b/gu));
   return matches.at(-1)?.[0] ?? successMarker;
 }
 
@@ -244,9 +284,7 @@ function collectFunctionCallOutputText(body) {
 }
 
 function hasDeclaredTool(bodyText, name) {
-  return new RegExp(`"name"\\s*:\\s*"${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"`, "u").test(
-    bodyText,
-  );
+  return new RegExp(`"name"\\s*:\\s*"${escapeRegExp(name)}"`, "u").test(bodyText);
 }
 
 function mcpCodeModeApiFileEvents(body, bodyText) {
@@ -290,6 +328,23 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   );
 }
 
+function mcpAppConformanceEvents(body, bodyText) {
+  const allText = collectText(body).join("\n");
+  if (!/mcp app conformance qa check/i.test(allText)) {
+    return null;
+  }
+  const toolOutput = collectFunctionCallOutputText(body);
+  if (!toolOutput) {
+    if (!hasDeclaredTool(bodyText, "fixture__show")) {
+      return null;
+    }
+    return toolCallEvents("fixture__show", {});
+  }
+  return /initial-result/.test(toolOutput)
+    ? responseEvents("MCP_APP_CONFORMANCE_READY")
+    : responseEvents("MCP_APP_CONFORMANCE_FAIL");
+}
+
 const server = http.createServer((req, res) => {
   void (async () => {
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -300,7 +355,7 @@ const server = http.createServer((req, res) => {
     if (req.method === "GET" && url.pathname === "/v1/models") {
       writeJson(res, 200, {
         object: "list",
-        data: [{ id: "gpt-5.5", object: "model", owned_by: "openclaw-e2e" }],
+        data: [{ id: "gpt-5.6-luna", object: "model", owned_by: "openclaw-e2e" }],
       });
       return;
     }
@@ -335,6 +390,11 @@ const server = http.createServer((req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/v1/responses") {
+      const appEvents = mcpAppConformanceEvents(body, bodyText);
+      if (appEvents) {
+        writeResponsesEvents(res, body.stream, appEvents);
+        return;
+      }
       const codeModeEvents = mcpCodeModeApiFileEvents(body, bodyText);
       if (codeModeEvents) {
         writeResponsesEvents(res, body.stream, codeModeEvents);
@@ -359,7 +419,7 @@ const server = http.createServer((req, res) => {
         });
         return;
       }
-      writeSse(res, responseEvents(responseText));
+      await writeDefaultResponseEvents(res, responseText);
       return;
     }
 

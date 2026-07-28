@@ -1,15 +1,16 @@
 // Bench Gateway Startup tests cover bench gateway startup script behavior.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createServer } from "node:http";
+import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
+import { isStartupTraceDuration } from "../../scripts/lib/gateway-startup-trace-ranking.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
-async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
+async function listenOnLoopback(handler: RequestListener) {
   const server = createServer(handler);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -383,6 +384,15 @@ describe("gateway startup benchmark script", () => {
     expect(startupTrace["sidecars.acp.runtime-ready.readyCount"]).toBe(1);
   });
 
+  it("keeps counts and memory metrics out of the slow-duration ranking", () => {
+    expect(isStartupTraceDuration("plugins.runtime-post-bind")).toBe(true);
+    expect(isStartupTraceDuration("plugins.gateway-load.loadMs")).toBe(true);
+    expect(isStartupTraceDuration("ready.eventLoopMax")).toBe(true);
+    expect(isStartupTraceDuration("plugins.runtime-post-bind.gatewayMethodCount")).toBe(false);
+    expect(isStartupTraceDuration("memory.ready.rssMb")).toBe(false);
+    expect(isStartupTraceDuration("ready.total")).toBe(false);
+  });
+
   it("records probe state transitions, first error kind, and first recovery", async () => {
     let calls = 0;
     const { port, server } = await listenOnLoopback((_req, res) => {
@@ -434,6 +444,33 @@ describe("gateway startup benchmark script", () => {
         ),
       ) as { activation?: { onStartup?: boolean } };
       expect(manifest.activation?.onStartup).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("builds a deterministic prepared-runtime catalog stall case", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
+    try {
+      const benchCase = testing.parseOptions(["--case", "preparedRuntimeCatalogStall"]).cases[0];
+      if (!benchCase) {
+        throw new Error("expected prepared runtime catalog stall case");
+      }
+      const configPath = testing.writeConfig(root, benchCase);
+      const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+        plugins?: { allow?: string[]; load?: { paths?: string[] } };
+      };
+      const pluginId = config.plugins?.allow?.[0];
+      expect(pluginId).toBe("bench-plugin-01");
+      const pluginDir = path.join(root, "plugins", pluginId ?? "missing");
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(pluginDir, "openclaw.plugin.json"), "utf8"),
+      ) as { providers?: string[] };
+      const source = fs.readFileSync(path.join(pluginDir, "index.cjs"), "utf8");
+
+      expect(manifest.providers).toEqual(["bench-catalog-stall"]);
+      expect(source).toContain("api.registerProvider");
+      expect(source).toContain("Date.now() + 2000");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -1,6 +1,7 @@
 // Channel MCP bridge translates MCP tool calls into channel runtime operations.
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -56,13 +57,6 @@ const EVENTS_WAIT_TIMEOUT_LIMIT_MS = 300_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
-
-function clampPositiveInteger(value: number | undefined, fallback: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(1, Math.floor(value)));
-}
 
 /** Connects the MCP server surface to a Gateway client and queues channel events for polling. */
 export class OpenClawChannelBridge {
@@ -120,7 +114,7 @@ export class OpenClawChannelBridge {
       { GatewayClient: GatewayClientCtor },
       { startGatewayClientWhenEventLoopReady },
       { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
-      { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
+      { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
       import("../gateway/client.js"),
@@ -151,10 +145,11 @@ export class OpenClawChannelBridge {
       clientDisplayName: "OpenClaw MCP",
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
       scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
-        void this.handleGatewayEvent(event);
+        void this.dispatchGatewayEvent(event);
       },
       onHelloOk: () => {
         this.retryingInitialConnect = false;
@@ -223,7 +218,10 @@ export class OpenClawChannelBridge {
     includeLastMessage?: boolean;
   }): Promise<ConversationDescriptor[]> {
     await this.waitUntilReady();
-    const limit = clampPositiveInteger(params?.limit, 50, CONVERSATIONS_LIST_LIMIT);
+    const limit = resolveIntegerOption(params?.limit, 50, {
+      min: 1,
+      max: CONVERSATIONS_LIST_LIMIT,
+    });
     const response: SessionListResult = await this.requestGateway("sessions.list", {
       limit,
       search: params?.search,
@@ -262,7 +260,7 @@ export class OpenClawChannelBridge {
     limit = 20,
   ): Promise<NonNullable<ChatHistoryResult["messages"]>> {
     await this.waitUntilReady();
-    const requestLimit = clampPositiveInteger(limit, 20, MESSAGES_READ_LIMIT);
+    const requestLimit = resolveIntegerOption(limit, 20, { min: 1, max: MESSAGES_READ_LIMIT });
     const response: ChatHistoryResult = await this.requestGateway("sessions.get", {
       key: sessionKey,
       limit: requestLimit,
@@ -320,7 +318,7 @@ export class OpenClawChannelBridge {
 
   /** Poll queued events after a cursor without consuming them. */
   pollEvents(filter: WaitFilter, limit = 20): { events: QueueEvent[]; nextCursor: number } {
-    const eventLimit = clampPositiveInteger(limit, 20, EVENTS_POLL_LIMIT);
+    const eventLimit = resolveIntegerOption(limit, 20, { min: 1, max: EVENTS_POLL_LIMIT });
     const events = this.queue
       .filter((event) => matchEventFilter(event, filter))
       .slice(0, eventLimit);
@@ -334,7 +332,10 @@ export class OpenClawChannelBridge {
     if (existing) {
       return existing;
     }
-    const waitTimeoutMs = clampPositiveInteger(timeoutMs, 30_000, EVENTS_WAIT_TIMEOUT_LIMIT_MS);
+    const waitTimeoutMs = resolveIntegerOption(timeoutMs, 30_000, {
+      min: 1,
+      max: EVENTS_WAIT_TIMEOUT_LIMIT_MS,
+    });
     return await new Promise<QueueEvent | null>((resolve) => {
       const waiter: PendingWaiter = {
         filter,
@@ -521,6 +522,21 @@ export class OpenClawChannelBridge {
     }
   }
 
+  private async dispatchGatewayEvent(event: EventFrame): Promise<void> {
+    try {
+      await this.handleGatewayEvent(event);
+    } catch (error) {
+      // Always surface a single low-noise record so swallowed gateway event
+      // failures remain observable; the spammy error detail stays behind --verbose.
+      process.stderr.write(`openclaw mcp: gateway event ${event.event} failed\n`);
+      if (this.verbose) {
+        process.stderr.write(
+          `openclaw mcp: gateway event ${event.event} error: ${String(error)}\n`,
+        );
+      }
+    }
+  }
+
   private async handleGatewayEvent(event: EventFrame): Promise<void> {
     switch (event.event) {
       case "session.message":
@@ -648,8 +664,7 @@ export class OpenClawChannelBridge {
   }
 }
 
-/** Decide whether startup should wait for a retryable Gateway connect failure to recover. */
-export function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
+function shouldRetryInitialMcpGatewayConnect(error: Error): boolean {
   if (
     error.name === "GatewayClientRequestError" &&
     "retryable" in error &&

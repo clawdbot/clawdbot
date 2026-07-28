@@ -11,9 +11,7 @@ import {
   createAcpxProcessLeaseStore,
   openAcpxProcessLeaseStateStore,
   OPENCLAW_ACPX_LEASE_ID_ARG,
-  OPENCLAW_ACPX_LEASE_ID_ENV,
   OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
-  OPENCLAW_GATEWAY_INSTANCE_ID_ENV,
   withAcpxLeaseEnvironment,
   type AcpxProcessLease,
 } from "./process-lease.js";
@@ -79,19 +77,15 @@ describe("createAcpxProcessLeaseStore", () => {
 });
 
 describe("withAcpxLeaseEnvironment", () => {
-  it("adds lease environment and wrapper args on POSIX", () => {
+  it("adds portable lease wrapper args", () => {
     const command = withAcpxLeaseEnvironment({
       command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
       leaseId: "lease-test",
       gatewayInstanceId: "gateway-test",
-      platform: "darwin",
     });
 
     expect(command).toBe(
       [
-        "env",
-        `${OPENCLAW_ACPX_LEASE_ID_ENV}=lease-test`,
-        `${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=gateway-test`,
         "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
         OPENCLAW_ACPX_LEASE_ID_ARG,
         "lease-test",
@@ -101,24 +95,21 @@ describe("withAcpxLeaseEnvironment", () => {
     );
   });
 
-  it("keeps Windows logs keyed by lease id with wrapper args", () => {
+  it("quotes portable lease wrapper args", () => {
     const command = withAcpxLeaseEnvironment({
       command: "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
-      leaseId: "lease-test",
+      leaseId: "lease test",
       gatewayInstanceId: "gateway-test",
-      platform: "win32",
     });
 
     expect(command).toBe(
       [
         "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
         OPENCLAW_ACPX_LEASE_ID_ARG,
-        "lease-test",
+        "'lease test'",
         OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
         "gateway-test",
       ].join(" "),
     );
-    expect(command).not.toContain(`${OPENCLAW_ACPX_LEASE_ID_ENV}=`);
-    expect(command).not.toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=`);
   });
 });

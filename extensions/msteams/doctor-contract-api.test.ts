@@ -12,13 +12,23 @@ import type {
   PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  legacyConfigRules,
+  normalizeCompatibilityConfig,
+  stateMigrations,
+} from "./doctor-contract-api.js";
 import {
   buildMSTeamsConversationStateKey,
   MSTEAMS_CONVERSATIONS_NAMESPACE,
   type MSTeamsLegacyConversationStoreData,
 } from "./src/conversation-store-state.js";
 import type { StoredConversationReference } from "./src/conversation-store.js";
+import {
+  MSTEAMS_DELEGATED_TOKEN_KEY,
+  MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+  MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+} from "./src/delegated-state.js";
+import type { MSTeamsDelegatedTokens } from "./src/oauth.shared.js";
 import {
   buildMSTeamsPollStateKey,
   buildMSTeamsPollVoteBucketKey,
@@ -251,6 +261,47 @@ describe("msteams doctor state migration", () => {
     await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
   });
 
+  it("imports delegated OAuth tokens into plugin state before archiving the file", async () => {
+    const filePath = path.join(stateDir, "msteams-delegated.json");
+    const token: MSTeamsDelegatedTokens = {
+      accessToken: "delegated-access",
+      refreshToken: "delegated-refresh",
+      expiresAt: 1_800_000_000_000,
+      scopes: ["User.Read", "offline_access"],
+      userPrincipalName: "user@example.com",
+    };
+    await fs.writeFile(filePath, JSON.stringify(token));
+    const migration = migrationById("msteams-delegated-token-json-to-plugin-state");
+    const context = createDoctorContext(env);
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    };
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: [
+        `- Microsoft Teams delegated OAuth token -> plugin state (${MSTEAMS_DELEGATED_TOKEN_NAMESPACE})`,
+      ],
+    });
+    const result = await migration.migrateLegacyState(params);
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual([
+      "Migrated Microsoft Teams delegated OAuth token -> plugin state",
+      expect.stringContaining("Archived Microsoft Teams delegated OAuth token legacy source"),
+    ]);
+    const store = context.openPluginStateKeyedStore<MSTeamsDelegatedTokens>({
+      namespace: MSTEAMS_DELEGATED_TOKEN_NAMESPACE,
+      maxEntries: MSTEAMS_DELEGATED_TOKEN_MAX_ENTRIES,
+      overflowPolicy: "reject-new",
+    });
+    await expect(store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY)).resolves.toEqual(token);
+    await expect(fs.access(`${filePath}.migrated`)).resolves.toBeUndefined();
+  });
+
   it("does not register a doctor migration for pending-upload cache files", () => {
     expect(stateMigrations.map((migration) => migration.id)).not.toContain(
       "msteams-pending-uploads-json-to-plugin-state",
@@ -346,5 +397,97 @@ describe("msteams doctor state migration", () => {
       sessionKey: sanitizedSessionKey,
       learnings: ["Prefer cards for channel feedback"],
     });
+  });
+});
+
+describe("msteams streaming legacy config rules", () => {
+  const rule = legacyConfigRules.find((entry) => entry.message.includes("chunkMode"));
+
+  it("matches flat streaming aliases", () => {
+    expect(rule?.match?.({ blockStreaming: true }, {})).toBe(true);
+    expect(rule?.match?.({ chunkMode: "newline" }, {})).toBe(true);
+    expect(rule?.match?.({ streamMode: "block" }, {})).toBe(true);
+    expect(rule?.match?.({ streaming: { mode: "partial" } }, {})).toBe(false);
+  });
+});
+
+describe("msteams normalizeCompatibilityConfig streaming aliases", () => {
+  function msteamsConfig(entry: Record<string, unknown>) {
+    return { channels: { msteams: entry } } as never;
+  }
+
+  it("moves flat aliases into the nested streaming shape", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        streamMode: "block",
+        chunkMode: "newline",
+        blockStreaming: true,
+        blockStreamingCoalesce: { idleMs: 250 },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streaming).toEqual({
+      mode: "block",
+      chunkMode: "newline",
+      block: { enabled: true, coalesce: { idleMs: 250 } },
+    });
+    expect(msteams.streamMode).toBeUndefined();
+    expect(msteams.chunkMode).toBeUndefined();
+    expect(msteams.blockStreaming).toBeUndefined();
+    expect(msteams.blockStreamingCoalesce).toBeUndefined();
+    for (const change of [
+      "Moved channels.msteams.streamMode → channels.msteams.streaming.mode (block).",
+      "Moved channels.msteams.chunkMode → channels.msteams.streaming.chunkMode.",
+      "Moved channels.msteams.blockStreaming → channels.msteams.streaming.block.enabled.",
+      "Moved channels.msteams.blockStreamingCoalesce → channels.msteams.streaming.block.coalesce.",
+    ]) {
+      expect(result.changes).toContain(change);
+    }
+  });
+
+  it("removes a conflicting streamMode when streaming.mode is already set", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        streamMode: "off",
+        streaming: { mode: "block" },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streamMode).toBeUndefined();
+    expect(msteams.streaming).toEqual({ mode: "block" });
+    // Doctor drops mutations without change messages, so the conflict removal
+    // must be reported or the invalid flat key would never be persisted away.
+    expect(result.changes).toEqual([
+      "Removed channels.msteams.streamMode (channels.msteams.streaming.mode already set).",
+    ]);
+  });
+
+  it("removes flat aliases when the nested value is already set", () => {
+    const result = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({
+        blockStreaming: false,
+        streaming: { block: { enabled: true } },
+      }),
+    });
+
+    const msteams = result.config.channels?.msteams as Record<string, unknown>;
+    expect(msteams.streaming).toEqual({ block: { enabled: true } });
+    expect(msteams.blockStreaming).toBeUndefined();
+    expect(result.changes).toContain(
+      "Removed channels.msteams.blockStreaming (channels.msteams.streaming.block.enabled already set).",
+    );
+  });
+
+  it("is idempotent: a second run reports no changes", () => {
+    const first = normalizeCompatibilityConfig({
+      cfg: msteamsConfig({ streamMode: "block", chunkMode: "newline" }),
+    });
+    expect(first.changes.length).toBeGreaterThan(0);
+
+    const second = normalizeCompatibilityConfig({ cfg: first.config });
+    expect(second.changes).toEqual([]);
+    expect(second.config).toBe(first.config);
   });
 });

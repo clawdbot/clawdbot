@@ -13,6 +13,7 @@ const repoRoot = path.resolve(here, "..");
 const uiDir = path.join(repoRoot, "ui");
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
+const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
 
 function usage() {
   // keep this tiny; it's invoked from npm scripts too
@@ -140,7 +141,7 @@ function runSpawnCall(spawnCall, label) {
           forwardedSignalDrainTimer = setInterval(waitForForwardedSignalChildren, 25);
           forceKillTimer = setTimeout(() => {
             signalProcessTree(child, "SIGKILL", forwardedSignalPids);
-          }, 5_000);
+          }, FORWARDED_SIGNAL_KILL_GRACE_MS);
           forceKillTimer.unref?.();
         }
       },
@@ -332,7 +333,7 @@ export function main(argv = process.argv.slice(2)) {
   runPnpm(["run", script, ...rest]);
 }
 
-export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
   const resolved = path.resolve(entry);
   try {
     return realpath(resolved);

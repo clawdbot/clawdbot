@@ -8,7 +8,7 @@ import {
 import { detectInlineEvalInSegments } from "./risks.js";
 
 /** Normalized policy analysis result for argv and shell commands. */
-export type CommandPolicyAnalysis =
+type CommandPolicyAnalysis =
   | {
       ok: true;
       source: "argv" | "shell";
@@ -24,14 +24,12 @@ export type CommandPolicyAnalysis =
     };
 
 /** Parses a shell or argv command into command segments for approval policy checks. */
-export function analyzeCommandForPolicy(
-  params: {
-    source: "argv";
-    argv: string[];
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  },
-): CommandPolicyAnalysis {
+export function analyzeCommandForPolicy(params: {
+  source: "argv";
+  argv: string[];
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+}): CommandPolicyAnalysis {
   const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
   if (!analysis.ok) {
     return {

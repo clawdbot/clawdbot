@@ -2,18 +2,20 @@
  * Implements Chutes OAuth PKCE, callback parsing, token exchange, and refresh
  * for agent model authentication.
  */
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
-import { readProviderJsonResponse, readResponseTextLimited } from "./provider-http-errors.js";
+import { buildOAuthRequestSignal } from "../llm/utils/oauth/abort.js";
+import { assertOkOrThrowProviderError, readProviderJsonResponse } from "./provider-http-errors.js";
 
-const CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const CHUTES_OAUTH_REQUEST_TIMEOUT_MS = 30_000;
 
 const CHUTES_OAUTH_ISSUER = "https://api.chutes.ai";
 export const CHUTES_AUTHORIZE_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/authorize`;
-export const CHUTES_TOKEN_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/token`;
-export const CHUTES_USERINFO_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/userinfo`;
+const CHUTES_TOKEN_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/token`;
+const CHUTES_USERINFO_ENDPOINT = `${CHUTES_OAUTH_ISSUER}/idp/userinfo`;
 
 const DEFAULT_EXPIRES_BUFFER_MS = 5 * 60 * 1000;
 
@@ -40,7 +42,7 @@ type ChutesStoredOAuth = OAuthCredentials & {
 /** Generates a PKCE verifier/challenge pair for Chutes login. */
 export function generateChutesPkce(): ChutesPkce {
   const verifier = randomBytes(32).toString("hex");
-  const challenge = createHash("sha256").update(verifier).digest("base64url");
+  const challenge = sha256Base64Url(verifier);
   return { verifier, challenge };
 }
 
@@ -113,6 +115,7 @@ async function fetchChutesUserInfo(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const response = await fetchFn(CHUTES_USERINFO_ENDPOINT, {
     headers: { Authorization: `Bearer ${params.accessToken}` },
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
   if (!response.ok) {
     await cancelUnreadResponseBody(response);
@@ -152,11 +155,9 @@ export async function exchangeChutesCodeForTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
-    throw new Error(`Chutes token exchange failed: ${text}`);
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token exchange failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;
@@ -178,7 +179,13 @@ export async function exchangeChutesCodeForTokens(params: {
     throw new Error("Chutes token exchange returned invalid expires_in");
   }
 
-  const info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  let info: ChutesUserInfo | null = null;
+  try {
+    info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
+  } catch {
+    // Token exchange completes authentication; optional profile enrichment must
+    // not discard issued credentials when userinfo is unavailable or times out.
+  }
 
   return {
     access,
@@ -223,11 +230,9 @@ export async function refreshChutesTokens(params: {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
+    signal: buildOAuthRequestSignal({ timeoutMs: CHUTES_OAUTH_REQUEST_TIMEOUT_MS }),
   });
-  if (!response.ok) {
-    const text = await readResponseTextLimited(response, CHUTES_OAUTH_ERROR_BODY_LIMIT_BYTES);
-    throw new Error(`Chutes token refresh failed: ${text}`);
-  }
+  await assertOkOrThrowProviderError(response, "Chutes token refresh failed");
 
   const data = await readProviderJsonResponse<{
     access_token?: string;

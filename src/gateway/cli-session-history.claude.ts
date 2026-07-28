@@ -5,23 +5,30 @@ import os from "node:os";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
 import {
   isToolCallBlock,
   isToolResultBlock,
   resolveToolUseId,
   type ToolContentBlock,
 } from "../chat/tool-content.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { CliSessionReseedReceipt, SessionEntry } from "../config/sessions.js";
+import {
+  getCliSessionBinding,
+  normalizeCliSessionReseedReceipt,
+} from "../config/sessions/cli-session-binding.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
-type ClaudeCliProjectEntry = {
+export type ClaudeCliProjectEntry = {
   type?: unknown;
   timestamp?: unknown;
   uuid?: unknown;
   isSidechain?: unknown;
+  isMeta?: unknown;
+  isCompactSummary?: unknown;
   message?: {
     role?: unknown;
     content?: unknown;
@@ -40,6 +47,10 @@ type ClaudeCliMessage = NonNullable<ClaudeCliProjectEntry["message"]>;
 type ClaudeCliUsage = ClaudeCliMessage["usage"];
 type TranscriptLikeMessage = Record<string, unknown>;
 type ToolNameRegistry = Map<string, string>;
+type ReseedImportState = {
+  receipt?: CliSessionReseedReceipt;
+  inspectedFirstUser: boolean;
+};
 
 function resolveHistoryHomeDir(homeDir?: string): string {
   return normalizeOptionalString(homeDir) || process.env.HOME || os.homedir();
@@ -52,21 +63,10 @@ function resolveClaudeProjectsDir(homeDir?: string): string {
 export function resolveClaudeCliBindingSessionId(
   entry: SessionEntry | undefined,
 ): string | undefined {
-  const bindingSessionId = normalizeOptionalString(
-    entry?.cliSessionBindings?.[CLAUDE_CLI_PROVIDER]?.sessionId,
-  );
-  if (bindingSessionId) {
-    return bindingSessionId;
-  }
-  const legacyMapSessionId = normalizeOptionalString(entry?.cliSessionIds?.[CLAUDE_CLI_PROVIDER]);
-  if (legacyMapSessionId) {
-    return legacyMapSessionId;
-  }
-  const legacyClaudeSessionId = normalizeOptionalString(entry?.claudeCliSessionId);
-  return legacyClaudeSessionId || undefined;
+  return getCliSessionBinding(entry, CLAUDE_CLI_PROVIDER)?.sessionId;
 }
 
-function resolveTimestampMs(value: unknown): number | undefined {
+export function resolveClaudeCliTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -100,6 +100,12 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
 
 function cloneJsonValue<T>(value: T): T {
   return structuredClone(value);
+}
+
+function removeContentBlock<T>(content: T[], blockIndex: number): T[] | null {
+  const nextContent = cloneJsonValue(content);
+  nextContent.splice(blockIndex, 1);
+  return nextContent.length > 0 ? nextContent : null;
 }
 
 function normalizeClaudeCliContent(
@@ -185,7 +191,10 @@ function isUserToolResultMessage(message: unknown): boolean {
 function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): TranscriptLikeMessage[] {
   const coalesced: TranscriptLikeMessage[] = [];
   for (let index = 0; index < messages.length; index += 1) {
-    const current = messages[index];
+    const current = messages.at(index);
+    if (current === undefined) {
+      break;
+    }
     const next = messages[index + 1];
     if (!isAssistantToolCallMessage(current) || !isUserToolResultMessage(next)) {
       coalesced.push(current);
@@ -217,10 +226,50 @@ function coalesceClaudeCliToolMessages(messages: TranscriptLikeMessage[]): Trans
   return coalesced;
 }
 
-function parseClaudeCliHistoryEntry(
+type ClaudeCliPromptTextCandidate = {
+  text: string;
+  blockIndex?: number;
+};
+
+export function resolveClaudeCliPromptTextCandidates(
+  entry: ClaudeCliProjectEntry,
+  content: string | unknown[],
+): ClaudeCliPromptTextCandidate[] {
+  if (entry.isMeta === true || entry.isCompactSummary === true) {
+    return [];
+  }
+  if (typeof content === "string") {
+    return [{ text: content }];
+  }
+  if (
+    content.some(
+      (item) =>
+        item !== null && typeof item === "object" && "type" in item && item.type === "tool_result",
+    )
+  ) {
+    return [];
+  }
+  return content.flatMap((item, blockIndex) =>
+    item !== null &&
+    typeof item === "object" &&
+    "type" in item &&
+    item.type === "text" &&
+    "text" in item &&
+    typeof item.text === "string"
+      ? [{ text: item.text, blockIndex }]
+      : [],
+  );
+}
+
+export function parseClaudeCliHistoryEntry(
   entry: ClaudeCliProjectEntry,
   cliSessionId: string,
+  sourceLineNumber: number,
   toolNameRegistry: ToolNameRegistry,
+  options: {
+    reseedMode: "recover" | "preserve";
+    reseedState?: ReseedImportState;
+  },
 ): TranscriptLikeMessage | null {
   if (entry.isSidechain === true || !entry.message || typeof entry.message !== "object") {
     return null;
@@ -231,14 +280,16 @@ function parseClaudeCliHistoryEntry(
     return null;
   }
 
-  const timestamp = resolveTimestampMs(entry.timestamp);
+  const timestamp = resolveClaudeCliTimestampMs(entry.timestamp);
+  const externalId = normalizeOptionalString(entry.uuid);
   const baseMeta = {
+    id: externalId ?? `${CLAUDE_CLI_PROVIDER}:${cliSessionId}:line:${sourceLineNumber}`,
     importedFrom: CLAUDE_CLI_PROVIDER,
     cliSessionId,
-    ...(normalizeOptionalString(entry.uuid) ? { externalId: entry.uuid } : {}),
+    ...(externalId ? { externalId } : {}),
   };
 
-  const content =
+  let content =
     typeof entry.message.content === "string" || Array.isArray(entry.message.content)
       ? normalizeClaudeCliContent(entry.message.content, toolNameRegistry)
       : undefined;
@@ -247,6 +298,61 @@ function parseClaudeCliHistoryEntry(
   }
 
   if (type === "user") {
+    const reseedState = options.reseedState;
+    const promptTextCandidates = resolveClaudeCliPromptTextCandidates(entry, content);
+    if (
+      options.reseedMode === "recover" &&
+      reseedState &&
+      !reseedState.inspectedFirstUser &&
+      promptTextCandidates.length > 0
+    ) {
+      reseedState.inspectedFirstUser = true;
+      if (reseedState.receipt) {
+        // The binding is trusted state for this native session. Do not scan
+        // later rows or a repeated user message could be suppressed.
+        const candidate = promptTextCandidates.length === 1 ? promptTextCandidates[0] : undefined;
+        if (candidate && hashCliReseedPrompt(candidate.text) === reseedState.receipt.promptHash) {
+          if (candidate.blockIndex === undefined || !Array.isArray(content)) {
+            return null;
+          }
+          // The receipt proves only the matching text block is synthetic.
+          // Preserve sibling images or other native content that has no local duplicate proof.
+          const nextContent = removeContentBlock(content, candidate.blockIndex);
+          if (!nextContent) {
+            return null;
+          }
+          content = nextContent;
+        }
+      } else {
+        for (const candidate of promptTextCandidates) {
+          const reseedPrompt = parseCliReseedPrompt(candidate.text);
+          if (reseedPrompt.kind === "legacy") {
+            if (candidate.blockIndex === undefined) {
+              if (!reseedPrompt.userMessage) {
+                return null;
+              }
+              content = reseedPrompt.userMessage;
+            } else if (Array.isArray(content)) {
+              if (!reseedPrompt.userMessage) {
+                const contentWithoutReseed = removeContentBlock(content, candidate.blockIndex);
+                if (!contentWithoutReseed) {
+                  return null;
+                }
+                content = contentWithoutReseed;
+                break;
+              }
+              const nextContent = cloneJsonValue(content);
+              const block = nextContent[candidate.blockIndex];
+              if (block && typeof block === "object") {
+                (block as Record<string, unknown>).text = reseedPrompt.userMessage;
+              }
+              content = nextContent;
+            }
+            break;
+          }
+        }
+      }
+    }
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
@@ -276,7 +382,7 @@ function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export function resolveClaudeCliSessionFilePath(params: {
+function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
@@ -320,6 +426,8 @@ export function resolveClaudeCliSessionFilePath(params: {
 export function readClaudeCliSessionMessages(params: {
   cliSessionId: string;
   homeDir?: string;
+  localSessionId?: string;
+  reseedReceipt?: CliSessionReseedReceipt;
 }): TranscriptLikeMessage[] {
   const filePath = resolveClaudeCliSessionFilePath(params);
   if (!filePath) {
@@ -335,13 +443,33 @@ export function readClaudeCliSessionMessages(params: {
 
   const messages: TranscriptLikeMessage[] = [];
   const toolNameRegistry: ToolNameRegistry = new Map();
-  for (const line of content.split(/\r?\n/)) {
+  const localSessionId = normalizeOptionalString(params.localSessionId);
+  const normalizedReceipt = normalizeCliSessionReseedReceipt(params.reseedReceipt);
+  const reseedState: ReseedImportState = {
+    receipt:
+      normalizedReceipt && normalizedReceipt.localSessionId === localSessionId
+        ? normalizedReceipt
+        : undefined,
+    inspectedFirstUser: false,
+  };
+  const lines = content.split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex] ?? "";
     if (!line.trim()) {
       continue;
     }
     try {
       const parsed = JSON.parse(line) as ClaudeCliProjectEntry;
-      const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
+      const message = parseClaudeCliHistoryEntry(
+        parsed,
+        params.cliSessionId,
+        lineIndex + 1,
+        toolNameRegistry,
+        {
+          reseedMode: "recover",
+          reseedState,
+        },
+      );
       if (message) {
         messages.push(message);
       }
@@ -418,7 +546,9 @@ export function readClaudeCliFallbackSeed(params: {
   let windowedTurns: TranscriptLikeMessage[] = [];
   const toolNameRegistry: ToolNameRegistry = new Map();
 
-  for (const line of content.split(/\r?\n/)) {
+  const lines = content.split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex] ?? "";
     if (!line.trim()) {
       continue;
     }
@@ -446,7 +576,15 @@ export function readClaudeCliFallbackSeed(params: {
       continue;
     }
 
-    const message = parseClaudeCliHistoryEntry(parsed, params.cliSessionId, toolNameRegistry);
+    const message = parseClaudeCliHistoryEntry(
+      parsed,
+      params.cliSessionId,
+      lineIndex + 1,
+      toolNameRegistry,
+      {
+        reseedMode: "preserve",
+      },
+    );
     if (message) {
       windowedTurns.push(message);
     }

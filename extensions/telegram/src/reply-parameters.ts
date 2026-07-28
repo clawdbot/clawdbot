@@ -1,7 +1,13 @@
 // Telegram plugin module implements reply parameters behavior.
+import { GrammyError } from "grammy";
 import type { MessageEntity } from "grammy/types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
+
+const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const GrammyErrorCtor: typeof GrammyError | undefined =
+  typeof GrammyError === "function" ? GrammyError : undefined;
 
 type TelegramReplyParameters = {
   message_id: number;
@@ -111,6 +117,13 @@ export function getTelegramNativeQuoteReplyMessageId(
   }
   const messageId = (replyParameters as { message_id?: unknown }).message_id;
   return typeof messageId === "number" && Number.isFinite(messageId) ? messageId : undefined;
+}
+
+export function isTelegramQuoteParamError(err: unknown): boolean {
+  if (GrammyErrorCtor && err instanceof GrammyErrorCtor) {
+    return QUOTE_PARAM_RE.test(err.description);
+  }
+  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
 }
 
 export function removeTelegramNativeQuoteParam(

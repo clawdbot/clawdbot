@@ -7,7 +7,7 @@ title: OpenClaw QA Scenario Pack
 # - each nested `*.yaml` scenario defines one runnable test via `scenario`
 # - flow scenarios add top-level `flow`; native test scenarios use `scenario.execution.path`
 # - scenario YAML may also define coverage IDs, category metadata, required plugins,
-#   lane filters, runtime parity tiers, and gateway config patching
+#   channel constraints, provider/runtime filters, runtime-pair lanes, and gateway config patching
 #
 # - kickoff mission
 # - QA operator identity
@@ -15,10 +15,10 @@ title: OpenClaw QA Scenario Pack
 #
 # Coverage tracking:
 #
-# - add `coverage.primary` IDs to each scenario's `scenario` block
-# - add `coverage.secondary` only when a scenario intentionally protects another behavior
-# - keep IDs behavior-shaped, broad enough to reuse, lowercase, and dotted
-#   as `namespace.behavior`, with dashes allowed inside each segment
+# - use `coverage.primary` only for evidence that executes the required product boundary
+# - use `coverage.secondary` for helper or supporting evidence; it may stand alone
+# - keep IDs behavior-shaped, broad enough to reuse, lowercase, and exactly
+#   `surface.feature`, with dashes allowed inside each segment
 # - use the exact values listed under feature `coverageIds` in `taxonomy.yaml`
 # - taxonomy feature coverage IDs are exact proof targets, not aliases
 # - scenario primary can list multiple IDs only when this scenario is primary
@@ -32,24 +32,26 @@ title: OpenClaw QA Scenario Pack
 # - use `scenario.execution.suiteIsolation: isolated` for flow scenarios that
 #   mutate gateway/runtime state in non-obvious ways; add `isolationReason`
 #   so reviewers know why the suite scheduler must not share the worker
-# - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
-#   `optional`, `live-only`, or `soak`
+# - use `runtimePairLane` only for runtime-pair batch membership: `core`,
+#   `extended`, or `soak`; provider/model/auth/channel eligibility stays in
+#   independent execution constraints
 # - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid
 # - keep source-path tracking in the report, not in the scenario schema
 #
-# Runtime parity tiers:
+# Runtime-pair lanes:
 #
-# - `standard`: required Codex-vs-OpenClaw mock gate coverage for first-hour depth and
-#   default runtime-tool fixtures. OpenClaw dynamic integration tools in this
-#   tier are hard-gated by `openclaw qa coverage --tools --summary`; Codex-native
+# - `core`: default Codex-vs-OpenClaw gate coverage for agentic behavior,
+#   first-hour depth, and default runtime-tool fixtures. OpenClaw dynamic
+#   integration tools in this lane are hard-gated by
+#   `openclaw qa coverage --tools --summary <path>`, where
+#   `<path>` is the paired `qa-suite-summary.json`; Codex-native
 #   workspace rows remain separately tracked until native/live behavior is the
 #   asserted surface. Rows that explicitly target searchable/deferred OpenClaw
-#   dynamic loading stay report-only unless a fixture promotes them to required. Selected with
-#   `openclaw qa suite --runtime-pair openclaw,codex --runtime-parity-tier standard`
-# - `optional`: profile-, plugin-, or external-service-dependent runtime-tool
+#   dynamic loading stay report-only unless a fixture promotes them to core.
+#   Selected with
+#   `openclaw qa suite --runtime-pair openclaw,codex --runtime-pair-lane core`
+# - `extended`: profile-, plugin-, or external-service-dependent runtime-tool
 #   fixtures that stay out of the default release gate
-# - `live-only`: scenarios that need real provider/runtime behavior rather than
-#   mock-openai fixtures
 # - `soak`: long-running scheduled or Testbox lanes such as the 100-turn parity
 #   soak
 #
@@ -59,6 +61,7 @@ title: OpenClaw QA Scenario Pack
 # - `channels/` - DM, shared channel, thread, and message-action behavior
 # - `character/` - persona and style eval scenarios
 # - `config/` - config patch, apply, and restart behavior
+# - `goals/` - active-goal context and cross-turn followthrough
 # - `media/` - image understanding and generation
 # - `memory/` - recall, ranking, active memory, and thread isolation
 # - `models/` - provider capabilities and model switching

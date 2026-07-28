@@ -1,13 +1,30 @@
 // Package manager tests cover resource discovery boundaries for package,
 // project, and npm-declared agent resources.
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { DefaultPackageManager } from "./package-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs: string[] = [];
+
+type PackageManagerInternals = {
+  parseSource(
+    source: string,
+  ):
+    | { type: "npm"; spec: string; name: string; pinned: boolean }
+    | { type: "git"; host: string; path: string }
+    | { type: "local"; path: string };
+  getNpmInstallPath(
+    source: { type: "npm"; spec: string; name: string; pinned: boolean },
+    scope: "user" | "project" | "temporary",
+  ): string;
+  getGitInstallPath(
+    source: { type: "git"; host: string; path: string },
+    scope: "user" | "project" | "temporary",
+  ): string;
+};
 
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
@@ -60,6 +77,33 @@ describe("DefaultPackageManager", () => {
     expect(skillPaths).not.toContain(outsideSkill);
   });
 
+  it("expands manifest resource globs without hidden paths", async () => {
+    const root = await makeTempDir("openclaw-package-manager-");
+    const packageRoot = join(root, "package");
+    const visibleSkill = join(packageRoot, "skills", "visible", "SKILL.md");
+    const hiddenSkill = join(packageRoot, "skills", ".hidden", "SKILL.md");
+    await mkdir(join(packageRoot, "skills", "visible"), { recursive: true });
+    await mkdir(join(packageRoot, "skills", ".hidden"), { recursive: true });
+    await writeFile(visibleSkill, "# Visible\n", "utf-8");
+    await writeFile(hiddenSkill, "# Hidden\n", "utf-8");
+    await writeFile(
+      join(packageRoot, "package.json"),
+      JSON.stringify({ openclaw: { skills: ["skills/*"] } }),
+      "utf-8",
+    );
+
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({ packages: [packageRoot] }),
+    });
+
+    const skillPaths = (await manager.resolve()).skills.map((skill) => skill.path);
+
+    expect(skillPaths).toContain(visibleSkill);
+    expect(skillPaths).not.toContain(hiddenSkill);
+  });
+
   it("keeps convention-discovered resource entries inside the package root", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const packageRoot = join(root, "package");
@@ -95,12 +139,19 @@ describe("DefaultPackageManager", () => {
   it("keeps auto-discovered project skills inside their skill root", async () => {
     const root = await makeTempDir("openclaw-package-manager-");
     const agentsSkillsRoot = join(root, ".agents", "skills");
-    const insideSkill = join(agentsSkillsRoot, "inside", "SKILL.md");
+    const insideSkill = join(agentsSkillsRoot, "group", "deep", "t", "SKILL.md");
+    const ignoredSkill = join(agentsSkillsRoot, "group", "deep", "i", "SKILL.md");
+    const escapedSkill = join(agentsSkillsRoot, "group", "deep", "!x ", "SKILL.md");
     const outsideRoot = join(root, "outside");
     await mkdir(join(root, ".git"));
-    await mkdir(join(agentsSkillsRoot, "inside"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "t"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "i"), { recursive: true });
+    await mkdir(join(agentsSkillsRoot, "group", "deep", "!x "), { recursive: true });
     await mkdir(outsideRoot, { recursive: true });
     await writeFile(insideSkill, "# Inside\n", "utf-8");
+    await writeFile(ignoredSkill, "# Ignored\n", "utf-8");
+    await writeFile(escapedSkill, "# Ignored\n", "utf-8");
+    await writeFile(join(agentsSkillsRoot, "group", ".gitignore"), "i/ \nt/\t\n\\!x\\ \n");
     await writeFile(join(outsideRoot, "SKILL.md"), "# Outside\n", "utf-8");
 
     try {
@@ -119,6 +170,8 @@ describe("DefaultPackageManager", () => {
     const skillPaths = resolved.skills.map((skill) => skill.path);
 
     expect(skillPaths).toContain(insideSkill);
+    expect(skillPaths).not.toContain(ignoredSkill);
+    expect(skillPaths).not.toContain(escapedSkill);
     expect(skillPaths.some((skillPath) => skillPath.includes(join("skills", "linked")))).toBe(
       false,
     );
@@ -133,14 +186,32 @@ describe("DefaultPackageManager", () => {
     const insidePrompt = join(configRoot, "prompts", "inside.md");
     const insideTheme = join(configRoot, "themes", "inside.json");
     const insideExtension = join(configRoot, "extensions", "inside.ts");
+    const ignoredPrompt = join(configRoot, "prompts", "ignored.md");
+    const ignoredTheme = join(configRoot, "themes", "ignored.json");
+    const hiddenPrompt = join(configRoot, "prompts", ".hidden.md");
+    const hiddenTheme = join(configRoot, "themes", ".hidden.json");
+    const nestedPrompt = join(configRoot, "prompts", "nested", "nested.md");
+    const nestedTheme = join(configRoot, "themes", "nested", "nested.json");
+    const wrongPromptType = join(configRoot, "prompts", "wrong.json");
+    const wrongThemeType = join(configRoot, "themes", "wrong.md");
     await mkdir(join(root, ".git"));
-    await mkdir(join(configRoot, "prompts"), { recursive: true });
-    await mkdir(join(configRoot, "themes"), { recursive: true });
+    await mkdir(join(configRoot, "prompts", "nested"), { recursive: true });
+    await mkdir(join(configRoot, "themes", "nested"), { recursive: true });
     await mkdir(join(configRoot, "extensions"), { recursive: true });
     await mkdir(outsideRoot, { recursive: true });
     await writeFile(insidePrompt, "# Inside\n", "utf-8");
     await writeFile(insideTheme, "{}\n", "utf-8");
     await writeFile(insideExtension, "export default {};\n", "utf-8");
+    await writeFile(ignoredPrompt, "# Ignored\n", "utf-8");
+    await writeFile(ignoredTheme, "{}\n", "utf-8");
+    await writeFile(nestedPrompt, "# Nested\n", "utf-8");
+    await writeFile(nestedTheme, "{}\n", "utf-8");
+    await writeFile(hiddenPrompt, "# Hidden\n", "utf-8");
+    await writeFile(hiddenTheme, "{}\n", "utf-8");
+    await writeFile(wrongPromptType, "{}\n", "utf-8");
+    await writeFile(wrongThemeType, "# Wrong\n", "utf-8");
+    await writeFile(join(configRoot, "prompts", ".ignore"), "ignored.md\n", "utf-8");
+    await writeFile(join(configRoot, "themes", ".ignore"), "ignored.json\n", "utf-8");
     await writeFile(join(outsideRoot, "outside.md"), "# Outside\n", "utf-8");
     await writeFile(join(outsideRoot, "outside.json"), "{}\n", "utf-8");
     await writeFile(join(outsideRoot, "outside.ts"), "export default {};\n", "utf-8");
@@ -161,12 +232,22 @@ describe("DefaultPackageManager", () => {
     });
 
     const resolved = await manager.resolve();
+    const promptPaths = resolved.prompts.map((prompt) => prompt.path);
+    const themePaths = resolved.themes.map((theme) => theme.path);
 
-    expect(resolved.prompts.map((prompt) => prompt.path)).toContain(insidePrompt);
-    expect(resolved.themes.map((theme) => theme.path)).toContain(insideTheme);
+    expect(promptPaths).toContain(insidePrompt);
+    expect(themePaths).toContain(insideTheme);
+    expect(promptPaths).not.toContain(ignoredPrompt);
+    expect(themePaths).not.toContain(ignoredTheme);
+    expect(promptPaths).not.toContain(nestedPrompt);
+    expect(themePaths).not.toContain(nestedTheme);
+    expect(promptPaths).not.toContain(hiddenPrompt);
+    expect(themePaths).not.toContain(hiddenTheme);
+    expect(promptPaths).not.toContain(wrongPromptType);
+    expect(themePaths).not.toContain(wrongThemeType);
     expect(resolved.extensions.map((extension) => extension.path)).toContain(insideExtension);
-    expect(resolved.prompts.some((prompt) => prompt.path.includes("linked"))).toBe(false);
-    expect(resolved.themes.some((theme) => theme.path.includes("linked"))).toBe(false);
+    expect(promptPaths.some((promptPath) => promptPath.includes("linked"))).toBe(false);
+    expect(themePaths.some((themePath) => themePath.includes("linked"))).toBe(false);
     expect(resolved.extensions.some((extension) => extension.path.includes("linked"))).toBe(false);
   });
 
@@ -184,5 +265,31 @@ describe("DefaultPackageManager", () => {
     expect(resolved.skills).toEqual([]);
     expect(resolved.prompts).toEqual([]);
     expect(resolved.themes).toEqual([]);
+  });
+
+  it("keeps temporary package paths in a private per-agent directory", async () => {
+    const createdRoot = await makeTempDir("openclaw-package-manager-temp-");
+    const root = await realpath(createdRoot);
+    const agentDir = join(root, "agent");
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir,
+      settingsManager: SettingsManager.inMemory({}),
+    }) as unknown as PackageManagerInternals;
+    const npmSource = manager.parseSource("npm:@openclaw/example");
+    const gitSource = manager.parseSource("https://github.com/openclaw/example.git");
+    if (npmSource.type !== "npm" || gitSource.type !== "git") {
+      throw new Error("Expected package sources");
+    }
+
+    const npmPath = manager.getNpmInstallPath(npmSource, "temporary");
+    const gitPath = manager.getGitInstallPath(gitSource, "temporary");
+    const tempRoot = join(agentDir, "tmp", "resources");
+
+    expect(relative(tempRoot, npmPath).startsWith("..")).toBe(false);
+    expect(relative(tempRoot, gitPath).startsWith("..")).toBe(false);
+    if (process.platform !== "win32") {
+      expect((await stat(tempRoot)).mode & 0o777).toBe(0o700);
+    }
   });
 });

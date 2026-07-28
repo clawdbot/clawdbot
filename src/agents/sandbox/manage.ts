@@ -4,9 +4,8 @@
  * Lists and removes registered runtime and browser containers using backend manager status.
  */
 import { getRuntimeConfig } from "../../config/config.js";
-import { stopBrowserBridgeServer } from "../../plugin-sdk/browser-bridge.js";
 import { getSandboxBackendManager } from "./backend.js";
-import { BROWSER_BRIDGES } from "./browser-bridges.js";
+import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
   readBrowserRegistry,
@@ -116,6 +115,7 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
   const config = getRuntimeConfig();
   const registry = await readBrowserRegistry();
   const entry = registry.entries.find((item) => item.containerName === containerName);
+  await stopCachedBrowserBridgesForContainer(containerName);
   if (entry) {
     await dockerSandboxBackendManager.removeRuntime({
       entry: toBrowserDockerRuntimeEntry(entry),
@@ -123,11 +123,4 @@ export async function removeSandboxBrowserContainer(containerName: string): Prom
     });
   }
   await removeBrowserRegistryEntry(containerName);
-
-  for (const [sessionKey, bridge] of BROWSER_BRIDGES.entries()) {
-    if (bridge.containerName === containerName) {
-      await stopBrowserBridgeServer(bridge.bridge.server).catch(() => undefined);
-      BROWSER_BRIDGES.delete(sessionKey);
-    }
-  }
 }

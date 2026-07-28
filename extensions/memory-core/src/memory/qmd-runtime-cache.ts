@@ -3,14 +3,13 @@ import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { memoryCoreWorkspaceEntryKey, openMemoryCoreStateStore } from "../dreaming-state.js";
 
-export const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE =
-  "qmd-runtime-cache.collection-validation";
-export const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE =
+const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE = "qmd-runtime-cache.collection-validation";
+const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE =
   "qmd-runtime-cache.multi-collection-probe";
-export const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_MAX_ENTRIES = 1_000;
-export const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_MAX_ENTRIES = 1_000;
-export const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS = 5 * 60_000;
-export const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS = 10 * 60_000;
+const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_MAX_ENTRIES = 1_000;
+const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_MAX_ENTRIES = 1_000;
+const QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS = 5 * 60_000;
+const QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS = 10 * 60_000;
 
 const QMD_RUNTIME_CACHE_ENTRY_VERSION = 1;
 
@@ -40,7 +39,7 @@ export type QmdRuntimeMultiCollectionProbeCacheContext = QmdRuntimeCacheContextB
   sources: readonly string[];
 };
 
-export type QmdRuntimeCacheCollectionValidationEntry = {
+type QmdRuntimeCacheCollectionValidationEntry = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
@@ -52,7 +51,7 @@ export type QmdRuntimeCacheCollectionValidationEntry = {
   };
 };
 
-export type QmdRuntimeCacheMultiCollectionProbeEntry = {
+type QmdRuntimeCacheMultiCollectionProbeEntry = {
   version: 1;
   createdAtMs: number;
   expiresAtMs: number;
@@ -62,7 +61,7 @@ export type QmdRuntimeCacheMultiCollectionProbeEntry = {
   };
 };
 
-export type QmdRuntimeCacheResult<T> =
+type QmdRuntimeCacheResult<T> =
   | {
       state: "hit";
       value: T;
@@ -113,10 +112,10 @@ function buildCollectionConfigHash(collections: readonly QmdRuntimeManagedCollec
   return hashText(normalized);
 }
 
-function buildCollectionValidationCacheContextInput(
-  params: QmdRuntimeCollectionValidationCacheContext,
-): string {
-  return JSON.stringify({
+function buildRuntimeCacheContextRecord(
+  params: QmdRuntimeCacheContextBase & { sources: readonly string[] },
+) {
+  return {
     agentId: normalizeText(params.agentId),
     commandHash: hashText(normalizeText(params.qmdCommand)),
     environmentHash: normalizeText(params.qmdEnvironmentHash ?? ""),
@@ -124,6 +123,14 @@ function buildCollectionValidationCacheContextInput(
     qmdVersion: normalizeText(params.qmdVersion ?? ""),
     searchMode: params.searchMode,
     sourceSet: sortedUnique(params.sources),
+  };
+}
+
+function buildCollectionValidationCacheContextInput(
+  params: QmdRuntimeCollectionValidationCacheContext,
+): string {
+  return JSON.stringify({
+    ...buildRuntimeCacheContextRecord(params),
     collectionConfigHash: buildCollectionConfigHash(params.collections),
   });
 }
@@ -131,39 +138,19 @@ function buildCollectionValidationCacheContextInput(
 function buildMultiCollectionProbeCacheContextInput(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
 ): string {
-  return JSON.stringify({
-    agentId: normalizeText(params.agentId),
-    commandHash: hashText(normalizeText(params.qmdCommand)),
-    environmentHash: normalizeText(params.qmdEnvironmentHash ?? ""),
-    indexPathHash: normalizePathIdentity(params.qmdIndexPath),
-    qmdVersion: normalizeText(params.qmdVersion ?? ""),
-    searchMode: params.searchMode,
-    sourceSet: sortedUnique(params.sources),
-  });
+  return JSON.stringify(buildRuntimeCacheContextRecord(params));
 }
 
-function buildCollectionValidationCacheHash(
+function buildQmdCollectionValidationCacheContextHash(
   params: QmdRuntimeCollectionValidationCacheContext,
 ): string {
   return hashText(buildCollectionValidationCacheContextInput(params));
 }
 
-function buildMultiCollectionProbeCacheHash(
+function buildQmdMultiCollectionProbeCacheContextHash(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
 ): string {
   return hashText(buildMultiCollectionProbeCacheContextInput(params));
-}
-
-export function buildQmdCollectionValidationCacheContextHash(
-  params: QmdRuntimeCollectionValidationCacheContext,
-): string {
-  return buildCollectionValidationCacheHash(params);
-}
-
-export function buildQmdMultiCollectionProbeCacheContextHash(
-  params: QmdRuntimeMultiCollectionProbeCacheContext,
-): string {
-  return buildMultiCollectionProbeCacheHash(params);
 }
 
 function collectionValidationStore(): PluginStateKeyedStore<QmdRuntimeCacheCollectionValidationEntry> {
@@ -183,22 +170,30 @@ function multiCollectionProbeStore(): PluginStateKeyedStore<QmdRuntimeCacheMulti
 function collectionValidationEntryKey(params: QmdRuntimeCollectionValidationCacheContext): string {
   return memoryCoreWorkspaceEntryKey(
     params.workspaceDir,
-    `qmd-runtime-cache.collection-validation:${buildCollectionValidationCacheHash(params)}`,
+    `qmd-runtime-cache.collection-validation:${buildQmdCollectionValidationCacheContextHash(params)}`,
   );
 }
 
 function multiCollectionProbeEntryKey(params: QmdRuntimeMultiCollectionProbeCacheContext): string {
   return memoryCoreWorkspaceEntryKey(
     params.workspaceDir,
-    `qmd-runtime-cache.multi-collection-probe:${buildMultiCollectionProbeCacheHash(params)}`,
+    `qmd-runtime-cache.multi-collection-probe:${buildQmdMultiCollectionProbeCacheContextHash(params)}`,
   );
 }
 
-function normalizeCollectionValidationEntry(
+type QmdRuntimeCacheEnvelope = {
+  record: Record<string, unknown>;
+  createdAtMs: number;
+  expiresAtMs: number;
+  keyHash: string;
+};
+
+/** Validates the shared cache-entry envelope: version, expiry window, and key hash. */
+function normalizeCacheEntryEnvelope(
   value: unknown,
   nowMs: number,
   expectedKeyHash: string,
-): QmdRuntimeCacheCollectionValidationEntry | undefined {
+): QmdRuntimeCacheEnvelope | undefined {
   if (typeof value !== "object" || value === null) {
     return undefined;
   }
@@ -228,6 +223,20 @@ function normalizeCollectionValidationEntry(
   if (keyHash !== expectedKeyHash) {
     return undefined;
   }
+
+  return { record, createdAtMs, expiresAtMs, keyHash };
+}
+
+function normalizeCollectionValidationEntry(
+  value: unknown,
+  nowMs: number,
+  expectedKeyHash: string,
+): QmdRuntimeCacheCollectionValidationEntry | undefined {
+  const envelope = normalizeCacheEntryEnvelope(value, nowMs, expectedKeyHash);
+  if (!envelope) {
+    return undefined;
+  }
+  const { record, createdAtMs, expiresAtMs, keyHash } = envelope;
 
   const validation = record.validation;
   if (typeof validation !== "object" || validation === null) {
@@ -262,35 +271,11 @@ function normalizeMultiCollectionProbeEntry(
   nowMs: number,
   expectedKeyHash: string,
 ): QmdRuntimeCacheMultiCollectionProbeEntry | undefined {
-  if (typeof value !== "object" || value === null) {
+  const envelope = normalizeCacheEntryEnvelope(value, nowMs, expectedKeyHash);
+  if (!envelope) {
     return undefined;
   }
-  const record = value as Record<string, unknown>;
-  if (record.version !== QMD_RUNTIME_CACHE_ENTRY_VERSION) {
-    return undefined;
-  }
-
-  const createdAtMs =
-    typeof record.createdAtMs === "number"
-      ? Math.max(0, Math.floor(record.createdAtMs))
-      : Number.NaN;
-  const expiresAtMs =
-    typeof record.expiresAtMs === "number"
-      ? Math.max(0, Math.floor(record.expiresAtMs))
-      : Number.NaN;
-  if (
-    !Number.isFinite(createdAtMs) ||
-    !Number.isFinite(expiresAtMs) ||
-    !Number.isFinite(nowMs) ||
-    nowMs >= expiresAtMs
-  ) {
-    return undefined;
-  }
-
-  const keyHash = normalizeText(typeof record.keyHash === "string" ? record.keyHash : "");
-  if (keyHash !== expectedKeyHash) {
-    return undefined;
-  }
+  const { record, createdAtMs, expiresAtMs, keyHash } = envelope;
 
   const probe = record.multiCollectionProbe;
   if (typeof probe !== "object" || probe === null) {
@@ -319,7 +304,7 @@ export async function readQmdCollectionValidationCache(
   try {
     const store = collectionValidationStore();
     const key = collectionValidationEntryKey(params);
-    const expectedKeyHash = buildCollectionValidationCacheHash(params);
+    const expectedKeyHash = buildQmdCollectionValidationCacheContextHash(params);
     const raw = await store.lookup(key);
     if (!raw) {
       return { state: "miss" };
@@ -337,7 +322,7 @@ export async function writeQmdCollectionValidationCache(
 ): Promise<boolean> {
   try {
     const key = collectionValidationEntryKey(params);
-    const keyHash = buildCollectionValidationCacheHash(params);
+    const keyHash = buildQmdCollectionValidationCacheContextHash(params);
     const collectionConfigHash = buildCollectionConfigHash(params.collections);
     const createdAtMs = Math.max(0, Math.floor(nowMs));
     const ttlMs = QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_TTL_MS;
@@ -363,17 +348,6 @@ export async function writeQmdCollectionValidationCache(
   }
 }
 
-export async function clearQmdCollectionValidationCache(
-  params: QmdRuntimeCollectionValidationCacheContext,
-): Promise<void> {
-  try {
-    const store = collectionValidationStore();
-    await store.delete(collectionValidationEntryKey(params));
-  } catch {
-    // fail open
-  }
-}
-
 export async function readQmdMultiCollectionProbeCache(
   params: QmdRuntimeMultiCollectionProbeCacheContext,
   nowMs = Date.now(),
@@ -381,7 +355,7 @@ export async function readQmdMultiCollectionProbeCache(
   try {
     const store = multiCollectionProbeStore();
     const key = multiCollectionProbeEntryKey(params);
-    const expectedKeyHash = buildMultiCollectionProbeCacheHash(params);
+    const expectedKeyHash = buildQmdMultiCollectionProbeCacheContextHash(params);
     const raw = await store.lookup(key);
     if (!raw) {
       return { state: "miss" };
@@ -400,7 +374,7 @@ export async function writeQmdMultiCollectionProbeCache(
 ): Promise<boolean> {
   try {
     const key = multiCollectionProbeEntryKey(params);
-    const keyHash = buildMultiCollectionProbeCacheHash(params);
+    const keyHash = buildQmdMultiCollectionProbeCacheContextHash(params);
     const createdAtMs = Math.max(0, Math.floor(nowMs));
     const ttlMs = QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS;
     const store = multiCollectionProbeStore();

@@ -1,3 +1,4 @@
+import type { ApiRegistry } from "@openclaw/ai";
 // Verifies the Google simple-completion wrapper and thinking-payload sanitizer hook.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../llm/types.js";
@@ -5,15 +6,14 @@ import type { Model } from "../llm/types.js";
 const streamSimple = vi.fn();
 const sanitizeGoogleThinkingPayload = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
+const apiRegistry = {
+  getApiProvider: vi.fn(() => ({ streamSimple })),
+} as unknown as ApiRegistry;
 
-vi.mock("../llm/stream.js", () => ({
-  streamSimple,
-}));
-
-vi.mock("../plugin-sdk/provider-stream-shared.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugin-sdk/provider-stream-shared.js")>(
-    "../plugin-sdk/provider-stream-shared.js",
-  );
+vi.mock("../llm/providers/stream-wrappers/google-thinking-payload.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../llm/providers/stream-wrappers/google-thinking-payload.js")
+  >("../llm/providers/stream-wrappers/google-thinking-payload.js");
   return {
     ...actual,
     sanitizeGoogleThinkingPayload,
@@ -24,15 +24,16 @@ vi.mock("./custom-api-registry.js", () => ({
   ensureCustomApiRegistered,
 }));
 
-const { prepareGoogleSimpleCompletionModel } = await import(
-  "./google-simple-completion-stream.js"
-);
+const { prepareGoogleSimpleCompletionModel } = await import("./google-simple-completion-stream.js");
 
 const GOOGLE_SIMPLE_COMPLETION_API = "openclaw-google-generative-ai-simple";
 
 // Mirrors the provider catalog shape closely enough for wrapper registration
 // without pulling live Google model discovery into unit tests.
-function makeGoogleModel(id = "gemini-flash-latest"): Model<"google-generative-ai"> {
+function makeGoogleModel(
+  id = "gemini-flash-latest",
+  overrides: Partial<Model<"google-generative-ai">> = {},
+): Model<"google-generative-ai"> {
   return {
     id,
     name: id,
@@ -45,6 +46,7 @@ function makeGoogleModel(id = "gemini-flash-latest"): Model<"google-generative-a
     contextWindow: 1_000_000,
     maxTokens: 8192,
     headers: {},
+    ...overrides,
   };
 }
 
@@ -70,7 +72,7 @@ describe("prepareGoogleSimpleCompletionModel", () => {
       api: "openai-responses",
     } as unknown as Model<"openai-responses">;
 
-    const result = prepareGoogleSimpleCompletionModel(model);
+    const result = prepareGoogleSimpleCompletionModel(apiRegistry, model);
 
     expect(result).toBe(model);
     expect(ensureCustomApiRegistered).not.toHaveBeenCalled();
@@ -79,22 +81,23 @@ describe("prepareGoogleSimpleCompletionModel", () => {
   it("registers an OpenClaw-owned Google simple-completion api alias", () => {
     const model = makeGoogleModel();
 
-    const result = prepareGoogleSimpleCompletionModel(model);
+    const result = prepareGoogleSimpleCompletionModel(apiRegistry, model);
 
     expect(result).toEqual({
       ...model,
       api: GOOGLE_SIMPLE_COMPLETION_API,
     });
     expect(ensureCustomApiRegistered).toHaveBeenCalledTimes(1);
-    expect(ensureCustomApiRegistered.mock.calls[0]?.[0]).toBe(GOOGLE_SIMPLE_COMPLETION_API);
+    expect(ensureCustomApiRegistered.mock.calls[0]?.[0]).toBe(apiRegistry);
+    expect(ensureCustomApiRegistered.mock.calls[0]?.[1]).toBe(GOOGLE_SIMPLE_COMPLETION_API);
   });
 
   it.each(["off", "low", "medium", "high", "adaptive"] as const)(
     "sanitizes outbound thinking payload for gemini-flash-latest with reasoning=%s",
     async (reasoning) => {
       const model = makeGoogleModel();
-      const wrapped = prepareGoogleSimpleCompletionModel(model);
-      const streamFn = ensureCustomApiRegistered.mock.calls[0]?.[1] as (
+      const wrapped = prepareGoogleSimpleCompletionModel(apiRegistry, model);
+      const streamFn = ensureCustomApiRegistered.mock.calls[0]?.[2] as (
         ...args: unknown[]
       ) => unknown;
 
@@ -128,8 +131,8 @@ describe("prepareGoogleSimpleCompletionModel", () => {
       payload.generationConfig.thinkingConfig.thinkingLevel = "MINIMAL";
     });
     const model = makeGoogleModel();
-    prepareGoogleSimpleCompletionModel(model);
-    const streamFn = ensureCustomApiRegistered.mock.calls[0]?.[1] as (
+    prepareGoogleSimpleCompletionModel(apiRegistry, model);
+    const streamFn = ensureCustomApiRegistered.mock.calls[0]?.[2] as (
       ...args: unknown[]
     ) => unknown;
 
@@ -152,4 +155,63 @@ describe("prepareGoogleSimpleCompletionModel", () => {
       ).payload.generationConfig.thinkingConfig,
     ).not.toHaveProperty("thinkingBudget");
   });
+
+  it.each(["xhigh", "max"] as const)(
+    "preserves clamped-off intent in the final Gemini 3 payload for reasoning=%s",
+    async (reasoning) => {
+      const actual = await vi.importActual<
+        typeof import("../llm/providers/stream-wrappers/google-thinking-payload.js")
+      >("../llm/providers/stream-wrappers/google-thinking-payload.js");
+      sanitizeGoogleThinkingPayload.mockImplementationOnce(actual.sanitizeGoogleThinkingPayload);
+      streamSimple.mockImplementationOnce((_model, _context, options) => {
+        const payload = {
+          generationConfig: {
+            thinkingConfig: { thinkingLevel: "MINIMAL" },
+          },
+        };
+        options?.onPayload?.(payload, _model);
+        return { content: [{ type: "text", text: "ok" }], payload };
+      });
+      const model = makeGoogleModel("gemini-3-flash-preview", {
+        thinkingLevelMap: {
+          minimal: null,
+          low: null,
+          medium: null,
+          high: null,
+          xhigh: null,
+          max: null,
+        },
+      });
+      const wrapped = prepareGoogleSimpleCompletionModel(apiRegistry, model);
+      const streamFn = ensureCustomApiRegistered.mock.calls[0]?.[2] as (
+        ...args: unknown[]
+      ) => unknown;
+
+      const result = await streamFn(wrapped, { messages: [] }, { apiKey: "key", reasoning });
+
+      expect(sanitizeGoogleThinkingPayload).toHaveBeenCalledWith({
+        payload: {
+          generationConfig: {
+            thinkingConfig: { thinkingLevel: "MINIMAL" },
+          },
+        },
+        modelId: "gemini-3-flash-preview",
+        thinkingLevel: "off",
+      });
+      expect(result).toMatchObject({
+        payload: {
+          generationConfig: {
+            thinkingConfig: { thinkingLevel: "MINIMAL" },
+          },
+        },
+      });
+      expect(
+        (
+          result as {
+            payload: { generationConfig: { thinkingConfig: Record<string, unknown> } };
+          }
+        ).payload.generationConfig.thinkingConfig,
+      ).not.toHaveProperty("includeThoughts");
+    },
+  );
 });

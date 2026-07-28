@@ -6,7 +6,7 @@ import path from "node:path";
 export type PluginDependencySpecMap = Record<string, string>;
 
 /** Installation status for one plugin dependency. */
-export type PluginDependencyEntry = {
+type PluginDependencyEntry = {
   name: string;
   spec: string;
   installed: boolean;

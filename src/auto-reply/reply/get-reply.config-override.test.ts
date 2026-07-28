@@ -92,4 +92,24 @@ describe("getReplyFromConfig configOverride", () => {
     expect(loadConfigMock).not.toHaveBeenCalled();
     expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
   });
+
+  it("marks a frozen complete config without changing its identity or own keys", async () => {
+    const { withFullRuntimeReplyConfig } = await import("./get-reply-fast-path.js");
+    const cfg = Object.freeze({
+      agents: { defaults: { userTimezone: "America/New_York" } },
+      channels: { telegram: { botToken: "resolved-telegram-token" } },
+    } satisfies OpenClawConfig);
+    const ownKeys = Reflect.ownKeys(cfg);
+    vi.mocked(loadConfigMock).mockImplementation(() => {
+      throw new Error("getRuntimeConfig should not be called for complete runtime config");
+    });
+
+    const marked = withFullRuntimeReplyConfig(cfg);
+    await getReplyFromConfig(buildGetReplyCtx(), undefined, marked);
+
+    expect(marked).toBe(cfg);
+    expect(Reflect.ownKeys(cfg)).toEqual(ownKeys);
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expectResolvedTelegramTimezone(mocks.resolveReplyDirectives);
+  });
 });

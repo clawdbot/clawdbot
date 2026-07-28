@@ -1,5 +1,7 @@
 // Tool image tests cover image payload sanitization before tool outputs are
 // returned to model-visible content blocks.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import {
   createNoisyPngBuffer,
@@ -61,7 +63,9 @@ describe("tool image sanitizing", () => {
     });
     expect(dropped).toBe(0);
     expect(out.length).toBe(1);
-    const meta = await getImageMetadata(Buffer.from(out[0].data, "base64"));
+    const meta = await getImageMetadata(
+      Buffer.from(expectDefined(out[0], "out[0] test invariant").data, "base64"),
+    );
     expect(meta?.width).toBeLessThanOrEqual(120);
     expect(meta?.height).toBeLessThanOrEqual(120);
   }, 20_000);
@@ -158,7 +162,7 @@ describe("tool image sanitizing", () => {
     ];
     const out = await sanitizeContentBlocksImages(blocks, "browser:screenshot");
     expect(out).toHaveLength(1);
-    expect(out[0].type).toBe("text");
+    expect(expectDefined(out[0], "out[0] test invariant").type).toBe("text");
     expect((out[0] as { type: "text"; text: string }).text).toContain("missing data or mimeType");
   });
 

@@ -19,7 +19,7 @@ import type { AdmittedWebInboundMessage } from "./inbound/types.js";
 import { resolveWhatsAppRuntimeGroupPolicy } from "./runtime-group-policy.js";
 import { isSelfChatMode, normalizeE164 } from "./text-runtime.js";
 
-export type ResolvedWhatsAppInboundPolicy = {
+type ResolvedWhatsAppInboundPolicy = {
   account: ResolvedWhatsAppAccount;
   dmPolicy: DmPolicy;
   groupPolicy: GroupPolicy;
@@ -173,13 +173,14 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   cfg: OpenClawConfig;
   msg: AdmittedWebInboundMessage;
   policy?: ResolvedWhatsAppInboundPolicy;
+  authDir?: string;
 }): Promise<boolean> {
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   if (!useAccessGroups) {
     return true;
   }
 
-  const self = getSelfIdentity(params.msg);
+  const self = getSelfIdentity(params.msg, params.authDir);
   const admission = requireWhatsAppInboundAdmission(params.msg);
   const policy =
     params.policy ??
@@ -189,7 +190,7 @@ export async function resolveWhatsAppCommandAuthorized(params: {
       selfE164: self.e164 ?? null,
     });
   const isGroup = admission.conversation.kind === "group";
-  const sender = getSenderIdentity(params.msg);
+  const sender = getSenderIdentity(params.msg, params.authDir);
   const dmSender = sender.e164 ?? admission.conversation.id;
   const groupSender = sender.e164 ?? "";
   if (!normalizeE164(isGroup ? groupSender : dmSender)) {

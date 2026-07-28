@@ -5,16 +5,18 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProviderExternalAuthProfile } from "../../plugins/types.js";
-import { testing, overlayExternalAuthProfiles } from "./external-auth.js";
+import { overlayExternalAuthProfiles } from "./external-auth.js";
+import { testing } from "./external-auth.test-support.js";
 import { readExternalCliBootstrapCredential } from "./external-cli-sync.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
   (params: unknown) => ProviderExternalAuthProfile[]
 >(() => []);
-const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
-  vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
-);
+const readCodexCliCredentialsCachedMock = vi.hoisted(() => {
+  vi.resetModules();
+  return vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null);
+});
 
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: () => null,
@@ -187,6 +189,9 @@ describe("auth external oauth helpers", () => {
     expect(overlaidProfile.refresh).toBe("fresh-cli-refresh-token");
     expect(overlaidProfile.accountId).toBe("acct-cli");
     const managedCredential = readExternalCliBootstrapCredential({
+      store: createStore({
+        "openai:default": tokenlessCredential,
+      }),
       profileId: "openai:default",
       credential: tokenlessCredential,
     });

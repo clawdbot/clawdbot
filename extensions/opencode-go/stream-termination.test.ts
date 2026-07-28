@@ -9,6 +9,19 @@ import { createOpencodeGoStalledStreamWrapper } from "./stream-termination.js";
 
 type AnyEvent = AssistantMessageEvent;
 type StreamLike = AssistantMessageEventStreamContract;
+type ProviderStreamFn = Parameters<typeof createOpencodeGoStalledStreamWrapper>[0];
+type ProviderModel = Parameters<ProviderStreamFn>[0];
+type ProviderContext = Parameters<ProviderStreamFn>[1];
+type ProviderCallOptions = Parameters<ProviderStreamFn>[2];
+type ErrorEvent = Extract<AnyEvent, { type: "error" }>;
+
+function asProviderEvent(event: unknown): AnyEvent {
+  return event as AnyEvent;
+}
+
+function asProviderModel(model: unknown): ProviderModel {
+  return model as ProviderModel;
+}
 
 interface FakeStreamController {
   emit(event: AnyEvent): void;
@@ -82,23 +95,6 @@ function createFakeBaseStream(): {
   return { stream, controller, getReturnCalls: () => returnCalls };
 }
 
-function disableAbortSignalAny(): PropertyDescriptor | undefined {
-  const descriptor = Object.getOwnPropertyDescriptor(AbortSignal, "any");
-  Object.defineProperty(AbortSignal, "any", {
-    configurable: true,
-    value: undefined,
-  });
-  return descriptor;
-}
-
-function restoreAbortSignalAny(descriptor: PropertyDescriptor | undefined): void {
-  if (descriptor) {
-    Object.defineProperty(AbortSignal, "any", descriptor);
-  } else {
-    Reflect.deleteProperty(AbortSignal, "any");
-  }
-}
-
 describe("createOpencodeGoStalledStreamWrapper", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -125,13 +121,17 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -152,13 +152,15 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       content: [{ type: "text", text: "hi" }],
       stopReason: undefined,
     };
-    controller.emit({ type: "start", partial } as any);
-    controller.emit({
-      type: "text_delta",
-      contentIndex: 0,
-      delta: "hi",
-      partial,
-    } as any);
+    controller.emit(asProviderEvent({ type: "start", partial }));
+    controller.emit(
+      asProviderEvent({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "hi",
+        partial,
+      }),
+    );
 
     // Advance wall clock beyond idleTimeoutMs without any new progress.
     await vi.advanceTimersByTimeAsync(6_000);
@@ -169,10 +171,10 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
     // And it pushed a terminal error event to the downstream consumer.
     const terminal = received.find(
-      (event) => event.type === "error" && (event as any).reason === "error",
+      (event): event is ErrorEvent => event.type === "error" && event.reason === "error",
     );
     expect(terminal).toBeDefined();
-    expect((terminal as any)?.error).toMatchObject({
+    expect(terminal?.error).toMatchObject({
       stopReason: "error",
       errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
     });
@@ -195,14 +197,18 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
       firstEventTimeoutMs: 10_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -236,14 +242,18 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
       firstEventTimeoutMs: 10_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -262,20 +272,22 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       content: [],
       stopReason: undefined,
     };
-    controller.emit({ type: "start", partial } as any);
+    controller.emit(asProviderEvent({ type: "start", partial }));
 
     await vi.advanceTimersByTimeAsync(6_000);
     expect(abortCalled).toBe(false);
 
-    controller.emit({
-      type: "text_delta",
-      contentIndex: 0,
-      delta: "hello",
-      partial: {
-        ...partial,
-        content: [{ type: "text", text: "hello" }],
-      },
-    } as any);
+    controller.emit(
+      asProviderEvent({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "hello",
+        partial: {
+          ...partial,
+          content: [{ type: "text", text: "hello" }],
+        },
+      }),
+    );
     controller.emit({
       type: "done",
       reason: "stop",
@@ -284,7 +296,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
         content: [{ type: "text", text: "hello" }],
         stopReason: "stop",
       },
-    } as any);
+    } as AnyEvent);
     await consumer;
 
     expect(abortCalled).toBe(false);
@@ -305,14 +317,18 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
       firstEventTimeoutMs: 10_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -331,8 +347,8 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       content: [{ type: "text", text: "" }],
       stopReason: undefined,
     };
-    controller.emit({ type: "start", partial } as any);
-    controller.emit({ type: "text_start", contentIndex: 0, partial } as any);
+    controller.emit(asProviderEvent({ type: "start", partial }));
+    controller.emit(asProviderEvent({ type: "text_start", contentIndex: 0, partial }));
 
     await vi.advanceTimersByTimeAsync(6_000);
     expect(abortCalled).toBe(false);
@@ -347,8 +363,8 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       contentIndex: 0,
       delta: "hello",
       partial: message,
-    } as any);
-    controller.emit({ type: "done", reason: "stop", message } as any);
+    } as AnyEvent);
+    controller.emit({ type: "done", reason: "stop", message } as AnyEvent);
     await consumer;
 
     expect(abortCalled).toBe(false);
@@ -369,7 +385,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
       firstEventTimeoutMs: 5_000,
@@ -377,9 +393,13 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
     const downstream = await Promise.resolve(
       wrapper(
-        { provider: "opencode-go", id: "deepseek-v4-flash", requestTimeoutMs: 10_000 } as any,
-        {} as any,
-        {} as any,
+        asProviderModel({
+          provider: "opencode-go",
+          id: "deepseek-v4-flash",
+          requestTimeoutMs: 10_000,
+        }),
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
       ),
     );
     expect(downstream).toBeDefined();
@@ -398,13 +418,51 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       content: [{ type: "text", text: "slow" }],
       stopReason: undefined,
     };
-    controller.emit({ type: "start", partial } as any);
+    controller.emit(asProviderEvent({ type: "start", partial }));
 
     await vi.advanceTimersByTimeAsync(6_000);
     expect(abortCalled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(abortCalled).toBe(true);
+    await consumer;
+  });
+
+  it("preserves the provider-owned first-event timeout when core passes a shorter generic value", async () => {
+    const { stream: baseStream, controller } = createFakeBaseStream();
+
+    const underlying = vi.fn((_model, _context, _options) => baseStream);
+
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
+      provider: "opencode-go",
+      idleTimeoutMs: 120_000,
+      firstEventTimeoutMs: 300_000,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        { firstEventTimeoutMs: 30_000 } as ProviderCallOptions,
+      ),
+    );
+    expect(downstream).toBeDefined();
+    if (!downstream) {
+      return;
+    }
+
+    const consumer = (async () => {
+      for await (const event of downstream) {
+        void event;
+      }
+    })();
+
+    expect(underlying).toHaveBeenCalledTimes(1);
+    expect(underlying.mock.calls[0]?.[2]).toMatchObject({
+      firstEventTimeoutMs: 300_000,
+    });
+
+    controller.end();
     await consumer;
   });
 
@@ -421,7 +479,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
       firstEventTimeoutMs: 10_000,
@@ -429,9 +487,13 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
 
     const downstream = await Promise.resolve(
       wrapper(
-        { provider: "opencode-go", id: "deepseek-v4-flash", requestTimeoutMs: 2_000 } as any,
-        {} as any,
-        {} as any,
+        asProviderModel({
+          provider: "opencode-go",
+          id: "deepseek-v4-flash",
+          requestTimeoutMs: 2_000,
+        }),
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
       ),
     );
     expect(downstream).toBeDefined();
@@ -465,13 +527,17 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -490,9 +556,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     expect(capturedSignals).toHaveLength(1);
     expect(abortCalled).toBe(true);
     expect(getReturnCalls()).toBe(1);
-    expect(
-      received.some((event) => event.type === "error" && (event as any).reason === "error"),
-    ).toBe(true);
+    expect(received.some((event) => event.type === "error" && event.reason === "error")).toBe(true);
 
     await consumer;
   });
@@ -511,13 +575,17 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       });
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -534,107 +602,41 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     await vi.advanceTimersByTimeAsync(6_000);
 
     expect(abortCalled).toBe(true);
-    expect(
-      received.some((event) => event.type === "error" && (event as any).reason === "error"),
-    ).toBe(true);
+    expect(received.some((event) => event.type === "error" && event.reason === "error")).toBe(true);
     await consumer;
   });
 
-  it("aborts through the fallback combined signal when no first event arrives", async () => {
-    const abortSignalAnyDescriptor = disableAbortSignalAny();
-    const { stream: baseStream } = createFakeBaseStream();
-    let abortCalled = false;
-
-    try {
-      const underlying = vi.fn((_model, _context, options) => {
-        if (options?.signal) {
-          options.signal.addEventListener("abort", () => {
-            abortCalled = true;
-          });
-        }
-        return baseStream;
-      });
-
-      const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
-        provider: "opencode-go",
-        idleTimeoutMs: 5_000,
-      });
-
-      const downstream = await Promise.resolve(
-        wrapper(
-          { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
-          {} as any,
-          { signal: new AbortController().signal } as any,
-        ),
-      );
-      expect(downstream).toBeDefined();
-      if (!downstream) {
-        return;
-      }
-
-      const consumer = (async () => {
-        for await (const event of downstream) {
-          void event;
-        }
-      })();
-
-      await vi.advanceTimersByTimeAsync(6_000);
-
-      expect(abortCalled).toBe(true);
-      await consumer;
-    } finally {
-      restoreAbortSignalAny(abortSignalAnyDescriptor);
-    }
-  });
-
-  it("cleans up fallback AbortSignal listeners after natural completion", async () => {
-    const abortSignalAnyDescriptor = disableAbortSignalAny();
-    const sourceController = new AbortController();
-    const addEventListener = vi.spyOn(sourceController.signal, "addEventListener");
-    const removeEventListener = vi.spyOn(sourceController.signal, "removeEventListener");
+  it("preserves caller abort reasons in the wrapped provider signal", async () => {
+    const caller = new AbortController();
+    const reason = new Error("caller stopped");
     const { stream: baseStream, controller } = createFakeBaseStream();
+    let capturedSignal: AbortSignal | undefined;
+    const underlying = vi.fn((_model, _context, options) => {
+      capturedSignal = options?.signal;
+      return baseStream;
+    });
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
+      provider: "opencode-go",
+      idleTimeoutMs: 5_000,
+    });
 
-    try {
-      const wrapper = createOpencodeGoStalledStreamWrapper(vi.fn(() => baseStream) as any, {
-        provider: "opencode-go",
-        idleTimeoutMs: 5_000,
-      });
+    const downstream = await Promise.resolve(
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        { signal: caller.signal } as ProviderCallOptions,
+      ),
+    );
+    caller.abort(reason);
 
-      const downstream = await Promise.resolve(
-        wrapper(
-          { provider: "opencode-go", id: "deepseek-v4-flash" } as any,
-          {} as any,
-          { signal: sourceController.signal } as any,
-        ),
-      );
-      expect(downstream).toBeDefined();
-      if (!downstream) {
-        return;
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal?.reason).toBe(reason);
+
+    controller.end();
+    if (downstream) {
+      for await (const event of downstream) {
+        void event;
       }
-
-      const received: AnyEvent[] = [];
-      const consumer = (async () => {
-        for await (const event of downstream) {
-          received.push(event);
-        }
-      })();
-
-      const partial = {
-        role: "assistant",
-        content: [{ type: "text", text: "done" }],
-        stopReason: "stop",
-      };
-      controller.emit({ type: "start", partial } as any);
-      controller.emit({ type: "done", reason: "stop", message: partial } as any);
-      await consumer;
-
-      expect(received.some((event) => event.type === "done")).toBe(true);
-      expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
-      expect(removeEventListener).toHaveBeenCalledWith("abort", expect.any(Function));
-    } finally {
-      restoreAbortSignalAny(abortSignalAnyDescriptor);
-      addEventListener.mockRestore();
-      removeEventListener.mockRestore();
     }
   });
 
@@ -657,13 +659,17 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       return baseStream;
     });
 
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs: 5_000,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "deepseek-v4-flash" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "deepseek-v4-flash" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
     if (!downstream) {
@@ -682,13 +688,13 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       content: [{ type: "text", text: "hello" }],
       stopReason: "stop",
     };
-    controller.emit({ type: "start", partial } as any);
+    controller.emit({ type: "start", partial } as AnyEvent);
     controller.emit({
       type: "text_delta",
       contentIndex: 0,
       delta: "hello",
       partial,
-    } as any);
+    } as AnyEvent);
 
     // Simulate a delayed final chunk after a short (sub-timeout) quiet gap.
     await vi.advanceTimersByTimeAsync(2_000);
@@ -698,7 +704,7 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
       type: "done",
       reason: "stop",
       message: partial,
-    } as any);
+    } as AnyEvent);
 
     // Advance well past the idle timeout — wrapper should NOT have fired.
     await vi.advanceTimersByTimeAsync(10_000);
@@ -732,18 +738,22 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     });
 
     const idleTimeoutMs = 5_000;
-    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as ProviderStreamFn, {
       provider: "opencode-go",
       idleTimeoutMs,
     });
 
     const downstream = await Promise.resolve(
-      wrapper({ provider: "opencode-go", id: "glm-4.6" } as any, {} as any, {} as any),
+      wrapper(
+        { provider: "opencode-go", id: "glm-4.6" } as ProviderModel,
+        {} as ProviderContext,
+        {} as ProviderCallOptions,
+      ),
     );
     expect(downstream).toBeDefined();
-      if (!downstream) {
-        return;
-      }
+    if (!downstream) {
+      return;
+    }
 
     const received: AnyEvent[] = [];
     const consumer = (async () => {
@@ -755,31 +765,33 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     const partial = { role: "assistant", content: [{ type: "text", text: "x" }] };
 
     // Provider starts producing a tool-call turn. The last *delta* arms the idle timer.
-    controller.emit({ type: "start", partial } as any);
+    controller.emit({ type: "start", partial } as AnyEvent);
     controller.emit({
       type: "toolcall_delta",
       contentIndex: 0,
       delta: "{",
       partial,
-    } as any);
+    } as AnyEvent);
     await vi.advanceTimersByTimeAsync(0);
 
     // The model finalizes the tool call and deliberates on the next one,
     // emitting real block-boundary events that prove the SSE socket is alive.
     // Each gap is < idleTimeoutMs, so a liveness-aware watchdog must stay armed.
     await vi.advanceTimersByTimeAsync(3_000);
-    controller.emit({
-      type: "toolcall_end",
-      contentIndex: 0,
-      toolCall: { name: "f", arguments: "{}" },
-      partial,
-    } as any);
+    controller.emit(
+      asProviderEvent({
+        type: "toolcall_end",
+        contentIndex: 0,
+        toolCall: { name: "f", arguments: "{}" },
+        partial,
+      }),
+    );
     await vi.advanceTimersByTimeAsync(3_000);
     controller.emit({
       type: "toolcall_start",
       contentIndex: 1,
       partial,
-    } as any);
+    } as AnyEvent);
 
     // Advance to 5s after the last delta, but only 2s after the last
     // boundary event. The idle timer should have been re-armed by the
@@ -795,14 +807,14 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
         content: [{ type: "text", text: "final answer" }],
         stopReason: "stop",
       },
-    } as any);
+    } as AnyEvent);
     controller.end();
     await vi.advanceTimersByTimeAsync(0);
     await consumer;
 
     const hasDone = received.some((e) => e.type === "done");
     const hasStalledError = received.some(
-      (e) => e.type === "error" && (e as any).error?.stopReason === "error",
+      (e) => e.type === "error" && e.error?.stopReason === "error",
     );
 
     expect(abortCalled).toBe(false);

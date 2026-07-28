@@ -1,0 +1,18 @@
+title: WhatsApp parallel Gateway sends deliver every outbound message
+scenario:
+  id: whatsapp-outbound-send-serialization
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-text-sends
+  execution:
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-outbound-send-serialization }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppOutboundSendSerializationScenario
+  args: [{ expr: whatsappScenarioContext }]

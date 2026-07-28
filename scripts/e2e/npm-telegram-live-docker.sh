@@ -10,6 +10,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-npm-telegram-live-e2e" OPENCLAW
 DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
+PACKAGE_DIR="${OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR:-}"
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
 RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"
@@ -17,7 +18,8 @@ case "$OUTPUT_DIR" in
   /*) OUTPUT_DIR_HOST="$OUTPUT_DIR" ;;
   *) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;
 esac
-OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"
+OUTPUT_DIR_CONTAINER_RELATIVE=".artifacts/qa-e2e/npm-telegram-live-output"
+OUTPUT_DIR_CONTAINER="/app/$OUTPUT_DIR_CONTAINER_RELATIVE"
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -77,11 +79,59 @@ resolve_package_tgz() {
   printf "%s/%s" "$dir" "$base"
 }
 
+resolve_package_dir() {
+  local candidate="$1"
+  if [ -z "$candidate" ]; then
+    return 0
+  fi
+  if [ ! -d "$candidate" ]; then
+    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR must point to an existing directory; got: $candidate" >&2
+    exit 1
+  fi
+  (cd "$candidate" && pwd)
+}
+
+read_package_version() {
+  tar -xOf "$1" package/package.json |
+    node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => (raw += chunk));
+process.stdin.on("end", () => {
+  const version = JSON.parse(raw).version;
+  if (typeof version !== "string" || !version) {
+    throw new Error("package tarball is missing a version");
+  }
+  process.stdout.write(version);
+});
+'
+}
+
 package_mount_args=()
+registry_helper_mount_args=()
 package_install_source="$PACKAGE_SPEC"
 package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
-if [ -n "$resolved_package_tgz" ]; then
+resolved_package_dir="$(resolve_package_dir "$PACKAGE_DIR")"
+if [ -n "$resolved_package_dir" ]; then
+  if [ -z "$resolved_package_tgz" ]; then
+    echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR requires OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ" >&2
+    exit 1
+  fi
+  case "$resolved_package_tgz" in
+    "$resolved_package_dir"/*) ;;
+    *)
+      echo "OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ must be inside OPENCLAW_NPM_TELEGRAM_PACKAGE_DIR" >&2
+      exit 1
+      ;;
+  esac
+  package_install_source="openclaw@$(read_package_version "$resolved_package_tgz")"
+  package_source_kind="prepared-package-set"
+  package_mount_args=(-v "$resolved_package_dir:/package-under-test:ro")
+  registry_helper_mount_args=(
+    -v "$ROOT_DIR/scripts/e2e/lib/bounded-response-text.mjs:/tmp/openclaw-e2e/lib/bounded-response-text.mjs:ro"
+    -v "$ROOT_DIR/scripts/e2e/lib/plugins/npm-registry-server.mjs:/tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs:ro"
+  )
+elif [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
   package_source_kind="packed-tarball"
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
@@ -162,9 +212,15 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 mkdir -p "$OUTPUT_DIR_HOST"
-run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
-trap 'rm -f "$run_log"; rm -rf "$npm_prefix_host"' EXIT
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
+  rm -rf "$npm_prefix_host"
+  exit "$rc"
+}
+trap cleanup EXIT
 
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
@@ -172,7 +228,7 @@ docker_env=(
   -e TMPDIR=/tmp
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
-  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"
+  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER_RELATIVE"
   -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
   -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
   -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
@@ -233,22 +289,15 @@ for key in \
   forward_env_if_set "$key"
 done
 
-run_logged() {
-  if ! "$@" >"$run_log" 2>&1; then
-    docker_e2e_print_log "$run_log"
-    exit 1
-  fi
-  docker_e2e_print_log "$run_log"
-  >"$run_log"
-}
-
 echo "Running package Telegram live Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker_e2e_docker_run_cmd run --rm \
+run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_run_cmd run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
+  -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SET="$([ -n "$resolved_package_dir" ] && printf 1 || printf 0)" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
+  ${registry_helper_mount_args[@]+"${registry_helper_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
@@ -260,6 +309,74 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 echo "Installing ${package_label} from ${install_source}..."
+
+registry_pid=""
+registry_log=""
+cleanup_registry() {
+  if [ -n "$registry_pid" ]; then
+    kill "$registry_pid" >/dev/null 2>&1 || true
+    wait "$registry_pid" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$registry_log" ]; then
+    rm -f "$registry_log"
+  fi
+}
+trap cleanup_registry EXIT
+
+if [ "${OPENCLAW_NPM_TELEGRAM_PACKAGE_SET:-0}" = "1" ]; then
+  shopt -s nullglob
+  package_tgzs=(/package-under-test/*.tgz)
+  shopt -u nullglob
+  if [ "${#package_tgzs[@]}" -eq 0 ]; then
+    echo "prepared package set contains no tgz files" >&2
+    exit 1
+  fi
+  registry_args=()
+  for package_tgz in "${package_tgzs[@]}"; do
+    package_metadata="$(
+      tar -xOf "$package_tgz" package/package.json |
+        node -e '
+let raw = "";
+process.stdin.on("data", (chunk) => (raw += chunk));
+process.stdin.on("end", () => {
+  const pkg = JSON.parse(raw);
+  if (typeof pkg.name !== "string" || !pkg.name || typeof pkg.version !== "string" || !pkg.version) {
+    throw new Error("package tarball is missing name or version");
+  }
+  process.stdout.write(`${pkg.name}\n${pkg.version}\n`);
+});
+'
+    )"
+    mapfile -t package_fields <<<"$package_metadata"
+    registry_args+=("${package_fields[0]}" "${package_fields[1]}" "$package_tgz")
+  done
+  registry_port_file="$(mktemp)"
+  registry_log="$(mktemp)"
+  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+    node /tmp/openclaw-e2e/lib/plugins/npm-registry-server.mjs \
+    "$registry_port_file" \
+    "${registry_args[@]}" >"$registry_log" 2>&1 &
+  registry_pid=$!
+  for _ in $(seq 1 100); do
+    if [ -s "$registry_port_file" ]; then
+      break
+    fi
+    if ! kill -0 "$registry_pid" >/dev/null 2>&1; then
+      cat "$registry_log" >&2
+      exit 1
+    fi
+    sleep 0.1
+  done
+  if [ ! -s "$registry_port_file" ]; then
+    cat "$registry_log" >&2
+    echo "prepared package registry did not start" >&2
+    exit 1
+  fi
+  registry_url="http://127.0.0.1:$(cat "$registry_port_file")"
+  rm -f "$registry_port_file"
+  export NPM_CONFIG_REGISTRY="$registry_url"
+  export npm_config_registry="$registry_url"
+fi
 
 npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
 run_npm_install() {
@@ -293,17 +410,19 @@ EOF
 
 # Mount only QA harness source; the SUT itself, including bundled plugin runtime,
 # is the installed package candidate.
-run_logged docker_e2e_run_with_harness \
+run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
+  -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 
-export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"
+runtime_home="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"
+export HOME="$runtime_home"
 export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENCLAW_NPM_TELEGRAM_REPO_ROOT="/app"
@@ -387,9 +506,16 @@ for dependency in \
 done
 
 if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
+  hotpath_home="$(mktemp -d "/tmp/openclaw-npm-telegram-hotpath.XXXXXX")"
+  export HOME="$hotpath_home"
   echo "Running installed-package onboarding recovery hot path..."
-  hotpath_openai_api_key="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}"
-  OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard \
+  hotpath_placeholder="openclaw-npm-telegram-hotpath"
+  hotpath_model_value="$(printf '%s%s' s "k-$hotpath_placeholder")"
+  if [ -n "${OPENAI_API_KEY:-}" ]; then
+    hotpath_model_value="$OPENAI_API_KEY"
+  fi
+  hotpath_channel_value="$(printf '%s:%s' 123456 "$hotpath_placeholder")"
+  OPENAI_API_KEY="$hotpath_model_value" openclaw_e2e_run_command openclaw onboard \
     --non-interactive --accept-risk \
     --mode local \
     --auth-choice openai-api-key \
@@ -402,9 +528,10 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     --skip-health \
     --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
 
-  openclaw_e2e_run_command openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw channels add --channel telegram --token "$hotpath_channel_value" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
   openclaw_e2e_run_command openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
   openclaw_e2e_run_command openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
+  export HOME="$runtime_home"
 fi
 
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"

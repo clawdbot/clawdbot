@@ -1,10 +1,10 @@
 // Qqbot plugin module implements sqlite state behavior.
-import crypto from "node:crypto";
 import type {
   OpenKeyedStoreOptions,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getQQBotRuntime } from "../../bridge/runtime.js";
+export { buildQQBotStateKey } from "./state-keys.js";
 
 type QQBotSyncStoreOptions = OpenKeyedStoreOptions & {
   stateDir?: string;
@@ -29,8 +29,4 @@ export function openQQBotSyncKeyedStore<T>(
     ...(options.defaultTtlMs != null ? { defaultTtlMs: options.defaultTtlMs } : {}),
     ...(resolveStoreEnv(options) ? { env: resolveStoreEnv(options) } : {}),
   });
-}
-
-export function buildQQBotStateKey(...parts: string[]): string {
-  return crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }

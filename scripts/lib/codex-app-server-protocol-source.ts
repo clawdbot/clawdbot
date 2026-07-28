@@ -2,7 +2,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { resolvePnpmRunner } from "../pnpm-runner.mjs";
+import { stageCodexAppServerProtocolArtifacts } from "./codex-app-server-protocol-artifacts.js";
 
 const PROTOCOL_SCHEMA_RELATIVE_PATH = "codex-rs/app-server-protocol/schema";
 const DEFAULT_PROTOCOL_GENERATION_MIN_FREE_BYTES = 10 * 1024 * 1024 * 1024;
@@ -18,7 +20,7 @@ export const selectedCodexAppServerJsonSchemas = [
   "v2/TurnStartResponse.json",
 ] as const;
 
-export type GeneratedCodexAppServerProtocolSource = {
+type GeneratedCodexAppServerProtocolSource = {
   root: string;
   codexRepo: string;
   typescriptRoot: string;
@@ -158,6 +160,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   repoRoot = process.cwd(),
 ): Promise<GeneratedCodexAppServerProtocolSource> {
   const { codexRepo } = await resolveCodexAppServerProtocolSource(repoRoot);
+  await validateCodexProtocolSourceVersion({ codexRepo, repoRoot });
   const root = await fs.mkdtemp(path.join(repoRoot, ".tmp-codex-app-server-protocol-"));
   const generatedRoot = path.join(root, "generated");
   const typescriptRoot = path.join(root, "typescript");
@@ -170,8 +173,7 @@ export async function generateExperimentalCodexAppServerProtocolSource(
   try {
     await assertCodexProtocolGenerationHeadroom({ codexRepo, repoRoot });
     runCargoProtocolGenerator(codexRepo, buildCodexProtocolExportArgs(manifestPath, generatedRoot));
-    await splitGeneratedProtocolOutput(generatedRoot, { jsonRoot, typescriptRoot });
-    await rewriteTypeScriptImports(typescriptRoot);
+    await stageCodexAppServerProtocolArtifacts(generatedRoot, { jsonRoot, typescriptRoot });
     formatGeneratedTypeScript(repoRoot, typescriptRoot);
   } catch (error) {
     await cleanup();
@@ -185,6 +187,41 @@ export async function generateExperimentalCodexAppServerProtocolSource(
     jsonRoot,
     cleanup,
   };
+}
+
+export function readCargoWorkspacePackageVersion(manifest: string): string | undefined {
+  const header = /^\s*\[workspace\.package\]\s*(?:#.*)?$/m.exec(manifest);
+  if (!header) {
+    return undefined;
+  }
+  const remainder = manifest.slice(header.index + header[0].length);
+  const nextSection = /^\s*\[/m.exec(remainder);
+  const workspacePackage = remainder.slice(0, nextSection?.index ?? remainder.length);
+  return /^\s*version\s*=\s*"([^"]+)"\s*(?:#.*)?$/m.exec(workspacePackage)?.[1];
+}
+
+export async function validateCodexProtocolSourceVersion(params: {
+  codexRepo: string;
+  repoRoot: string;
+}): Promise<void> {
+  const packageManifest = JSON.parse(
+    await fs.readFile(path.join(params.repoRoot, "extensions/codex/package.json"), "utf8"),
+  ) as { dependencies?: Record<string, unknown> };
+  const expectedVersion = packageManifest.dependencies?.["@openai/codex"];
+  if (typeof expectedVersion !== "string" || expectedVersion.length === 0) {
+    throw new Error("extensions/codex/package.json must pin @openai/codex to an exact version");
+  }
+
+  const cargoManifest = await fs.readFile(
+    path.join(params.codexRepo, "codex-rs/Cargo.toml"),
+    "utf8",
+  );
+  const sourceVersion = readCargoWorkspacePackageVersion(cargoManifest);
+  if (sourceVersion !== expectedVersion) {
+    throw new Error(
+      `Codex protocol source version ${sourceVersion ?? "<unknown>"} does not match @openai/codex ${expectedVersion}. Check out rust-v${expectedVersion} in ${params.codexRepo}.`,
+    );
+  }
 }
 
 async function collectCodexRepoCandidates(repoRoot: string): Promise<string[]> {
@@ -210,7 +247,7 @@ async function resolvePrimaryWorktreeSiblingCodex(repoRoot: string): Promise<str
     return undefined;
   }
 
-  const gitDir = path.resolve(repoRoot, match[1].trim());
+  const gitDir = path.resolve(repoRoot, expectDefined(match[1], "gitdir target").trim());
   const worktreeMarker = `${path.sep}.git${path.sep}worktrees${path.sep}`;
   const markerIndex = gitDir.indexOf(worktreeMarker);
   if (markerIndex < 0) {
@@ -280,52 +317,14 @@ async function resolveExistingStatfsPath(targetPath: string): Promise<string> {
   }
 }
 
-async function splitGeneratedProtocolOutput(
-  sourceRoot: string,
-  roots: { jsonRoot: string; typescriptRoot: string },
-): Promise<void> {
-  await copyGeneratedProtocolFiles(sourceRoot, sourceRoot, roots);
-}
-
-async function copyGeneratedProtocolFiles(
-  sourceRoot: string,
-  currentRoot: string,
-  roots: { jsonRoot: string; typescriptRoot: string },
-): Promise<void> {
-  const entries = await fs.readdir(currentRoot, { withFileTypes: true });
-  await Promise.all(
-    entries.map(async (entry) => {
-      const sourcePath = path.join(currentRoot, entry.name);
-      if (entry.isDirectory()) {
-        await copyGeneratedProtocolFiles(sourceRoot, sourcePath, roots);
-        return;
-      }
-      if (!entry.isFile()) {
-        return;
-      }
-
-      const relativePath = path.relative(sourceRoot, sourcePath);
-      const targetRoot = entry.name.endsWith(".ts")
-        ? roots.typescriptRoot
-        : entry.name.endsWith(".json")
-          ? roots.jsonRoot
-          : null;
-      if (targetRoot === null) {
-        return;
-      }
-
-      const targetPath = path.join(targetRoot, relativePath);
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-      await fs.copyFile(sourcePath, targetPath);
-    }),
-  );
-}
-
 function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
   const result = spawnSync("cargo", args, {
     cwd: codexRepo,
     stdio: "inherit",
   });
+  if (result.error) {
+    throw new Error(`Failed to start cargo: ${result.error.message}`, { cause: result.error });
+  }
   if (result.status !== 0) {
     throw new Error(`cargo ${args.join(" ")} failed with exit code ${result.status ?? "unknown"}`);
   }
@@ -346,6 +345,11 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
     stdio: "inherit",
     windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
+  if (result.error) {
+    throw new Error(`Failed to start protocol formatter: ${result.error.message}`, {
+      cause: result.error,
+    });
+  }
   if (result.status !== 0) {
     throw new Error(
       `pnpm exec oxfmt --write --threads=1 ${root} failed with exit code ${
@@ -353,31 +357,6 @@ function formatGeneratedTypeScript(repoRoot: string, root: string): void {
       }`,
     );
   }
-}
-
-export async function rewriteTypeScriptImports(root: string): Promise<void> {
-  const entries = await fs.readdir(root, { withFileTypes: true });
-  await Promise.all(
-    entries.map(async (entry) => {
-      const fullPath = path.join(root, entry.name);
-      if (entry.isDirectory()) {
-        await rewriteTypeScriptImports(fullPath);
-        return;
-      }
-      if (!entry.isFile() || !entry.name.endsWith(".ts")) {
-        return;
-      }
-      const text = await fs.readFile(fullPath, "utf8");
-      await fs.writeFile(fullPath, normalizeGeneratedTypeScript(text));
-    }),
-  );
-}
-
-export function normalizeGeneratedTypeScript(text: string): string {
-  return text
-    .replace(/(from\s+["'])(\.{1,2}\/[^"']+?)(\.js)?(["'])/g, "$1$2.js$4")
-    .replace('export * as v2 from "./v2.js";', 'export * as v2 from "./v2/index.js";')
-    .replaceAll("| null | null", "| null");
 }
 
 // Sort typed-object arrays for schema keywords whose item order does not affect

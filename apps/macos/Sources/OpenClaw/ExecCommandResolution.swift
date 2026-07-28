@@ -1,22 +1,38 @@
+import CryptoKit
 import Foundation
+
+struct ExecAllowAlwaysPattern: Sendable, Hashable {
+    let pattern: String
+    let argPattern: String?
+
+    init(pattern: String, argPattern: String? = nil) {
+        self.pattern = pattern
+        self.argPattern = argPattern
+    }
+}
 
 struct ExecCommandResolution {
     let rawExecutable: String
     let resolvedPath: String?
+    let resolvedRealPath: String?
     let executableName: String
     let cwd: String?
+    let argv: [String]?
 
-    static func resolve(
-        command: [String],
-        rawCommand: String?,
+    init(
+        rawExecutable: String,
+        resolvedPath: String?,
+        resolvedRealPath: String? = nil,
+        executableName: String,
         cwd: String?,
-        env: [String: String]?) -> ExecCommandResolution?
+        argv: [String]? = nil)
     {
-        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedRaw.isEmpty, let token = self.parseFirstToken(trimmedRaw) {
-            return self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
-        }
-        return self.resolve(command: command, cwd: cwd, env: env)
+        self.rawExecutable = rawExecutable
+        self.resolvedPath = resolvedPath
+        self.resolvedRealPath = resolvedRealPath
+        self.executableName = executableName
+        self.cwd = cwd
+        self.argv = argv
     }
 
     static func resolveForAllowlist(
@@ -36,7 +52,7 @@ struct ExecCommandResolution {
                 return []
             }
             guard let shellCommand = shell.command,
-                  let segments = self.splitShellCommandChain(shellCommand)
+                  let segments = splitShellCommandChain(shellCommand)
             else {
                 // Fail closed: if we cannot safely parse a shell wrapper payload,
                 // treat this as an allowlist miss and require approval.
@@ -45,7 +61,7 @@ struct ExecCommandResolution {
             var resolutions: [ExecCommandResolution] = []
             resolutions.reserveCapacity(segments.count)
             for segment in segments {
-                guard let resolution = self.resolveShellSegmentExecutable(segment, cwd: cwd, env: env)
+                guard let resolution = resolveShellSegmentExecutable(segment, cwd: cwd, env: env)
                 else {
                     return []
                 }
@@ -54,9 +70,8 @@ struct ExecCommandResolution {
             return resolutions
         }
 
-        guard let resolution = self.resolveForAllowlistCommand(
+        guard let resolution = resolveForAllowlistCommand(
             command: command,
-            rawCommand: rawCommand,
             cwd: cwd,
             env: env)
         else {
@@ -69,10 +84,10 @@ struct ExecCommandResolution {
         command: [String],
         cwd: String?,
         env: [String: String]?,
-        rawCommand: String? = nil) -> [String]
+        rawCommand: String? = nil) -> [ExecAllowAlwaysPattern]
     {
-        var patterns: [String] = []
-        var seen = Set<String>()
+        var patterns: [ExecAllowAlwaysPattern] = []
+        var seen = Set<ExecAllowAlwaysPattern>()
         self.collectAllowAlwaysPatterns(
             command: command,
             cwd: cwd,
@@ -84,33 +99,140 @@ struct ExecCommandResolution {
         return patterns
     }
 
+    /// Reusable authorization must execute the same canonical executable that
+    /// was matched. A non-login `sh -c` transport may bind a static command
+    /// directly; login shells and other modes stay gated.
+    static func bindForAllowlistExecution(
+        command: [String],
+        rawCommand: String?,
+        resolutions: [ExecCommandResolution]) -> [String]?
+    {
+        let shell = ExecShellWrapperParser.extractForAllowlist(
+            command: command,
+            rawCommand: rawCommand)
+        guard resolutions.count == 1,
+              let resolution = resolutions.first,
+              let argv = resolution.argv,
+              !argv.isEmpty
+        else { return nil }
+
+        if shell.isWrapper {
+            guard let payload = self.staticNodeShellPayload(command: command, parsed: shell),
+                  self.tokenizeShellWords(payload) == argv
+            else { return nil }
+        }
+
+        guard let realPath = resolution.resolvedRealPath,
+              FileManager().isExecutableFile(atPath: realPath)
+        else { return nil }
+        guard !self.isUnsafeReusableExecutionTarget(resolution) else { return nil }
+        return [realPath] + Array(argv.dropFirst())
+    }
+
+    /// Bind only the static non-login transport. Login startup files execute
+    /// outside the matched argv, and other shell modes change semantics.
+    private static func staticNodeShellPayload(
+        command: [String],
+        parsed: ExecShellWrapperParser.ParsedShellWrapper) -> String?
+    {
+        guard command.count == 3,
+              ExecCommandToken.basenameLower(command[0]) == "sh",
+              command[1] == "-c",
+              let payload = parsed.command,
+              self.isStaticShellPayload(payload),
+              !self.hasLeadingShellAssignment(payload),
+              splitShellCommandChain(payload)?.count == 1
+        else { return nil }
+        return payload
+    }
+
+    private static func hasLeadingShellAssignment(_ payload: String) -> Bool {
+        guard let first = self.tokenizeShellWords(payload).first else { return false }
+        return first.range(
+            of: #"^[A-Za-z_][A-Za-z0-9_]*\+?="#,
+            options: .regularExpression) != nil
+    }
+
+    private static func isStaticShellPayload(_ payload: String) -> Bool {
+        var inSingle = false
+        var inDouble = false
+        var escaped = false
+        let chars = Array(payload)
+
+        for idx in chars.indices {
+            let ch = chars[idx]
+            if escaped {
+                if ch == "\n" {
+                    return false
+                }
+                if inDouble, ch != "$", ch != "`", ch != "\"", ch != "\\" {
+                    // POSIX double quotes preserve the backslash here, while
+                    // our argv tokenizer removes it. Reject semantic drift.
+                    return false
+                }
+                escaped = false
+                continue
+            }
+            if ch == "\\", !inSingle {
+                escaped = true
+                continue
+            }
+            if ch == "'", !inDouble {
+                inSingle.toggle()
+                continue
+            }
+            if ch == "\"", !inSingle {
+                inDouble.toggle()
+                continue
+            }
+            if inSingle {
+                continue
+            }
+            if ch == "$" || ch == "`" {
+                return false
+            }
+            if !inDouble,
+               "*?[]<>|&;\n{}()#~!".contains(ch)
+            {
+                return false
+            }
+        }
+        return !escaped && !inSingle && !inDouble
+    }
+
+    static func isUnsafeReusableExecutionTarget(_ resolution: ExecCommandResolution) -> Bool {
+        [resolution.rawExecutable, resolution.resolvedPath, resolution.resolvedRealPath]
+            .compactMap(\.self)
+            .map(ExecCommandToken.basenameLower)
+            .contains {
+                ExecShellWrapperParser.isShellWrapperExecutable($0) ||
+                    self.unsafeReusableDispatchCarrierNames.contains($0)
+            }
+    }
+
     static func resolve(command: [String], cwd: String?, env: [String: String]?) -> ExecCommandResolution? {
         let effective = ExecEnvInvocationUnwrapper.unwrapTransparentDispatchWrappersForResolution(command)
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
-        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+        return self.resolveExecutable(rawExecutable: raw, argv: effective, cwd: cwd, env: env)
     }
 
     private static func resolveForAllowlistCommand(
         command: [String],
-        rawCommand: String?,
         cwd: String?,
         env: [String: String]?) -> ExecCommandResolution?
     {
-        let trimmedRaw = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmedRaw.isEmpty, let token = self.parseFirstToken(trimmedRaw) {
-            return self.resolveExecutable(rawExecutable: token, cwd: cwd, env: env)
-        }
         let effective = ExecEnvInvocationUnwrapper.unwrapDispatchWrappersForResolution(command)
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
-        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+        return self.resolveExecutable(rawExecutable: raw, argv: effective, cwd: cwd, env: env)
     }
 
     private static func resolveExecutable(
         rawExecutable: String,
+        argv: [String]?,
         cwd: String?,
         env: [String: String]?) -> ExecCommandResolution?
     {
@@ -128,12 +250,18 @@ struct ExecCommandResolution {
             let searchPaths = self.searchPaths(from: env)
             return CommandResolver.findExecutable(named: expanded, searchPaths: searchPaths)
         }()
-        let name = resolvedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
+        let normalizedPath = resolvedPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        let resolvedRealPath = normalizedPath.map {
+            URL(fileURLWithPath: $0).resolvingSymlinksInPath().standardizedFileURL.path
+        }
+        let name = normalizedPath.map { URL(fileURLWithPath: $0).lastPathComponent } ?? expanded
         return ExecCommandResolution(
             rawExecutable: expanded,
-            resolvedPath: resolvedPath,
+            resolvedPath: normalizedPath,
+            resolvedRealPath: resolvedRealPath,
             executableName: name,
-            cwd: cwd)
+            cwd: cwd,
+            argv: argv)
     }
 
     private static func resolveShellSegmentExecutable(
@@ -147,7 +275,7 @@ struct ExecCommandResolution {
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
-        return self.resolveExecutable(rawExecutable: raw, cwd: cwd, env: env)
+        return self.resolveExecutable(rawExecutable: raw, argv: effective, cwd: cwd, env: env)
     }
 
     private static func collectAllowAlwaysPatterns(
@@ -156,8 +284,8 @@ struct ExecCommandResolution {
         env: [String: String]?,
         rawCommand: String?,
         depth: Int,
-        patterns: inout [String],
-        seen: inout Set<String>)
+        patterns: inout [ExecAllowAlwaysPattern],
+        seen: inout Set<ExecAllowAlwaysPattern>)
     {
         guard depth < 3, !command.isEmpty else {
             return
@@ -184,7 +312,7 @@ struct ExecCommandResolution {
             return
         }
 
-        if let shellMultiplexer = self.unwrapShellMultiplexerInvocation(command) {
+        if let shellMultiplexer = unwrapShellMultiplexerInvocation(command) {
             self.collectAllowAlwaysPatterns(
                 command: shellMultiplexer,
                 cwd: cwd,
@@ -199,7 +327,7 @@ struct ExecCommandResolution {
         let shell = ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand)
         if shell.isWrapper {
             guard let shellCommand = shell.command,
-                  let segments = self.splitShellCommandChain(shellCommand)
+                  let segments = splitShellCommandChain(shellCommand)
             else {
                 return
             }
@@ -220,14 +348,55 @@ struct ExecCommandResolution {
             return
         }
 
-        guard let resolution = self.resolve(command: command, cwd: cwd, env: env),
-              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution),
-              seen.insert(pattern).inserted
+        guard let resolution = resolve(command: command, cwd: cwd, env: env),
+              !self.isInterpreterLikePersistentGrantTarget(resolution),
+              let pattern = ExecApprovalHelpers.allowlistPattern(command: command, resolution: resolution)
         else {
             return
         }
-        patterns.append(pattern)
+        let candidate = ExecAllowAlwaysPattern(
+            pattern: pattern,
+            argPattern: self.hashedArgPattern(argv: command))
+        guard seen.insert(candidate).inserted else { return }
+        patterns.append(candidate)
     }
+
+    private static func hashedArgPattern(argv: [String]) -> String {
+        let arguments = Array(argv.dropFirst())
+        let subject = "\(arguments.count)\0" + arguments
+            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .joined()
+        let digest = SHA256.hash(data: Data(subject.utf8))
+        return "sha256:argv:" + digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Path-only durable grants are too broad for tools that can execute code
+    /// from ordinary argv. This mirrors the node host's default allow-always
+    /// policy; users may still configure an explicit manual rule.
+    static func isInterpreterLikePersistentGrantTarget(_ resolution: ExecCommandResolution) -> Bool {
+        [resolution.rawExecutable, resolution.resolvedPath, resolution.resolvedRealPath]
+            .compactMap(\.self)
+            .map(ExecCommandToken.basenameLower)
+            .contains(where: self.isInterpreterLikeName)
+    }
+
+    private static func isInterpreterLikeName(_ value: String) -> Bool {
+        let normalized = value.hasSuffix(".exe") ? String(value.dropLast(4)) : value
+        if self.interpreterLikePersistentGrantNames.contains(normalized) {
+            return true
+        }
+        let stripped = normalized.replacingOccurrences(
+            of: #"-?\d+(?:\.\d+)*$"#,
+            with: "",
+            options: .regularExpression)
+        return stripped.count >= 2 && self.interpreterLikePersistentGrantNames.contains(stripped)
+    }
+
+    private static let interpreterLikePersistentGrantNames = Set([
+        "awk", "bun", "deno", "find", "gawk", "gmake", "gsed", "lua", "make", "mawk", "nawk",
+        "node", "nodejs", "osascript", "perl", "php", "pypy", "pypy3", "python", "python2", "python3",
+        "r", "rscript", "ruby", "sed", "xargs",
+    ])
 
     private static func isAllowlistShellWrapper(command: [String], rawCommand: String?) -> Bool {
         ExecShellWrapperParser.extractForAllowlist(command: command, rawCommand: rawCommand).isWrapper
@@ -272,22 +441,38 @@ struct ExecCommandResolution {
         return Array(argv[appletIndex...])
     }
 
-    private static func parseFirstToken(_ command: String) -> String? {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard let first = trimmed.first else { return nil }
-        if first == "\"" || first == "'" {
-            let rest = trimmed.dropFirst()
-            if let end = rest.firstIndex(of: first) {
-                return String(rest[..<end])
-            }
-            return String(rest)
-        }
-        return trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init)
-    }
+    private static let unsafeReusableDispatchCarrierNames = Set([
+        "arch",
+        "busybox",
+        "bun",
+        "bunx",
+        "caffeinate",
+        "chrt",
+        "deno",
+        "doas",
+        "env",
+        "flock",
+        "ionice",
+        "nice",
+        "nohup",
+        "npm",
+        "npx",
+        "pnpm",
+        "sandbox-exec",
+        "script",
+        "setsid",
+        "stdbuf",
+        "sudo",
+        "taskset",
+        "time",
+        "timeout",
+        "toybox",
+        "xcrun",
+        "yarn",
+    ])
 
     private static func tokenizeShellWords(_ command: String) -> [String] {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = self.trimmingShellWordSeparators(command)
         guard !trimmed.isEmpty else { return [] }
 
         var tokens: [String] = []
@@ -295,48 +480,71 @@ struct ExecCommandResolution {
         var inSingle = false
         var inDouble = false
         var escaped = false
+        var tokenStarted = false
 
         func appendCurrent() {
-            guard !current.isEmpty else { return }
+            guard tokenStarted else { return }
             tokens.append(current)
             current.removeAll(keepingCapacity: true)
+            tokenStarted = false
         }
 
         for ch in trimmed {
             if escaped {
                 current.append(ch)
+                tokenStarted = true
                 escaped = false
                 continue
             }
 
             if ch == "\\", !inSingle {
+                tokenStarted = true
                 escaped = true
                 continue
             }
 
             if ch == "'", !inDouble {
+                tokenStarted = true
                 inSingle.toggle()
                 continue
             }
 
             if ch == "\"", !inSingle {
+                tokenStarted = true
                 inDouble.toggle()
                 continue
             }
 
-            if ch.isWhitespace, !inSingle, !inDouble {
+            if self.isShellWordSeparator(ch), !inSingle, !inDouble {
                 appendCurrent()
                 continue
             }
 
             current.append(ch)
+            tokenStarted = true
         }
 
-        if escaped {
-            current.append("\\")
-        }
+        if escaped { current.append("\\") }
         appendCurrent()
         return tokens
+    }
+
+    private static func isShellWordSeparator(_ ch: Character) -> Bool {
+        ch == " " || ch == "\t" || ch == "\n"
+    }
+
+    private static func trimmingShellWordSeparators(_ value: String) -> String {
+        var start = value.startIndex
+        while start < value.endIndex, self.isShellWordSeparator(value[start]) {
+            value.formIndex(after: &start)
+        }
+        var end = value.endIndex
+        while end > start {
+            let previous = value.index(before: end)
+            guard self.isShellWordSeparator(value[previous]) else { break }
+            end = previous
+        }
+        return String(value[start..<end])
     }
 
     private enum ShellTokenContext {
@@ -363,7 +571,7 @@ struct ExecCommandResolution {
     ]
 
     private static func splitShellCommandChain(_ command: String) -> [String]? {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = self.trimmingShellWordSeparators(command)
         guard !trimmed.isEmpty else { return nil }
 
         var segments: [String] = []
@@ -375,7 +583,7 @@ struct ExecCommandResolution {
         var idx = 0
 
         func appendCurrent() -> Bool {
-            let segment = current.trimmingCharacters(in: .whitespacesAndNewlines)
+            let segment = self.trimmingShellWordSeparators(current)
             guard !segment.isEmpty else { return false }
             segments.append(segment)
             current.removeAll(keepingCapacity: true)
@@ -432,7 +640,7 @@ struct ExecCommandResolution {
 
             if !inSingle, !inDouble {
                 let prev: Character? = idx > 0 ? chars[idx - 1] : nil
-                if let delimiterStep = self.chainDelimiterStep(ch: ch, prev: prev, next: next) {
+                if let delimiterStep = chainDelimiterStep(ch: ch, prev: prev, next: next) {
                     guard appendCurrent() else { return nil }
                     idx += delimiterStep
                     continue
@@ -443,7 +651,9 @@ struct ExecCommandResolution {
             idx += 1
         }
 
-        if escaped || inSingle || inDouble { return nil }
+        if escaped || inSingle || inDouble {
+            return nil
+        }
         guard appendCurrent() else { return nil }
         return segments
     }
@@ -469,7 +679,7 @@ struct ExecCommandResolution {
 
     private static func shouldFailClosedForShell(ch: Character, next: Character?, inDouble: Bool) -> Bool {
         let context: ShellTokenContext = inDouble ? .doubleQuoted : .unquoted
-        guard let rules = self.shellFailClosedRules[context] else {
+        guard let rules = shellFailClosedRules[context] else {
             return false
         }
         for rule in rules {
@@ -512,20 +722,53 @@ struct ExecCommandResolution {
 }
 
 enum ExecCommandFormatter {
+    private static let safeDisplayScalars = CharacterSet(
+        charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_@%+=:,./-")
+
     static func displayString(for argv: [String]) -> String {
         argv.map { arg in
-            let trimmed = arg.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return "\"\"" }
-            let needsQuotes = trimmed.contains { $0.isWhitespace || $0 == "\"" }
-            if !needsQuotes { return trimmed }
-            let escaped = trimmed.replacingOccurrences(of: "\"", with: "\\\"")
-            return "\"\(escaped)\""
+            guard !arg.isEmpty else { return "\"\"" }
+            if arg.unicodeScalars.allSatisfy({ self.safeDisplayScalars.contains($0) }) {
+                return arg
+            }
+            return "\"\(self.escapeDisplayArg(arg))\""
         }.joined(separator: " ")
+    }
+
+    static func legacyDisplayString(for argv: [String]) -> String {
+        argv.map { arg in
+            guard !arg.isEmpty else { return "\"\"" }
+            let needsQuotes = arg.contains { $0.isWhitespace || $0 == "\"" }
+            guard needsQuotes else { return arg }
+            return "\"\(arg.replacingOccurrences(of: "\"", with: "\\\""))\""
+        }.joined(separator: " ")
+    }
+
+    private static func escapeDisplayArg(_ arg: String) -> String {
+        var escaped = ""
+        for scalar in arg.unicodeScalars {
+            switch scalar.value {
+            case 0x5C: escaped += "\\\\"
+            case 0x22: escaped += "\\\""
+            case 0x08: escaped += "\\b"
+            case 0x0C: escaped += "\\f"
+            case 0x0A: escaped += "\\n"
+            case 0x0D: escaped += "\\r"
+            case 0x09: escaped += "\\t"
+            case 0x00...0x1F, 0x7F:
+                escaped += "\\u{\(String(scalar.value, radix: 16, uppercase: true))}"
+            default:
+                escaped.append(String(scalar))
+            }
+        }
+        return escaped
     }
 
     static func displayString(for argv: [String], rawCommand: String?) -> String {
         let trimmed = rawCommand?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !trimmed.isEmpty { return trimmed }
+        if !trimmed.isEmpty {
+            return trimmed
+        }
         return self.displayString(for: argv)
     }
 }

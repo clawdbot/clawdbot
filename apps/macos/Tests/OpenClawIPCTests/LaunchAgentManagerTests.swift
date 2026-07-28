@@ -3,6 +3,18 @@ import Testing
 @testable import OpenClaw
 
 struct LaunchAgentManagerTests {
+    @Test func `enabling an already loaded login job only refreshes its plist`() async {
+        var persistedBundlePaths: [String] = []
+        let reloaded = await LaunchAgentManager.set(
+            enabled: true,
+            bundlePath: "/Applications/OpenClaw.app",
+            loaded: true,
+            writePlist: { persistedBundlePaths.append($0) })
+
+        #expect(reloaded == false)
+        #expect(persistedBundlePaths == ["/Applications/OpenClaw.app"])
+    }
+
     @Test func `launch at login plist does not keep app alive after manual quit`() throws {
         let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
         let data = try #require(plist.data(using: .utf8))

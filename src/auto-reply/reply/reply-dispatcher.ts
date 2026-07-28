@@ -13,6 +13,7 @@ import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type {
   ReplyDispatchBeforeDeliver,
+  ReplyDispatchBeforeDeliverOptions,
   ReplyDispatchKind,
   ReplyDispatchRuntimeInfo,
   ReplyDispatcher,
@@ -20,8 +21,6 @@ import type {
 } from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
-
-export type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
 
 type ReplyDispatchErrorHandler = (
   err: unknown,
@@ -38,6 +37,18 @@ type ReplyDispatchCancelHandler = (
   info: ReplyDispatchRuntimeInfo,
 ) => Promise<void> | void;
 
+export type ReplyDispatchDeliveryOutcome =
+  | "delivered"
+  | "cancelled"
+  | "failed-before-deliver"
+  | "failed-deliver";
+
+type ReplyDispatchDeliveryOutcomeTracker = {
+  promise: Promise<ReplyDispatchDeliveryOutcome>;
+  resolve: (outcome: ReplyDispatchDeliveryOutcome) => void;
+  tracked: boolean;
+};
+
 type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: ReplyDispatchRuntimeInfo,
@@ -47,7 +58,166 @@ export type { ReplyDispatchBeforeDeliver };
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const DEFAULT_BEFORE_DELIVER_TIMEOUT_MS = 15_000;
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
+const beforeDeliverCancelledHooks = new WeakMap<ReplyDispatcher, ReplyDispatchCancelHandler[]>();
+const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
+
+type ReplyDispatchBeforeDeliverStage = {
+  hook: ReplyDispatchBeforeDeliver;
+  timeoutMs?: number;
+};
+
+type ReplyDispatchBeforeDeliverStageInput =
+  | ReplyDispatchBeforeDeliver
+  | {
+      hook: ReplyDispatchBeforeDeliver;
+      options?: ReplyDispatchBeforeDeliverOptions;
+    }
+  | undefined;
+
+const beforeDeliverStagesByHook = new WeakMap<
+  ReplyDispatchBeforeDeliver,
+  readonly ReplyDispatchBeforeDeliverStage[]
+>();
+
+class ReplyDispatchBeforeDeliverTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`beforeDeliver timed out after ${timeoutMs}ms`);
+    this.name = "ReplyDispatchBeforeDeliverTimeoutError";
+  }
+}
+
+function resolveReplyDispatchBeforeDeliverTimeoutMs(
+  options: ReplyDispatchBeforeDeliverOptions | undefined,
+): number {
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_BEFORE_DELIVER_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError("beforeDeliver timeoutMs must be a positive finite number");
+  }
+  return timeoutMs;
+}
+
+async function runReplyDispatchBeforeDeliverStage(
+  stage: ReplyDispatchBeforeDeliverStage,
+  payload: ReplyPayload,
+  info: ReplyDispatchRuntimeInfo,
+): Promise<ReplyPayload | null> {
+  const timeoutMs = stage.timeoutMs;
+  if (!timeoutMs) {
+    return await stage.hook(payload, info);
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // The hook promise cannot be cancelled. The deadline releases the serialized
+  // delivery owner; Promise.race still observes any late rejection.
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new ReplyDispatchBeforeDeliverTimeoutError(timeoutMs)),
+      timeoutMs,
+    );
+    timer.unref?.();
+  });
+  try {
+    return await Promise.race([Promise.resolve(stage.hook(payload, info)), timeout]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function resolveReplyDispatchBeforeDeliverStages(
+  input: ReplyDispatchBeforeDeliverStageInput,
+): readonly ReplyDispatchBeforeDeliverStage[] {
+  if (!input) {
+    return [];
+  }
+  if (typeof input === "function") {
+    return (
+      beforeDeliverStagesByHook.get(input) ?? [
+        { hook: input, timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS },
+      ]
+    );
+  }
+  const existingStages = beforeDeliverStagesByHook.get(input.hook);
+  // Internal composition already assigned each real stage its owner budget.
+  // Wrapping that chain again would turn one stage budget into an aggregate deadline.
+  if (existingStages) {
+    return existingStages;
+  }
+  return [
+    {
+      hook: input.hook,
+      timeoutMs: resolveReplyDispatchBeforeDeliverTimeoutMs(input.options),
+    },
+  ];
+}
+
+/** Compose core delivery stages while retaining a separate deadline for each actual hook. */
+export function composeReplyDispatchBeforeDeliver(
+  ...hooks: ReplyDispatchBeforeDeliverStageInput[]
+): ReplyDispatchBeforeDeliver | undefined {
+  const stages: ReplyDispatchBeforeDeliverStage[] = [];
+  for (const hook of hooks) {
+    if (hook) {
+      stages.push(...resolveReplyDispatchBeforeDeliverStages(hook));
+    }
+  }
+  if (stages.length === 0) {
+    return undefined;
+  }
+  const composed: ReplyDispatchBeforeDeliver = async (payload, info) => {
+    let current: ReplyPayload | null = payload;
+    for (const stage of stages) {
+      if (!current) {
+        return null;
+      }
+      const next = await runReplyDispatchBeforeDeliverStage(stage, current, info);
+      current = next ? copyReplyPayloadMetadata(current, next) : null;
+    }
+    return current;
+  };
+  beforeDeliverStagesByHook.set(composed, stages);
+  return composed;
+}
+
+/** Mark a core hook whose lifecycle owner controls settlement and any deadline. */
+export function markReplyDispatchBeforeDeliverDeadlineOwned(
+  hook: ReplyDispatchBeforeDeliver,
+): ReplyDispatchBeforeDeliver {
+  beforeDeliverStagesByHook.set(hook, [{ hook }]);
+  return hook;
+}
+
+/** Adds a core-internal cancellation observer without expanding the plugin-facing dispatcher. */
+export function appendReplyDispatcherBeforeDeliverCancelled(
+  dispatcher: ReplyDispatcher,
+  hook: ReplyDispatchCancelHandler,
+): boolean {
+  const hooks = beforeDeliverCancelledHooks.get(dispatcher);
+  if (!hooks) {
+    return false;
+  }
+  hooks.push(hook);
+  return true;
+}
+
+/** Capture one core-dispatcher delivery outcome without changing send* return types. */
+export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
+  promise: Promise<ReplyDispatchDeliveryOutcome>;
+  isTracked: () => boolean;
+} {
+  let resolveOutcome!: (outcome: ReplyDispatchDeliveryOutcome) => void;
+  const tracker: ReplyDispatchDeliveryOutcomeTracker = {
+    promise: new Promise((resolve) => {
+      resolveOutcome = resolve;
+    }),
+    resolve: (outcome) => resolveOutcome(outcome),
+    tracked: false,
+  };
+  deliveryOutcomeTrackers.set(payload, tracker);
+  return { promise: tracker.promise, isTracked: () => tracker.tracked };
+}
 
 function buildReplyDispatchRuntimeInfo(
   payload: ReplyPayload,
@@ -111,6 +281,8 @@ export type ReplyDispatcherOptions = {
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
   beforeDeliver?: ReplyDispatchBeforeDeliver;
+  /** Owner-declared deadline for the constructor before-delivery callback. */
+  beforeDeliverOptions?: ReplyDispatchBeforeDeliverOptions;
   onBeforeDeliverCancelled?: ReplyDispatchCancelHandler;
   /** Observe each queued payload settling, including cancellation and delivery failure. */
   onDeliverySettled?: (info: ReplyDispatchRuntimeInfo) => void;
@@ -167,7 +339,12 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
-  let beforeDeliver = options.beforeDeliver;
+  let beforeDeliver = composeReplyDispatchBeforeDeliver(
+    options.beforeDeliver
+      ? { hook: options.beforeDeliver, options: options.beforeDeliverOptions }
+      : undefined,
+  );
+  const appendedBeforeDeliverCancelledHooks: ReplyDispatchCancelHandler[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -199,6 +376,37 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     waitForIdle: () => sendChain,
   });
 
+  const reportObserverError = (err: unknown, info: ReplyDispatchRuntimeInfo) => {
+    void Promise.resolve(options.onError?.(err, info)).catch(() => undefined);
+  };
+
+  const notifyBeforeDeliverCancelled = async (
+    payload: ReplyPayload,
+    info: ReplyDispatchRuntimeInfo,
+  ) => {
+    const observers = [
+      ...(options.onBeforeDeliverCancelled ? [options.onBeforeDeliverCancelled] : []),
+      ...appendedBeforeDeliverCancelledHooks,
+    ];
+    for (const observer of observers) {
+      try {
+        await runReplyDispatchBeforeDeliverStage(
+          {
+            hook: async (current, currentInfo) => {
+              await observer(current, currentInfo);
+              return current;
+            },
+            timeoutMs: DEFAULT_BEFORE_DELIVER_TIMEOUT_MS,
+          },
+          payload,
+          info,
+        );
+      } catch (err: unknown) {
+        reportObserverError(err, info);
+      }
+    }
+  };
+
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
     const normalized = normalizeReplyPayloadInternal(payload, {
@@ -225,12 +433,18 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     }
     queuedCounts[kind] += 1;
     pending += 1;
+    const deliveryOutcomeTracker = deliveryOutcomeTrackers.get(payload);
+    if (deliveryOutcomeTracker) {
+      deliveryOutcomeTracker.tracked = true;
+    }
 
     // Determine if we should add human-like delay (only for block replies after the first).
     const shouldDelay = kind === "block" && sentFirstBlock;
     if (kind === "block") {
       sentFirstBlock = true;
     }
+    let deliveryStarted = false;
+    let deliveryOutcome: ReplyDispatchDeliveryOutcome = "failed-before-deliver";
 
     sendChain = sendChain
       .then(async () => {
@@ -247,36 +461,38 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           try {
             deliverPayload = await beforeDeliver(normalized, dispatchInfo);
           } catch (err: unknown) {
-            try {
-              await options.onBeforeDeliverCancelled?.(normalized, dispatchInfo);
-            } catch (cancelErr: unknown) {
-              void options.onError?.(cancelErr, dispatchInfo);
-            }
+            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
             throw err;
           }
           if (!deliverPayload) {
+            deliveryOutcome = "cancelled";
             cancelledCounts[kind] += 1;
-            try {
-              await options.onBeforeDeliverCancelled?.(normalized, dispatchInfo);
-            } catch (err: unknown) {
-              void options.onError?.(err, dispatchInfo);
-            }
+            await notifyBeforeDeliverCancelled(normalized, dispatchInfo);
             return;
           }
           deliverPayload = copyReplyPayloadMetadata(normalized, deliverPayload);
         }
+        deliveryStarted = true;
         await options.deliver(deliverPayload, dispatchInfo);
+        deliveryOutcome = "delivered";
       })
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
+        deliveryOutcome = deliveryStarted ? "failed-deliver" : "failed-before-deliver";
         failedCounts[kind] += 1;
-        void options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        // Error cleanup belongs to this send: idle/finalization must not race it.
+        // Observer failures stay isolated from later queued deliveries.
+        try {
+          await options.onError?.(err, buildReplyDispatchRuntimeInfo(normalized, kind));
+        } catch {}
       })
       .finally(() => {
         const dispatchInfo = buildReplyDispatchRuntimeInfo(normalized, kind);
+        deliveryOutcomeTracker?.resolve(deliveryOutcome);
+        deliveryOutcomeTrackers.delete(payload);
         try {
           options.onDeliverySettled?.(dispatchInfo);
         } catch (err: unknown) {
-          void options.onError?.(err, dispatchInfo);
+          reportObserverError(err, dispatchInfo);
         }
         pending -= 1;
         // Clear reservation if:
@@ -315,20 +531,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     });
   };
 
-  return {
+  const dispatcher: ReplyDispatcher = {
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
-    appendBeforeDeliver: (hook) => {
-      const previousBeforeDeliver = beforeDeliver;
-      beforeDeliver = previousBeforeDeliver
-        ? async (payload, info) => {
-            const previousPayload = await previousBeforeDeliver(payload, info);
-            return previousPayload
-              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
-              : null;
-          }
-        : hook;
+    appendBeforeDeliver: (hook, stageOptions) => {
+      beforeDeliver = composeReplyDispatchBeforeDeliver(beforeDeliver, {
+        hook,
+        options: stageOptions,
+      });
     },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
@@ -345,6 +556,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             })
         : undefined,
   };
+  beforeDeliverCancelledHooks.set(dispatcher, appendedBeforeDeliverCancelledHooks);
+  return dispatcher;
 }
 
 export async function waitForReplyDispatcherIdle(

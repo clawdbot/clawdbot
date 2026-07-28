@@ -20,6 +20,54 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.requesterSenderId).toBe("trusted-sender");
   });
 
+  it("forwards the trusted owner bit", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        senderIsOwner: true,
+      },
+    });
+
+    expect(result.context.senderIsOwner).toBe(true);
+  });
+
+  it("forwards the trusted native conversation id", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        nativeChannelId: "oc_native_chat",
+      },
+    });
+
+    expect(result.context.nativeChannelId).toBe("oc_native_chat");
+  });
+
+  it("defaults missing and unknown conversation-read origins to delegated", () => {
+    const missing = resolveOpenClawPluginToolInputs({
+      options: { config: {} as never },
+    });
+    const unknown = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationReadOrigin: "forged" as never,
+      },
+    });
+
+    expect(missing.context.conversationReadOrigin).toBe("delegated");
+    expect(unknown.context.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("preserves a server-owned direct-operator origin", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationReadOrigin: "direct-operator",
+      },
+    });
+
+    expect(result.context.conversationReadOrigin).toBe("direct-operator");
+  });
+
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {
@@ -42,6 +90,22 @@ describe("openclaw plugin tool context", () => {
 
     expect(result.context.sessionKey).toBe("agent:main:telegram:direct:12345");
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  });
+
+  it("forwards trusted private conversation recall context", () => {
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationRecall,
+      },
+    });
+
+    expect(result.context.conversationRecall).toEqual(conversationRecall);
   });
 
   it("forwards runtime-owned active model metadata", () => {
@@ -190,6 +254,50 @@ describe("openclaw plugin tool context", () => {
       accountId: "work",
       threadId: "1710000000.000100",
     });
+  });
+
+  it("uses the current conversation target when agentTo is unavailable", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "discord",
+        currentChannelId: "discord:channel:987654321",
+        agentAccountId: "molty",
+      },
+    });
+
+    expect(result.context.deliveryContext).toStrictEqual({
+      channel: "discord",
+      to: "discord:channel:987654321",
+      accountId: "molty",
+    });
+  });
+
+  it("keeps an explicit agent target ahead of the current conversation target", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "discord",
+        agentTo: "channel:111",
+        currentMessagingTarget: "channel:222",
+        currentChannelId: "333",
+      },
+    });
+
+    expect(result.context.deliveryContext?.to).toBe("channel:111");
+  });
+
+  it("keeps the routable conversation target ahead of the native channel id", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "slack",
+        currentMessagingTarget: "user:U123",
+        currentChannelId: "D123",
+      },
+    });
+
+    expect(result.context.deliveryContext?.to).toBe("user:U123");
   });
 
   it("does not inject ambient thread defaults into plugin tools", async () => {

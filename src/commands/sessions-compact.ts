@@ -11,7 +11,7 @@ import { callGatewayCli, type GatewayRpcOpts } from "../cli/gateway-cli/call.js"
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-export type SessionsCompactCliOptions = {
+type SessionsCompactCliOptions = {
   key: string;
   agent?: string;
   maxLines?: number;
@@ -34,14 +34,13 @@ type SessionsCompactResult = {
     tokensAfter?: number;
     sessionId?: string;
     sessionFile?: string;
-    // Codex app-server `thread/compact/start` reports ok:true / compacted:false
-    // with this pending marker; the compaction was *started* and completion is
-    // delivered asynchronously, so it must not be rendered as "no work needed".
+    // A backend can explicitly report an accepted asynchronous operation.
     details?: {
       backend?: string;
       threadId?: string;
       signal?: string;
       pending?: boolean;
+      completed?: boolean;
     };
   };
 };
@@ -50,7 +49,7 @@ function describeCompaction(result: SessionsCompactResult, fallbackKey: string):
   const sessionKey = result.key ?? fallbackKey;
   if (!result.compacted) {
     const details = result.result?.details;
-    if (details?.pending === true || details?.signal === "thread/compact/start") {
+    if (details?.pending === true) {
       return `Compaction started for session ${sessionKey} (pending; completion is reported asynchronously by the backend).`;
     }
     const reason = result.reason ? ` (${result.reason})` : "";
@@ -76,7 +75,9 @@ export async function sessionsCompactCommand(
     url: opts.url,
     token: opts.token,
     password: opts.password,
-    timeout: opts.timeout,
+    // Compaction owns a configurable multi-stage server deadline. Keep an
+    // explicit CLI override, but otherwise avoid an ambiguous client timeout.
+    timeout: opts.timeout ?? null,
     json: opts.json,
   };
   const params = {

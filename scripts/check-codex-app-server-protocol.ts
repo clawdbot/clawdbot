@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 // Check Codex App Server Protocol script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -70,7 +71,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "ReviewDecision.ts",
-    snippets: ['"approved"', '"approved_for_session"', '"denied"', '"abort"'],
+    snippets: ['"approved"', '"approved_for_session"', "denied: { rejection: string }", '"abort"'],
   },
   {
     file: "v2/PlanDeltaNotification.ts",
@@ -93,6 +94,7 @@ async function main(): Promise<void> {
 
   try {
     await compareGeneratedProtocolMirror(source.jsonRoot);
+    await checkMaintainedProtocolTypes(source.typescriptRoot);
 
     for (const check of checks) {
       const filePath = path.join(source.typescriptRoot, check.file);
@@ -127,6 +129,114 @@ async function main(): Promise<void> {
   console.log(
     `Codex app-server generated protocol matches OpenClaw bridge assumptions: ${source.codexRepo}`,
   );
+}
+
+async function checkMaintainedProtocolTypes(sourceRoot: string): Promise<void> {
+  // Raw requests go to Codex; raw responses flow into OpenClaw. Keep the
+  // assignability direction explicit so the probe permits deliberate projections.
+  const probePath = path.join(sourceRoot, "openclaw-protocol-compatibility.ts");
+  const protocolPath = path.resolve(process.cwd(), "extensions/codex/src/app-server/protocol.ts");
+  const protocolImport = relativeTypeScriptImport(probePath, protocolPath);
+  const generatedImport = (file: string) =>
+    relativeTypeScriptImport(probePath, path.join(sourceRoot, file));
+  const probe = `
+import type {
+  CodexAppServerRequestParams,
+  CodexDynamicToolSpec,
+  CodexDynamicToolCallParams,
+  CodexErrorNotification,
+  CodexModelListResponse,
+  CodexThreadForkParams,
+  CodexThreadForkResponse,
+  CodexThreadResumeParams,
+  CodexThreadResumeResponse,
+  CodexThreadStartParams,
+  CodexThreadStartResponse,
+  CodexTurnEnvironmentParams,
+  CodexTurnStartParams,
+} from ${JSON.stringify(protocolImport)};
+import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
+import type { DynamicToolSpec } from ${JSON.stringify(generatedImport("v2/DynamicToolSpec.ts"))};
+import type { ErrorNotification } from ${JSON.stringify(generatedImport("v2/ErrorNotification.ts"))};
+import type { ModelListResponse } from ${JSON.stringify(generatedImport("v2/ModelListResponse.ts"))};
+import type { ThreadForkParams } from ${JSON.stringify(generatedImport("v2/ThreadForkParams.ts"))};
+import type { ThreadForkResponse } from ${JSON.stringify(generatedImport("v2/ThreadForkResponse.ts"))};
+import type { ThreadResumeParams } from ${JSON.stringify(generatedImport("v2/ThreadResumeParams.ts"))};
+import type { ThreadResumeResponse } from ${JSON.stringify(generatedImport("v2/ThreadResumeResponse.ts"))};
+import type { ThreadStartParams } from ${JSON.stringify(generatedImport("v2/ThreadStartParams.ts"))};
+import type { ThreadStartResponse } from ${JSON.stringify(generatedImport("v2/ThreadStartResponse.ts"))};
+import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/TurnEnvironmentParams.ts"))};
+import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
+import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
+
+declare const openClawDynamicToolSpec: CodexDynamicToolSpec;
+const generatedDynamicToolSpec: DynamicToolSpec = openClawDynamicToolSpec;
+declare const openClawTurnEnvironmentParams: CodexTurnEnvironmentParams;
+const generatedTurnEnvironmentParams: TurnEnvironmentParams = openClawTurnEnvironmentParams;
+declare const openClawThreadStartParams: CodexThreadStartParams;
+const generatedThreadStartParams: ThreadStartParams = openClawThreadStartParams;
+declare const openClawThreadResumeParams: CodexThreadResumeParams;
+const generatedThreadResumeParams: ThreadResumeParams = openClawThreadResumeParams;
+declare const openClawThreadForkParams: CodexThreadForkParams;
+const generatedThreadForkParams: ThreadForkParams = openClawThreadForkParams;
+declare const openClawTurnInterruptParams: CodexAppServerRequestParams<"turn/interrupt">;
+const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
+declare const openClawTurnStartParams: CodexTurnStartParams;
+const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;
+
+declare const generatedDynamicToolCallParams: Omit<DynamicToolCallParams, "arguments">;
+const openClawDynamicToolCallParams: Omit<CodexDynamicToolCallParams, "arguments"> =
+  generatedDynamicToolCallParams;
+declare const generatedErrorNotification: ErrorNotification;
+const openClawErrorNotification: CodexErrorNotification = generatedErrorNotification;
+declare const generatedModelListResponse: ModelListResponse;
+const openClawModelListResponse: CodexModelListResponse = generatedModelListResponse;
+
+// Thread and turn bodies are normalized behind checked-in JSON schemas. Their
+// raw generated shapes must not be confused with the projector-facing types.
+declare const generatedThreadForkResponse: Omit<ThreadForkResponse, "thread">;
+const openClawThreadForkResponse: Omit<CodexThreadForkResponse, "thread"> =
+  generatedThreadForkResponse;
+declare const generatedThreadResumeResponse: Omit<ThreadResumeResponse, "thread">;
+const openClawThreadResumeResponse: Omit<CodexThreadResumeResponse, "thread"> =
+  generatedThreadResumeResponse;
+declare const generatedThreadStartResponse: Omit<ThreadStartResponse, "thread">;
+const openClawThreadStartResponse: Omit<CodexThreadStartResponse, "thread"> =
+  generatedThreadStartResponse;
+
+export {};
+`;
+  await fs.writeFile(probePath, probe);
+  const result = spawnSync(
+    process.execPath,
+    [
+      "scripts/run-tsgo.mjs",
+      "--ignoreConfig",
+      "--noEmit",
+      "--allowImportingTsExtensions",
+      "--strict",
+      "--skipLibCheck",
+      "--module",
+      "nodenext",
+      "--moduleResolution",
+      "nodenext",
+      probePath,
+    ],
+    { cwd: process.cwd(), encoding: "utf8" },
+  );
+  if (result.error) {
+    failures.push(`maintained protocol types: failed to start tsgo (${result.error.message})`);
+    return;
+  }
+  if (result.status !== 0) {
+    const output = `${result.stdout}${result.stderr}`.trim();
+    failures.push(`maintained protocol types differ from generated Codex types\n${output}`);
+  }
+}
+
+function relativeTypeScriptImport(fromFile: string, toFile: string): string {
+  const relative = path.relative(path.dirname(fromFile), toFile).replaceAll(path.sep, "/");
+  return relative.startsWith(".") ? relative : `./${relative}`;
 }
 
 async function compareGeneratedProtocolMirror(sourceJsonRoot: string): Promise<void> {

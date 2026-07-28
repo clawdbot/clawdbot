@@ -15,7 +15,7 @@ import {
 
 const actualDeliveryPlanModule =
   await vi.importActual<typeof import("../delivery-plan.js")>("../delivery-plan.js");
-const { createCronPromptExecutor, executeCronRun } = await import("./run-executor.js");
+const { executeCronRun } = await import("./run-executor.js");
 const { resolveCronSourceDeliveryPlan, resolveFallbackCronSourceDeliveryPlan } =
   await import("./source-delivery-fallback.js");
 
@@ -44,36 +44,20 @@ function makeJob(
   } as CronJob;
 }
 
-function makeExecutor(overrides: Partial<Parameters<typeof createCronPromptExecutor>[0]>) {
+function makeExecutor(overrides: Record<string, unknown>) {
   const resolvedDelivery = overrides.resolvedDelivery ?? {};
-
-  return createCronPromptExecutor({
-    cfg: {},
-    cfgWithAgentDefaults: {},
-    job: makeJob(),
-    agentId: "default",
-    agentDir: "/tmp/agent-dir",
-    agentSessionKey: "cron:source-delivery-guard",
-    runSessionKey: "cron:source-delivery-guard:run:test-session-id",
-    workspaceDir: "/tmp/workspace",
-    resolvedVerboseLevel: "off",
-    thinkLevel: undefined,
-    timeoutMs: 60_000,
-    suppressExecNotifyOnExit: true,
-    skillsSnapshot: emptySkillsSnapshot,
-    agentPayload: null,
-    useSubagentFallbacks: false,
-    liveSelection: {
-      provider: "openai",
-      model: "gpt-5.4",
-    },
-    cronSession: makeCronSession() as MutableCronSession,
-    abortReason: () => "aborted",
-    resolvedDeliveryOk: true,
-    messageToolPromptEnabled: true,
-    ...overrides,
-    resolvedDelivery,
-  });
+  return {
+    runPrompt: async (commandBody: string) =>
+      await executeCronRun(
+        makeExecuteCronRunParams({
+          resolvedDeliveryOk: true,
+          messageToolPromptEnabled: true,
+          ...overrides,
+          resolvedDelivery,
+          commandBody,
+        }),
+      ),
+  };
 }
 
 function getEmbeddedRunArg(): Record<string, unknown> {
@@ -256,7 +240,7 @@ describe("resolveCronSourceDeliveryPlan", () => {
   }
 });
 
-describe("createCronPromptExecutor sourceDelivery guard", () => {
+describe("executeCronRun sourceDelivery mapping", () => {
   let previousFastTestEnv: string | undefined;
 
   beforeEach(() => {
@@ -275,6 +259,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "none" } }),
+      deliveryRequested: false,
       sourceDelivery: undefined,
       resolvedDelivery: {
         channel: "messagechat",
@@ -288,6 +273,8 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.requireExplicitMessageTarget).toBe(false);
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
@@ -299,6 +286,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "123" } }),
+      deliveryRequested: true,
       sourceDelivery: undefined,
       resolvedDelivery: { ok: true, channel: "messagechat", to: "123" },
     });
@@ -308,6 +296,8 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.allowEmptyAssistantReplyAsSilent).toBe(true);
+    expect(args.terminalReplyExpectation).toBe("required");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -318,6 +308,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ delivery: { mode: "webhook" } }),
+      deliveryRequested: false,
       sourceDelivery: undefined,
       resolvedDelivery: { channel: "messagechat", to: "123" },
     });
@@ -327,6 +318,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.terminalReplyExpectation).toBe("optional");
     expect(args.disableMessageTool).toBe(true);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -336,6 +328,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
       job: makeJob({ omitDelivery: true }),
+      deliveryRequested: true,
       sourceDelivery: undefined,
       resolvedDelivery: { channel: "messagechat", to: "123" },
     });
@@ -345,6 +338,7 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const args = getEmbeddedRunArg();
     expect(args.sourceReplyDeliveryMode).toBeUndefined();
+    expect(args.terminalReplyExpectation).toBe("required");
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(false);
     expect(args.messageChannel).toBe("messagechat");
@@ -376,6 +370,22 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(args.requireExplicitMessageTarget).toBe(true);
   });
 
+  it("does not require a terminal reply when announce delivery did not resolve", async () => {
+    mockRunCronFallbackPassthrough();
+    const executor = makeExecutor({
+      job: makeJob({ delivery: { mode: "announce", channel: "messagechat", to: "123" } }),
+      deliveryRequested: true,
+      resolvedDeliveryOk: false,
+      sourceDelivery: undefined,
+      resolvedDelivery: { ok: false, channel: "messagechat", to: "123" },
+    });
+
+    await executor.runPrompt("run a task");
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(getEmbeddedRunArg().terminalReplyExpectation).toBe("optional");
+  });
+
   it("still works with a valid sourceDelivery", async () => {
     mockRunCronFallbackPassthrough();
     const executor = makeExecutor({
@@ -399,6 +409,39 @@ describe("createCronPromptExecutor sourceDelivery guard", () => {
     expect(args.disableMessageTool).toBe(false);
     expect(args.forceMessageTool).toBe(true);
     expect(args.messageChannel).toBe("messagechat");
+  });
+
+  it("forwards an explicit OpenClaw runtime override to cron execution", async () => {
+    mockRunCronFallbackPassthrough();
+    const cronSession = makeCronSession() as MutableCronSession;
+    cronSession.sessionEntry.agentRuntimeOverride = "openclaw";
+    cronSession.sessionEntry.agentHarnessId = "codex";
+    const executor = makeExecutor({
+      cfgWithAgentDefaults: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
+            },
+          },
+        },
+      },
+      liveSelection: { provider: "openai", model: "gpt-5.6-luna" },
+      cronSession,
+      thinkLevel: "ultra",
+    });
+
+    await executor.runPrompt("run an Ultra task");
+
+    expect(getEmbeddedRunArg()).toEqual(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        thinkLevel: "ultra",
+        agentHarnessRuntimeOverride: "openclaw",
+      }),
+    );
+    expect(getEmbeddedRunArg()).not.toHaveProperty("agentHarnessId");
   });
 });
 

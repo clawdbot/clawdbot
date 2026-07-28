@@ -43,6 +43,7 @@ const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
+let getReplyPayloadMetadata: typeof import("../auto-reply/reply-payload.js").getReplyPayloadMetadata;
 
 vi.mock("openclaw/plugin-sdk/llm", async () => {
   const actual =
@@ -180,9 +181,12 @@ beforeAll(async () => {
   vi.useRealTimers();
   vi.resetModules();
   installRunEmbeddedMocks();
+  ({ getReplyPayloadMetadata } = await import("../auto-reply/reply-payload.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = await import("../config/config.js"));
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
-  ({ SessionManager } = await import("openclaw/plugin-sdk/agent-sessions"));
+  const { SessionManager: LoadedSessionManager } =
+    await import("openclaw/plugin-sdk/agent-sessions");
+  SessionManager = LoadedSessionManager;
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
 }, 180_000);
@@ -362,6 +366,28 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
+  it("reuses one standalone snapshot across configless runs", async () => {
+    mockSuccessfulEmbeddedAttempt();
+    mockSuccessfulEmbeddedAttempt();
+
+    for (const suffix of ["first", "second"]) {
+      await runEmbeddedAgent({
+        sessionId: `configless-${suffix}`,
+        sessionFile: nextSessionFile(),
+        workspaceDir,
+        prompt: "hello",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: nextRunId(`configless-${suffix}`),
+        enqueue: immediateEnqueue,
+      });
+    }
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the configured default model when the caller omits provider and model", async () => {
     const sessionFile = nextSessionFile();
     const cfg = {
@@ -517,7 +543,7 @@ describe("runEmbeddedAgent", () => {
     ).toEqual(expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-6" }));
   });
 
-  it("skips models.json generation when dynamic model resolution succeeds", async () => {
+  it("publishes the standalone model snapshot before dynamic model resolution", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -551,7 +577,7 @@ describe("runEmbeddedAgent", () => {
     expect(
       (resolveModelCall?.[4] as { skipAgentDiscovery?: boolean } | undefined)?.skipAgentDiscovery,
     ).toBe(true);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
   });
 
   it("resolves explicit OpenAI OpenClaw runs through Codex when auth order starts with Codex OAuth", async () => {
@@ -696,7 +722,7 @@ describe("runEmbeddedAgent", () => {
       expect.objectContaining({ skipAgentDiscovery: true }),
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
@@ -770,10 +796,80 @@ describe("runEmbeddedAgent", () => {
         preferBundledStaticCatalogTransport: true,
       }),
     );
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
+  });
+
+  it("lets a locked Codex harness own stale model resolution, prompts, and context policy", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
+    const prompt = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
+    resolveModelAsyncMock.mockRejectedValueOnce(new Error("stale outer model must not resolve"));
+    mockSuccessfulEmbeddedAttempt();
+
+    await runEmbeddedAgent({
+      sessionId: "locked-codex-native-policy",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt,
+      provider: "anthropic",
+      model: "retired-outer-model",
+      timeoutMs: 5_000,
+      agentDir,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      runId: nextRunId("locked-codex-native-policy"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+    const attempt = firstRunEmbeddedAttemptParams() as Record<string, unknown>;
+    expect(attempt).toMatchObject({
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      provider: "anthropic",
+      modelId: "retired-outer-model",
+      prompt,
+    });
+    expect("contextEngine" in attempt).toBe(false);
+    expect("contextTokenBudget" in attempt).toBe(false);
+    expect("contextWindowInfo" in attempt).toBe(false);
+  });
+
+  it("does not apply outer context-overflow recovery to a locked Codex harness", async () => {
+    const sessionFile = nextSessionFile();
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("request exceeds the model context window"),
+        },
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "locked-codex-native-overflow",
+      sessionFile,
+      workspaceDir,
+      config: createEmbeddedAgentRunnerOpenAiConfig([]),
+      prompt: "hello",
+      provider: "anthropic",
+      model: "retired-outer-model",
+      timeoutMs: 5_000,
+      agentDir,
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+      runId: nextRunId("locked-codex-native-overflow"),
+      enqueue: immediateEnqueue,
+    }).catch(() => undefined);
+
+    expect(resolveModelAsyncMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
@@ -817,7 +913,7 @@ describe("runEmbeddedAgent", () => {
     expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("agent:test:resolved");
   });
 
-  it("drops whitespace-only session keys when backfill cannot resolve a session key", async () => {
+  it("falls back to the session id when a whitespace-only session key cannot be resolved", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveSessionKeyForRequestMock.mockReturnValue({
@@ -855,7 +951,7 @@ describe("runEmbeddedAgent", () => {
       agentId: undefined,
       clone: false,
     });
-    expect(firstRunEmbeddedAttemptParams().sessionKey).toBeUndefined();
+    expect(firstRunEmbeddedAttemptParams().sessionKey).toBe("resume-124");
   });
 
   it("logs when embedded session-key backfill resolution fails", async () => {
@@ -898,7 +994,7 @@ describe("runEmbeddedAgent", () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
     resolveStoredSessionKeyForSessionIdMock.mockReturnValue({
-      sessionKey: "agent:test:resolved",
+      sessionKey: "agent:embedded-agent:resolved",
       sessionStore: {},
       storePath: "/tmp/session-store.json",
     });
@@ -978,7 +1074,7 @@ describe("runEmbeddedAgent", () => {
       .mockImplementationOnce(async () => {
         expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
         return makeEmbeddedRunnerAttempt({
-          promptError: new Error("401 unauthorized"),
+          terminal: { kind: "failed", source: "prompt", error: new Error("401 unauthorized") },
         });
       })
       .mockImplementationOnce(async () => {
@@ -1055,13 +1151,48 @@ describe("runEmbeddedAgent", () => {
     );
   });
 
+  it("preserves harness-owned media provenance through terminal preparation", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-1"]);
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        toolMediaUrls: ["/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      sessionId: "session:test",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "generate an image",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("host-owned-media"),
+      sourceReplyDeliveryMode: "message_tool_only",
+      enqueue: immediateEnqueue,
+    });
+
+    expect(result.payloads).toHaveLength(1);
+    expect(result.payloads?.[0]).toMatchObject({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+    });
+    expect(getReplyPayloadMetadata(result.payloads?.[0] ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("handles prompt error paths without dropping user state", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig(["mock-error"]);
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("boom"),
+        terminal: { kind: "failed", source: "prompt", error: new Error("boom") },
       }),
     );
     await expect(
@@ -1141,3 +1272,4 @@ describe("runEmbeddedAgent", () => {
     expect(result.payloads?.[0]?.text).toBe("ok");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

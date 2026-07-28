@@ -313,9 +313,7 @@ export function emitDiagnosticMemorySample(options?: {
         log.warn(`critical memory pressure bundle failed: ${String(result.error)}`);
       }
     } else if (pressure.level === "critical") {
-      log.warn(
-        "critical memory pressure snapshot disabled: diagnostics.memoryPressureSnapshot=false",
-      );
+      log.warn("critical memory pressure snapshot disabled");
     }
   }
   return memory;

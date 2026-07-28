@@ -1,11 +1,6 @@
 // Resolves transcript file targets without depending on transcript read/write facades.
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptPath,
-} from "./paths.js";
+import { resolveSessionFilePath, resolveSessionFilePathOptions } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 /**
@@ -29,15 +24,6 @@ export async function resolveSessionTranscriptFile(params: {
   let sessionEntry = params.sessionEntry;
 
   if (params.sessionStore && params.storePath) {
-    // Persisting the resolved transcript path keeps later tail reads and exports on the same file.
-    const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
-    const fallbackSessionFile = !sessionEntry?.sessionFile
-      ? resolveSessionTranscriptPath(
-          params.sessionId,
-          params.agentId,
-          params.threadId ?? threadIdFromSessionKey,
-        )
-      : undefined;
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -45,8 +31,6 @@ export async function resolveSessionTranscriptFile(params: {
       storePath: params.storePath,
       sessionEntry,
       agentId: sessionPathOpts?.agentId,
-      sessionsDir: sessionPathOpts?.sessionsDir,
-      fallbackSessionFile,
     });
     sessionFile = resolvedSessionFile.sessionFile;
     sessionEntry = resolvedSessionFile.sessionEntry;

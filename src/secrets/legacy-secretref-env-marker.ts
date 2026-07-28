@@ -12,7 +12,7 @@ import {
 } from "./target-registry.js";
 
 /** Legacy marker string found on a registered secret target, with parsed ref when possible. */
-export type LegacySecretRefEnvMarkerCandidate = {
+type LegacySecretRefEnvMarkerCandidate = {
   path: string;
   pathSegments: string[];
   value: string;
@@ -41,7 +41,7 @@ function toCandidate(
 /**
  * Finds legacy env marker strings on registered secret targets without mutating config.
  */
-export function collectLegacySecretRefEnvMarkerCandidates(
+function collectLegacySecretRefEnvMarkerCandidates(
   config: OpenClawConfig,
 ): LegacySecretRefEnvMarkerCandidate[] {
   const defaults = config.secrets?.defaults;

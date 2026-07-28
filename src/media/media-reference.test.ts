@@ -1,6 +1,7 @@
 // Media reference tests cover resolving refs to local, remote, and inline media.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -10,6 +11,7 @@ import {
   parseInboundMediaUri,
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
+  resolveMediaReferenceLocalPathInfo,
   resolveMediaReferenceSandboxPath,
 } from "./media-reference.js";
 
@@ -133,7 +135,13 @@ describe("media reference helpers", () => {
       await expect(resolveMediaReferenceLocalPath(`media://inbound/${id}`)).resolves.toBe(
         realFilePath,
       );
+      await expect(
+        resolveMediaReferenceLocalPathInfo(`media://inbound/${id}`),
+      ).resolves.toStrictEqual({ kind: "inbound", path: realFilePath });
       await expect(resolveMediaReferenceLocalPath("  MEDIA: ./out.png")).resolves.toBe("./out.png");
+      await expect(resolveMediaReferenceLocalPathInfo("  MEDIA: ./out.png")).resolves.toStrictEqual(
+        { kind: "local", path: "./out.png" },
+      );
     } finally {
       await fs.rm(filePath, { force: true });
     }
@@ -165,10 +173,20 @@ describe("media reference helpers", () => {
         });
       }
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "inbound", "nested", ids[0])),
+        resolveInboundMediaReference(
+          path.join(
+            stateDir,
+            "media",
+            "inbound",
+            "nested",
+            expectDefined(ids[0], "ids[0] test invariant"),
+          ),
+        ),
       ).resolves.toBeNull();
       await expect(
-        resolveInboundMediaReference(path.join(stateDir, "media", "outbound", ids[0])),
+        resolveInboundMediaReference(
+          path.join(stateDir, "media", "outbound", expectDefined(ids[0], "ids[0] test invariant")),
+        ),
       ).resolves.toBeNull();
     } finally {
       await Promise.all(filePaths.map((filePath) => fs.rm(filePath, { force: true })));

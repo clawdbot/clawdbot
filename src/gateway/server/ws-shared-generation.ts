@@ -1,6 +1,6 @@
 // WebSocket shared-session generation hashes gateway auth inputs so clients can detect credential rotation.
-import { createHash } from "node:crypto";
 import type { GatewayTrustedProxyConfig } from "../../config/types.gateway.js";
+import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 
 function resolveSharedSecret(
@@ -40,21 +40,16 @@ export function resolveSharedGatewaySessionGeneration(
 ): string | undefined {
   const shared = resolveSharedSecret(auth);
   if (shared) {
-    return createHash("sha256")
-      .update(`${shared.mode}\u0000${shared.secret}`, "utf8")
-      .digest("base64url");
+    return sha256Base64Url(`${shared.mode}\u0000${shared.secret}`);
   }
   if (auth.mode === "trusted-proxy") {
-    return createHash("sha256")
-      .update(
-        JSON.stringify({
-          mode: auth.mode,
-          trustedProxy: normalizeTrustedProxyConfig(auth.trustedProxy),
-          trustedProxies: [...(trustedProxies ?? [])].toSorted(),
-        }),
-        "utf8",
-      )
-      .digest("base64url");
+    return sha256Base64Url(
+      JSON.stringify({
+        mode: auth.mode,
+        trustedProxy: normalizeTrustedProxyConfig(auth.trustedProxy),
+        trustedProxies: [...(trustedProxies ?? [])].toSorted(),
+      }),
+    );
   }
   return undefined;
 }

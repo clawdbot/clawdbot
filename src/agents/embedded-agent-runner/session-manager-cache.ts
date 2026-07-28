@@ -3,22 +3,12 @@
  */
 import { Buffer } from "node:buffer";
 import fs from "node:fs/promises";
-import {
-  createExpiringMapCache,
-  isCacheEnabled,
-  resolveCacheTtlMs,
-} from "../../config/cache-utils.js";
+import { createExpiringMapCache, isCacheEnabled } from "../../config/cache-utils.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 
 const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
 const MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 1_000;
 const MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS = 30_000;
-
-function getSessionManagerTtl(): number {
-  return resolveCacheTtlMs({
-    envValue: process.env.OPENCLAW_SESSION_MANAGER_CACHE_TTL_MS,
-    defaultTtlMs: DEFAULT_SESSION_MANAGER_TTL_MS,
-  });
-}
 
 function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
   return Math.min(
@@ -35,7 +25,7 @@ type SessionManagerCache = {
   trackSessionManagerAccess: (sessionFile: string) => void;
 };
 
-export function createSessionManagerCache(options?: {
+function createSessionManagerCache(options?: {
   clock?: () => number;
   fsModule?: Pick<typeof fs, "open">;
   ttlMs?: number | (() => number);
@@ -43,7 +33,7 @@ export function createSessionManagerCache(options?: {
   const getTtlMs = () =>
     typeof options?.ttlMs === "function"
       ? options.ttlMs()
-      : (options?.ttlMs ?? getSessionManagerTtl());
+      : (options?.ttlMs ?? DEFAULT_SESSION_MANAGER_TTL_MS);
   const cache = createExpiringMapCache<string, true>({
     ttlMs: getTtlMs,
     pruneIntervalMs: resolveSessionManagerCachePruneInterval,
@@ -59,6 +49,9 @@ export function createSessionManagerCache(options?: {
     keys: () => cache.keys(),
     prewarmSessionFile: async (sessionFile) => {
       if (!isCacheEnabled(getTtlMs())) {
+        return;
+      }
+      if (parseSqliteSessionFileMarker(sessionFile)) {
         return;
       }
       if (cache.get(sessionFile) === true) {
@@ -93,4 +86,9 @@ export function trackSessionManagerAccess(sessionFile: string): void {
 
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
   await sessionManagerCache.prewarmSessionFile(sessionFile);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionManagerCacheTestApi")] =
+    { createSessionManagerCache };
 }

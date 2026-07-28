@@ -65,6 +65,7 @@ describe("startSshPortForward", () => {
   const openServers: net.Server[] = [];
 
   afterEach(async () => {
+    vi.useRealTimers();
     while (openServers.length > 0) {
       const server = openServers.pop();
       await new Promise<void>((resolve) => {
@@ -163,4 +164,70 @@ describe("startSshPortForward", () => {
 
     await tunnel.stop();
   });
+
+  it("rejects with the spawn error when ssh binary is missing", async () => {
+    vi.useFakeTimers();
+    const spawnError = new Error("ENOENT: no such file or directory, spawn /usr/bin/ssh");
+    (spawnError as NodeJS.ErrnoException).code = "ENOENT";
+    const kill = vi.fn(() => false);
+    mocks.spawn.mockImplementation(() => {
+      const child = new EventEmitter() as EventEmitter & {
+        killed: boolean;
+        pid?: number;
+        stderr: EventEmitter & { setEncoding: (enc: string) => void };
+        kill: (signal?: string) => boolean;
+      };
+      child.killed = false;
+      const stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void };
+      stderr.setEncoding = () => {};
+      child.stderr = stderr;
+      child.kill = kill;
+      queueMicrotask(() => {
+        child.emit("error", spawnError);
+        child.emit("close", -2, null);
+      });
+      return child;
+    });
+
+    const forwarding = startSshPortForward({
+      target: "me@example.com:2222",
+      localPortPreferred: 43210,
+      remotePort: 18789,
+      timeoutMs: 500,
+    });
+    const rejection = expect(forwarding).rejects.toMatchObject({
+      message: expect.stringContaining("ENOENT"),
+      cause: spawnError,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await rejection;
+    expect(kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it.each(["active", "teardown"] as const)(
+    "does not crash when stderr errors while the tunnel is %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      spawnFakeSshListening();
+
+      const tunnel = await startSshPortForward({
+        target: "me@example.com:2222",
+        localPortPreferred: 43210,
+        remotePort: 18789,
+        timeoutMs: 1000,
+      });
+
+      const child = mocks.spawn.mock.results[0]?.value as EventEmitter & {
+        killed: boolean;
+        stderr: EventEmitter;
+      };
+      const stopping = phase === "teardown" ? tunnel.stop() : undefined;
+      expect(child.killed).toBe(phase === "teardown");
+      expect(() => child.stderr.emit("error", new Error("stderr EPIPE"))).not.toThrow();
+
+      await expect(stopping ?? tunnel.stop()).resolves.toBeUndefined();
+    },
+  );
 });

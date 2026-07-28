@@ -29,10 +29,8 @@ function writeOpenWebUiWorkspace() {
     path.join(workspace, "IDENTITY.md"),
     "# Identity\n\n- Name: OpenClaw\n- Purpose: Open WebUI Docker compatibility smoke test assistant.\n",
   );
-  writeJson(path.join(workspace, ".openclaw", "workspace-state.json"), {
-    version: 1,
-    setupCompletedAt: "2026-01-01T00:00:00.000Z",
-  });
+  fs.rmSync(path.join(workspace, ".openclaw", "workspace-state.json"), { force: true });
+  fs.rmSync(path.join(workspace, "openclaw-workspace-state.json"), { force: true });
   fs.rmSync(path.join(workspace, "BOOTSTRAP.md"), { force: true });
 }
 
@@ -43,10 +41,10 @@ function writeAgentsDeleteConfig() {
   fs.mkdirSync(sharedWorkspace, { recursive: true });
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: {
-      list: [
-        { id: "main", workspace: sharedWorkspace },
-        { id: "ops", workspace: sharedWorkspace },
-      ],
+      entries: {
+        main: { workspace: sharedWorkspace },
+        ops: { workspace: sharedWorkspace },
+      },
     },
     ...(gatewayToken ? { gateway: { auth: { mode: "token", token: gatewayToken } } } : {}),
   });
@@ -72,12 +70,14 @@ function assertAgentsDeleteResult([outputPath]) {
     const message = error instanceof Error ? error.message.split("\n").at(0) : String(error);
     throw new Error(`agents delete --json parse failed: ${message}`, { cause: error });
   }
-  for (const [actual, expected, label] of [
+  /** @type {Array<[unknown, unknown, string]>} */
+  const comparisons = [
     [parsed.agentId, "ops", "agentId"],
     [parsed.workspace, process.env.SHARED_WORKSPACE, "workspace"],
     [parsed.workspaceRetained, true, "workspaceRetained"],
     [parsed.workspaceRetainedReason, "shared", "workspaceRetainedReason"],
-  ]) {
+  ];
+  for (const [actual, expected, label] of comparisons) {
     assert(actual === expected, `${label} mismatch: ${JSON.stringify(actual)}`);
   }
   assert(
@@ -86,13 +86,13 @@ function assertAgentsDeleteResult([outputPath]) {
   );
   assert(fs.existsSync(process.env.SHARED_WORKSPACE), "shared workspace was removed");
   const remaining =
-    readJson(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"))?.agents?.list ?? [];
-  assert(Array.isArray(remaining), "agents list missing after delete");
-  assert(!remaining.some((entry) => entry?.id === "ops"), "deleted agent remained in config");
+    readJson(path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json"))?.agents?.entries ?? {};
   assert(
-    remaining.some((entry) => entry?.id === "main"),
-    "main agent missing after delete",
+    remaining && typeof remaining === "object" && !Array.isArray(remaining),
+    "agents entries missing after delete",
   );
+  assert(!Object.hasOwn(remaining, "ops"), "deleted agent remained in config");
+  assert(Object.hasOwn(remaining, "main"), "main agent missing after delete");
   console.log("agents delete shared workspace smoke ok");
 }
 

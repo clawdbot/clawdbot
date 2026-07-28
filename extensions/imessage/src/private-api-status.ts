@@ -84,11 +84,3 @@ export function setCachedIMessagePrivateApiStatus(
   }
   bridgeStatusCache.set(normalizeCliPath(cliPath), { status, expiresAt });
 }
-
-export function clearCachedIMessagePrivateApiStatus(cliPath?: string): void {
-  if (cliPath) {
-    bridgeStatusCache.delete(normalizeCliPath(cliPath));
-  } else {
-    bridgeStatusCache.clear();
-  }
-}

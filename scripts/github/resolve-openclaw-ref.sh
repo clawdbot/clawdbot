@@ -64,9 +64,12 @@ write_output() {
   fi
 }
 
+lower_sha() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 resolve_unique_remote_ref() {
   local refspec
-  local -a matches=()
   for refspec in "$@"; do
     [[ -n "$refspec" ]] || continue
     local raw=""
@@ -88,32 +91,41 @@ resolve_unique_remote_ref() {
       return 3
     fi
     rm -f "$stderr_file"
-    mapfile -t matches < <(printf '%s\n' "$raw" | awk 'NF {print $1}' | awk '!seen[$0]++')
-    if [[ "${#matches[@]}" -eq 0 ]]; then
+    local match=""
+    local match_count=0
+    local line=""
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      match_count=$((match_count + 1))
+      if [[ "$match_count" -eq 1 ]]; then
+        match="$line"
+      fi
+    done < <(printf '%s\n' "$raw" | awk 'NF {print $1}' | awk '!seen[$0]++')
+    if [[ "$match_count" -eq 0 ]]; then
       continue
     fi
-    if [[ "${#matches[@]}" -ne 1 ]]; then
+    if [[ "$match_count" -ne 1 ]]; then
       return 2
     fi
-    printf '%s\n' "${matches[0]}"
+    printf '%s\n' "$match"
     return 0
   done
   return 1
 }
 
 read_remote_matches() {
-  local -n output_array="$1"
+  local output_name="$1"
   shift
   local output=""
   local status=0
-  output_array=()
+  eval "$output_name=()"
   set +e
   output="$(resolve_unique_remote_ref "$@")"
   status="$?"
   set -e
   case "$status" in
     0)
-      mapfile -t output_array <<< "$output"
+      eval "$output_name=(\"\$output\")"
       ;;
     1)
       ;;
@@ -139,11 +151,11 @@ if [[ -n "$EXPECTED_SHA" ]] && [[ ! "$EXPECTED_SHA" =~ ^[0-9a-fA-F]{40}$ ]]; the
 fi
 
 if [[ "$REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
-  if [[ -n "$EXPECTED_SHA" ]] && [[ "${REF,,}" != "${EXPECTED_SHA,,}" ]]; then
+  if [[ -n "$EXPECTED_SHA" ]] && [[ "$(lower_sha "$REF")" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref SHA ${REF} does not match expected SHA ${EXPECTED_SHA}." >&2
     exit 1
   fi
-  write_output sha "${REF,,}"
+  write_output sha "$(lower_sha "$REF")"
   write_output ref_kind sha
   write_output fast false
   write_output fallback true
@@ -176,8 +188,8 @@ else
 fi
 
 if [[ "${#matches[@]}" -eq 1 ]]; then
-  resolved="${matches[0],,}"
-  if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "${EXPECTED_SHA,,}" ]]; then
+  resolved="$(lower_sha "${matches[0]}")"
+  if [[ -n "$EXPECTED_SHA" ]] && [[ "$resolved" != "$(lower_sha "$EXPECTED_SHA")" ]]; then
     echo "Ref ${REF} resolved to ${resolved}, expected ${EXPECTED_SHA}." >&2
     exit 1
   fi

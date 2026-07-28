@@ -1,0 +1,19 @@
+title: WhatsApp group user-path agent upload-file sends media
+scenario:
+  id: whatsapp-group-agent-message-action-upload-file
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-image
+  execution:
+    profiles: { "whatsapp:mock-default": 13 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 90000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-agent-message-action-upload-file }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupAgentMessageActionUploadFileScenario
+  args: [{ expr: whatsappScenarioContext }]

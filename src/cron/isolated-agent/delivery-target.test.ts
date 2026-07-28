@@ -3,7 +3,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type {
   ChannelDirectoryEntry,
   ChannelOutboundAdapter,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -11,9 +11,11 @@ import {
   parseTelegramTargetForTest,
   telegramMessagingForTest,
 } from "../../infra/outbound/targets.test-helpers.js";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { buildChannelOutboundSessionRoute } from "../../plugin-sdk/core.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 
 const { extractDeliveryInfoMock } = vi.hoisted(() => ({
   extractDeliveryInfoMock: vi.fn(),
@@ -32,9 +34,13 @@ vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
 }));
 
-vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: vi.fn(),
-}));
+vi.mock("../../config/sessions/session-accessor.js", () => {
+  const loadSessionEntry = vi.fn();
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
   resolveMessageChannelSelection: vi
@@ -224,10 +230,21 @@ const DEFAULT_TARGET = {
   to: "room:default",
 };
 
-type SessionStore = Record<string, SessionEntry>;
+type SessionStore = Record<
+  string,
+  SessionEntry & {
+    lastChannel?: string;
+    lastTo?: string;
+    lastAccountId?: string;
+    lastThreadId?: string | number;
+  }
+>;
 
 function setSessionStore(store: SessionStore) {
-  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => store[sessionKey]);
+  const canonical = Object.fromEntries(
+    Object.entries(store).map(([key, entry]) => [key, normalizeLegacySessionEntryDelivery(entry)]),
+  );
+  vi.mocked(loadSessionEntry).mockImplementation(({ sessionKey }) => canonical[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -245,10 +262,14 @@ function setLastSessionEntry(params: {
   setMainSessionEntry({
     sessionId: params.sessionId,
     updatedAt: 1000,
-    lastChannel: params.lastChannel,
-    lastTo: params.lastTo,
-    ...(params.lastThreadId ? { lastThreadId: params.lastThreadId } : {}),
-    ...(params.lastAccountId ? { lastAccountId: params.lastAccountId } : {}),
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: params.lastChannel,
+        to: params.lastTo,
+        threadId: params.lastThreadId,
+        accountId: params.lastAccountId,
+      },
+    }),
   });
 }
 
@@ -411,9 +432,9 @@ describe("resolveDeliveryTarget", () => {
     setMainSessionEntry({
       sessionId: "sess-1",
       updatedAt: 1000,
-      lastChannel: "forum",
-      lastTo: "room:default",
-      lastAccountId: "session-account",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "forum", to: "room:default", accountId: "session-account" },
+      }),
     });
 
     const cfg = makeForumBoundCfg();
@@ -1611,3 +1632,4 @@ describe("resolveDeliveryTarget", () => {
     expect(result.accountId).toBe("explicit");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

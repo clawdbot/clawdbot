@@ -22,7 +22,7 @@ describe("completion-fish helpers", () => {
     const line = buildFishOptionCompletionLine({
       rootCmd: "openclaw",
       condition: "__fish_use_subcommand",
-      flags: "-s, --shell <shell>",
+      flags: ["-s", "--shell"],
       description: "Shell target",
     });
     expect(line).toBe(
@@ -34,11 +34,23 @@ describe("completion-fish helpers", () => {
     const line = buildFishOptionCompletionLine({
       rootCmd: "openclaw",
       condition: "__fish_seen_subcommand_from completion",
-      flags: "--write-state",
+      flags: ["--write-state"],
       description: "Write cache",
     });
     expect(line).toBe(
       `complete -c openclaw -n "__fish_seen_subcommand_from completion" -l write-state -d 'Write cache'\n`,
+    );
+  });
+
+  it("builds option line with two long aliases", () => {
+    const line = buildFishOptionCompletionLine({
+      rootCmd: "openclaw",
+      condition: "__fish_use_subcommand",
+      flags: ["--ws", "--workspace"],
+      description: "Workspace",
+    });
+    expect(line).toBe(
+      `complete -c openclaw -n "__fish_use_subcommand" -l ws -l workspace -d 'Workspace'\n`,
     );
   });
 });

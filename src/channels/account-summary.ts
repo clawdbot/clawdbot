@@ -6,7 +6,10 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { projectSafeChannelAccountSnapshotFields } from "./account-snapshot-fields.js";
+import {
+  projectSafeChannelAccountSnapshotFields,
+  redactChannelAccountSnapshotBaseUrl,
+} from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 import type { ChannelPlugin } from "./plugins/types.plugin.js";
 
@@ -22,13 +25,13 @@ export function buildChannelAccountSnapshot(params: {
   configured: boolean;
 }): ChannelAccountSnapshot {
   const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
-  return {
+  return redactChannelAccountSnapshotBaseUrl({
     enabled: params.enabled,
     configured: params.configured,
     ...projectSafeChannelAccountSnapshotFields(params.account),
     ...described,
     accountId: params.accountId,
-  };
+  });
 }
 
 /**

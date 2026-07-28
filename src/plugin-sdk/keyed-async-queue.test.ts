@@ -1,6 +1,8 @@
 /**
  * Tests keyed async queue serialization and cancellation behavior.
  */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../test-utils/deferred.js";
 import { enqueueKeyedTask, KeyedAsyncQueue } from "./keyed-async-queue.js";
@@ -68,8 +70,8 @@ describe("enqueueKeyedTask", () => {
         }),
     ];
 
-    await expect(runs[0]()).rejects.toThrow("boom");
-    await expect(runs[1]()).resolves.toBe("ok");
+    await expect(expectDefined(runs[0], "runs[0] test invariant")()).rejects.toThrow("boom");
+    await expect(expectDefined(runs[1], "runs[1] test invariant")()).resolves.toBe("ok");
   });
 
   it("does not leak unhandled rejections when a task failure is already awaited", async () => {
@@ -116,17 +118,29 @@ describe("enqueueKeyedTask", () => {
 });
 
 describe("KeyedAsyncQueue", () => {
-  it("exposes tail map for observability", async () => {
+  it("serializes tasks while preserving their return values", async () => {
     const queue = new KeyedAsyncQueue();
     const gate = createDeferred();
-    const run = queue.enqueue("actor", async () => {
+    const order: string[] = [];
+    const first = queue.enqueue("actor", async () => {
+      order.push("first:start");
       await gate.promise;
       return 1;
     });
-    expect(queue.getTailMapForTesting().has("actor")).toBe(true);
-    gate.resolve();
-    await run;
+    const second = queue.enqueue("actor", async () => {
+      order.push("second:start");
+      return 2;
+    });
     await Promise.resolve();
-    expect(queue.getTailMapForTesting().has("actor")).toBe(false);
+    await Promise.resolve();
+    expect(order).toEqual(["first:start"]);
+    gate.resolve();
+    await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+    expect(order).toEqual(["first:start", "second:start"]);
+  });
+
+  it("retains the deprecated tail-map accessor for Plugin SDK compatibility", () => {
+    const queue = new KeyedAsyncQueue();
+    expect(queue.getTailMapForTesting()).toBeInstanceOf(Map);
   });
 });

@@ -108,9 +108,10 @@ const defaultOptions = (): WindowsOptions => ({
   latestVersion: "",
   mode: "both",
   modelId: undefined,
+  npmRegistry: undefined,
   provider: "openai",
   skipLatestRefCheck: false,
-  snapshotHint: "pre-openclaw-native-e2e-2026-03-12",
+  snapshotHint: "pre-openclaw-native-e2e-",
   targetPackageSpec: "",
   upgradeFromPackedMain: false,
   vmName: "Windows 11",
@@ -126,7 +127,7 @@ function usage(): string {
 Options:
   --vm <name>                Parallels VM name. Default: "Windows 11"
   --snapshot-hint <name>     Snapshot name substring/fuzzy match.
-                             Default: "pre-openclaw-native-e2e-2026-03-12"
+                             Default: newest "pre-openclaw-native-e2e-*" snapshot
   --mode <fresh|upgrade|both>
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for the agent-turn smoke.
@@ -142,6 +143,7 @@ Options:
                              then run openclaw update --channel dev.
   --target-package-spec <npm-spec>
                              Install this npm package tarball instead of packing current main.
+  --npm-registry <url>       Registry used for target package installs.
   --skip-latest-ref-check    Skip latest-release ref-mode precheck.
   --keep-server              Leave temp host HTTP server running.
   --json                     Print machine-readable JSON summary.
@@ -174,6 +176,9 @@ export function parseArgs(argv: string[]): WindowsOptions {
     },
     "--model": (value) => {
       options.modelId = value;
+    },
+    "--npm-registry": (value) => {
+      options.npmRegistry = value;
     },
     "--openai-api-key-env": (value) => {
       options.apiKeyEnv = value;
@@ -210,6 +215,9 @@ export function parseArgs(argv: string[]): WindowsOptions {
   };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
+    if (arg === undefined) {
+      die(`missing argument at index ${i}`);
+    }
     if (arg === "--") {
       break;
     }
@@ -567,11 +575,15 @@ Invoke-OpenClaw --version
       die("package artifact/server missing");
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
+    const registryScript = this.options.npmRegistry
+      ? `$env:NPM_CONFIG_REGISTRY = ${psSingleQuote(this.options.npmRegistry)}`
+      : "";
     return this.guestPowerShellBackground(
       `install-main-${tempName.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`,
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
 curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
+${registryScript}
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version

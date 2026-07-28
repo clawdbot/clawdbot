@@ -27,6 +27,9 @@ extension CronSettings {
         case let .cron(expr, tz):
             if let tz, !tz.isEmpty { return "cron \(expr) (\(tz))" }
             return "cron \(expr)"
+        case let .onExit(command, cwd):
+            if let cwd, !cwd.isEmpty { return "on exit: \(command) (cwd: \(cwd))" }
+            return "on exit: \(command)"
         }
     }
 

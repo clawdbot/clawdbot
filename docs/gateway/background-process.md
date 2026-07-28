@@ -10,88 +10,89 @@ OpenClaw runs shell commands through the `exec` tool and keeps long-running task
 
 ## exec tool
 
-Key parameters:
+Parameters:
 
-- `command` (required)
-- `yieldMs` (default 10000): auto-background after this delay
-- `background` (bool): background immediately
-- `timeout` (seconds, default `tools.exec.timeoutSec`): kill the process after this timeout; set `timeout: 0` only to disable the exec process timeout for that call
-- `elevated` (bool): run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`)
-- Need a real TTY? Set `pty: true`.
-- `workdir`, `env`
+| Parameter    | Description                                                                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`    | Required. Shell command to run.                                                                                                                            |
+| `workdir`    | Working directory; omit to use the default cwd.                                                                                                            |
+| `env`        | Extra environment variables for the command.                                                                                                               |
+| `yieldMs`    | Milliseconds to wait before backgrounding (default 10000).                                                                                                 |
+| `background` | Run in background immediately.                                                                                                                             |
+| `timeout`    | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeout: 0` to disable the exec process timeout for that call. |
+| `pty`        | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                |
+| `elevated`   | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                              |
+| `host`       | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                      |
+| `node`       | Node id/name, used with `host: "node"`.                                                                                                                    |
 
 Behavior:
 
 - Foreground runs return output directly.
-- When backgrounded (explicit or timeout), the tool returns `status: "running"` + `sessionId` and a short tail.
-- Background and `yieldMs` runs inherit `tools.exec.timeoutSec` unless the call provides an explicit `timeout`.
-- Output is kept in memory until the session is polled or cleared.
+- When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
+- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeout`.
+- Output stays in memory until the session is polled or cleared.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
-- For long-running work that starts now, start it once and rely on automatic
-  completion wake when it is enabled and the command emits output or fails.
-- If automatic completion wake is unavailable, or you need quiet-success
-  confirmation for a command that exited cleanly without output, use `process`
-  to confirm completion.
-- Do not emulate reminders or delayed follow-ups with `sleep` loops or repeated
-  polling; use cron for future work.
+- For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
+- If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
+- Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
+
+### Env overrides
+
+| Variable                                 | Effect                                                                                                           |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_BASH_YIELD_MS`                 | Default yield before backgrounding (ms). Default 10000, clamped 10-120000.                                       |
+| `OPENCLAW_BASH_MAX_OUTPUT_CHARS`         | In-memory output cap (chars).                                                                                    |
+| `OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS` | Pending stdout/stderr cap per stream (chars).                                                                    |
+| `OPENCLAW_BASH_JOB_TTL_MS`               | TTL for finished sessions (ms), bounded to 1m-3h.                                                                |
+| `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`    | Idle-output threshold before writable background sessions are marked as likely waiting for input. Default 15000. |
+
+### Config (preferred over env overrides)
+
+| Key                                   | Default | Effect                                                                          |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------- |
+| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                               |
+| `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                       |
+| `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                             |
+| `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
+| `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
 
 ## Child process bridging
 
-When spawning long-running child processes outside the exec/process tools (for example, CLI respawns or gateway helpers), attach the child-process bridge helper so termination signals are forwarded and listeners are detached on exit/error. This avoids orphaned processes on systemd and keeps shutdown behavior consistent across platforms.
-
-Environment overrides:
-
-- `OPENCLAW_BASH_YIELD_MS`: default yield (ms)
-- `OPENCLAW_BASH_MAX_OUTPUT_CHARS`: in-memory output cap (chars)
-- `OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS`: pending stdout/stderr cap per stream (chars)
-- `OPENCLAW_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
-- `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`: idle-output threshold before writable background sessions are marked as likely waiting for input (default 15000 ms)
-
-Config (preferred):
-
-- `tools.exec.backgroundMs` (default 10000)
-- `tools.exec.timeoutSec` (default 1800)
-- `tools.exec.cleanupMs` (default 1800000)
-- `tools.exec.notifyOnExit` (default true): enqueue a system event + request heartbeat when a backgrounded exec exits.
-- `tools.exec.notifyOnExitEmptySuccess` (default false): when true, also enqueue completion events for successful backgrounded runs that produced no output.
+When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/error. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
 ## process tool
 
 Actions:
 
-- `list`: running + finished sessions
-- `poll`: drain new output for a session (also reports exit status)
-- `log`: read the aggregated output and show input recovery hints (supports `offset` + `limit`)
-- `write`: send stdin (`data`, optional `eof`)
-- `send-keys`: send explicit key tokens or bytes to a PTY-backed session
-- `submit`: send Enter / carriage return to a PTY-backed session
-- `paste`: send literal text, optionally wrapped in bracketed paste mode
-- `kill`: terminate a background session
-- `clear`: remove a finished session from memory
-- `remove`: kill if running, otherwise clear if finished
+| Action      | Effect                                                                        |
+| ----------- | ----------------------------------------------------------------------------- |
+| `list`      | Running + finished sessions.                                                  |
+| `poll`      | Drain new output for a session (also reports exit status).                    |
+| `log`       | Read aggregated output and input-recovery hints. Supports `offset` + `limit`. |
+| `write`     | Send stdin (`data`, optional `eof`).                                          |
+| `send-keys` | Send explicit key tokens or bytes to a PTY-backed session.                    |
+| `submit`    | Send Enter/carriage return to a PTY-backed session.                           |
+| `paste`     | Send literal text, optionally wrapped in bracketed paste mode.                |
+| `kill`      | Terminate a background session.                                               |
+| `clear`     | Remove a finished session from memory.                                        |
+| `remove`    | Kill if running, otherwise clear if finished.                                 |
 
 Notes:
 
-- Only backgrounded sessions are listed/persisted in memory.
-- Sessions are lost on process restart (no disk persistence).
-- Session logs are only saved to chat history if you run `process poll/log` and the tool result is recorded.
+- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
+- `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
+- Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
-- Use `poll` / `log` for status, logs, quiet-success confirmation, or
-  completion confirmation when automatic completion wake is unavailable.
-- Use `log` before recovering an interactive CLI so the current transcript,
-  stdin state, and input-wait hint are visible together.
-- Use `write` / `send-keys` / `submit` / `paste` / `kill` when you need input
-  or intervention.
+- Use `poll`/`log` for status, logs, or completion confirmation when automatic completion wake is unavailable.
+- Use `log` before recovering an interactive CLI, so the current transcript, stdin state, and input-wait hint are visible together.
+- Use `write`/`send-keys`/`submit`/`paste`/`kill` when you need input or intervention.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
-- `process list`, `poll`, and `log` report `waitingForInput` only
-  when the session still has writable stdin and has been idle longer than the
-  input-wait threshold.
-- `process log` uses line-based `offset`/`limit`.
-- When both `offset` and `limit` are omitted, it returns the last 200 lines and includes a paging hint.
-- When `offset` is provided and `limit` is omitted, it returns from `offset` to the end (not capped to 200).
-- Polling is for on-demand status, not wait-loop scheduling. If the work should
-  happen later, use cron instead.
+- `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
+- `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
+- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
+- Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
 
 ## Examples
 

@@ -1,0 +1,32 @@
+title: Matrix media attachments cover image, audio, video, PDF, and EPUB transport
+scenario:
+  id: matrix-media-type-coverage
+  surface: channels
+  coverage:
+    primary:
+      - matrix.media-and-rich-content
+  execution:
+    profiles: { "matrix:all": 53, "matrix:media": 2 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: media
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Media Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media.js
+  call: runMediaTypeCoverageScenario
+  args:
+    - expr: "scenarioContext"

@@ -1,0 +1,19 @@
+title: Slack top-level reply stays top-level
+scenario:
+  id: slack-top-level-reply-shape
+  surface: channels
+  coverage:
+    primary:
+      - slack.thread-routing
+  execution:
+    profiles: { "slack:default": 3 }
+    kind: flow
+    channel: slack
+    timeoutMs: 45000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-top-level-reply-shape }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackTopLevelReplyShapeScenario
+  args: [{ expr: slackScenarioContext }]

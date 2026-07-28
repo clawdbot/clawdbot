@@ -6,9 +6,10 @@ import {
 } from "./provider-self-hosted-setup.js";
 import type { ProviderAuthMethodNonInteractiveContext } from "./types.js";
 
-const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock } = vi.hoisted(() => ({
+const { fetchWithSsrFGuardMock, upsertAuthProfileWithLock, loggerWarnMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
   upsertAuthProfileWithLock: vi.fn(async () => null),
+  loggerWarnMock: vi.fn(),
 }));
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
@@ -17,6 +18,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 
 vi.mock("../agents/auth-profiles/upsert-with-lock.js", () => ({
   upsertAuthProfileWithLock,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({ warn: loggerWarnMock }),
 }));
 
 beforeEach(() => {
@@ -142,6 +147,53 @@ function cancelTrackedResponse(init?: ResponseInit): {
 }
 
 describe("discoverOpenAICompatibleLocalModels", () => {
+  it("labels malformed discovery JSON in the warning", async () => {
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("not valid json {", { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "local llama.cpp",
+      env: {},
+    });
+
+    expect(models).toEqual([]);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("local llama.cpp discovery: malformed JSON response"),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("logs a warning when discovery JSON contains invalid UTF-8 bytes", async () => {
+    const release = vi.fn(async () => undefined);
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"data":[{"id":"qwen3-'),
+      0xff,
+      ...new TextEncoder().encode('"}]}'),
+    ]);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, { status: 200 }),
+      finalUrl: "http://127.0.0.1:8080/v1/models",
+      release,
+    });
+
+    const models = await discoverOpenAICompatibleLocalModels({
+      baseUrl: "http://127.0.0.1:8080/v1",
+      label: "local llama.cpp",
+      env: {},
+    });
+
+    expect(models).toEqual([]);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("local llama.cpp discovery: malformed JSON response"),
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
     const release = vi.fn(async () => undefined);
     const propsRelease = vi.fn(async () => undefined);

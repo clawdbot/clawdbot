@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
@@ -104,6 +105,7 @@ internal fun ClawBottomNav(
       Row(
         modifier =
           Modifier
+            .fillMaxWidth()
             .windowInsetsPadding(safeInsets)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -131,18 +133,25 @@ private fun ClawBottomNavItem(
 ) {
   Surface(
     onClick = onClick,
-    modifier = modifier.heightIn(min = 48.dp),
+    modifier = modifier.heightIn(min = 52.dp),
     shape = RoundedCornerShape(ClawTheme.radii.control),
     color = if (selected) ClawTheme.colors.surfacePressed.copy(alpha = 0.72f) else Color.Transparent,
     contentColor = if (selected) ClawTheme.colors.text else ClawTheme.colors.textMuted,
   ) {
     Column(
-      modifier = Modifier.padding(horizontal = 5.dp, vertical = 5.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 5.dp, vertical = 5.dp),
       horizontalAlignment = Alignment.CenterHorizontally,
       verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(18.dp))
-      Text(text = item.label, style = ClawTheme.type.caption, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Icon(imageVector = item.icon, contentDescription = item.label, modifier = Modifier.size(20.dp))
+      Text(
+        modifier = Modifier.fillMaxWidth(),
+        text = item.label,
+        style = ClawTheme.type.caption,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        textAlign = TextAlign.Center,
+      )
     }
   }
 }

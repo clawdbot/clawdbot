@@ -1,7 +1,7 @@
 import AppKit
+import KeyboardShortcuts
 import Observation
 import OpenClawDiscovery
-import OpenClawIPC
 import OpenClawKit
 import SwiftUI
 
@@ -16,6 +16,7 @@ struct GeneralSettings: View {
 
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    @AppStorage(computerControlEnabledKey) private var computerControlEnabled: Bool = false
     let page: Page
     let isActive: Bool
     private let healthStore = HealthStore.shared
@@ -59,6 +60,13 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onChange(of: self.state.quickChatEnabled) { _, enabled in
+            QuickChatController.shared.setEnabled(enabled)
+        }
+        .onChange(of: self.computerControlEnabled) { _, _ in
+            // Turning Computer Control on/off must start or stop the gated PeekabooBridge host.
+            self.state.applyPeekabooBridgeHostState()
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
     }
 
@@ -73,19 +81,37 @@ struct GeneralSettings: View {
             SettingsCardGroup("App") {
                 SettingsCardToggleRow(
                     title: "Launch at login",
-                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    subtitle: self.state.bundleLocationAllowsPersistentIntegration
+                        ? "Automatically start OpenClaw after you sign in."
+                        : "Move OpenClaw to Applications before enabling launch at login.",
                     binding: self.$state.launchAtLogin)
+                    .disabled(!self.state.bundleLocationAllowsPersistentIntegration && !self.state.launchAtLogin)
 
                 SettingsCardToggleRow(
                     title: "Show Dock icon",
-                    subtitle: "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
+                    subtitle: """
+                    Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.
+                    """,
                     binding: self.$state.showDockIcon)
 
                 SettingsCardToggleRow(
                     title: "Play menu bar icon animations",
                     subtitle: "Enable idle blinks and wiggles on the status icon.",
-                    binding: self.$state.iconAnimationsEnabled,
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsCardToggleRow(
+                    title: "Quick Chat",
+                    subtitle: "Show a floating composer for quick messages, summoned with a global shortcut.",
+                    binding: self.$state.quickChatEnabled)
+
+                SettingsCardRow(
+                    title: "Quick Chat shortcut",
+                    subtitle: "Global shortcut that opens a floating chat bar for the main thread.",
                     showsDivider: false)
+                {
+                    KeyboardShortcuts.Recorder(for: .toggleQuickChat)
+                }
+                .disabled(!self.state.quickChatEnabled)
             }
 
             SettingsCardGroup("Capabilities") {
@@ -100,10 +126,50 @@ struct GeneralSettings: View {
                     binding: self.$cameraEnabled)
 
                 SettingsCardToggleRow(
+                    title: "Allow Computer Control",
+                    subtitle: """
+                    Let an authorized agent move the pointer, click, and type on this Mac. \
+                    Also requires Accessibility, Screen Recording, and gateway command authorization. High risk.
+                    """,
+                    binding: self.$computerControlEnabled)
+
+                SettingsCardToggleRow(
                     title: "Enable Peekaboo Bridge",
-                    subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                    binding: self.$state.peekabooBridgeEnabled,
+                    subtitle: """
+                    Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge. \
+                    Requires Computer Control; otherwise run Peekaboo's own Mac app.
+                    """,
+                    binding: self.peekabooBridgeBinding,
                     showsDivider: false)
+                    .disabled(!self.computerControlEnabled)
+            }
+
+            SettingsCardGroup("Browser") {
+                SettingsCardRow(
+                    title: "Browser login",
+                    subtitle: "Copy cookies from a Chrome-family profile into an isolated managed profile.",
+                    showsDivider: false)
+                {
+                    Button("Import…") {
+                        Task { @MainActor in
+                            switch await BrowserProfileImportModel.shared.refresh(force: true) {
+                            case .offering:
+                                // The banner lives in the dashboard window; force
+                                // offers must surface it even if that window is closed.
+                                AppNavigationActions.openDashboard()
+                            case let .unavailable(title, message):
+                                let alert = NSAlert()
+                                alert.messageText = title
+                                alert.informativeText = message
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.state.connectionMode != .local)
+                }
             }
 
             SettingsCardGroup("Developer") {
@@ -204,6 +270,14 @@ struct GeneralSettings: View {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    /// Reflects the effective bridge state: off (and disabled) whenever Computer Control is off,
+    /// so the row matches the host that actually runs instead of a standalone toggle.
+    private var peekabooBridgeBinding: Binding<Bool> {
+        Binding(
+            get: { self.computerControlEnabled && self.state.peekabooBridgeEnabled },
+            set: { self.state.peekabooBridgeEnabled = $0 })
     }
 
     private func updateActiveWork(active: Bool) {
@@ -317,7 +391,9 @@ struct GeneralSettings: View {
             if self.state.connectionMode == .unconfigured {
                 SettingsCardRow(
                     title: "Setup needed",
-                    subtitle: "Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.",
+                    subtitle: """
+                    Local is best for this Mac. Remote is best when the Gateway already runs on a Mac Studio or server.
+                    """,
                     showsDivider: false)
                 {
                     Image(systemName: "exclamationmark.triangle.fill")
@@ -403,7 +479,10 @@ struct GeneralSettings: View {
     }
 
     private var controlChannelRow: some View {
-        SettingsCardRow(title: "Control channel", subtitle: self.controlChannelSubtitle) {
+        SettingsCardRow(
+            title: "Control channel",
+            subtitle: self.controlChannelSubtitle.map(SettingsTextValue.verbatim))
+        {
             Text(self.controlStatusLine)
                 .font(.caption.weight(.semibold))
                 .padding(.horizontal, 8)
@@ -757,8 +836,8 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID)
         GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
+        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
     }
 }
 

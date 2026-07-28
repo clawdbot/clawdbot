@@ -16,7 +16,7 @@ Adds Cerebras model provider support to OpenClaw.
 
 ## Surface
 
-providers: cerebras
+providers: `cerebras`
 
 ## Related docs
 

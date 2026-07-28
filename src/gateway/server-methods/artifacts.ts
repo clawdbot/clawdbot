@@ -1,6 +1,7 @@
 // Artifact gateway methods collect generated artifacts from session transcripts
 // and expose list/get/download RPCs scoped by session, run, task, or agent.
 import { createHash } from "node:crypto";
+import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -28,7 +29,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -257,12 +258,7 @@ function isSafeDownloadUrl(value: string): boolean {
   if (trimmed.startsWith("/")) {
     return !trimmed.startsWith("//") && trimmed.startsWith("/api/");
   }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isHttpUrl(trimmed);
 }
 
 /** Generates a stable id from transcript position plus display metadata. */
@@ -516,8 +512,8 @@ async function loadArtifacts(
   const scopedGlobalAgentId =
     cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
   const { storePath, entry } = scopedGlobalAgentId
-    ? loadSessionEntry(sessionKey, { agentId: scopedGlobalAgentId })
-    : loadSessionEntry(sessionKey);
+    ? loadSessionEntryReadOnly(sessionKey, { agentId: scopedGlobalAgentId })
+    : loadSessionEntryReadOnly(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };

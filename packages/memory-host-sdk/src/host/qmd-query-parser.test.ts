@@ -1,5 +1,5 @@
 // Memory Host SDK tests cover qmd query parser behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parseQmdQueryJson } from "./qmd-query-parser.js";
 
 describe("parseQmdQueryJson", () => {
@@ -60,6 +60,15 @@ complete`,
     expect(parseQmdQueryJson("", "[qmd] warning: no results found\n")).toStrictEqual([]);
   });
 
+  it("keeps bounded stderr context UTF-16 safe", () => {
+    const prefix = "a".repeat(116);
+    const stderr = `${prefix}😀${"b".repeat(120)}`;
+
+    expect(() => parseQmdQueryJson("", stderr)).toThrow(
+      `qmd query returned invalid JSON: stdout empty (stderr: ${prefix}...)`,
+    );
+  });
+
   it("does not treat arbitrary non-marker text as no-results output", () => {
     expect(() =>
       parseQmdQueryJson("warning: search completed; no results found for this query", ""),
@@ -70,5 +79,23 @@ complete`,
     expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
       /qmd query returned invalid JSON/i,
     );
+  });
+
+  it("routes invalid-output diagnostics through console capture", () => {
+    vi.stubEnv("VITEST", "");
+    vi.stubEnv("NODE_ENV", "production");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      expect(() => parseQmdQueryJson("this is not json", "")).toThrow(
+        /qmd query returned invalid JSON/i,
+      );
+      expect(warn).toHaveBeenCalledWith(
+        "qmd query returned invalid JSON: qmd query JSON response was not an array",
+      );
+    } finally {
+      warn.mockRestore();
+      vi.unstubAllEnvs();
+    }
   });
 });

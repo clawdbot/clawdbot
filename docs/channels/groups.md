@@ -7,19 +7,19 @@ title: "Groups"
 sidebarTitle: "Groups"
 ---
 
-OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp, Zalo.
+OpenClaw applies the same group rules across group-capable channels, including Discord, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp, and Zalo.
 
 For always-on rooms that should provide quiet context unless the agent explicitly sends a visible message, see [Ambient room events](/channels/ambient-room-events).
 
 ## Beginner intro (2 minutes)
 
-OpenClaw "lives" on your own messaging accounts. There is no separate WhatsApp bot user. If **you** are in a group, OpenClaw can see that group and respond there.
+OpenClaw "lives" on your own messaging accounts. There is no separate WhatsApp bot user: if **you** are in a group, OpenClaw can see that group and respond there.
 
 Default behavior:
 
-- Groups are restricted (`groupPolicy: "allowlist"`).
-- Replies require a mention unless you explicitly disable mention gating.
-- Visible replies in groups/channels use the `message` tool by default.
+- Groups are restricted (`groupPolicy: "allowlist"`); group senders are blocked until allowlisted.
+- Replies require a mention unless you disable mention gating for a group.
+- Final reply text posts to the room automatically (`visibleReplies: "automatic"`).
 
 Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
@@ -34,7 +34,7 @@ Translation: allowlisted senders can trigger OpenClaw by mentioning it.
 
 Quick flow (what happens to a group message):
 
-```
+```text
 groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
 requireMention? yes -> mentioned? no -> store for context only
@@ -44,30 +44,23 @@ always-on group chatter -> user request, or room event when configured
 
 ## Visible replies
 
-For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`. Final assistant text posts through the legacy visible reply path unless you opt the room into message-tool-only output.
+For normal group/channel requests, OpenClaw defaults to `messages.groupChat.visibleReplies: "automatic"`: the final assistant text posts to the room as the visible reply.
 
-Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best for group rooms backed by latest-generation, tool-reliable models such as GPT 5.5. If the model misses that tool and returns substantive final text, OpenClaw keeps that final text private instead of posting it to the room.
+Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room should let the agent decide when to speak by calling `message(action=send)`. This works best with tool-reliable models (for example GPT-5.6 Sol). If the model misses the tool and returns substantive final text, OpenClaw keeps that text private instead of posting it to the room.
 
-Use `"automatic"` for weaker models or runtimes that do not reliably understand tool-only delivery. In automatic mode, the agent's final assistant text is the visible source reply path, so a model that cannot consistently call `message(action=send)` can still answer normally.
+Use `"automatic"` for models or runtimes that do not reliably follow tool-only delivery: normal text finals post directly to the room, and the agent may still call `message(action=send)` for files, images, or other attachments that cannot ride along with the final text.
 
-In automatic mode, normal text final replies are posted directly to the room. If the visible reply needs files, images, or other attachments, the agent may still use `message(action=send)` for that attachment instead of trying to force it through the final text reply.
+If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
 
-If the message tool is unavailable under the active tool policy, OpenClaw falls
-back to automatic visible replies instead of silently suppressing the response.
-`openclaw doctor` warns about this mismatch.
+For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
-
-This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, the prompt does not define a `NO_REPLY` contract. Doing nothing visible simply means not calling the message tool.
+Tool-only mode replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode the prompt does not define a `NO_REPLY` contract; doing nothing visible simply means not calling the message tool.
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
-Sessions suppress verbose tool/progress summaries by default. Use `/verbose on`
-to show those summaries for the current session while debugging, and
-`/verbose off` to return to final-reply-only behavior. The same verbose state
-applies across direct chats, groups, channels, and forum topics.
+Sessions suppress verbose tool/progress summaries by default. Use `/verbose on` (or `/verbose full`) to show them for the current session while debugging, and `/verbose off` to return to final-reply-only behavior. Verbose state is per session and works the same in direct chats, groups, channels, and forum topics.
 
 To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
 
@@ -81,9 +74,7 @@ To submit unmentioned always-on group chatter as quiet room context instead of u
 }
 ```
 
-The default is `unmentionedInbound: "user_request"`.
-
-Mentioned messages, commands, abort requests, and DMs stay user requests.
+The default is `unmentionedInbound: "user_request"`. Mentioned messages, commands, abort requests, and DMs stay user requests.
 
 To require visible output to go through the message tool for group/channel requests:
 
@@ -97,10 +88,7 @@ To require visible output to go through the message tool for group/channel reque
 }
 ```
 
-The gateway hot-reloads `messages` config after the file is saved. Restart only
-when file watching or config reload is disabled in the deployment.
-
-To require visible output to go through the message tool for every source chat:
+To require it for every source chat:
 
 ```json5
 {
@@ -110,32 +98,28 @@ To require visible output to go through the message tool for every source chat:
 }
 ```
 
-Native slash commands (Discord, Telegram, and other surfaces with native command support) bypass `visibleReplies: "message_tool"` and always reply visibly so the channel-native command UI gets the response it expects. This applies to validated native command turns only; text-typed `/...` commands and ordinary chat turns still follow the configured group default.
+The gateway picks up `messages` config changes without a restart after the file is saved. Restart only when config reload is disabled (`gateway.reload.mode: "off"`).
+
+Command turns bypass `visibleReplies: "message_tool"` and always reply visibly: native slash commands (Discord, Telegram, and other surfaces with native command support) and authorized text `/...` commands both post their response to the source chat. Unauthorized text `/...` turns in groups stay message-tool-only; ordinary chat turns follow the configured default.
 
 ## Context visibility and allowlists
 
 Two different controls are involved in group safety:
 
 - **Trigger authorization**: who can trigger the agent (`groupPolicy`, `groups`, `groupAllowFrom`, channel-specific allowlists).
-- **Context visibility**: what supplemental context is injected into the model (reply text, quotes, thread history, forwarded metadata).
+- **Context visibility**: what supplemental context is injected into the model (reply/quote text, thread history, forwarded metadata).
 
-By default, OpenClaw prioritizes normal chat behavior and keeps context mostly as received. This means allowlists primarily decide who can trigger actions, not a universal redaction boundary for every quoted or historical snippet.
+By default OpenClaw keeps context as received: allowlists decide who can trigger actions, not what quoted or historical snippets the model sees. To also filter supplemental context, set `contextVisibility`:
 
-<AccordionGroup>
-  <Accordion title="Current behavior is channel-specific">
-    - Some channels already apply sender-based filtering for supplemental context in specific paths (for example Slack thread seeding, Matrix reply/thread lookups).
-    - Other channels still pass quote/reply/forward context through as received.
+| Mode                | Behavior                                                                         |
+| ------------------- | -------------------------------------------------------------------------------- |
+| `"all"` (default)   | Keep supplemental context as received.                                           |
+| `"allowlist"`       | Only inject history/thread/quote/forwarded context from allowlisted senders.     |
+| `"allowlist_quote"` | `allowlist`, plus keep the explicitly quoted/replied-to message from any sender. |
 
-  </Accordion>
-  <Accordion title="Hardening direction (planned)">
-    - `contextVisibility: "all"` (default) keeps current as-received behavior.
-    - `contextVisibility: "allowlist"` filters supplemental context to allowlisted senders.
-    - `contextVisibility: "allowlist_quote"` is `allowlist` plus one explicit quote/reply exception.
+Set it per channel (`channels.<channel>.contextVisibility`), per account (`channels.<channel>.accounts.<accountId>.contextVisibility`), or globally (`channels.defaults.contextVisibility`). Channels that fetch supplemental context (Discord, Feishu, iMessage, Matrix, Microsoft Teams, QQBot, Signal, Slack, Telegram, WhatsApp) apply the policy when building inbound context; unknown policy combinations fail closed and omit the context.
 
-    Until this hardening model is implemented consistently across channels, expect differences by surface.
-
-  </Accordion>
-</AccordionGroup>
+These modes filter channel-supplied supplemental context only. Tool policy and the owner-only tool inventory are still selected from the current turn's originating requester, not every sender represented in the prompt. See [Requester-scoped controls and prompt context](/gateway/security#requester-scoped-controls-and-prompt-context).
 
 ![Group message flow](/images/groups-flow.svg)
 
@@ -155,8 +139,8 @@ For reusable sender allowlists, see [Access groups](/channels/access-groups).
 
 - Group sessions use `agent:<agentId>:<channel>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<channel>:channel:<id>`).
 - Telegram forum topics add `:topic:<threadId>` to the group id so each topic has its own session.
-- Direct chats use the main session (or per-sender if configured).
-- Heartbeats are skipped for group sessions.
+- Direct chats use the main session (or per-sender sessions if `session.dmScope` is configured).
+- Heartbeats run in the configured heartbeat session (default: the agent main session); group sessions do not run their own heartbeats.
 
 <a id="pattern-personal-dms-public-groups-single-agent"></a>
 
@@ -235,7 +219,7 @@ Related:
 ## Display labels
 
 - UI labels use `displayName` when available, formatted as `<channel>:<token>`.
-- `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
+- `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`). Very long opaque ids are shortened into a stable token instead of leaking full route ids into the UI.
 
 ## Group policy
 
@@ -250,7 +234,7 @@ Control how group/room messages are handled per channel:
     },
     telegram: {
       groupPolicy: "disabled",
-      groupAllowFrom: ["123456789"], // numeric Telegram user id (wizard can resolve @username)
+      groupAllowFrom: ["123456789"], // numeric Telegram user id (setup resolves @username)
     },
     signal: {
       groupPolicy: "disabled",
@@ -267,12 +251,12 @@ Control how group/room messages are handled per channel:
     discord: {
       groupPolicy: "allowlist",
       guilds: {
-        GUILD_ID: { channels: { help: { allow: true } } },
+        GUILD_ID: { channels: { help: { enabled: true } } },
       },
     },
     slack: {
       groupPolicy: "allowlist",
-      channels: { "#general": { allow: true } },
+      channels: { "#general": { enabled: true } },
     },
     matrix: {
       groupPolicy: "allowlist",
@@ -300,11 +284,11 @@ Control how group/room messages are handled per channel:
     - DM pairing approvals (`*-allowFrom` store entries) apply to DM access only; group sender authorization stays explicit to group allowlists.
     - Discord: allowlist uses `channels.discord.guilds.<id>.channels`.
     - Slack: allowlist uses `channels.slack.channels`.
-    - Matrix: allowlist uses `channels.matrix.groups`. Prefer room IDs or aliases; joined-room name lookup is best-effort, and unresolved names are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
-    - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`).
-    - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
+    - Matrix: allowlist uses `channels.matrix.groups`. Use room IDs (`!room:server`) or aliases (`#alias:server`); room-name keys match only with `channels.matrix.dangerouslyAllowNameMatching: true`, and unresolved entries are ignored at runtime. Use `channels.matrix.groupAllowFrom` to restrict senders; per-room `users` allowlists are also supported.
+    - Group DMs are controlled separately (`channels.discord.dm.*`, `channels.slack.dm.*`: `groupEnabled`, `groupChannels`).
+    - Telegram: sender allowlists accept numeric user IDs only (`"123456789"`; `telegram:`/`tg:` prefixes are stripped case-insensitively). `@username` entries do not match at runtime and log a warning; setup resolves `@username` to IDs. Negative chat IDs belong under `channels.telegram.groups`, not sender allowlists.
     - Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
-    - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy falls back to a fail-closed mode (typically `allowlist`) instead of inheriting `channels.defaults.groupPolicy`.
+    - Runtime safety: when a provider block is completely missing (`channels.<provider>` absent), group policy fails closed to `allowlist` instead of inheriting `channels.defaults.groupPolicy`, and the gateway logs the fallback once per account.
 
   </Accordion>
 </AccordionGroup>
@@ -327,7 +311,15 @@ Quick mental model (evaluation order for group messages):
 
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
-Replying to a bot message counts as an implicit mention when the channel supports reply metadata. Quoting a bot message can also count as an implicit mention on channels that expose quote metadata. Current built-in cases include Telegram, WhatsApp, Slack, Discord, Microsoft Teams, and ZaloUser.
+Supported implicit mention facts are channel-specific:
+
+| Fact                  | Current built-in producers                       |
+| --------------------- | ------------------------------------------------ |
+| Reply to the bot      | Discord, Microsoft Teams, QQBot, Slack, Telegram |
+| Quote of the bot      | WhatsApp, Zalo personal                          |
+| Bot joined the thread | Mattermost, Slack, Tlon                          |
+
+Each fact defaults to enabled when the channel produces it. Set the corresponding `implicitMentions` flag to `false` to stop that fact from bypassing mention gating; native explicit mentions remain unaffected. A flag has no effect on channels that do not produce that fact.
 
 ```json5
 {
@@ -352,15 +344,15 @@ Replying to a bot message counts as an implicit mention when the channel support
     },
   },
   agents: {
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
+        default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw", "\\+15555550123"],
           historyLimit: 50,
         },
       },
-    ],
+    },
   },
 }
 ```
@@ -370,17 +362,13 @@ Replying to a bot message counts as an implicit mention when the channel support
 Configured `mentionPatterns` are regex fallback triggers. Use them when the
 platform does not expose a native bot mention, or when you want plain text such
 as `openclaw:` to count as a mention. Native platform mentions are separate:
-when Discord, Slack, Telegram, Matrix, or another channel can prove the message
+when Discord, Slack, Telegram, Matrix, Signal, or another channel can prove the message
 explicitly mentioned the bot, that native mention still triggers even if
 configured regex patterns are denied.
 
-By default, configured mention patterns apply everywhere that channel passes
-provider and conversation facts into mention detection. To keep broad patterns
-from waking the agent in every group, scope them per channel with
-`channels.<channel>.mentionPatterns`.
+By default, configured mention patterns apply everywhere the channel passes provider and conversation facts into mention detection. To keep broad patterns from waking the agent in every group, scope them per channel with `channels.<channel>.mentionPatterns`.
 
-Use `mode: "deny"` when regex mention patterns should be off by default for a
-channel, then opt in specific rooms with `allowIn`:
+Use `mode: "deny"` when regex mention patterns should be off by default for a channel, then opt in specific rooms with `allowIn`:
 
 ```json5
 {
@@ -400,8 +388,7 @@ channel, then opt in specific rooms with `allowIn`:
 }
 ```
 
-Use the default `mode: "allow"` (or omit `mode`) when regex mention patterns
-should apply broadly, then turn them off in noisy rooms with `denyIn`:
+Use the default `mode: "allow"` (or omit `mode`) when regex mention patterns should apply broadly, then turn them off in noisy rooms with `denyIn`:
 
 ```json5
 {
@@ -439,18 +426,12 @@ Supported scoped regex policy today:
 | Telegram | Group chat IDs, or `chatId:topic:threadId` for forum topics. |
 | WhatsApp | WhatsApp conversation IDs such as `123@g.us`.                |
 
-Account-level channel configs can set the same policy under
-`channels.<channel>.accounts.<accountId>.mentionPatterns` when that channel
-supports multiple accounts. Account policy takes precedence over the top-level
-channel policy for that account.
+Account-level channel configs can set the same policy under `channels.<channel>.accounts.<accountId>.mentionPatterns` when that channel supports multiple accounts. Account policy takes precedence over the top-level channel policy for that account.
 
 <AccordionGroup>
   <Accordion title="Mention gating notes">
-    - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored.
-    - Surfaces that provide explicit mentions still pass; configured regex patterns are a fallback.
-    - `channels.<channel>.mentionPatterns.mode: "deny"` disables configured mention patterns by default for that channel; opt selected conversations back in with `allowIn`.
-    - `channels.<channel>.mentionPatterns.denyIn` disables configured mention patterns for specific conversation IDs while native platform @mentions still pass.
-    - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
+    - `mentionPatterns` are case-insensitive safe regex patterns; invalid patterns and unsafe nested-repetition forms are ignored (with a warning).
+    - Pattern precedence: `agents.entries.*.groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the agent identity name/emoji.
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
@@ -467,8 +448,8 @@ channel policy for that account.
 
 Some channel configs support restricting which tools are available **inside a specific group/room/channel**.
 
-- `tools`: allow/deny tools for the whole group.
-- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Channel ids use canonical OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are still accepted and matched as `id:` only.
+- `tools`: allow/deny tools for the whole group (`allow`, `alsoAllow`, `deny`; deny wins).
+- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Channel ids use canonical OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Legacy unprefixed keys are still accepted, matched as `id:` only, and log a deprecation warning.
 
 Resolution order (most specific wins):
 
@@ -571,12 +552,12 @@ Common intents (copy/paste):
 
 ## Activation (owner-only)
 
-Group owners can toggle per-group activation:
+Group owners can toggle per-group activation with a standalone message:
 
 - `/activation mention`
 - `/activation always`
 
-Owner is determined by `channels.whatsapp.allowFrom` (or the bot's self E.164 when unset). Send the command as a standalone message. Other surfaces currently ignore `/activation`.
+`/activation` is a core owner-gated command and only applies in group chats. Owner means the sender matches `commands.ownerAllowFrom`; channel `allowFrom` lists only control ordinary channel and command access. The stored mode overrides that group's `requireMention` on channels that consult it (Google Chat, QQBot, Telegram, WhatsApp), and the group system-prompt intro reflects the active mode everywhere.
 
 ## Context fields
 
@@ -588,7 +569,7 @@ Group inbound payloads set:
 - `WasMentioned` (mention gating result)
 - Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
-The agent system prompt includes a group intro on the first turn of a new group session. It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Non-Telegram groups also discourage Markdown tables; Telegram rich-text guidance comes from the Telegram channel prompt. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
+The agent system prompt includes a group intro on the first turn of a new group session (and after `/activation` changes). It reminds the model to respond like a human, minimize empty lines and follow normal chat spacing, and avoid typing literal `\n` sequences. Channels whose declared table mode does not preserve native or raw tables also discourage Markdown tables. Channel-sourced group names and participant labels are rendered as fenced untrusted metadata, not inline system instructions.
 
 ## iMessage specifics
 

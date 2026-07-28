@@ -11,12 +11,18 @@ import {
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  resolveSessionTranscriptTarget,
-  type SessionTranscriptTargetParams,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+  listSessionEntries,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
-export type CodexMirroredSessionHistoryTarget = {
+function isMissingFileError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
+}
+
+type CodexMirroredSessionHistoryTarget = {
   agentId?: string;
   sessionFile: string;
   sessionId: string;
@@ -28,17 +34,25 @@ export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    await resolveSessionTranscriptTarget(resolveCodexHistoryTranscriptTarget(target));
-    const raw = await fs.readFile(target.sessionFile, "utf-8");
-    const entries = parseSessionEntries(raw);
+    const entries = await readCodexMirroredSessionEntries(target);
     if (entries.length === 0) {
       return [];
     }
     const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
-    if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
+    if (firstEntry?.type !== "session") {
+      // A well-formed transcript that does not open with a `session` marker is
+      // simply not a Codex-mirrored session (e.g. a non-Codex model run reusing
+      // this hook) — an empty mirror, not a read failure, so callers must not
+      // warn. `undefined` stays reserved for genuine failures: read/parse errors
+      // (caught below) and malformed `session` headers (next check).
+      return [];
+    }
+    if (typeof firstEntry.id !== "string") {
+      // A `session` header without a string id is a corrupted Codex transcript,
+      // not a foreign one — keep it on the warn path.
       return undefined;
     }
-    migrateSessionEntries(entries as SessionEntry[]);
+    migrateSessionEntries(entries);
     const sessionEntries = entries.filter((entry): entry is SessionEntry => {
       return (
         entry !== null &&
@@ -51,18 +65,60 @@ export async function readCodexMirroredSessionHistoryMessages(
       buildSessionContext(sessionEntries).messages,
       "codex mirrored history",
     );
-  } catch {
+  } catch (error) {
+    // A new Codex session can be read before its transcript exists; other failures still warn.
+    if (isMissingFileError(error)) {
+      return [];
+    }
     return undefined;
   }
 }
 
-function resolveCodexHistoryTranscriptTarget(
+async function readCodexMirroredSessionEntries(
   target: CodexMirroredSessionHistoryTarget,
-): SessionTranscriptTargetParams {
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionFile: target.sessionFile,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey ?? "",
-  };
+): Promise<SessionEntry[]> {
+  const sqliteMarker = parseSqliteSessionFileMarker(target.sessionFile);
+  if (sqliteMarker) {
+    if (
+      sqliteMarker.sessionId !== target.sessionId ||
+      (target.agentId !== undefined && sqliteMarker.agentId !== target.agentId)
+    ) {
+      return [];
+    }
+    const sessionKey = resolveSqliteMarkerSessionKey(target, sqliteMarker);
+    if (!sessionKey) {
+      return [];
+    }
+    return (await readSessionTranscriptEvents({
+      agentId: sqliteMarker.agentId,
+      sessionId: sqliteMarker.sessionId,
+      sessionKey,
+      storePath: sqliteMarker.storePath,
+    })) as SessionEntry[];
+  }
+  return parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8")) as SessionEntry[];
+}
+
+function resolveSqliteMarkerSessionKey(
+  target: CodexMirroredSessionHistoryTarget,
+  marker: SqliteSessionFileMarker,
+): string | undefined {
+  const explicitSessionKey = target.sessionKey?.trim();
+  if (explicitSessionKey) {
+    return explicitSessionKey;
+  }
+  const entries = listSessionEntries({
+    agentId: marker.agentId,
+    readOnly: true,
+    storePath: marker.storePath,
+  });
+  const exactEntry = entries.find(({ entry }) => {
+    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
+  });
+  const sessionEntry =
+    exactEntry ??
+    entries.find(({ entry }) => {
+      return entry.sessionId === marker.sessionId;
+    });
+  return sessionEntry?.sessionKey;
 }

@@ -10,6 +10,7 @@ import type {
   ContextEngineMaintenanceResult,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeSettings,
+  ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -22,7 +23,6 @@ import {
   createQueuedTaskRun,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import {
@@ -50,6 +50,7 @@ type DeferredTurnMaintenanceScheduleParams = {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -131,7 +132,7 @@ async function disposeDeferredMaintenanceContextEngine(
   }
 }
 
-export function createDeferredTurnMaintenanceAbortSignal(params?: {
+function createDeferredTurnMaintenanceAbortSignal(params?: {
   processLike?: DeferredTurnMaintenanceProcessLike;
 }): {
   abortSignal?: AbortSignal;
@@ -196,7 +197,7 @@ export function createDeferredTurnMaintenanceAbortSignal(params?: {
   };
 }
 
-export function resetDeferredTurnMaintenanceStateForTest(): void {
+function resetDeferredTurnMaintenanceStateForTest(): void {
   activeDeferredTurnMaintenanceRuns.clear();
   const processLike = process as DeferredTurnMaintenanceProcessLike;
   const state = processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
@@ -206,6 +207,15 @@ export function resetDeferredTurnMaintenanceStateForTest(): void {
   state.controllers.clear();
   unregisterDeferredTurnMaintenanceAbortSignalHandlers(processLike, state);
   delete processLike[DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.contextEngineMaintenanceTestApi")
+  ] = {
+    createDeferredTurnMaintenanceAbortSignal,
+    resetDeferredTurnMaintenanceStateForTest,
+  };
 }
 
 export async function waitForDeferredTurnMaintenanceForSession(sessionKey?: string): Promise<void> {
@@ -231,11 +241,15 @@ function markDeferredTurnMaintenanceTaskScheduleFailure(params: {
   });
 }
 
-function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
-  const runId = `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(
-    0,
-    8,
-  )}`;
+function buildTurnMaintenanceTaskDescriptor(params: {
+  sessionKey: string;
+  runId?: string;
+  notifyPolicy?: "silent" | "done_only" | "state_changes";
+  deliveryStatus?: "not_applicable" | "pending";
+}) {
+  const runId =
+    params.runId ??
+    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
   return createQueuedTaskRun({
     runtime: "acp",
     taskKind: TURN_MAINTENANCE_TASK_KIND,
@@ -246,8 +260,10 @@ function buildTurnMaintenanceTaskDescriptor(params: { sessionKey: string }) {
     runId,
     label: TURN_MAINTENANCE_TASK_LABEL,
     task: TURN_MAINTENANCE_TASK_TASK,
-    notifyPolicy: "silent",
-    deliveryStatus: "pending",
+    notifyPolicy: params.notifyPolicy ?? "silent",
+    // Fast maintenance stays silent and must not create a one-task flow.
+    // Long-running and failed workers promote it to pending before notifying.
+    deliveryStatus: params.deliveryStatus ?? "not_applicable",
     preferMetadata: true,
   });
 }
@@ -257,54 +273,22 @@ function promoteTurnMaintenanceTaskVisibility(params: {
   runId: string;
   notifyPolicy: "done_only" | "state_changes";
 }) {
-  const task = findTaskByRunIdForOwner({
-    runId: params.runId,
-    callerOwnerKey: params.sessionKey,
-  });
-  if (!task) {
-    return createQueuedTaskRun({
-      runtime: "acp",
-      taskKind: TURN_MAINTENANCE_TASK_KIND,
-      sourceId: TURN_MAINTENANCE_TASK_KIND,
-      requesterSessionKey: params.sessionKey,
-      ownerKey: params.sessionKey,
-      scopeKind: "session",
-      runId: params.runId,
-      label: TURN_MAINTENANCE_TASK_LABEL,
-      task: TURN_MAINTENANCE_TASK_TASK,
-      notifyPolicy: params.notifyPolicy,
-      deliveryStatus: "pending",
-      preferMetadata: true,
-    });
-  }
-  setDetachedTaskDeliveryStatusByRunId({
-    runId: params.runId,
-    runtime: "acp",
+  return buildTurnMaintenanceTaskDescriptor({
     sessionKey: params.sessionKey,
+    runId: params.runId,
+    notifyPolicy: params.notifyPolicy,
     deliveryStatus: "pending",
   });
-  if (task.notifyPolicy !== params.notifyPolicy) {
-    updateTaskNotifyPolicyForOwner({
-      taskId: task.taskId,
-      callerOwnerKey: params.sessionKey,
-      notifyPolicy: params.notifyPolicy,
-    });
-  }
-  return (
-    findTaskByRunIdForOwner({
-      runId: params.runId,
-      callerOwnerKey: params.sessionKey,
-    }) ?? task
-  );
 }
 
 /**
  * Attach runtime-owned transcript rewrite helpers to an existing
  * context-engine runtime context payload.
  */
-export function buildContextEngineMaintenanceRuntimeContext(params: {
+function buildContextEngineMaintenanceRuntimeContext(params: {
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   withSessionManagerRewriteLock?: SessionManagerRewriteLock;
@@ -325,6 +309,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: params.purpose ?? "context-engine.maintenance",
     }),
+    ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
     rewriteTranscriptEntries: async (request) => {
       if (params.sessionManager) {
@@ -358,6 +343,7 @@ async function executeContextEngineMaintenance(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -374,11 +360,13 @@ async function executeContextEngineMaintenance(params: {
   const result = await params.contextEngine.maintain({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionTarget: params.sessionTarget,
     sessionFile: params.sessionFile,
     runtimeSettings: params.runtimeSettings,
     runtimeContext: buildContextEngineMaintenanceRuntimeContext({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       sessionManager: params.executionMode === "background" ? undefined : params.sessionManager,
       withSessionManagerRewriteLock:
@@ -405,6 +393,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
   runtimeContext?: ContextEngineRuntimeContext;
@@ -460,6 +449,7 @@ async function runDeferredTurnMaintenanceWorker(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
@@ -607,6 +597,7 @@ function scheduleDeferredTurnMaintenance(
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -674,6 +665,7 @@ export async function runContextEngineMaintenance(params: {
   contextEngine?: ContextEngine;
   sessionId: string;
   sessionKey?: string;
+  sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   reason: "bootstrap" | "compaction" | "turn";
   sessionManager?: Parameters<typeof rewriteTranscriptEntriesInSessionManager>[0]["sessionManager"];
@@ -703,6 +695,7 @@ export async function runContextEngineMaintenance(params: {
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -726,6 +719,7 @@ export async function runContextEngineMaintenance(params: {
       contextEngine: params.contextEngine,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
+      sessionTarget: params.sessionTarget,
       sessionFile: params.sessionFile,
       reason: params.reason,
       sessionManager: params.sessionManager,

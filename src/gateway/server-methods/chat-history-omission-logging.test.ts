@@ -3,15 +3,17 @@
 // and that the omitted count reflects unique source messages (a message that is
 // first replaced and then trimmed is not double-counted). These run the real
 // production helpers and capture the real diagnostic event bus output.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { onDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import type { DiagnosticPayloadLargeEvent } from "../../infra/diagnostic-events.js";
-import { capArrayByJsonBytes } from "../session-utils.js";
+import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   enforceChatHistoryFinalBudget,
   replaceOversizedChatHistoryMessages,
   reportOmittedChatHistory,
-} from "./chat.js";
+} from "./chat-history-budget.js";
 
 type Captured = DiagnosticPayloadLargeEvent[];
 
@@ -70,7 +72,7 @@ describe("chat.history truncation logging (real diagnostic bus)", () => {
     });
 
     expect(result.events).toHaveLength(1);
-    const event = result.events[0];
+    const event = expectDefined(result.events[0], "result.events[0] test invariant");
     expect(event.surface).toBe("gateway.chat.history");
     expect(event.action).toBe("truncated");
     expect(event.reason).toBe("chat_history_budget");
@@ -114,7 +116,9 @@ describe("chat.history truncation logging (real diagnostic bus)", () => {
     // The emitted count equals the number of original messages that lost their
     // verbatim representation, and is strictly less than the double-counting sum.
     expect(result.events).toHaveLength(1);
-    expect(result.events[0].count).toBe(result.emittedCount);
+    expect(expectDefined(result.events[0], "result.events[0] test invariant").count).toBe(
+      result.emittedCount,
+    );
     expect(result.emittedCount).toBe(2);
     expect(naiveAdditive).toBeGreaterThan(result.emittedCount);
   });

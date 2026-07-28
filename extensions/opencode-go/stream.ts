@@ -5,6 +5,7 @@ import {
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { isOpencodeGoKimiNoReasoningModelId } from "./provider-catalog.js";
+import { isOpencodeGoDeepSeekV4ModelId } from "./provider-policy-api.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
 import {
   createOpencodeGoStalledStreamWrapper,
@@ -12,11 +13,7 @@ import {
   OPENCODE_GO_STREAM_IDLE_TIMEOUT_MS_DEFAULT,
 } from "./stream-termination.js";
 
-function isOpencodeGoDeepSeekV4ModelId(modelId: unknown): boolean {
-  return modelId === "deepseek-v4-flash" || modelId === "deepseek-v4-pro";
-}
-
-export function createOpencodeGoDeepSeekV4Wrapper(
+function createOpencodeGoDeepSeekV4Wrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
 ): ProviderWrapStreamFnContext["streamFn"] {
@@ -32,7 +29,7 @@ function stripReasoningParams(payloadObj: Record<string, unknown>): void {
   stripOpencodeGoKimiReasoningPayload(payloadObj);
 }
 
-export function createOpencodeGoKimiNoReasoningWrapper(
+function createOpencodeGoKimiNoReasoningWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
 ): ProviderWrapStreamFnContext["streamFn"] {
   if (!baseStreamFn) {

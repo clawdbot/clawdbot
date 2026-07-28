@@ -32,6 +32,13 @@ export type AcpRuntimeHandle = {
   backendSessionId?: string;
   /** Upstream harness session identifier, if exposed by adapter/runtime. */
   agentSessionId?: string;
+  /**
+   * Effective model the backend applied during session creation, when it can differ from the
+   * requested model. A backend that drops an unsupported inherited default reports `dropped` so
+   * the manager omits that model from persisted runtime controls instead of replaying a rejected
+   * model before the first turn. Absent when the backend did not deviate from the request.
+   */
+  appliedModel?: { kind: "applied"; model: string } | { kind: "dropped" };
 };
 
 export type AcpRuntimeEnsureInput = {
@@ -42,6 +49,12 @@ export type AcpRuntimeEnsureInput = {
   resumeSessionId?: string;
   /** Optional runtime model override that must be available during session creation. */
   model?: string;
+  /**
+   * Whether `model` was an explicit caller selection rather than an inherited default. A backend
+   * that cannot honor an explicit unsupported model must fail closed; an unsupported inherited
+   * default may be dropped so the backend starts on its own default.
+   */
+  modelExplicit?: boolean;
   /** Optional runtime thinking/reasoning override that must be available during session creation. */
   thinking?: string;
   cwd?: string;
@@ -113,9 +126,22 @@ export type AcpRuntimeEvent =
       toolCallId?: string;
       status?: string;
       title?: string;
+      kind?:
+        | "read"
+        | "edit"
+        | "delete"
+        | "move"
+        | "search"
+        | "execute"
+        | "fetch"
+        | "switch_mode"
+        | "think"
+        | "other";
     }
   | {
       type: "done";
+      /** Closed result status when the manager synthesizes the terminal event. */
+      status?: "completed" | "cancelled";
       stopReason?: string;
     }
   | {

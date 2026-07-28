@@ -79,4 +79,65 @@ struct CanvasWindowSmokeTests {
         #expect(controller
             .shouldAutoNavigateToA2UI(lastAutoTarget: currentTarget, candidateTarget: currentTarget) == false)
     }
+
+    @Test func `hosted Canvas URL resolver keeps capability scope and only trusts A2UI`() throws {
+        let surface = "https://gateway.example/root/__openclaw__/cap/token%20value"
+        let canvas = try #require(CanvasHostedURLResolver.resolve(
+            surfaceURL: surface,
+            target: "/__openclaw__/canvas/demo%20page.html?mode=proof#result"))
+        #expect(canvas.url.absoluteString ==
+            "https://gateway.example/root/__openclaw__/cap/token%20value/__openclaw__/canvas/demo%20page.html?mode=proof#result")
+        #expect(canvas.allowsA2UIActions == false)
+
+        let a2ui = try #require(CanvasHostedURLResolver.resolve(
+            surfaceURL: surface,
+            target: "/__openclaw__/a2ui/?platform=macos"))
+        #expect(a2ui.url.absoluteString ==
+            "https://gateway.example/root/__openclaw__/cap/token%20value/__openclaw__/a2ui/?platform=macos")
+        #expect(a2ui.allowsA2UIActions)
+
+        #expect(CanvasHostedURLResolver.resolve(surfaceURL: surface, target: "/local.html") == nil)
+        #expect(CanvasHostedURLResolver.resolve(surfaceURL: surface, target: "https://example.com/") == nil)
+        #expect(CanvasHostedURLResolver.resolve(
+            surfaceURL: surface,
+            target: "/__openclaw__/a2ui/../canvas/") == nil)
+        #expect(CanvasHostedURLResolver.resolve(
+            surfaceURL: surface,
+            target: "/__openclaw__/a2ui/%252e%252e/canvas/") == nil)
+        #expect(CanvasHostedURLResolver.resolve(
+            surfaceURL: surface,
+            target: "/__openclaw__/a2ui/%25252525252e%25252525252e/canvas/") == nil)
+        #expect(CanvasHostedURLResolver.resolve(
+            surfaceURL: "https://gateway.example/not-capability-scoped",
+            target: "/__openclaw__/canvas/") == nil)
+    }
+
+    @Test func `A2UI action trust is exact and capability scoped`() throws {
+        let expected = try #require(URL(string:
+            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=macos"))
+        let sameWithFragment = try #require(URL(string: expected.absoluteString + "#card"))
+        let staleCapability = try #require(URL(string:
+            "https://gateway.example/__openclaw__/cap/stale-token/__openclaw__/a2ui/?platform=macos"))
+        let changedQuery = try #require(URL(string:
+            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=other"))
+        let canvasPage = try #require(URL(string:
+            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/canvas/"))
+        let traversingA2UI = try #require(URL(string:
+            "https://gateway.example/__openclaw__/cap/current-token/__openclaw__/a2ui/%2e%2e/canvas/"))
+        let localCanvas = try #require(URL(string: "openclaw-canvas://main/"))
+
+        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(expected, expectedRemoteURL: expected))
+        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(sameWithFragment, expectedRemoteURL: expected))
+        #expect(!CanvasA2UIActionMessageHandler.isTrustedSourceURL(staleCapability, expectedRemoteURL: expected))
+        #expect(!CanvasA2UIActionMessageHandler.isTrustedSourceURL(changedQuery, expectedRemoteURL: expected))
+        #expect(!CanvasA2UIActionMessageHandler.isTrustedSourceURL(canvasPage, expectedRemoteURL: expected))
+        #expect(!CanvasHostedURLResolver.isCapabilityScopedA2UIURL(traversingA2UI))
+        #expect(CanvasA2UIActionMessageHandler.isTrustedSourceURL(localCanvas, expectedRemoteURL: nil))
+
+        let handler = CanvasA2UIActionMessageHandler(sessionKey: "main")
+        handler.setTrustedRemoteURL(expected)
+        #expect(handler.isTrustedSourceURL(expected))
+        handler.updateTrustForMainFrameNavigation(to: canvasPage)
+        #expect(!handler.isTrustedSourceURL(expected))
+    }
 }

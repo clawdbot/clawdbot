@@ -23,7 +23,6 @@ import {
   resetLoadConfigMock,
   sendWebDirectInboundMessage,
   setLoadConfigMock,
-  setRuntimeConfigSourceSnapshotMock,
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 import {
@@ -106,8 +105,9 @@ async function startWatchdogScenario(params: {
 }
 
 function expectErrorContaining(errorFn: unknown, text: string): void {
-  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
-    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map(
+    (call) =>
+      typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
   );
   expect(messages.join("\n")).toContain(text);
 }
@@ -211,6 +211,52 @@ describe("web auto-reply connection", () => {
 
       expectErrorContaining(runtime.error, scenario.expectedError);
     }
+  });
+
+  it("widens append catch-up only after reconnecting a recently active listener", async () => {
+    const scripted = createScriptedWebListenerFactory();
+    const { controller, run } = startWebAutoReplyMonitor({
+      monitorWebChannelFn: monitorWebChannel as never,
+      listenerFactory: scripted.listenerFactory,
+      sleep: vi.fn(async () => {}),
+      messageTimeoutMs: 30 * 60_000,
+    });
+
+    await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(1));
+    expect(
+      (
+        mockCallArg(scripted.listenerFactory, 0, 0) as {
+          appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+        }
+      ).appendReplyWindow,
+    ).toBeUndefined();
+
+    await sendWebDirectInboundMessage({
+      onMessage: requireOnMessage(scripted.getOnMessage()),
+      body: "hi before reconnect",
+      from: "+1",
+      to: "+2",
+      id: "active-before-reconnect",
+      spies: createWebInboundDeliverySpies(),
+    });
+
+    const reconnectStartedAt = Date.now();
+    scripted.resolveClose(0, { status: 408, isLoggedOut: false, error: new Error("timeout") });
+    await vi.waitFor(() => expect(scripted.getListenerCount()).toBe(2));
+
+    const appendReplyWindow = (
+      mockCallArg(scripted.listenerFactory, 1, 0) as {
+        appendReplyWindow?: { afterMs: number; untilMs: number; maxAgeMs: number };
+      }
+    ).appendReplyWindow;
+    expect(appendReplyWindow?.afterMs).toBeGreaterThanOrEqual(reconnectStartedAt - 20 * 60_000);
+    expect(appendReplyWindow?.afterMs).toBeLessThanOrEqual(Date.now() - 20 * 60_000);
+    expect(appendReplyWindow?.untilMs).toBeGreaterThanOrEqual(reconnectStartedAt + 20 * 60_000);
+    expect(appendReplyWindow?.maxAgeMs).toBe(20 * 60_000);
+
+    controller.abort();
+    scripted.resolveClose(1, { status: 499, isLoggedOut: false, error: "aborted" });
+    await run;
   });
 
   it("retries opening-phase Boom 428 through the reconnect policy", async () => {
@@ -878,73 +924,7 @@ describe("web auto-reply connection", () => {
     }
   });
 
-  it("passes accounts.default debounceMs into the live listener for named accounts", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            default: {
-              debounceMs: 250,
-            },
-            work: {
-              authDir: "/tmp/work",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("matches per-account debounce overrides case-insensitively", async () => {
-    const capture = createWebListenerFactoryCapture();
-
-    setLoadConfigMock({
-      channels: {
-        whatsapp: {
-          accounts: {
-            work: {
-              authDir: "/tmp/work",
-              debounceMs: 250,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    await monitorWebChannel(
-      false,
-      capture.listenerFactory as never,
-      false,
-      async () => ({ text: "ok" }),
-      undefined,
-      undefined,
-      {
-        accountId: "Work",
-      },
-    );
-
-    resetLoadConfigMock();
-    expect(capture.getLastOptions()?.debounceMs).toBe(250);
-  });
-
-  it("keeps the global inbound debounce fallback when WhatsApp debounceMs is only the schema default", async () => {
+  it("passes the global inbound debounce into the live listener", async () => {
     const capture = createWebListenerFactoryCapture();
 
     setLoadConfigMock({
@@ -963,8 +943,6 @@ describe("web auto-reply connection", () => {
         },
       },
     } as OpenClawConfig);
-    setRuntimeConfigSourceSnapshotMock(null);
-
     await monitorWebChannel(
       false,
       capture.listenerFactory as never,
@@ -998,6 +976,22 @@ describe("web auto-reply connection", () => {
     });
 
     expect(capture.getLastOptions()?.shouldDebounce?.(msg)).toBe(true);
+    expect(
+      capture
+        .getLastOptions()
+        ?.shouldDebounce?.(createTestWebInboundMessage({ payload: { body: "   " } })),
+    ).toBe(false);
+    expect(
+      capture.getLastOptions()?.shouldDebounce?.(
+        createTestWebInboundMessage({
+          payload: {
+            body: "/stop\n\n[whatsapp attachment unavailable]",
+            commandBody: "/stop",
+          },
+          platform: { sendComposing, reply, sendMedia },
+        }),
+      ),
+    ).toBe(false);
     await onMessage(msg);
 
     expect(reply).toHaveBeenCalledWith("ok", undefined);
@@ -1270,3 +1264,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

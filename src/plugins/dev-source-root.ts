@@ -5,7 +5,7 @@ import { resolveUserPath } from "../utils.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 
 /** Env var that points bundled-plugin lookup at an OpenClaw source checkout. */
-export const OPENCLAW_DEV_SOURCE_ROOT_ENV = "OPENCLAW_DEV_SOURCE_ROOT";
+const OPENCLAW_DEV_SOURCE_ROOT_ENV = "OPENCLAW_DEV_SOURCE_ROOT";
 
 function readPackageName(packageJsonPath: string): string | null {
   try {

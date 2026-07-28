@@ -1,8 +1,7 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
-import { agentCommand, rpcReq, testState } from "./test-helpers.js";
+import { agentCommand, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
   setupGatewaySessionsTestHarness,
@@ -28,18 +27,13 @@ test("agent RPC rejects deleted-agent session keys before dispatch", async () =>
   const deletedStorePath = storeTemplate.replace("{agentId}", "deleted-agent");
   const orphanKey = "agent:deleted-agent:main";
 
-  await fs.mkdir(path.dirname(deletedStorePath), { recursive: true });
-  await fs.writeFile(
-    deletedStorePath,
-    JSON.stringify(
-      {
-        [orphanKey]: sessionStoreEntry("sess-orphan"),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await writeSessionStore({
+    storePath: deletedStorePath,
+    agentId: "deleted-agent",
+    entries: {
+      [orphanKey]: sessionStoreEntry("sess-orphan"),
+    },
+  });
 
   vi.mocked(agentCommand).mockClear();
   const { ws } = await openClient();
@@ -61,23 +55,53 @@ test("agent RPC rejects deleted-agent session keys before dispatch", async () =>
   }
 });
 
+test("agent RPC rejects archived session keys before dispatch", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = await configurePerAgentSessionStore(dir);
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const archivedKey = "agent:main:subagent:archived";
+
+  await writeSessionStore({
+    storePath: mainStorePath,
+    agentId: "main",
+    entries: {
+      [archivedKey]: sessionStoreEntry("sess-archived", { archivedAt: Date.now() }),
+    },
+  });
+
+  vi.mocked(agentCommand).mockClear();
+  const { ws } = await openClient();
+  try {
+    const blocked = await rpcReq(ws, "agent", {
+      sessionKey: archivedKey,
+      message: "hi",
+      idempotencyKey: "proof-archived-session",
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.error).toEqual({
+      code: ErrorCodes.INVALID_REQUEST,
+      message:
+        'Session "agent:main:subagent:archived" is archived. Restore it before starting new work.',
+    });
+    expect(agentCommand).not.toHaveBeenCalled();
+  } finally {
+    ws.close();
+    resetSessionStoreFixture();
+  }
+});
+
 test("agent RPC still dispatches for configured-agent session keys", async () => {
   const { dir } = await createSessionStoreDir();
   const storeTemplate = await configurePerAgentSessionStore(dir);
   const mainStorePath = storeTemplate.replace("{agentId}", "main");
 
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify(
-      {
-        main: sessionStoreEntry("sess-main"),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await writeSessionStore({
+    storePath: mainStorePath,
+    agentId: "main",
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
 
   vi.mocked(agentCommand).mockClear();
   const { ws } = await openClient();

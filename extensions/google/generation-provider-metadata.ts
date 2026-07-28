@@ -13,8 +13,7 @@ export const GOOGLE_MAX_INPUT_IMAGES = 10;
 export const DEFAULT_GOOGLE_VIDEO_MODEL = "veo-3.1-fast-generate-preview";
 export const GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS = [4, 6, 8] as const;
 export const GOOGLE_VIDEO_MIN_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[0];
-export const GOOGLE_VIDEO_MAX_DURATION_SECONDS =
-  GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS.length - 1];
+export const GOOGLE_VIDEO_MAX_DURATION_SECONDS = GOOGLE_VIDEO_ALLOWED_DURATION_SECONDS[2];
 
 function isGoogleProviderConfigured(
   ctx: { agentDir?: string } | VideoGenerationProviderConfiguredContext,
@@ -74,9 +73,6 @@ export function createGoogleVideoGenerationProviderMetadata(): Omit<
       DEFAULT_GOOGLE_VIDEO_MODEL,
       "veo-3.1-generate-preview",
       "veo-3.1-lite-generate-preview",
-      "veo-3.0-fast-generate-001",
-      "veo-3.0-generate-001",
-      "veo-2.0-generate-001",
     ],
     isConfigured: isGoogleProviderConfigured,
     capabilities: {

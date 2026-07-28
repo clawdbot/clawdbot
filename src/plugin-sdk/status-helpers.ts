@@ -38,6 +38,7 @@ type RuntimeLifecycleSnapshot = {
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
   healthState?: string | null;
+  terminalDisconnect?: boolean | null;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
@@ -69,6 +70,68 @@ type ConfigIssueAccount = {
   accountId?: string | null;
   configured?: boolean | null;
 } & Record<string, unknown>;
+
+const ACCOUNT_STATUS_SNAPSHOT_FIELDS = [
+  "accountId",
+  "enabled",
+  "configured",
+  "running",
+  "connected",
+] as const;
+
+export type AccountStatusSnapshot<TField extends string = never> = Record<
+  (typeof ACCOUNT_STATUS_SNAPSHOT_FIELDS)[number] | TField,
+  unknown
+>;
+
+/** Coerce a status row to the standard account fields plus channel-owned extras. */
+export function readAccountStatusSnapshot<TField extends string>(
+  value: unknown,
+  extraFields: readonly TField[],
+): AccountStatusSnapshot<TField> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const fields: readonly string[] = [...ACCOUNT_STATUS_SNAPSHOT_FIELDS, ...extraFields];
+  const result: Record<string, unknown> = {};
+  for (const field of fields) {
+    result[field] = record[field];
+  }
+  return result as AccountStatusSnapshot<TField>;
+}
+
+/** Build the standard warning for an enabled/configured account with open DM policy. */
+export function standardDmPolicyOpenIssue(params: {
+  channel: ChannelStatusIssue["channel"];
+  accountId: string;
+  channelLabel: string;
+  configPath: string;
+}): ChannelStatusIssue {
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    kind: "config",
+    message: `${params.channelLabel} dmPolicy is "open", allowing any user to message the bot without pairing.`,
+    fix: `Set ${params.configPath}.dmPolicy to "pairing" or "allowlist" to restrict access.`,
+  };
+}
+
+/** Build a standard authentication issue for an enabled but unconfigured account. */
+export function standardNotConfiguredIssue(params: {
+  channel: ChannelStatusIssue["channel"];
+  accountId: string;
+  message: string;
+  fix: string;
+}): ChannelStatusIssue {
+  return {
+    channel: params.channel,
+    accountId: params.accountId,
+    kind: "auth",
+    message: params.message,
+    fix: params.fix,
+  };
+}
 
 function buildComputedAccountStatusAdapterBase<ResolvedAccount, Probe, Audit>(
   options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot">,
@@ -320,6 +383,7 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       ? { lastTransportActivityAt: runtime.lastTransportActivityAt }
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
+    ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }

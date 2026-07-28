@@ -1,15 +1,17 @@
 // Qa Lab plugin module implements child output behavior.
+import { StringDecoder } from "node:string_decoder";
+
 export const QA_CHILD_STDOUT_MAX_BYTES = 1024 * 1024;
 export const QA_CHILD_STDERR_TAIL_BYTES = 64 * 1024;
 
-export type QaChildOutputCapture = {
+type QaChildOutputCapture = {
   chunks: Buffer[];
   bytes: number;
   exceeded: boolean;
   maxBytes: number;
 };
 
-export type QaChildOutputTail = {
+type QaChildOutputTail = {
   buffer: Buffer;
   maxBytes: number;
   truncated: boolean;
@@ -17,6 +19,20 @@ export type QaChildOutputTail = {
 
 function toBuffer(chunk: unknown): Buffer {
   return Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+}
+
+function decodeUtf8Prefix(buffer: Buffer, truncated: boolean): string {
+  return truncated ? new StringDecoder("utf8").write(buffer) : buffer.toString("utf8");
+}
+
+function decodeUtf8Tail(buffer: Buffer, truncated: boolean): string {
+  let start = 0;
+  if (truncated) {
+    while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
+      start += 1;
+    }
+  }
+  return buffer.subarray(start).toString("utf8");
 }
 
 export function createQaChildOutputCapture(maxBytes = QA_CHILD_STDOUT_MAX_BYTES) {
@@ -47,7 +63,7 @@ export function appendQaChildOutput(capture: QaChildOutputCapture, chunk: unknow
 }
 
 export function readQaChildOutput(capture: QaChildOutputCapture) {
-  return Buffer.concat(capture.chunks, capture.bytes).toString("utf8");
+  return decodeUtf8Prefix(Buffer.concat(capture.chunks, capture.bytes), capture.exceeded);
 }
 
 export function createQaChildOutputTail(maxBytes = QA_CHILD_STDERR_TAIL_BYTES) {
@@ -75,7 +91,7 @@ export function appendQaChildOutputTail(tail: QaChildOutputTail, chunk: unknown)
 }
 
 export function formatQaChildOutputTail(tail: QaChildOutputTail, label: string) {
-  const text = tail.buffer.toString("utf8").trim();
+  const text = decodeUtf8Tail(tail.buffer, tail.truncated).trim();
   if (!text) {
     return "";
   }

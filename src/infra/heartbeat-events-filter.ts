@@ -1,5 +1,6 @@
 // Filters heartbeat event text before it is added to prompts.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 
@@ -124,7 +125,7 @@ export function buildExecEventPrompt(
   const { text: rawEventText, hasMissingOutputFailure } = formatExecEventPromptText(pendingEvents);
   const eventText =
     rawEventText.length > MAX_EXEC_EVENT_PROMPT_CHARS
-      ? `${rawEventText.slice(0, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
+      ? `${truncateUtf16Safe(rawEventText, MAX_EXEC_EVENT_PROMPT_CHARS)}\n\n[truncated]`
       : rawEventText;
   if (!eventText) {
     if (useHeartbeatResponseTool) {
@@ -185,7 +186,7 @@ function isHeartbeatAckEvent(evt: string): boolean {
   if (suffix.length === 0) {
     return true;
   }
-  return !/[a-z0-9_]/.test(suffix[0]);
+  return !/[a-z0-9_]/.test(suffix.charAt(0));
 }
 
 function isHeartbeatNoiseEvent(evt: string): boolean {

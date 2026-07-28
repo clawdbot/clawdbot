@@ -19,7 +19,7 @@ import {
 
 /** Marker used to identify security-sensitive guard comments. */
 export const securitySensitiveGuardMarker = "<!-- openclaw:security-sensitive-guard -->";
-export const securitySensitiveChangedLabel = "security-sensitive-changed";
+const securitySensitiveChangedLabel = "security-sensitive-changed";
 export const allowSecuritySensitiveCommand = "/allow-security-sensitive-change";
 export {
   GITHUB_API_REQUEST_TIMEOUT_MS,

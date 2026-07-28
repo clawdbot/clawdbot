@@ -1,0 +1,19 @@
+title: Slack unmentioned bot message does not trigger
+scenario:
+  id: slack-mention-gating
+  surface: channels
+  coverage:
+    primary:
+      - slack.channel-allowlists
+  execution:
+    profiles: { "slack:default": 1 }
+    kind: flow
+    channel: slack
+    timeoutMs: 8000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { slackScenarioId: slack-mention-gating }
+flow:
+  module: ./live-transports/slack/scenario-runtime.js
+  call: runSlackMentionGatingScenario
+  args: [{ expr: slackScenarioContext }]

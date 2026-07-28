@@ -13,8 +13,26 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../embedded-agent-messaging.types.js";
+import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+import type { ContextUsage } from "../usage.js";
+
+export type BlockReplyFlushContext =
+  | {
+      /** Boundary that requested the flush. */
+      reason: "message_end" | "terminal";
+    }
+  | {
+      /** Tool boundary separating pre-tool narration from the eventual answer. */
+      reason: "tool_start";
+      assistantMessageIndex: number;
+    }
+  | {
+      /** Pre-compaction delivery is safe only for a completed assistant attempt. */
+      reason: "pre_compaction";
+      attemptAccepted: boolean;
+    };
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -59,6 +77,7 @@ export type EmbeddedAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    contextUsage?: ContextUsage;
     reasoningTokens?: number;
     total?: number;
   };
@@ -186,6 +205,7 @@ export type EmbeddedAgentRunMeta = {
 };
 
 export type EmbeddedAgentRunResult = {
+  latestMcpAppChannelView?: McpAppChannelView;
   payloads?: Array<{
     text?: string;
     mediaUrl?: string;

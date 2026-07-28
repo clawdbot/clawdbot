@@ -36,11 +36,22 @@ type ScoredNodeMatch = {
 };
 
 /** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
-export function normalizeNodeKey(value: string) {
-  return normalizeLowercaseStringOrEmpty(value)
-    .replace(/[^a-z0-9]+/g, "-")
+function normalizeNodeKey(value: string) {
+  // Emoji components can also be marks (variation selectors and keycaps); drop
+  // them so decorated and plain display-name selectors stay equivalent.
+  // Retain script marks only when attached to a surviving letter/number; marks
+  // on stripped emoji or symbols must not become invisible selector bytes.
+  const normalized = normalizeLowercaseStringOrEmpty(value.normalize("NFC"))
+    .replace(/(?=\p{M})\p{Emoji_Component}/gu, "")
+    .replace(/(?<![\p{L}\p{M}\p{N}])\p{M}+/gu, "");
+  return normalized
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
+}
+
+function compactNormalizedNodeKey(value: string) {
+  return value.replace(/-/g, "");
 }
 
 function listKnownNodes(nodes: NodeMatchCandidate[]): string {
@@ -90,6 +101,7 @@ function resolveMatchScore(
   node: NodeMatchCandidate,
   query: string,
   queryNormalized: string,
+  allowCompactDisplayName: boolean,
 ): number {
   // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
   if (node.nodeId === query) {
@@ -99,8 +111,16 @@ function resolveMatchScore(
     return 3_000;
   }
   const name = typeof node.displayName === "string" ? node.displayName : "";
-  if (name && normalizeNodeKey(name) === queryNormalized) {
+  const nameNormalized = name ? normalizeNodeKey(name) : "";
+  if (nameNormalized && nameNormalized === queryNormalized) {
     return 2_000;
+  }
+  if (
+    allowCompactDisplayName &&
+    nameNormalized &&
+    compactNormalizedNodeKey(nameNormalized) === compactNormalizedNodeKey(queryNormalized)
+  ) {
+    return 1_900;
   }
   if (query.length >= 6 && node.nodeId.startsWith(query)) {
     return 1_000;
@@ -121,7 +141,11 @@ function scoreNodeCandidate(node: NodeMatchCandidate, matchScore: number): numbe
   return score;
 }
 
-function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): ScoredNodeMatch[] {
+function resolveScoredMatches(
+  nodes: NodeMatchCandidate[],
+  query: string,
+  allowCompactDisplayName: boolean,
+): ScoredNodeMatch[] {
   const trimmed = normalizeOptionalString(query);
   if (!trimmed) {
     return [];
@@ -129,7 +153,7 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
   const normalized = normalizeNodeKey(trimmed);
   return nodes
     .map((node) => {
-      const matchScore = resolveMatchScore(node, trimmed, normalized);
+      const matchScore = resolveMatchScore(node, trimmed, normalized, allowCompactDisplayName);
       if (matchScore === 0) {
         return null;
       }
@@ -143,13 +167,17 @@ function resolveScoredMatches(nodes: NodeMatchCandidate[], query: string): Score
 }
 
 /** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
-export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: string): string {
+export function resolveNodeIdFromCandidates(
+  nodes: NodeMatchCandidate[],
+  query: string,
+  allowCompactDisplayName = false,
+): string {
   const q = query.trim();
   if (!q) {
     throw new Error("node required");
   }
 
-  const rawMatches = resolveScoredMatches(nodes, q);
+  const rawMatches = resolveScoredMatches(nodes, q, allowCompactDisplayName);
   if (rawMatches.length === 1) {
     return rawMatches[0]?.node.nodeId ?? "";
   }

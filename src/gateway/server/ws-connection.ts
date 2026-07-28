@@ -3,12 +3,10 @@ import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
-import {
-  GATEWAY_STARTUP_CLOSE_CODE,
-  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
-} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
+import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_STARTUP_PENDING_CLOSE_CAUSE } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { upsertPresence } from "../../infra/system-presence.js";
+import { touchPresence, upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { removeRemoteNodeInfo } from "../../skills/runtime/remote.js";
@@ -21,16 +19,16 @@ import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { NodeReapprovalCoordinator } from "../node-reapproval-coordinator.js";
+import { clearNodeWakeState } from "../node-wake-state.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import {
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
   MAX_PREAUTH_PAYLOAD_BYTES,
 } from "../server-constants.js";
-import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
 import { formatError } from "../server-utils.js";
-import { logWs } from "../ws-log.js";
+import { formatForLog, logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
@@ -39,12 +37,20 @@ import {
   HandshakeAuthLogLimiter,
   shouldLimitMissingCredentialAuthLog,
 } from "./ws-connection/handshake-auth-log-limiter.js";
-import type {
-  GatewayWsMessageHandlerParams,
-  WsOriginCheckMetrics,
-} from "./ws-connection/message-handler.js";
+import type { WsOriginCheckMetrics } from "./ws-connection/message-handler.js";
+import {
+  attachWorkerWsMessageHandler,
+  type WorkerConnectionService,
+} from "./ws-connection/worker-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
-import type { GatewayWsClient } from "./ws-types.js";
+import {
+  GATEWAY_WS_CONNECTION_KIND_PROPERTY,
+  GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
+  WS_HANDSHAKE_PHASES,
+  type GatewayIngressWebSocket,
+  type GatewayWsClient,
+  type WsHandshakePhase,
+} from "./ws-types.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -141,7 +147,7 @@ function isWsPayloadLimitError(err: unknown): boolean {
   return typeof message === "string" && /max payload size exceeded/i.test(message);
 }
 
-export type GatewayWsSharedHandlerParams = {
+type GatewayWsSharedHandlerParams = {
   wss: WebSocketServer;
   clients: Set<GatewayWsClient>;
   preauthConnectionBudget: PreauthConnectionBudget;
@@ -159,6 +165,7 @@ export type GatewayWsSharedHandlerParams = {
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   preauthHandshakeTimeoutMs?: number;
   isStartupPending?: () => boolean;
+  isControlUiDeviceAuthMigrationPending?: () => boolean;
   gatewayMethods: string[];
   events: string[];
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
@@ -179,9 +186,12 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
     },
   ) => void;
   buildRequestContext: () => GatewayRequestContext;
+  workerConnectionService?: WorkerConnectionService;
 };
 
-function attachGatewayWsMessageHandlerOnDemand(params: GatewayWsMessageHandlerParams): void {
+function attachGatewayWsMessageHandlerOnDemand(
+  params: import("./ws-connection/message-handler.js").GatewayWsMessageHandlerParams,
+): void {
   const queued: RawData[] = [];
   const queueMessage = (data: RawData) => {
     if (queued.length >= MAX_QUEUED_MESSAGE_HANDLER_FRAMES) {
@@ -236,6 +246,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     browserRateLimiter,
     nodeReapprovalCoordinator,
     isStartupPending,
+    isControlUiDeviceAuthMigrationPending,
     gatewayMethods,
     events,
     refreshHealthSnapshot,
@@ -246,6 +257,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     getMethodRegistry,
     broadcast,
     buildRequestContext,
+    workerConnectionService,
   } = params;
   const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
 
@@ -254,6 +266,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     let closed = false;
     const openedAt = Date.now();
     const connId = randomUUID();
+    const connectionKind =
+      (socket as GatewayIngressWebSocket)[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
+    const connectionPreauthBudget =
+      (socket as GatewayIngressWebSocket)[GATEWAY_WS_PREAUTH_BUDGET_PROPERTY] ??
+      preauthConnectionBudget;
     const { remoteAddr, remotePort, localAddr, localPort, endpoint } = resolveSocketAddress(socket);
     const preauthBudgetKey = (
       socket as WebSocket & {
@@ -273,8 +290,10 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const requestUserAgent = headerValue(upgradeReq.headers["user-agent"]);
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
+    const openedDuringStartup = isStartupPending?.() === true;
 
-    const pluginNodeCapabilities = getPluginNodeCapabilities?.() ?? [];
+    const pluginNodeCapabilities =
+      connectionKind === "gateway" ? (getPluginNodeCapabilities?.() ?? []) : [];
     const pluginSurfaceBaseUrl =
       pluginNodeCapabilities.length > 0
         ? resolveHostedPluginSurfaceUrl({
@@ -289,12 +308,24 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
+    let lastHandshakePhase: WsHandshakePhase = "tcp_accepted";
     let holdsPreauthBudget = true;
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
     let lastFrameType: string | undefined;
     let lastFrameMethod: string | undefined;
     let lastFrameId: string | undefined;
+    let hasReceivedPreauthFrame = false;
+
+    socket.once("message", () => {
+      hasReceivedPreauthFrame = true;
+    });
+
+    const advanceHandshakePhase = (next: WsHandshakePhase) => {
+      if (WS_HANDSHAKE_PHASES.indexOf(next) > WS_HANDSHAKE_PHASES.indexOf(lastHandshakePhase)) {
+        lastHandshakePhase = next;
+      }
+    };
 
     const setCloseCause = (cause: string, meta?: Record<string, unknown>) => {
       if (!closeCause) {
@@ -310,7 +341,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         return;
       }
       holdsPreauthBudget = false;
-      preauthConnectionBudget.release(preauthBudgetKey);
+      connectionPreauthBudget.release(preauthBudgetKey);
     };
 
     const setLastFrameMeta = (meta: { type?: string; method?: string; id?: string }) => {
@@ -322,6 +353,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     let pingTimer: ReturnType<typeof setInterval> | undefined;
+    let cleanupWorkerConnection: (() => void) | undefined;
+    let awaitingPong = false;
     const handshakeTimeoutMs = resolvePreauthHandshakeTimeoutMs({
       configuredTimeoutMs: params.preauthHandshakeTimeoutMs,
     });
@@ -331,11 +364,16 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         setCloseCause("handshake-timeout", {
           handshakeMs: Date.now() - openedAt,
           endpoint,
+          phase: lastHandshakePhase,
         });
         logWsControl.warn(
-          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"}`,
+          `handshake timeout conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} phase=${lastHandshakePhase}`,
         );
-        close();
+        if (connectionKind === "worker") {
+          close(1008, "invalid-handshake");
+        } else {
+          close();
+        }
       }
     }, handshakeTimeoutMs);
 
@@ -348,6 +386,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       if (pingTimer !== undefined) {
         clearInterval(pingTimer);
       }
+      cleanupWorkerConnection?.();
       releasePreauthBudget();
       if (client) {
         clients.delete(client);
@@ -374,7 +413,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           bytes: socket.bufferedAmount,
           limitBytes: MAX_BUFFERED_BYTES,
         });
-        close(1008, "slow consumer");
+        close(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
         return;
       }
       try {
@@ -385,27 +424,55 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     };
 
     const connectNonce = randomUUID();
-    send({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: connectNonce, ts: Date.now() },
-    });
+    if (connectionKind === "gateway") {
+      send({
+        type: "event",
+        event: "connect.challenge",
+        payload: { nonce: connectNonce, ts: Date.now() },
+      });
+    }
+    advanceHandshakePhase("ws_upgrade_started");
 
     socket.once("error", (err) => {
       if (isWsPayloadLimitError(err)) {
+        const workerPayload = connectionKind === "worker";
         logRejectedLargePayload({
           surface: client ? "gateway.ws.frame" : "gateway.ws.preauth",
-          limitBytes: client ? MAX_PAYLOAD_BYTES : MAX_PREAUTH_PAYLOAD_BYTES,
+          limitBytes: workerPayload
+            ? WORKER_PROTOCOL_MAX_PAYLOAD_BYTES
+            : client
+              ? MAX_PAYLOAD_BYTES
+              : MAX_PREAUTH_PAYLOAD_BYTES,
           reason: client ? "ws_frame_limit" : "preauth_frame_limit",
         });
       }
       logWsControl.warn(`error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`);
-      close();
+      if (connectionKind === "worker") {
+        close(1008, client ? "invalid-frame" : "invalid-handshake");
+      } else {
+        close();
+      }
+    });
+
+    socket.on("pong", () => {
+      awaitingPong = false;
+      if (client?.presenceKey) {
+        touchPresence(client.presenceKey);
+      }
     });
 
     const isNoisySwiftPmHelperClose = (userAgent: string | undefined, remote: string | undefined) =>
       normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
       isLoopbackAddress(remote);
+
+    const isExpectedLocalAppStartupAbort = (code: number) =>
+      openedDuringStartup &&
+      (code === 1001 || code === 1006) &&
+      lastHandshakePhase === "ws_upgrade_started" &&
+      !hasReceivedPreauthFrame &&
+      lastFrameType === undefined &&
+      normalizeLowercaseStringOrEmpty(requestUserAgent).startsWith("openclaw/") &&
+      isLoopbackAddress(remoteAddr);
 
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
@@ -414,9 +481,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       const logHost = sanitizeLogValue(requestHost);
       const logUserAgent = sanitizeLogValue(requestUserAgent);
       const logReason = sanitizeLogValue(reason?.toString());
+      const handshakeIncomplete = lastHandshakePhase !== "ready";
       const closeContext = {
         cause: closeCause,
         handshake: handshakeState,
+        ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         durationMs,
         lastFrameType,
         lastFrameMethod,
@@ -433,10 +502,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const isExpectedStartupRetryClose =
-          closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE && code === GATEWAY_STARTUP_CLOSE_CODE;
+        const isExpectedStartupRetryClose = closeCause === GATEWAY_STARTUP_PENDING_CLOSE_CAUSE;
         const logFn =
-          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) || isExpectedStartupRetryClose
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isExpectedStartupRetryClose ||
+          isExpectedLocalAppStartupAbort(code)
             ? logWsControl.debug
             : logWsControl.warn;
         const authReason = stringMetaValue(closeMeta, "authReason");
@@ -467,7 +537,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               ? ` suppressed=${closeLogDecision.suppressedSinceLastLog}`
               : "";
           logFn(
-            `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}${suppressedText}`,
+            `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"} phase=${lastHandshakePhase}${suppressedText}`,
             closeContext,
           );
         }
@@ -477,23 +547,37 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
         );
       }
-      const context = buildRequestContext();
-      context.unsubscribeAllSessionEvents(connId);
-      let currentDisconnectedNodeId: string | null = null;
-      if (client?.connect?.role === "node") {
-        currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+      if (client?.authenticatedUserId) {
+        logWsControl.info(
+          `authenticated user disconnected code=${code} reason=${logReason || "n/a"} conn=${connId} user=${formatForLog(client.authenticatedUserId)}`,
+        );
       }
-      if (
-        client?.presenceKey &&
-        (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
-      ) {
-        upsertPresence(client.presenceKey, { reason: "disconnect" });
-        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
-      }
-      if (currentDisconnectedNodeId) {
-        removeRemoteNodeInfo(currentDisconnectedNodeId);
-        context.nodeUnsubscribeAll(currentDisconnectedNodeId);
-        clearNodeWakeState(currentDisconnectedNodeId);
+      if (connectionKind === "gateway") {
+        const context = buildRequestContext();
+        context.unsubscribeAllSessionEvents(connId);
+        // Detach (or, with a zero grace period, kill) any PTY shells this
+        // connection owned; detached sessions stay reattachable via
+        // terminal.attach until their reaper fires.
+        context.terminalSessions?.handleDisconnect(connId);
+        let currentDisconnectedNodeId: string | null = null;
+        if (client?.connect?.role === "node") {
+          currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+        }
+        if (
+          client?.presenceKey &&
+          (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
+        ) {
+          upsertPresence(client.presenceKey, {
+            reason: "disconnect",
+            watchedSessions: undefined,
+          });
+          broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+        }
+        if (currentDisconnectedNodeId) {
+          removeRemoteNodeInfo(currentDisconnectedNodeId);
+          context.nodeUnsubscribeAll(currentDisconnectedNodeId);
+          clearNodeWakeState(currentDisconnectedNodeId);
+        }
       }
       logWs("out", "close", {
         connId,
@@ -502,6 +586,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         durationMs,
         cause: closeCause,
         handshake: handshakeState,
+        ...(handshakeIncomplete ? { phase: lastHandshakePhase } : {}),
         lastFrameType,
         lastFrameMethod,
         lastFrameId,
@@ -509,6 +594,73 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       });
       close();
     });
+
+    const setClient = (next: GatewayWsClient) => {
+      if (closed) {
+        return false;
+      }
+      if (next.worker) {
+        for (const existing of clients) {
+          if (existing.worker?.environmentId === next.worker.environmentId) {
+            // Fence queued frames before transport teardown releases the old handler and timers.
+            existing.invalidated = true;
+            clients.delete(existing);
+            try {
+              existing.socket.terminate();
+            } catch {
+              existing.socket.close(1008, "credential-replaced");
+            }
+          }
+        }
+      }
+      releasePreauthBudget();
+      client = next;
+      clients.add(next);
+      pingTimer = setInterval(() => {
+        // A half-open TCP connection can remain OPEN indefinitely. Terminate
+        // after one missed pong so the normal close handler releases node state.
+        if (awaitingPong) {
+          setCloseCause("heartbeat-timeout");
+          try {
+            socket.terminate();
+          } catch {
+            close();
+          }
+          return;
+        }
+        awaitingPong = true;
+        try {
+          socket.ping();
+        } catch {
+          // close() clears the timer; ping can race with a socket already entering CLOSING.
+        }
+      }, 25_000);
+      return true;
+    };
+
+    if (connectionKind === "worker") {
+      cleanupWorkerConnection = attachWorkerWsMessageHandler({
+        socket,
+        connId,
+        service: workerConnectionService,
+        isStartupPending,
+        send,
+        close,
+        isClosed: () => closed,
+        clearHandshakeTimer: () => clearTimeout(handshakeTimer),
+        getClient: () => client,
+        setClient,
+        setHandshakeState: (next) => {
+          handshakeState = next;
+        },
+        advanceHandshakePhase,
+        setCloseCause,
+        setLastFrameMeta,
+        logGateway,
+        logWsControl,
+      });
+      return;
+    }
 
     attachGatewayWsMessageHandlerOnDemand({
       socket,
@@ -533,6 +685,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       browserRateLimiter,
       nodeReapprovalCoordinator,
       isStartupPending,
+      isControlUiDeviceAuthMigrationPending,
       gatewayMethods,
       events,
       extraHandlers,
@@ -544,25 +697,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       isClosed: () => closed,
       clearHandshakeTimer: () => clearTimeout(handshakeTimer),
       getClient: () => client,
-      setClient: (next) => {
-        if (closed) {
-          return false;
-        }
-        releasePreauthBudget();
-        client = next;
-        clients.add(next);
-        pingTimer = setInterval(() => {
-          try {
-            socket.ping();
-          } catch {
-            // close() clears the timer; ping can race with a socket already entering CLOSING.
-          }
-        }, 25_000);
-        return true;
-      },
+      setClient,
       setHandshakeState: (next) => {
         handshakeState = next;
       },
+      advanceHandshakePhase,
       setCloseCause,
       setLastFrameMeta,
       originCheckMetrics,

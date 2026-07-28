@@ -71,10 +71,6 @@ vi.mock("./server-lifecycle.js", () => ({
   stopKnownBrowserProfiles: vi.fn(async () => {}),
 }));
 
-vi.mock("./pw-ai-state.js", () => ({
-  isPwAiLoaded: vi.fn(() => false),
-}));
-
 describe("browser control auth bootstrap failures", () => {
   beforeEach(async () => {
     mocks.controlPort = await getFreePort();

@@ -19,11 +19,11 @@ export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
 };
 
-export type EmbeddingProviderId = string;
-export type EmbeddingProviderRequest = string;
-export type EmbeddingProviderFallback = string;
+/** @public */ export type EmbeddingProviderId = string;
+/** @public */ export type EmbeddingProviderRequest = string;
+/** @public */ export type EmbeddingProviderFallback = string;
 
-export type GeminiTaskType =
+/** @public */ export type GeminiTaskType =
   | "RETRIEVAL_QUERY"
   | "RETRIEVAL_DOCUMENT"
   | "SEMANTIC_SIMILARITY"

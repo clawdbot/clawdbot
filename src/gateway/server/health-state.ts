@@ -4,11 +4,13 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
+import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveMainSessionKey } from "../../config/sessions.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
+import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
@@ -29,12 +31,13 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
   const uptimeMs = Math.round(process.uptime() * 1000);
   const updateAvailable = getUpdateAvailable() ?? undefined;
   // Health is async; caller should await getHealthSnapshot and replace later if needed.
-  const emptyHealth: unknown = {};
+  const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
     presence,
     health: emptyHealth,
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
+    appliedConfigHash: getRuntimeConfigAppliedHash(),
     sessionDefaults: {
       defaultAgentId,
       mainKey,
@@ -79,6 +82,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   includeSensitive?: boolean;
   getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   let refresh = includeSensitive ? sensitiveHealthRefresh : healthRefresh;
@@ -91,11 +95,13 @@ export async function refreshGatewayHealthSnapshot(opts?: {
         runtimeSnapshot = undefined;
       }
       const eventLoop = opts?.getEventLoopHealth?.();
+      const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
       const snap = await getHealthSnapshot({
         probe: opts?.probe,
         includeSensitive,
         runtimeSnapshot,
         ...(eventLoop ? { eventLoop } : {}),
+        ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
       });
       if (!includeSensitive) {
         healthCache = snap;

@@ -5,7 +5,7 @@ import {
   normalizeOptionalString as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type DiscordInboundEventDeliveryEnd = () => void;
+type DiscordInboundEventDeliveryEnd = () => void;
 
 type ActiveEvent = {
   outboundTo: string;

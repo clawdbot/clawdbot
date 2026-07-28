@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
@@ -14,11 +15,9 @@ type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
-let agentsBindModulePromise: Promise<AgentsBindModule> | undefined;
-
-function loadAgentsBindModule(): Promise<AgentsBindModule> {
-  return (agentsBindModulePromise ??= import("../../commands/agents.commands.bind.js"));
-}
+const loadAgentsBindModule = createLazyRuntimeModule(
+  () => import("../../commands/agents.commands.bind.js"),
+);
 
 async function loadAgentsAddCommand(): Promise<AgentsAddModule["agentsAddCommand"]> {
   return (await import("../../commands/agents.commands.add.js")).agentsAddCommand;

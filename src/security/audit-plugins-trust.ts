@@ -1,13 +1,14 @@
 // Audits installed plugins for trust, provenance, and filesystem risks.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { resolveNativeSkillsEnabled } from "../config/commands.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
+import { readHookInstalls } from "../hooks/installs.js";
 import { readInstalledPackageVersion } from "../infra/package-update-utils.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
@@ -15,8 +16,9 @@ import {
   createPluginRegistryIdNormalizer,
   loadPluginRegistrySnapshot,
 } from "../plugins/plugin-registry.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import type { SecurityAuditFinding } from "./audit.types.js";
-import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
+import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 
 type SandboxToolPolicy = import("../agents/sandbox/types.js").SandboxToolPolicy;
 
@@ -28,25 +30,24 @@ type PluginTrustPolicyDeps = {
   resolveToolProfilePolicy: typeof import("../agents/tool-policy.js").resolveToolProfilePolicy;
 };
 
-let pluginTrustPolicyDepsPromise: Promise<PluginTrustPolicyDeps> | undefined;
-
 /** Lazily load tool-policy helpers so basic security imports avoid agent policy modules. */
-async function loadPluginTrustPolicyDeps(): Promise<PluginTrustPolicyDeps> {
-  pluginTrustPolicyDepsPromise ??= Promise.all([
-    import("../agents/sandbox/config.js"),
-    import("../agents/sandbox/tool-policy.js"),
-    import("../agents/tool-policy-match.js"),
-    import("../agents/tool-policy.js"),
-    import("../agents/sandbox-tool-policy.js"),
-  ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
-    isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
-    pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
-    resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
-    resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
-    resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
-  }));
-  return await pluginTrustPolicyDepsPromise;
-}
+const loadPluginTrustPolicyDeps = createLazyPromise(
+  () =>
+    Promise.all([
+      import("../agents/sandbox/config.js"),
+      import("../agents/sandbox/tool-policy.js"),
+      import("../agents/tool-policy-match.js"),
+      import("../agents/tool-policy.js"),
+      import("../agents/sandbox-tool-policy.js"),
+    ]).then(([sandboxConfig, sandboxToolPolicy, toolPolicyMatch, toolPolicy, auditToolPolicy]) => ({
+      isToolAllowedByPolicies: toolPolicyMatch.isToolAllowedByPolicies,
+      pickSandboxToolPolicy: auditToolPolicy.pickSandboxToolPolicy,
+      resolveSandboxConfigForAgent: sandboxConfig.resolveSandboxConfigForAgent,
+      resolveSandboxToolPolicyForAgent: sandboxToolPolicy.resolveSandboxToolPolicyForAgent,
+      resolveToolProfilePolicy: toolPolicy.resolveToolProfilePolicy,
+    })),
+  { cacheRejections: true },
+);
 
 function readChannelCommandSetting(
   cfg: OpenClawConfig,
@@ -125,30 +126,6 @@ async function isChannelPluginConfigured(
     }
   }
   return false;
-}
-
-async function listInstalledPluginDirs(params: {
-  stateDir: string;
-  onReadError?: (error: unknown) => void;
-}): Promise<{ extensionsDir: string; pluginDirs: string[] }> {
-  const extensionsDir = path.join(params.stateDir, "extensions");
-  const st = await fs.stat(extensionsDir).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return null;
-  });
-  if (!st?.isDirectory()) {
-    return { extensionsDir, pluginDirs: [] };
-  }
-  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch((err: unknown) => {
-    params.onReadError?.(err);
-    return [];
-  });
-  const pluginDirs = entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .filter((name) => !shouldIgnoreInstalledPluginDirName(name))
-    .filter(Boolean);
-  return { extensionsDir, pluginDirs };
 }
 
 function resolveToolPolicies(params: {
@@ -381,12 +358,12 @@ export async function collectPluginsTrustFindings(params: {
         agentId?: string;
         tools?: AgentToolsConfig;
       }> = [{ label: "default" }];
-      for (const entry of params.cfg.agents?.list ?? []) {
+      for (const entry of listAgentEntries(params.cfg)) {
         if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
           continue;
         }
         contexts.push({
-          label: `agents.list.${entry.id}`,
+          label: `agents.entries.${entry.id}`,
           agentId: entry.id,
           tools: entry.tools,
         });
@@ -512,7 +489,9 @@ export async function collectPluginsTrustFindings(params: {
     }
   }
 
-  const hookInstalls = params.cfg.hooks?.internal?.installs ?? {};
+  const hookInstalls = readHookInstalls({
+    env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
+  });
   const npmHookInstalls = Object.entries(hookInstalls).filter(
     ([, record]) => record?.source === "npm",
   );

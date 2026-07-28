@@ -1,0 +1,57 @@
+title: Telegram status command reply
+
+scenario:
+  id: telegram-status-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  regressionRefs:
+    - openclaw/openclaw#74698
+  objective: Verify Telegram status returns model, session, and activation details.
+  successCriteria:
+    - The status command succeeds in the Telegram group path.
+    - The reply includes model, session, and activation fields.
+  codeRefs:
+    - src/auto-reply/reply/commands-status.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles:
+      {
+        "telegram:adapter": 7,
+        "telegram:all": 6,
+        "telegram:mock-release": 6,
+        "telegram:release": 6,
+      }
+    kind: flow
+    channel: telegram
+    summary: Run Telegram status and verify representative status fields.
+    config:
+      expectedAny: [OpenClaw, "Model:", "Session:", "Activation:"]
+
+flow:
+  steps:
+    - name: status includes session details
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text:
+              expr: "transport.id === 'telegram' ? '/status@openclaw' : '/status'"
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            sinceIndex: { ref: startIndex }
+            textIncludes: OpenClaw
+            timeoutMs: 60000
+          saveAs: reply
+        - assert:
+            expr: "config.expectedAny.every((needle) => reply.text.includes(needle))"
+            message:
+              expr: "`status reply missing expected text: ${reply.text}`"
+      detailsExpr: reply.text

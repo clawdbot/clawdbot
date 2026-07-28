@@ -1,13 +1,9 @@
 // Feishu tests cover bot.helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { buildFeishuAgentBody } from "./bot-agent-body.js";
+import { buildBroadcastSessionKey, resolveBroadcastAgents } from "./bot-broadcast.js";
 import { parseMessageContent } from "./bot-content.js";
-import {
-  buildBroadcastSessionKey,
-  buildFeishuAgentBody,
-  resolveBroadcastAgents,
-  toMessageResourceType,
-} from "./bot.js";
 
 describe("buildFeishuAgentBody", () => {
   it("builds message id, speaker, quoted content, mention context, and permission notice in order", () => {
@@ -67,27 +63,11 @@ describe("buildFeishuAgentBody", () => {
   });
 });
 
-describe("toMessageResourceType", () => {
-  it("maps image to image", () => {
-    expect(toMessageResourceType("image")).toBe("image");
-  });
-
-  it("maps audio to file", () => {
-    expect(toMessageResourceType("audio")).toBe("file");
-  });
-
-  it("maps video/file/sticker to file", () => {
-    expect(toMessageResourceType("video")).toBe("file");
-    expect(toMessageResourceType("file")).toBe("file");
-    expect(toMessageResourceType("sticker")).toBe("file");
-  });
-});
-
-describe("parseMessageContent media placeholders", () => {
-  it("uses an audio placeholder instead of leaking raw file_key JSON", () => {
+describe("parseMessageContent media captions", () => {
+  it("keeps an audio-only body empty instead of leaking raw file_key JSON", () => {
     expect(
       parseMessageContent(JSON.stringify({ file_key: "file_audio", duration: 1200 }), "audio"),
-    ).toBe("<media:audio>");
+    ).toBe("");
   });
 
   it("prefers Feishu-provided audio transcript text when present", () => {
@@ -99,10 +79,14 @@ describe("parseMessageContent media placeholders", () => {
     ).toBe("spoken words");
   });
 
-  it("keeps media filenames as placeholder context without raw payload fields", () => {
+  it("drops media filenames from the primary body", () => {
     expect(
       parseMessageContent(JSON.stringify({ file_key: "file_doc", file_name: "q1.pdf" }), "file"),
-    ).toBe("<media:document> (q1.pdf)");
+    ).toBe("");
+  });
+
+  it("keeps malformed media bodies empty", () => {
+    expect(parseMessageContent("not-json", "image")).toBe("");
   });
 });
 

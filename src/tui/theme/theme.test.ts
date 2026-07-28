@@ -1,6 +1,12 @@
 // TUI theme tests cover theme defaults and environment-driven variants.
+
+import { expectDefined } from "@openclaw/normalization-core";
+import chalk from "chalk";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+
+const originalChalkLevel = chalk.level;
+chalk.level = 3;
 
 const { markdownTheme, searchableSelectListTheme, selectListTheme, theme } =
   await import("./theme.js");
@@ -11,22 +17,86 @@ const stripAnsi = (str: string) =>
 let themeImportCase = 0;
 const originalEnv = { ...process.env };
 
+afterAll(() => {
+  chalk.level = originalChalkLevel;
+});
+
 afterEach(() => {
   process.env = { ...originalEnv };
 });
 
-async function importThemeWithEnv(env: Record<string, string | undefined>) {
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) {
-      delete process.env[key];
+type ThemeEnvOverrides = {
+  OPENCLAW_THEME?: string | undefined;
+  COLORFGBG?: string | undefined;
+};
+
+type ThemeModule = typeof import("./theme.js");
+const ansiRgbPattern = new RegExp(
+  `${String.fromCharCode(27)}\\[(38|48);2;(\\d+);(\\d+);(\\d+)m`,
+  "u",
+);
+
+function colorFromStyle(style: (text: string) => string, layer: 38 | 48): string {
+  const match = style("x").match(ansiRgbPattern);
+  if (!match || Number(match[1]) !== layer) {
+    throw new Error(`expected ${layer === 38 ? "foreground" : "background"} RGB style`);
+  }
+  return `#${match
+    .slice(2, 5)
+    .map((channel) => Number(channel).toString(16).padStart(2, "0"))
+    .join("")}`.toUpperCase();
+}
+
+function readActivePalette(mod: ThemeModule) {
+  return {
+    text: colorFromStyle(mod.theme.fg, 38),
+    dim: colorFromStyle(mod.theme.dim, 38),
+    accent: colorFromStyle(mod.theme.accent, 38),
+    accentSoft: colorFromStyle(mod.theme.accentSoft, 38),
+    border: colorFromStyle(mod.theme.border, 38),
+    userBg: colorFromStyle(mod.theme.userBg, 48),
+    userText: colorFromStyle(mod.theme.userText, 38),
+    systemText: colorFromStyle(mod.theme.system, 38),
+    toolPendingBg: colorFromStyle(mod.theme.toolPendingBg, 48),
+    toolSuccessBg: colorFromStyle(mod.theme.toolSuccessBg, 48),
+    toolErrorBg: colorFromStyle(mod.theme.toolErrorBg, 48),
+    toolTitle: colorFromStyle(mod.theme.toolTitle, 38),
+    toolOutput: colorFromStyle(mod.theme.toolOutput, 38),
+    quote: colorFromStyle(mod.markdownTheme.quote, 38),
+    quoteBorder: colorFromStyle(mod.markdownTheme.quoteBorder, 38),
+    code: colorFromStyle(mod.markdownTheme.code, 38),
+    codeBorder: colorFromStyle(mod.markdownTheme.codeBlockBorder, 38),
+    link: colorFromStyle(mod.markdownTheme.link, 38),
+    error: colorFromStyle(mod.theme.error, 38),
+    success: colorFromStyle(mod.theme.success, 38),
+  };
+}
+
+async function importThemeWithEnv(env: ThemeEnvOverrides) {
+  if (Object.hasOwn(env, "OPENCLAW_THEME")) {
+    if (env.OPENCLAW_THEME === undefined) {
+      delete process.env.OPENCLAW_THEME;
     } else {
-      process.env[key] = value;
+      process.env.OPENCLAW_THEME = env.OPENCLAW_THEME;
     }
   }
-  return importFreshModule<typeof import("./theme.js")>(
+  if (Object.hasOwn(env, "COLORFGBG")) {
+    if (env.COLORFGBG === undefined) {
+      delete process.env.COLORFGBG;
+    } else {
+      process.env.COLORFGBG = env.COLORFGBG;
+    }
+  }
+  const mod = await importFreshModule<ThemeModule>(
     import.meta.url,
     `./theme.js?env=${++themeImportCase}`,
   );
+  const lightPalette = readActivePalette(mod);
+  return {
+    ...mod,
+    lightMode: lightPalette.text === "#1E1E1E",
+    lightPalette,
+  };
 }
 
 function relativeLuminance(hex: string): number {
@@ -38,14 +108,21 @@ function relativeLuminance(hex: string): number {
   if (!channels || channels.length !== 3) {
     throw new Error(`invalid color: ${hex}`);
   }
-  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+  return (
+    0.2126 * expectDefined(channels[0], "channels[0] test invariant") +
+    0.7152 * expectDefined(channels[1], "channels[1] test invariant") +
+    0.0722 * expectDefined(channels[2], "channels[2] test invariant")
+  );
 }
 
 function contrastRatio(foreground: string, background: string): number {
   const [lighter, darker] = [relativeLuminance(foreground), relativeLuminance(background)].toSorted(
     (a, b) => b - a,
   );
-  return (lighter + 0.05) / (darker + 0.05);
+  return (
+    (expectDefined(lighter, "lighter test invariant") + 0.05) /
+    (expectDefined(darker, "darker test invariant") + 0.05)
+  );
 }
 
 describe("markdownTheme", () => {
@@ -214,7 +291,7 @@ describe("light palette accessibility", () => {
       pending: mod.lightPalette.toolPendingBg,
       success: mod.lightPalette.toolSuccessBg,
       error: mod.lightPalette.toolErrorBg,
-      code: mod.lightPalette.codeBlock,
+      code: "#FFFFFF",
     };
 
     const textPairs = [

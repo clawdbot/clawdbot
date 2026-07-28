@@ -19,6 +19,9 @@ describe("plugin-sdk browser subpaths", () => {
     const parsed = parseBrowserHttpUrl("http://user:pass@127.0.0.1:9222/", "browser.cdpUrl");
     expect(parsed.port).toBe(9222);
     expect(redactCdpUrl(parsed.normalized)).toBe("http://127.0.0.1:9222");
+    expect(redactCdpUrl("wss://browser.example/cdp?token=browser-token&view=full")).toBe(
+      "wss://browser.example/cdp?token=***&view=full",
+    );
   });
 
   it("preserves explicit default ports and rejects explicit port zero", () => {

@@ -1,14 +1,17 @@
 // Imessage plugin module implements media staging behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";
+import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
+import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-export type StagedIMessageAttachment = {
-  path: string;
-  contentType?: string;
+type StagedIMessageAttachment = ChannelInboundMediaInput;
+
+type StagedIMessageAttachments = {
+  attachments: StagedIMessageAttachment[];
+  unavailableCount: number;
 };
 
 type SaveMediaBufferImpl = typeof saveMediaBuffer;
@@ -18,6 +21,13 @@ type StageIMessageAttachmentsDeps = {
   convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
   logVerbose?: (message: string) => void;
 };
+
+function createTypeOnlyIMessageAttachment(
+  attachment: IMessageAttachment,
+): StagedIMessageAttachment {
+  const contentType = attachment.mime_type?.trim() || undefined;
+  return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+}
 
 function isHeicAttachment(attachmentPath: string, mimeType?: string | null): boolean {
   const normalizedMime = mimeType?.toLowerCase();
@@ -135,14 +145,17 @@ export async function stageIMessageAttachments(
     allowedRoots?: readonly string[];
     deps?: StageIMessageAttachmentsDeps;
   },
-): Promise<StagedIMessageAttachment[]> {
+): Promise<StagedIMessageAttachments> {
   const deps = params.deps ?? {};
   const save = deps.saveMediaBuffer ?? saveMediaBuffer;
   const staged: StagedIMessageAttachment[] = [];
+  let unavailableCount = 0;
 
   for (const attachment of attachments) {
     const attachmentPath = attachment.original_path?.trim();
     if (!attachmentPath || attachment.missing) {
+      unavailableCount += 1;
+      staged.push(createTypeOnlyIMessageAttachment(attachment));
       continue;
     }
 
@@ -161,11 +174,18 @@ export async function stageIMessageAttachments(
         params.maxBytes,
         media.originalFilename,
       );
-      staged.push({ path: saved.path, contentType: saved.contentType });
+      const contentType = saved.contentType ?? media.contentType;
+      staged.push({
+        path: saved.path,
+        contentType,
+        kind: kindFromMime(contentType) ?? "unknown",
+      });
     } catch (err) {
+      unavailableCount += 1;
+      staged.push(createTypeOnlyIMessageAttachment(attachment));
       deps.logVerbose?.(`imessage: failed to stage inbound attachment: ${String(err)}`);
     }
   }
 
-  return staged;
+  return { attachments: staged, unavailableCount };
 }

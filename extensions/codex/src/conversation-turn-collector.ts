@@ -76,7 +76,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
       return;
     }
     if (notification.method === "item/agentMessage/delta") {
-      const itemId = readString(params, "itemId") ?? readString(params, "id") ?? "assistant";
+      const itemId = readString(params, "itemId") ?? "assistant";
       const delta = readTextString(params, "delta");
       if (!delta) {
         return;

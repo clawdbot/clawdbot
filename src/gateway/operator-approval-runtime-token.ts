@@ -1,7 +1,8 @@
 // Operator approval runtime token.
 // Uses an existing shared socket token when available, with a process-local fallback.
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { loadExecApprovals } from "../infra/exec-approvals.js";
+import { safeEqualSecret } from "../security/secret-equal.js";
 
 const APPROVAL_RUNTIME_TOKEN_CONTEXT = "openclaw:gateway-approval-runtime-token:v1";
 
@@ -16,16 +17,6 @@ function deriveApprovalRuntimeToken(socketToken: string): string {
 function readSharedApprovalRuntimeToken(): string | null {
   const token = loadExecApprovals().socket?.token?.trim();
   return token ? deriveApprovalRuntimeToken(token) : null;
-}
-
-function tokenMatches(token: string, expected: string | null | undefined): boolean {
-  if (!expected) {
-    return false;
-  }
-  const tokenBytes = Buffer.from(token);
-  const expectedBytes = Buffer.from(expected);
-  // timingSafeEqual requires equal lengths; keep length rejection explicit instead of catching.
-  return tokenBytes.length === expectedBytes.length && timingSafeEqual(tokenBytes, expectedBytes);
 }
 
 /**
@@ -49,10 +40,10 @@ export function isOperatorApprovalRuntimeToken(value: string | null | undefined)
     return false;
   }
   const sharedToken = readSharedApprovalRuntimeToken();
-  if (tokenMatches(token, sharedToken)) {
+  if (safeEqualSecret(token, sharedToken)) {
     return true;
   }
   const fallbackToken =
     fallbackApprovalRuntimeToken ?? (sharedToken ? null : getOperatorApprovalRuntimeToken());
-  return tokenMatches(token, fallbackToken);
+  return safeEqualSecret(token, fallbackToken);
 }

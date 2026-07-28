@@ -7,11 +7,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -58,9 +60,6 @@ const ENABLE_STARTUP_PROBE_ENV = "OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE";
 const SKIP_RUNTIME_PROBE_ENV = "OPENCLAW_SKIP_ACPX_RUNTIME_PROBE";
 const ACPX_BACKEND_ID = "acpx";
 
-type AcpxRuntimeModule = typeof import("./runtime.js");
-let runtimeModulePromise: Promise<AcpxRuntimeModule> | null = null;
-
 type AcpxRuntimeFactoryParams = {
   pluginConfig: ResolvedAcpxPluginConfig;
   gatewayInstanceId: string;
@@ -76,10 +75,7 @@ type CreateAcpxRuntimeServiceParams = {
   processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
-function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
-  runtimeModulePromise ??= import("./runtime.js");
-  return runtimeModulePromise;
-}
+const loadRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
 
 /** Convert ACPX timeout seconds into timer-safe milliseconds. */
 export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -111,6 +107,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         }),
         probeAgent: params.pluginConfig.probeAgent,
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+        pluginToolsMcpBridgeEnabled: params.pluginConfig.pluginToolsMcpBridge,
         openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
         permissionMode: params.pluginConfig.permissionMode,
         nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
@@ -184,14 +181,9 @@ function formatDoctorFailureMessage(report: { message: string; details?: unknown
   return detailText ? `${report.message} (${detailText})` : report.message;
 }
 
-function normalizeProbeAgent(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : undefined;
-}
-
 function resolveAllowedAgentsProbeAgent(ctx: OpenClawPluginServiceContext): string | undefined {
   for (const agent of ctx.config.acp?.allowedAgents ?? []) {
-    const normalized = normalizeProbeAgent(agent);
+    const normalized = normalizeLowercaseStringOrEmpty(agent);
     if (normalized) {
       return normalized;
     }

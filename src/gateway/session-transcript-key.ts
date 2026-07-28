@@ -39,11 +39,6 @@ function sessionKeyMatchesTranscriptPath(params: {
   ).some((candidate) => resolveTranscriptPathForComparison(candidate) === params.targetPath);
 }
 
-/** Clears the transcript path lookup cache for isolated tests. */
-export function clearSessionTranscriptKeyCacheForTests(): void {
-  TRANSCRIPT_SESSION_KEY_CACHE.clear();
-}
-
 /** Resolve the most likely Gateway session key for a transcript file path. */
 export function resolveSessionKeyForTranscriptFile(sessionFile: string): string | undefined {
   const targetPath = resolveTranscriptPathForComparison(sessionFile);

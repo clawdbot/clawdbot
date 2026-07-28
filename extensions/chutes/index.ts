@@ -79,6 +79,7 @@ async function runChutesOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthRes
       onAuth,
       onPrompt,
       onProgress: (message) => progress.update(message),
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
     });
 
     progress.stop("Chutes OAuth complete");

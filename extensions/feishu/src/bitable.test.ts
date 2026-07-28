@@ -172,3 +172,29 @@ describe("feishu bitable create app cleanup", () => {
     expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("feishu bitable write tool schemas (#94547)", () => {
+  it.each([
+    ["feishu_bitable_create_record", "fields"],
+    ["feishu_bitable_update_record", "fields"],
+    ["feishu_bitable_create_field", "property"],
+  ])("%s emits a non-empty value schema for %s", (toolName, propName) => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool(toolName) as unknown as {
+      parameters?: {
+        properties?: Record<
+          string,
+          { patternProperties?: Record<string, Record<string, unknown>> }
+        >;
+      };
+    };
+    const patternSchemas = Object.values(
+      tool.parameters?.properties?.[propName]?.patternProperties ?? {},
+    );
+    expect(patternSchemas).toEqual([
+      { type: ["string", "number", "boolean", "object", "array", "null"] },
+    ]);
+  });
+});

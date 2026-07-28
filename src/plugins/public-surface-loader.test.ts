@@ -41,6 +41,8 @@ afterEach(() => {
 
 describe("bundled plugin public surface loader", () => {
   it("keeps auto-resolved bundled roots on built public artifacts", async () => {
+    // The non-isolated plugin shard may have already imported the native loader.
+    vi.resetModules();
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist", "extensions");
     const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");
@@ -293,12 +295,12 @@ describe("bundled plugin public surface loader", () => {
       typeof import("./public-surface-loader.js")
     >(import.meta.url, "./public-surface-loader.js?scope=missing-location-retry");
 
-    expect(
-      publicSurfaceLoader.resolveBundledPluginPublicArtifactPath({
+    expect(() =>
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync({
         dirName: "demo",
         artifactBasename: "api.js",
       }),
-    ).toBeNull();
+    ).toThrow("Unable to resolve bundled plugin public surface demo/api.js");
 
     const modulePath = path.join(bundledPluginsDir, "demo", "api.js");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });

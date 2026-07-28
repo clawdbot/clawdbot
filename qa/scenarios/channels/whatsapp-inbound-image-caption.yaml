@@ -1,0 +1,19 @@
+title: WhatsApp inbound image caption reaches the agent
+scenario:
+  id: whatsapp-inbound-image-caption
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.inbound-media-download
+  execution:
+    profiles: { "whatsapp:mock-default": 16 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-inbound-image-caption }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppInboundImageCaptionScenario
+  args: [{ expr: whatsappScenarioContext }]

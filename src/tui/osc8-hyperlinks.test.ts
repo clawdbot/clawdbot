@@ -47,6 +47,42 @@ describe("extractUrls", () => {
     const urls = extractUrls("https://example.com/path?q=1&r=2#section");
     expect(urls).toEqual(["https://example.com/path?q=1&r=2#section"]);
   });
+
+  it("extracts a bare URL with a bracketed IPv6 authority", () => {
+    const url = "http://[::1]:8080/path";
+    expect(extractUrls(url)).toEqual([url]);
+  });
+
+  it("extracts markdown link hrefs with parentheses in the URL", () => {
+    const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
+    expect(extractUrls(`[Wikipedia](${url})`)).toEqual([url]);
+  });
+
+  it("does not extract an incomplete markdown link destination", () => {
+    expect(extractUrls("[broken](https://)")).toEqual([]);
+  });
+
+  it.each(["[broken](https://.)", "https://.", "https:///path"])(
+    "does not extract a URL without a real authority from %s",
+    (text) => {
+      expect(extractUrls(text)).toEqual([]);
+    },
+  );
+
+  it("handles bare URLs with trailing closing paren as punctuation", () => {
+    const urls = extractUrls("(see https://example.com/path)");
+    expect(urls).toEqual(["https://example.com/path"]);
+  });
+
+  it("drops punctuation after an unmatched closing paren", () => {
+    const urls = extractUrls("(see https://example.com/path).");
+    expect(urls).toEqual(["https://example.com/path"]);
+  });
+
+  it("handles markdown link with angle brackets and parenthetical URL", () => {
+    const url = "https://en.wikipedia.org/wiki/Special_(film)";
+    expect(extractUrls(`[link](<${url}>)`)).toEqual([url]);
+  });
 });
 
 describe("addOsc8Hyperlinks", () => {
@@ -75,6 +111,44 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain(`\x1b]8;;${fullUrl}\x07`);
     // Line 2: continuation should also be wrapped
     expect(result[1]).toContain(`\x1b]8;;${fullUrl}\x07`);
+  });
+
+  it("wraps a URL with a bracketed IPv6 authority", () => {
+    const url = "http://[::1]:8080/path";
+    expect(addOsc8Hyperlinks([url], [url])).toEqual([`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`]);
+  });
+
+  it("wraps a URL broken immediately after its scheme", () => {
+    const fullUrl = "https://example.com/path";
+    const result = addOsc8Hyperlinks(["https://", "example.com/path"], [fullUrl]);
+
+    expect(result[0]).toBe(`\x1b]8;;${fullUrl}\x07https://\x1b]8;;\x07`);
+    expect(result[1]).toBe(`\x1b]8;;${fullUrl}\x07example.com/path\x1b]8;;\x07`);
+  });
+
+  it("does not cross-link a scheme-only fragment to a partial domain match", () => {
+    const result = addOsc8Hyperlinks(["https://", "example.org"], ["https://example.com"]);
+
+    expect(result).toEqual(["https://", "example.org"]);
+  });
+
+  it("does not cross-link a scheme-only fragment to a longer URL token", () => {
+    const result = addOsc8Hyperlinks(
+      ["https://", "example.com/pathology"],
+      ["https://example.com/path"],
+    );
+
+    expect(result).toEqual(["https://", "example.com/pathology"]);
+  });
+
+  it("does not recover a punctuated incomplete URL as a wrapped URL", () => {
+    const result = addOsc8Hyperlinks(["broken (https://)", "example.com"], ["https://example.com"]);
+
+    expect(result).toEqual(["broken (https://)", "example.com"]);
+  });
+
+  it("does not wrap a punctuation-only URL body", () => {
+    expect(addOsc8Hyperlinks(["https://."], ["https://."])).toEqual(["https://."]);
   });
 
   it("handles URL with ANSI styling codes", () => {
@@ -124,6 +198,20 @@ describe("addOsc8Hyperlinks", () => {
     const fragment = "https://example.com/api/v2/u";
     const result = addOsc8Hyperlinks([fragment], [short, long]);
     expect(result[0]).toContain(`\x1b]8;;${long}\x07${fragment}\x1b]8;;\x07`);
+  });
+
+  it("wraps URLs with parentheses in markdown rendered text", () => {
+    const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
+    const line = `Wikipedia (${url})`;
+    const result = addOsc8Hyperlinks([line], [url]);
+    expect(result[0]).toBe(`Wikipedia (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`);
+  });
+
+  it("does not resolve an incomplete URL to another known URL", () => {
+    const url = "https://example.com";
+    const result = addOsc8Hyperlinks(["broken (https://)", url], [url]);
+    expect(result[0]).toBe("broken (https://)");
+    expect(result[1]).toContain(`\x1b]8;;${url}\x07${url}\x1b]8;;\x07`);
   });
 
   it("handles URL split across three lines", () => {

@@ -15,6 +15,7 @@ import {
   createTalkSessionController,
 } from "../talk/talk-session-controller.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
+import { decodeTalkRelayAudioBase64 } from "./talk-relay-audio-base64.js";
 import {
   closeExpiredTalkRelaySessions,
   requireActiveTalkRelaySession,
@@ -390,7 +391,7 @@ export function sendTalkTranscriptionRelayAudio(params: {
     throw new Error("Transcription Talk audio frame is too large");
   }
   const session = getTranscriptionSession(params.transcriptionSessionId, params.connId);
-  const audio = Buffer.from(params.audioBase64, "base64");
+  const audio = decodeTalkRelayAudioBase64(params.audioBase64, "Transcription Talk");
   const turnId = ensureTranscriptionTurn(session);
   session.sttSession.sendAudio(audio);
   broadcastToOwner(session.context, session.connId, {
@@ -448,13 +449,4 @@ export function cancelTalkTranscriptionRelayTurn(params: {
     talkEvent: cancelled.ok ? cancelled.event : undefined,
   });
   closeTranscriptionSession(session, "completed");
-}
-
-/** Clears process-local transcription relays between tests. */
-export function clearTalkTranscriptionRelaySessionsForTest(): void {
-  for (const session of transcriptionSessions.values()) {
-    clearTimeout(session.cleanupTimer);
-    session.sttSession.close();
-  }
-  transcriptionSessions.clear();
 }

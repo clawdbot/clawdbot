@@ -11,11 +11,8 @@ import {
 } from "./pre-commit/pnpm-audit-prod.mjs";
 
 const DEPENDENCY_FILE_PATTERNS = [
+  /^\.github\/release\/clawhub-cli\/package-lock\.json$/u,
   /^package\.json$/u,
-  /^package-lock\.json$/u,
-  /\/package-lock\.json$/u,
-  /^npm-shrinkwrap\.json$/u,
-  /\/npm-shrinkwrap\.json$/u,
   /^pnpm-lock\.yaml$/u,
   /^pnpm-workspace\.yaml$/u,
   /^patches\//u,
@@ -23,13 +20,10 @@ const DEPENDENCY_FILE_PATTERNS = [
 ];
 
 const DEPENDENCY_DIFF_PATHS = [
+  ".github/release/clawhub-cli/package-lock.json",
   "package.json",
-  "package-lock.json",
-  "extensions/*/package-lock.json",
-  "npm-shrinkwrap.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
-  "extensions/*/npm-shrinkwrap.json",
   "*package.json",
   "patches",
 ];
@@ -128,8 +122,8 @@ function renderMarkdownReport(report) {
     "",
     "It reports two related but different things:",
     "",
-    "- Dependency file changes: package manifests, npm shrinkwrap/package-lock, pnpm workspace config, lockfile, and patches.",
-    "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml; inspect shrinkwrap/package-lock diffs directly.",
+    "- Dependency file changes: package manifests, pnpm workspace config, pnpm lockfile, the trusted ClawHub CLI package lock, and patches.",
+    "- Resolved package changes: package versions added, removed, or changed in pnpm-lock.yaml.",
     "",
     "## Summary",
     "",
@@ -314,7 +308,7 @@ async function writeArtifact(filePath, content) {
 /**
  * Generates and writes dependency change report artifacts.
  */
-export async function runDependencyChangesReport(options) {
+async function runDependencyChangesReport(options) {
   const headLockfileText = await readFile(path.join(options.rootDir, options.headLockfile), "utf8");
   const baseLockfileText = options.baseRef
     ? readGitFile(options.baseRef, "pnpm-lock.yaml", options.rootDir)

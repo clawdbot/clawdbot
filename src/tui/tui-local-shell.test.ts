@@ -1,5 +1,6 @@
 // Verifies local shell process handling for TUI local mode.
 import { EventEmitter } from "node:events";
+import type { OverlayHandle } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 
@@ -13,8 +14,20 @@ const createSelector = () => {
   return selector;
 };
 
+function createOverlayHandle(): OverlayHandle {
+  return {
+    hide: vi.fn(),
+    setHidden: vi.fn(),
+    isHidden: vi.fn(() => false),
+    focus: vi.fn(),
+    unfocus: vi.fn(),
+    isFocused: vi.fn(() => true),
+  };
+}
+
 function createShellHarness(params?: {
   spawnCommand?: typeof import("node:child_process").spawn;
+  getCwd?: () => string | undefined;
   env?: Record<string, string>;
   maxOutputChars?: number;
 }) {
@@ -25,7 +38,8 @@ function createShellHarness(params?: {
     },
   };
   const tui = { requestRender: vi.fn() };
-  const openOverlay = vi.fn();
+  const overlayHandle = createOverlayHandle();
+  const openOverlay = vi.fn(() => overlayHandle);
   const closeOverlay = vi.fn();
   let lastSelector: ReturnType<typeof createSelector> | null = null;
   const createSelectorSpy = vi.fn(() => {
@@ -40,12 +54,15 @@ function createShellHarness(params?: {
     closeOverlay,
     createSelector: createSelectorSpy,
     spawnCommand,
+    ...(params?.getCwd ? { getCwd: params.getCwd } : {}),
     ...(params?.env ? { env: params.env } : {}),
     ...(params?.maxOutputChars !== undefined ? { maxOutputChars: params.maxOutputChars } : {}),
   });
   return {
     messages,
     openOverlay,
+    overlayHandle,
+    closeOverlay,
     createSelectorSpy,
     spawnCommand,
     runLocalShellLine,
@@ -79,6 +96,7 @@ describe("createLocalShellRunner", () => {
     expect(harness.messages).toContain("local shell: not enabled for this session");
     expect(harness.createSelectorSpy).toHaveBeenCalledTimes(1);
     expect(harness.spawnCommand).not.toHaveBeenCalled();
+    expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
   });
 
   it("sets OPENCLAW_SHELL when running local shell commands", async () => {
@@ -145,5 +163,108 @@ describe("createLocalShellRunner", () => {
     // The failure reason in stderr must survive even though stdout filled the cap;
     // the previous head-cut kept all stdout and dropped stderr entirely.
     expect(harness.messages.some((m) => m.includes("FATAL"))).toBe(true);
+  });
+
+  it("keeps a whole code point when the combined output tail starts inside an emoji", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => {
+            stdout.emit("data", Buffer.from("x😀"));
+            stderr.emit("data", Buffer.from("tail"));
+            callback(0, null);
+          });
+        }
+      },
+    }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+      maxOutputChars: 6,
+    });
+
+    const run = harness.runLocalShellLine("!unicode");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(harness.messages).toContain("[local] tail");
+    expect(harness.messages.join("\n")).not.toMatch(/[\uD800-\uDFFF]/u);
+  });
+
+  it("preserves UTF-8 characters split across stdout and stderr chunks", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => {
+            const stdoutBytes = Buffer.from("猫", "utf8");
+            const stderrBytes = Buffer.from("😀", "utf8");
+            stdout.emit("data", stdoutBytes.subarray(0, 1));
+            stderr.emit("data", stderrBytes.subarray(0, 2));
+            setImmediate(() => {
+              stdout.emit("data", stdoutBytes.subarray(1));
+              stderr.emit("data", stderrBytes.subarray(2));
+              callback(0, null);
+            });
+          });
+        }
+      },
+    }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const run = harness.runLocalShellLine("!unicode");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(harness.messages).toContain("[local] 猫");
+    expect(harness.messages).toContain("[local] 😀");
+    expect(harness.messages.join("\n")).not.toContain("�");
+  });
+
+  it("refuses to retarget local commands after the working directory is deleted", async () => {
+    const harness = createShellHarness({ getCwd: () => undefined });
+
+    const run = harness.runLocalShellLine("!pwd");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await run;
+
+    expect(harness.spawnCommand).not.toHaveBeenCalled();
+    expect(harness.messages).toContain(
+      "local shell: working directory was deleted; cd to an existing directory first",
+    );
+  });
+
+  it("does not crash when stdout or stderr emit an error event", async () => {
+    const stdout = new EventEmitter();
+    const stderr = new EventEmitter();
+    const spawnCommand = vi.fn(() => ({
+      stdout,
+      stderr,
+      on: (event: string, callback: (...args: unknown[]) => void) => {
+        if (event === "close") {
+          setImmediate(() => callback(0, null));
+        }
+      },
+    }));
+    const harness = createShellHarness({
+      spawnCommand: spawnCommand as unknown as typeof import("node:child_process").spawn,
+    });
+
+    const run = harness.runLocalShellLine("!cmd");
+    harness.getLastSelector()?.onSelect?.({ value: "yes", label: "Yes" });
+    await vi.waitFor(() => expect(spawnCommand).toHaveBeenCalledTimes(1));
+    stdout.emit("error", new Error("EPIPE"));
+    stderr.emit("error", new Error("EIO"));
+
+    await expect(run).resolves.toBeUndefined();
+    expect(harness.messages.some((message) => message.includes("exit 0"))).toBe(true);
   });
 });

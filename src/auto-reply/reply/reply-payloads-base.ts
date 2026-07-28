@@ -90,7 +90,9 @@ export function applyReplyTagsToPayload(
 
 /** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
-  return hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice });
+  return hasReplyPayloadContent(payload, {
+    extraContent: payload.audioAsVoice || payload.location != null,
+  });
 }
 
 /** True when a payload should stay internal as reasoning-only output. */
@@ -98,16 +100,17 @@ export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
 
-/** Applies threading policy and filters empty payloads before channel delivery. */
-export function applyReplyThreading(params: {
+type ReplyThreadingParams = {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
-}): ReplyPayload[] {
-  const { payloads, replyToMode, replyToChannel, currentMessageId, replyThreading } = params;
-  const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
+};
+
+/** Resolves reply targets and filters empty payloads before channel delivery. */
+export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): ReplyPayload[] {
+  const { payloads, replyToMode, currentMessageId, replyThreading } = params;
   const implicitReplyToId = normalizeOptionalString(currentMessageId);
   return payloads
     .map((payload) =>
@@ -119,6 +122,14 @@ export function applyReplyThreading(params: {
         replyThreading,
       }),
     )
-    .filter(isRenderablePayload)
-    .map(applyReplyToMode);
+    .filter(isRenderablePayload);
+}
+
+/** Applies threading policy and filters empty payloads before channel delivery. */
+export function applyReplyThreading(params: ReplyThreadingParams): ReplyPayload[] {
+  const applyReplyToMode = createReplyToModeFilterForChannel(
+    params.replyToMode,
+    params.replyToChannel,
+  );
+  return resolveReplyThreadingPayloads(params).map(applyReplyToMode);
 }

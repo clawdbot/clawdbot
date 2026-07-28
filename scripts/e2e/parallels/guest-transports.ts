@@ -1,17 +1,18 @@
 // Guest Transports script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
+import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
 
-export interface GuestExecOptions {
+interface GuestExecOptions {
   check?: boolean;
   input?: string;
   timeoutMs?: number;
 }
 
-export interface WindowsBackgroundPowerShellOptions {
+interface WindowsBackgroundPowerShellOptions {
   append?: (chunk: string | Uint8Array) => void;
   beforeLaunchAttempt?: () => void;
   completedLogDrainGraceMs?: number;
@@ -44,17 +45,34 @@ function timeoutBefore(deadline: number, fallbackMs: number): number {
   return Math.min(fallbackMs, Math.max(1_000, deadline - Date.now()));
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function throwIfFailed(label: string, result: CommandResult, check: boolean | undefined): void {
   if (check === false || result.status === 0) {
     return;
   }
   throw new Error(`${label} failed with exit code ${result.status}`);
+}
+
+const PARALLELS_GUEST_SESSION_UNAVAILABLE = "Unable to open new session in this virtual machine.";
+const PARALLELS_VM_NOT_STARTED =
+  "This operation can be performed for running virtual machines only.";
+
+function throwIfGuestSessionUnavailable(
+  label: string,
+  result: CommandResult,
+  check: boolean | undefined,
+): void {
+  if (
+    check !== false &&
+    `${result.stdout}\n${result.stderr}`.includes(PARALLELS_GUEST_SESSION_UNAVAILABLE)
+  ) {
+    throw new Error(`${label} failed: Parallels guest session unavailable`);
+  }
+}
+
+function throwIfParallelsVmStopped(label: string, result: CommandResult): void {
+  if (result.status !== 0 && result.stderr.includes(PARALLELS_VM_NOT_STARTED)) {
+    throw new Error(`${label} failed: Parallels VM stopped`);
+  }
 }
 
 const POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS = 30_000;
@@ -175,6 +193,7 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
     timeoutMs: timeoutBefore(deadline, 120_000),
   });
   appendOutput(append, writeScript);
+  throwIfParallelsVmStopped(options.label, writeScript);
   if (writeScript.status === 255) {
     options.onLaunchRetry?.(
       `${options.label} background script write retry after guest transport rc255`,
@@ -186,6 +205,7 @@ if (!(Test-Path $scriptPath)) { throw "${safeLabel} background script was not wr
       timeoutMs: timeoutBefore(deadline, 120_000),
     });
     appendOutput(append, writeScript);
+    throwIfParallelsVmStopped(options.label, writeScript);
   }
   if (writeScript.status !== 0) {
     throw new Error(
@@ -220,6 +240,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 8_000) },
       );
       appendOutput(append, launch);
+      throwIfParallelsVmStopped(options.label, launch);
       if (launch.status === 0 && launch.stdout.includes("started")) {
         launched = true;
         break;
@@ -274,6 +295,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 5_000) },
       );
       appendOutput(append, doneProbe);
+      throwIfParallelsVmStopped(options.label, doneProbe);
       if (doneProbe.stdout.split(/\r?\n/u).some((line) => line.trim() === "done")) {
         doneFileSeen = true;
         completedLogDrainDeadline ||= Date.now() + completedLogDrainGraceMs;
@@ -296,6 +318,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         { check: false, quiet: true, timeoutMs: timeoutBefore(activeDeadline(), 30_000) },
       );
       appendOutput(append, poll);
+      throwIfParallelsVmStopped(options.label, poll);
       if (hasControlLine(poll.stdout, backgroundDoneMarker)) {
         doneSeen = true;
         const backgroundExit = findControlValue(poll.stdout, backgroundExitPrefix) ?? "0";
@@ -356,6 +379,7 @@ if ((Test-Path $pidPath) -or (Test-Path $donePath)) {
       { check: false, quiet: true, timeoutMs: timeoutBefore(materializeDeadline, 15_000) },
     );
     appendOutput(params.append, result);
+    throwIfParallelsVmStopped("Windows background launch", result);
     if (result.stdout.includes("materialized")) {
       return true;
     }
@@ -480,7 +504,7 @@ export class LinuxGuest {
   }
 }
 
-export interface MacosGuestOptions extends GuestExecOptions {
+interface MacosGuestOptions extends GuestExecOptions {
   env?: Record<string, string>;
 }
 
@@ -532,6 +556,7 @@ export class MacosGuest {
     });
     this.phases.append(result.stdout);
     this.phases.append(result.stderr);
+    throwIfGuestSessionUnavailable("macOS guest command", result, options.check);
     throwIfFailed("macOS guest command", result, options.check);
     return result;
   }

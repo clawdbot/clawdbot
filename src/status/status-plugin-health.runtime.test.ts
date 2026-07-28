@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { recordPersistedRuntimeToolSchemaQuarantine } from "../agents/tool-schema-quarantine-health.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { recordPersistedContextEngineQuarantine } from "../context-engine/quarantine-health.js";
-import { clearContextEngineRuntimeQuarantine } from "../context-engine/registry.js";
+import { resetContextEngineRuntimeQuarantineForTests } from "../context-engine/registry.test-support.js";
 import {
   createCorePluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
@@ -67,7 +67,7 @@ function seedPersistedToolQuarantineForTest(record: {
 describe("runtime plugin health snapshot", () => {
   it("includes persisted context-engine quarantines", async () => {
     await withStateDirEnv("openclaw-status-plugin-health-", async () => {
-      clearContextEngineRuntimeQuarantine();
+      resetContextEngineRuntimeQuarantineForTests();
       recordPersistedContextEngineQuarantine({
         engineId: "lossless-claw",
         owner: "plugin:lossless-claw",

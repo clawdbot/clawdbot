@@ -1,29 +1,29 @@
 // Memory Host SDK module implements backend config behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  CANONICAL_ROOT_MEMORY_FILENAME,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import {
+  MEMORY_HOST_ROOT_FILENAME,
   type MemoryBackend,
   type MemoryCitationsMode,
   type MemoryQmdConfig,
   type MemoryQmdIndexPath,
-  type MemoryQmdMcporterConfig,
   type MemoryQmdSearchMode,
   type MemoryQmdStartupMode,
   type OpenClawConfig,
-  parseDurationMs,
-  resolveAgentWorkspaceDir,
+  resolveMemoryHostAgentWorkspaceDir,
+  resolveMemoryHostSearchPathConfig,
   normalizeAgentId,
-  resolveUserPath,
+  resolveMemoryHostUserPath,
   type SessionSendPolicyConfig,
   splitShellArgs,
 } from "./config-utils.js";
 import { isPathInside } from "./fs-utils.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
-  uniqueStrings,
-} from "./string-utils.js";
+import { parseDurationMs } from "./openclaw-runtime-config.js";
 
 function escapeQmdExactFilePattern(fileName: string): string {
   return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
@@ -63,14 +63,14 @@ export type ResolvedMemoryBackendConfig = {
   qmd?: ResolvedQmdConfig;
 };
 
-export type ResolvedQmdCollection = {
+/** @public */ export type ResolvedQmdCollection = {
   name: string;
   path: string;
   pattern: string;
   kind: "memory" | "custom" | "sessions";
 };
 
-export type ResolvedQmdUpdateConfig = {
+/** @public */ export type ResolvedQmdUpdateConfig = {
   intervalMs: number;
   debounceMs: number;
   onBoot: boolean;
@@ -83,15 +83,22 @@ export type ResolvedQmdUpdateConfig = {
   embedTimeoutMs: number;
 };
 
-export type ResolvedQmdLimitsConfig = {
+/** @public */ export type ResolvedQmdLimitsConfig = {
   maxResults: number;
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
 };
 
-export type ResolvedQmdSessionConfig = {
+/** @public */ export type ResolvedQmdSessionConfig = {
   enabled: boolean;
+  /**
+   * Whether ordinary memory searches and memory_get may access exported
+   * session transcripts. Only explicit memory.qmd.sessions.enabled opts
+   * transcripts into the ordinary memory corpus; remember-across-conversations
+   * implies export for trusted recall search only.
+   */
+  readable: boolean;
   exportDir?: string;
   retentionDays?: number;
 };
@@ -209,7 +216,7 @@ function resolvePath(raw: string, workspaceDir: string): string {
     throw new Error("path required");
   }
   if (trimmed.startsWith("~") || path.isAbsolute(trimmed)) {
-    return path.normalize(resolveUserPath(trimmed));
+    return path.normalize(resolveMemoryHostUserPath(trimmed));
   }
   return path.normalize(path.resolve(workspaceDir, trimmed));
 }
@@ -245,10 +252,6 @@ function resolveDebounceMs(raw: number | undefined): number {
   return DEFAULT_QMD_DEBOUNCE_MS;
 }
 
-function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
-  return resolvePositiveIntegerConfig(raw, fallback);
-}
-
 function resolvePositiveIntegerConfig(raw: number | undefined, fallback: number): number;
 function resolvePositiveIntegerConfig(raw: number | undefined): number | undefined;
 function resolvePositiveIntegerConfig(
@@ -259,14 +262,6 @@ function resolvePositiveIntegerConfig(
     return fallback;
   }
   return Math.max(1, Math.floor(raw));
-}
-
-function resolveStartupMode(raw: MemoryQmdConfig["update"]): MemoryQmdStartupMode {
-  const value = raw?.startup;
-  if (value === "idle" || value === "immediate" || value === "off") {
-    return value;
-  }
-  return DEFAULT_QMD_STARTUP;
 }
 
 function resolveStartupDelayMs(raw: number | undefined): number {
@@ -306,13 +301,20 @@ function resolveSearchTool(raw?: MemoryQmdConfig["searchTool"]): string | undefi
 function resolveSessionConfig(
   cfg: MemoryQmdConfig["sessions"],
   workspaceDir: string,
+  options: { explicit: boolean },
 ): ResolvedQmdSessionConfig {
   const enabled = Boolean(cfg?.enabled);
   const exportDirRaw = cfg?.exportDir?.trim();
-  const exportDir = exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
+  // A configured exportDir belongs to explicit session export. When export is
+  // only implied by rememberAcrossConversations, honoring it could write
+  // transcripts into workspace memory/ and leak them into the ordinary memory
+  // corpus; implied exports always use the default private location.
+  const exportDir =
+    options.explicit && exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
   const retentionDays = resolvePositiveIntegerConfig(cfg?.retentionDays);
   return {
     enabled,
+    readable: enabled && options.explicit,
     exportDir,
     retentionDays,
   };
@@ -376,27 +378,6 @@ function resolveCustomPaths(
   return collections;
 }
 
-function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcporterConfig {
-  const parsed: ResolvedQmdMcporterConfig = { ...DEFAULT_QMD_MCPORTER };
-  if (!raw) {
-    return parsed;
-  }
-  if (raw.enabled !== undefined) {
-    parsed.enabled = raw.enabled;
-  }
-  if (typeof raw.serverName === "string" && raw.serverName.trim()) {
-    parsed.serverName = raw.serverName.trim();
-  }
-  if (raw.startDaemon !== undefined) {
-    parsed.startDaemon = raw.startDaemon;
-  }
-  // When enabled, default startDaemon to true.
-  if (parsed.enabled && raw.startDaemon === undefined) {
-    parsed.startDaemon = true;
-  }
-  return parsed;
-}
-
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -407,7 +388,7 @@ function resolveDefaultCollections(
     return [];
   }
   const entries: Array<{ path: string; pattern: string; base: string }> = [
-    { path: workspaceDir, pattern: CANONICAL_ROOT_MEMORY_FILENAME, base: "memory-root" },
+    { path: workspaceDir, pattern: MEMORY_HOST_ROOT_FILENAME, base: "memory-root" },
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
@@ -429,8 +410,9 @@ export function resolveMemoryBackendConfig(params: {
     return { backend: "builtin", citations };
   }
 
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, normalizedAgentId);
+  const workspaceDir = resolveMemoryHostAgentWorkspaceDir(params.cfg, normalizedAgentId);
   const qmdCfg = params.cfg.memory?.qmd;
+  const memorySearch = resolveMemoryHostSearchPathConfig(params.cfg, normalizedAgentId);
   const includeDefaultMemory = qmdCfg?.includeDefaultMemory !== false;
   const nameSet = new Set<string>();
   const agentEntry = params.cfg.agents?.list?.find(
@@ -438,8 +420,8 @@ export function resolveMemoryBackendConfig(params: {
   );
   const mergedExtraPaths = normalizeStringEntries(
     [
-      ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
-      ...(agentEntry?.memorySearch?.extraPaths ?? []),
+      ...(params.cfg.memory?.search?.extraPaths ?? []),
+      ...(agentEntry?.memory?.search?.extraPaths ?? []),
     ].filter((value): value is string => typeof value === "string"),
   );
   const dedupedExtraPaths = uniqueStrings(mergedExtraPaths);
@@ -447,8 +429,8 @@ export function resolveMemoryBackendConfig(params: {
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
   const mergedExtraCollections = [
-    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
-    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(params.cfg.memory?.search?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memory?.search?.qmd?.extraCollections ?? []),
   ].filter(
     (value): value is MemoryQmdIndexPath =>
       value !== null && typeof value === "object" && typeof value.path === "string",
@@ -470,33 +452,33 @@ export function resolveMemoryBackendConfig(params: {
   const command = resolveQmdCommand(rawCommand);
   const resolved: ResolvedQmdConfig = {
     command,
-    mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
+    mcporter: { ...DEFAULT_QMD_MCPORTER },
     searchMode: resolveSearchMode(qmdCfg?.searchMode),
     rerank: qmdCfg?.rerank,
     searchTool: resolveSearchTool(qmdCfg?.searchTool),
     collections,
     includeDefaultMemory,
-    sessions: resolveSessionConfig(qmdCfg?.sessions, workspaceDir),
+    sessions: resolveSessionConfig(
+      {
+        ...qmdCfg?.sessions,
+        enabled: qmdCfg?.sessions?.enabled === true || memorySearch?.rememberAcrossConversations,
+      },
+      workspaceDir,
+      // Remember-only export is search-only for trusted recall; ordinary
+      // memory_get reads and sessions options require explicit sessions.enabled.
+      { explicit: qmdCfg?.sessions?.enabled === true },
+    ),
     update: {
-      intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
-      debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),
-      onBoot: qmdCfg?.update?.onBoot !== false,
-      startup: resolveStartupMode(qmdCfg?.update),
-      startupDelayMs: resolveStartupDelayMs(qmdCfg?.update?.startupDelayMs),
-      waitForBootSync: qmdCfg?.update?.waitForBootSync === true,
-      embedIntervalMs: resolveEmbedIntervalMs(qmdCfg?.update?.embedInterval),
-      commandTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.commandTimeoutMs,
-        DEFAULT_QMD_COMMAND_TIMEOUT_MS,
-      ),
-      updateTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.updateTimeoutMs,
-        DEFAULT_QMD_UPDATE_TIMEOUT_MS,
-      ),
-      embedTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.embedTimeoutMs,
-        DEFAULT_QMD_EMBED_TIMEOUT_MS,
-      ),
+      intervalMs: resolveIntervalMs(undefined),
+      debounceMs: resolveDebounceMs(undefined),
+      onBoot: true,
+      startup: DEFAULT_QMD_STARTUP,
+      startupDelayMs: resolveStartupDelayMs(undefined),
+      waitForBootSync: false,
+      embedIntervalMs: resolveEmbedIntervalMs(undefined),
+      commandTimeoutMs: DEFAULT_QMD_COMMAND_TIMEOUT_MS,
+      updateTimeoutMs: DEFAULT_QMD_UPDATE_TIMEOUT_MS,
+      embedTimeoutMs: DEFAULT_QMD_EMBED_TIMEOUT_MS,
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
+import { isFastTestRuntimeEnv } from "../infra/test-runtime-env.js";
 import type { OpenClawConfig } from "./types.js";
 
 /**
@@ -24,6 +25,12 @@ const LEGACY_STATE_DIRNAMES = [".clawdbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
 const LEGACY_CONFIG_FILENAMES = ["clawdbot.json"] as const;
+
+/** True when the root CLI selected a non-default isolated profile. */
+export function isNamedProfile(env: NodeJS.ProcessEnv = process.env): boolean {
+  const profile = env.OPENCLAW_PROFILE?.trim();
+  return Boolean(profile && profile.toLowerCase() !== "default");
+}
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -65,7 +72,7 @@ export function resolveStateDir(
     return resolveUserPath(override, env, effectiveHomedir);
   }
   const newDir = newStateDir(effectiveHomedir);
-  if (env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv(env)) {
     return newDir;
   }
   const legacyDirs = legacyStateDirs(effectiveHomedir);
@@ -168,7 +175,7 @@ export function resolveConfigPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string {
-  if (env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv(env)) {
     return resolveCanonicalConfigPath(env, resolveStateDir(env, homedir));
   }
   const candidates = resolveDefaultConfigCandidates(env, homedir);
@@ -197,7 +204,7 @@ export function resolveConfigPath(
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  if (env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv(env)) {
     return path.join(stateDir, CONFIG_FILENAME);
   }
   const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
@@ -287,15 +294,16 @@ export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string 
   return path.join(base, suffix);
 }
 
-const OAUTH_FILENAME = "oauth.json";
-
 /**
- * OAuth credentials storage directory.
- *
- * Precedence:
- * - `OPENCLAW_OAUTH_DIR` (explicit override)
- * - `$*_STATE_DIR/credentials` (canonical server/default)
+ * Queue-owned copies of outbound attachments that have not been delivered yet,
+ * held outside the media store so its TTL sweep cannot reclaim an attachment a
+ * durable row still has to send.
  */
+export function resolveDeliveryQueueMediaDir(stateDir?: string): string {
+  return path.join(stateDir ?? resolveStateDir(), "delivery-queue-media");
+}
+
+/** Resolves the legacy credentials directory retained for Doctor and backup ownership. */
 export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, envHomedir(env)),
@@ -305,13 +313,6 @@ export function resolveOAuthDir(
     return resolveUserPath(override, env, envHomedir(env));
   }
   return path.join(stateDir, "credentials");
-}
-
-export function resolveOAuthPath(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
-): string {
-  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
 function parseGatewayPortEnvValue(raw: string | undefined): number | null {

@@ -6,7 +6,12 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveAllowedManagedMediaPath, resolveSandboxedMediaSource } from "./sandbox-paths.js";
+import {
+  assertSandboxPath,
+  resolveAllowedManagedMediaPath,
+  resolveSandboxedMediaSource,
+  resolveSandboxPath,
+} from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
   // Real temp roots exercise path normalization and symlink/hardlink behavior.
@@ -85,6 +90,144 @@ async function withOutsideHardlinkInOpenClawTmp<T>(
     await fs.rm(outsideDir, { recursive: true, force: true });
   }
 }
+
+describe("resolveSandboxPath", () => {
+  it("keeps home-sibling roots absolute in escape diagnostics", async () => {
+    const home = path.join(os.homedir(), "test-home");
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      const root = path.resolve(`${home}-sibling`);
+      const outside = path.dirname(root);
+
+      expect(() => resolveSandboxPath({ filePath: outside, cwd: root, root })).toThrow(
+        `Path escapes sandbox root (${root}): ${outside}`,
+      );
+    });
+  });
+
+  it("still shortens roots beneath the home directory", async () => {
+    const home = path.join(os.homedir(), "test-home");
+    await withEnvAsync({ HOME: home, OPENCLAW_HOME: undefined }, async () => {
+      const root = path.join(home, "openclaw-sandbox");
+      const outside = path.dirname(root);
+
+      expect(() => resolveSandboxPath({ filePath: outside, cwd: root, root })).toThrow(
+        `Path escapes sandbox root (~${path.sep}openclaw-sandbox): ${outside}`,
+      );
+    });
+  });
+});
+
+describe("assertSandboxPath", () => {
+  it.runIf(process.platform !== "win32")(
+    "rejects symlink-then-dot-dot traversal for existing and new files",
+    async () => {
+      const parent = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-symlink-dotdot-")),
+      );
+      const root = path.join(parent, "workspace");
+      const outside = path.join(parent, "outside");
+      try {
+        await fs.mkdir(path.join(root, "sub"), { recursive: true });
+        await fs.mkdir(outside);
+        await fs.symlink("..", path.join(root, "sub", "up"));
+        await fs.writeFile(path.join(outside, "secret.txt"), "outside", "utf8");
+
+        const escapedRead = `${root}/sub/up/../outside/secret.txt`;
+        await expect(fs.readFile(escapedRead, "utf8")).resolves.toBe("outside");
+        await expect(assertSandboxPath({ filePath: escapedRead, cwd: root, root })).rejects.toThrow(
+          /escapes sandbox root/i,
+        );
+        await expect(
+          assertSandboxPath({
+            filePath: `${root}/sub/up/../outside/new.txt`,
+            cwd: root,
+            root,
+          }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+        await expect(
+          assertSandboxPath({ filePath: `${root}/sub/up/../..`, cwd: root, root }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+
+        await fs.mkdir(path.join(root, "a"));
+        await fs.mkdir(path.join(root, "b"));
+        await fs.symlink("../b", path.join(root, "a", "up"));
+        await fs.symlink(path.join(outside, "secret.txt"), path.join(root, "escape"));
+        const escapedFinalSymlink = `${root}/a/up/../escape`;
+        await expect(fs.readFile(escapedFinalSymlink, "utf8")).resolves.toBe("outside");
+        await expect(
+          assertSandboxPath({ filePath: escapedFinalSymlink, cwd: root, root }),
+        ).rejects.toThrow(/symlink escapes sandbox root/i);
+
+        await fs.symlink(outside, path.join(root, "outside-link"));
+        await expect(
+          assertSandboxPath({
+            filePath: `${root}/outside-link/`,
+            cwd: root,
+            root,
+            allowFinalSymlinkForUnlink: true,
+          }),
+        ).rejects.toThrow(/escapes sandbox root/i);
+
+        await fs.mkdir(path.join(root, "real"));
+        await fs.symlink(path.join(root, "real"), path.join(root, "in-root-link"));
+        await expect(
+          assertSandboxPath({
+            filePath: `${root}/in-root-link/../real/new.txt`,
+            cwd: root,
+            root,
+          }),
+        ).resolves.toBeTruthy();
+        await expect(assertSandboxPath({ filePath: root, cwd: root, root })).resolves.toBeTruthy();
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "pins Win32 junction-then-dot-dot to lexical traversal semantics",
+    async () => {
+      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-junction-dotdot-"));
+      const root = path.join(parent, "workspace");
+      const outside = path.join(parent, "outside");
+      try {
+        await fs.mkdir(path.join(root, "sub"), { recursive: true });
+        await fs.mkdir(outside);
+        await fs.symlink(root, path.join(root, "sub", "up"), "junction");
+        await fs.writeFile(path.join(outside, "secret.txt"), "outside", "utf8");
+        const attemptedEscape = `${root}\\sub\\up\\..\\outside\\secret.txt`;
+
+        await expect(fs.readFile(attemptedEscape, "utf8")).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      } finally {
+        await fs.rm(parent, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("accepts not-yet-created and symlinked roots", async () => {
+    const parent = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "sandbox-missing-root-")),
+    );
+    try {
+      const root = path.join(parent, "workspace");
+      await expect(
+        assertSandboxPath({ filePath: "nested/new.txt", cwd: root, root }),
+      ).resolves.toMatchObject({ relative: path.join("nested", "new.txt") });
+
+      const realRoot = path.join(parent, "real-workspace");
+      const linkedRoot = path.join(parent, "linked-workspace");
+      await fs.mkdir(realRoot);
+      await fs.symlink(realRoot, linkedRoot);
+      await expect(
+        assertSandboxPath({ filePath: linkedRoot, cwd: linkedRoot, root: linkedRoot }),
+      ).resolves.toMatchObject({ relative: "" });
+    } finally {
+      await fs.rm(parent, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("resolveSandboxedMediaSource", () => {
   const openClawTmpDir = resolvePreferredOpenClawTmpDir();

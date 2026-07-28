@@ -54,4 +54,21 @@ describe("zalo directory", () => {
     expect(zaloPlugin.pairing?.normalizeAllowEntry?.("  zalo:123  ")).toBe("123");
     expect(zaloPlugin.messaging?.normalizeTarget?.("  zl:234  ")).toBe("234");
   });
+
+  it("recognizes opaque Bot API chat ids as direct targets", () => {
+    const looksLikeId = zaloPlugin.messaging?.targetResolver?.looksLikeId;
+    if (!looksLikeId) {
+      throw new Error("expected Zalo target resolver");
+    }
+
+    expect(looksLikeId("123456", "123456")).toBe(true);
+    expect(looksLikeId("3becaa50ae12474c1e03", "3becaa50ae12474c1e03")).toBe(true);
+    expect(looksLikeId("abc.xyz", "abc.xyz")).toBe(true);
+    expect(looksLikeId("zalo:49270a5f8f1c66423f0d", "49270a5f8f1c66423f0d")).toBe(true);
+    expect(looksLikeId("zalo:abc.xyz", "abc.xyz")).toBe(true);
+    expect(looksLikeId("zl:3becaa50ae12474c1e03", "3becaa50ae12474c1e03")).toBe(true);
+    expect(looksLikeId("zl:abc.xyz", "abc.xyz")).toBe(true);
+    expect(looksLikeId("support", "support")).toBe(true);
+    expect(looksLikeId("zalo:  ", "")).toBe(false);
+  });
 });

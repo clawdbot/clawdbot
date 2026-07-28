@@ -101,7 +101,8 @@
     }
   },
   "dependencies": {
-    "@clack/prompts": "1.4.0",
+    "@clack/prompts": "1.7.0",
+    "@openclaw/normalization-core": "workspace:*",
     "chalk": "5.6.2"
   }
 }

@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { readCronRunLogEntriesSync } from "../../../cron/run-log.js";
 import {
   loadCronJobsStoreWithConfigJobs,
   loadCronQuarantineFile,
@@ -13,9 +12,12 @@ import {
   resolveCronQuarantinePath,
   saveCronStore,
 } from "../../../cron/store.js";
+import { cronStoreKey } from "../../../cron/store/key.js";
+import { readCronTaskRunHistoryPage } from "../../../cron/task-run-history.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
 import {
+  collectLegacyCronStoreHealthFindings,
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck,
@@ -37,6 +39,7 @@ async function makeTempStorePath() {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   noteMock.mockClear();
   if (tempRoot) {
     await fs.rm(tempRoot, { recursive: true, force: true });
@@ -50,13 +53,16 @@ function makePrompter(confirmResult = true) {
   };
 }
 
-function createCronConfig(storePath: string): OpenClawConfig {
+function createCronConfig(
+  storePath: string,
+  webhook = "https://example.invalid/cron-finished",
+): OpenClawConfig {
   return {
     cron: {
       store: storePath,
-      webhook: "https://example.invalid/cron-finished",
+      webhook,
     },
-  };
+  } as unknown as OpenClawConfig;
 }
 
 function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
@@ -209,6 +215,95 @@ function mockExdevRename(filePath: string) {
   });
 }
 
+describe("collectLegacyCronStoreHealthFindings", () => {
+  it("reports legacy cron store, run-log, and payload findings without mutating files", async () => {
+    const storePath = await makeTempStorePath();
+    await writeLegacyCronArrayStore(storePath, [
+      createLegacyCronJob({
+        jobId: "legacy-notify",
+        payload: {
+          kind: "systemEvent",
+          text: "Morning brief",
+        },
+      }),
+    ]);
+    const runLogPath = path.join(path.dirname(storePath), "runs", "legacy-notify.jsonl");
+    await fs.mkdir(path.dirname(runLogPath), { recursive: true });
+    await fs.writeFile(runLogPath, "", "utf-8");
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-cron-store",
+          severity: "warning",
+          path: storePath,
+          requirement: "legacy-cron-store",
+        }),
+        expect.objectContaining({
+          checkId: "core/doctor/legacy-cron-store",
+          severity: "warning",
+          path: storePath,
+          requirement: "legacy-notify-fallback",
+        }),
+      ]),
+    );
+    expect(findings.some((finding) => finding.requirement === "legacy-cron-run-logs")).toBe(true);
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("legacy-notify");
+    await expect(fs.stat(runLogPath)).resolves.toBeDefined();
+  });
+
+  it("reports quarantined cron rows while leaving the active store untouched", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+    await fs.mkdir(path.dirname(resolveCronQuarantinePath(storePath)), { recursive: true });
+    await fs.writeFile(
+      resolveCronQuarantinePath(storePath),
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              quarantinedAtMs: Date.parse("2026-05-29T09:00:00.000Z"),
+              sourceIndex: 1,
+              reason: "missing-schedule",
+              job: { id: "bad-cron", name: "Bad cron" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const findings = await collectLegacyCronStoreHealthFindings({
+      cfg: createCronConfig(storePath),
+    });
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/legacy-cron-store",
+        path: resolveCronQuarantinePath(storePath),
+        requirement: "quarantined-cron-rows",
+      }),
+    ]);
+    await expect(readPersistedJobs(storePath)).resolves.toEqual([]);
+  });
+
+  it("returns no findings for an already-normalized empty cron store", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, []);
+
+    await expect(
+      collectLegacyCronStoreHealthFindings({ cfg: createCronConfig(storePath) }),
+    ).resolves.toEqual([]);
+  });
+});
+
 describe("maybeRepairLegacyCronStore", () => {
   it("reports quarantined cron rows even when the active store is already sanitized", async () => {
     const storePath = await makeTempStorePath();
@@ -305,7 +400,7 @@ describe("maybeRepairLegacyCronStore", () => {
             model: { primary: "openai/gpt-5.5", fallbacks: [] },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       options: {},
       prompter,
     });
@@ -381,7 +476,7 @@ describe("maybeRepairLegacyCronStore", () => {
             model: { primary: "test:opus", fallbacks: [] },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       options: {},
       prompter: makePrompter(true),
     });
@@ -390,6 +485,148 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("Provider namespaces: bare/alias=1", "Cron");
     expectNoteContaining("1 job uses a different model than `agents.defaults.model`", "Cron");
     expectNoteContaining("Examples: alias-pinned -> gpt", "Cron");
+  });
+
+  describe("in-flight cron job advisory", () => {
+    const RUNNING_AT_MS = Date.parse("2026-05-01T00:00:00.000Z");
+
+    it("warns about jobs still marked in-flight without touching the store", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({ id: "running-job", state: { runningAtMs: RUNNING_AT_MS } }),
+      ]);
+      const prompter = makePrompter(true);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter,
+      });
+
+      expectNoteContaining("1 cron job is still marked in-flight", "Cron");
+      expectNoteContaining("shows it as `running`", "Cron");
+      expectNoteContaining("marks such runs interrupted the next time it starts", "Cron");
+      expectNoteContaining("openclaw cron show <id>", "Cron");
+
+      // Observer-only: no repair prompt and the running marker is left untouched.
+      expect(prompter.confirm).not.toHaveBeenCalled();
+      const jobs = await readPersistedJobs(storePath);
+      const state = requireRecord(requirePersistedJob(jobs, 0).state, "cron state");
+      expect(state.runningAtMs).toBe(RUNNING_AT_MS);
+      expect(state.lastRunStatus).toBeUndefined();
+    });
+
+    it("pluralizes the advisory when multiple jobs are in-flight", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({ id: "running-a", state: { runningAtMs: RUNNING_AT_MS } }),
+        createCurrentCronJob({ id: "running-b", state: { runningAtMs: RUNNING_AT_MS + 1000 } }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoteContaining("2 cron jobs are still marked in-flight", "Cron");
+      expectNoteContaining("shows them as `running`", "Cron");
+    });
+
+    it("stays silent when no job is marked in-flight", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [createCurrentCronJob({ id: "idle-job" })]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoNoteContaining("still marked in-flight", "Cron");
+    });
+  });
+
+  describe("chronic failure advisory", () => {
+    it("warns about repeatedly failing jobs without touching the store", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "failing-job",
+          state: { lastRunStatus: "error", consecutiveErrors: 5, lastError: "boom" },
+        }),
+      ]);
+      const prompter = makePrompter(true);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter,
+      });
+
+      expectNoteContaining("1 cron job has failed 3+ runs in a row", "Cron");
+      expectNoteContaining("re-fires it on error backoff", "Cron");
+      expectNoteContaining("resets on the next successful run", "Cron");
+      expectNoteContaining("interrupted by a gateway restart", "Cron");
+      expectNoteContaining("openclaw cron show <id>", "Cron");
+
+      // Observer-only: no repair prompt and the failure counters stay untouched.
+      expect(prompter.confirm).not.toHaveBeenCalled();
+      const jobs = await readPersistedJobs(storePath);
+      const state = requireRecord(requirePersistedJob(jobs, 0).state, "cron state");
+      expect(state.consecutiveErrors).toBe(5);
+    });
+
+    it("pluralizes and only counts enabled jobs at or above the threshold", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "failing-a",
+          state: { lastRunStatus: "error", consecutiveErrors: 3 },
+        }),
+        createCurrentCronJob({
+          id: "failing-b",
+          state: { lastRunStatus: "error", consecutiveErrors: 12 },
+        }),
+        createCurrentCronJob({
+          id: "recovering",
+          state: { lastRunStatus: "error", consecutiveErrors: 2 },
+        }),
+        // Exhausted one-shot jobs get disabled with their error state retained;
+        // they no longer re-fire, so the advisory must not count them.
+        createCurrentCronJob({
+          id: "disabled-exhausted",
+          enabled: false,
+          state: { lastRunStatus: "error", consecutiveErrors: 9 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoteContaining("2 cron jobs have failed 3+ runs in a row", "Cron");
+    });
+
+    it("stays silent when failure streaks are below the threshold", async () => {
+      const storePath = await makeTempStorePath();
+      await writeCurrentCronStore(storePath, [
+        createCurrentCronJob({
+          id: "single-failure",
+          state: { lastRunStatus: "error", consecutiveErrors: 2 },
+        }),
+      ]);
+
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+
+      expectNoNoteContaining("runs in a row", "Cron");
+    });
   });
 
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
@@ -495,7 +732,9 @@ describe("maybeRepairLegacyCronStore", () => {
       await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.readFile(archivePath, "utf-8")).resolves.toContain("legacy-job");
       const archiveStat = await fs.stat(archivePath);
-      expect(archiveStat.mode & 0o777).toBe(0o640);
+      if (process.platform !== "win32") {
+        expect(archiveStat.mode & 0o777).toBe(0o640);
+      }
       expect(archiveStat.mtimeMs).toBe(sourceMtime.getTime());
       expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
       expectNoNoteContaining("could not archive the legacy cron file", "Doctor warnings");
@@ -844,7 +1083,11 @@ describe("maybeRepairLegacyCronStore", () => {
     let injectedFailure = false;
     const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const handle = await realOpen(...args);
-      if (args[0] === path.dirname(storePath) && args[1] === "r" && !injectedFailure) {
+      const flags = args[1];
+      const opensDirectory =
+        flags === "r" ||
+        (typeof flags === "number" && (flags & fsSync.constants.O_DIRECTORY) !== 0);
+      if (args[0] === path.dirname(storePath) && opensDirectory && !injectedFailure) {
         injectedFailure = true;
         vi.spyOn(handle, "sync").mockRejectedValueOnce(
           createFsError("EIO", "directory fsync failed"),
@@ -1096,7 +1339,10 @@ describe("maybeRepairLegacyCronStore", () => {
       prompter: makePrompter(true),
     });
 
-    const entries = readCronRunLogEntriesSync({ storePath, jobId: "sqlite-job" });
+    const entries = readCronTaskRunHistoryPage({
+      storeKey: cronStoreKey(storePath),
+      jobId: "sqlite-job",
+    }).entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.jobId).toBe("sqlite-job");
     expect(entries[0]?.summary).toBe("done");
@@ -1238,9 +1484,10 @@ describe("maybeRepairLegacyCronStore", () => {
       updatedAtMs: shellPromptJob.updatedAtMs,
       state: {},
       scheduleIdentity: JSON.stringify({
-        version: 1,
+        version: 2,
         enabled: shellPromptJob.enabled,
         schedule: shellPromptJob.schedule,
+        hasTrigger: false,
       }),
     });
     const payload = requireRecord(job.payload, "cron payload");
@@ -1357,12 +1604,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: { nonInteractive: true },
       prompter: makePrompter(true),
     });
@@ -1443,12 +1685,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -1493,12 +1730,7 @@ describe("maybeRepairLegacyCronStore", () => {
     );
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "https://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath),
       options: {},
       prompter: makePrompter(true),
     });
@@ -1522,12 +1754,7 @@ describe("maybeRepairLegacyCronStore", () => {
     ]);
 
     await maybeRepairLegacyCronStore({
-      cfg: {
-        cron: {
-          store: storePath,
-          webhook: "ftp://example.invalid/cron-finished",
-        },
-      },
+      cfg: createCronConfig(storePath, "ftp://example.invalid/cron-finished"),
       options: {},
       prompter: makePrompter(true),
     });
@@ -1556,7 +1783,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
 
-    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const cfg = { cron: { store: storePath } } as unknown as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
       options: {},
@@ -1594,7 +1821,7 @@ describe("maybeRepairLegacyCronStore", () => {
       }),
     ]);
 
-    const cfg = { cron: { store: storePath } } as OpenClawConfig;
+    const cfg = { cron: { store: storePath } } as unknown as OpenClawConfig;
     await maybeRepairLegacyCronStore({
       cfg,
       options: {},
@@ -1726,7 +1953,7 @@ describe("maybeRepairLegacyCronStore", () => {
 
     await expect(
       maybeRepairLegacyCronStore({
-        cfg: { cron: { store: storePath } },
+        cfg: { cron: { store: storePath } } as unknown as OpenClawConfig,
         options: {},
         prompter,
       }),
@@ -1821,3 +2048,4 @@ describe("legacy WhatsApp crontab health check", () => {
     expect(noteMock).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

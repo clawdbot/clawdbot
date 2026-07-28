@@ -1,10 +1,11 @@
 // Irc tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
+import type { IrcIngressLifecycle } from "./irc-ingress.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
+import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
@@ -96,10 +97,6 @@ describe("irc inbound behavior", () => {
   beforeEach(() => {
     resetInboundMocks();
     installIrcRuntime();
-  });
-
-  afterEach(() => {
-    clearIrcRuntime();
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
@@ -200,6 +197,48 @@ describe("irc inbound behavior", () => {
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 
+  it("binds durable completion to reply-lane adoption", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setIrcRuntime(coreRuntime as never);
+    const onAdopted = vi.fn(async () => undefined);
+    const turnAdoptionLifecycle: IrcIngressLifecycle = {
+      abortSignal: new AbortController().signal,
+      onAdopted,
+      onDeferred: vi.fn(),
+      onAdoptionFinalizing: vi.fn(),
+      onAbandoned: vi.fn(async () => undefined),
+    };
+
+    const result = await handleIrcInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      turnAdoptionLifecycle,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const dispatchReply = coreRuntime.channel.reply
+      .dispatchReplyWithBufferedBlockDispatcher as unknown as { mock: { calls: unknown[][] } };
+    const replyOptions = (
+      dispatchReply.mock.calls[0]?.[0] as
+        | { replyOptions?: { turnAdoptionLifecycle?: IrcIngressLifecycle } }
+        | undefined
+    )?.replyOptions;
+    expect(replyOptions?.turnAdoptionLifecycle).toEqual(
+      expect.objectContaining({ abortSignal: turnAdoptionLifecycle.abortSignal }),
+    );
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(result).toEqual({ kind: "completed" });
+  });
+
   it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
     const coreRuntime = createPluginRuntimeMock();
     const runtime = createRuntimeEnv();
@@ -230,18 +269,83 @@ describe("irc inbound behavior", () => {
       sendReply: vi.fn(async () => {}),
     });
 
+    const dispatch = coreRuntime.channel.inbound.dispatch as unknown as {
+      mock: { calls: unknown[][] };
+    };
+    expect(dispatch.mock.calls).toHaveLength(1);
     const ctx = (
-      coreRuntime.channel.reply.finalizeInboundContext as unknown as {
-        mock: { calls: unknown[][] };
-      }
-    ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    expect(
-      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
-        .mock.calls.length,
-    ).toBe(1);
+      dispatch.mock.calls[0]?.[0] as { ctxPayload?: Record<string, unknown> } | undefined
+    )?.ctxPayload;
     expect(runtime.log).not.toHaveBeenCalled();
     expect(ctx?.From).toBe("channel:#ops");
     expect(ctx?.To).toBe("channel:#ops");
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
+  });
+
+  it("drops a spoofed sender for a host-less nick!user DM allowlist entry", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "alice",
+        senderNick: "alice",
+        senderUser: "ident",
+        senderHost: "attacker.example",
+        text: "hello",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["alice!ident"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(
+      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length,
+    ).toBe(0);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "irc: drop DM sender alice!ident@attacker.example (dmPolicy=allowlist)",
+    );
+  });
+
+  it("admits a sender matching a full nick!user@host DM allowlist entry", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "alice",
+        senderNick: "alice",
+        senderUser: "ident",
+        senderHost: "example.com",
+        text: "hello",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["alice!ident@example.com"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(
+      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length,
+    ).toBe(1);
   });
 });

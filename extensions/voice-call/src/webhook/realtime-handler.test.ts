@@ -1,12 +1,14 @@
 // Voice Call tests cover realtime handler plugin behavior.
 import http from "node:http";
+import { expectDefined } from "@openclaw/normalization-core";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
+  RealtimeVoiceSessionHarness,
   RealtimeVoiceToolCallEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, type RawData } from "ws";
 import type { VoiceCallRealtimeConfig } from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
@@ -14,7 +16,26 @@ import type { CallRecord, NormalizedEvent } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
 
+const realtimeVoiceHarnessTestHooks = vi.hoisted(() => ({
+  onCreate: undefined as ((harness: RealtimeVoiceSessionHarness) => void) | undefined,
+}));
+
+vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>();
+  return {
+    ...actual,
+    createRealtimeVoiceSessionHarness: (
+      params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
+    ) => {
+      const harness = actual.createRealtimeVoiceSessionHarness(params);
+      realtimeVoiceHarnessTestHooks.onCreate?.(harness);
+      return harness;
+    },
+  };
+});
+
 afterEach(() => {
+  realtimeVoiceHarnessTestHooks.onCreate = undefined;
   vi.useRealTimers();
 });
 
@@ -42,21 +63,40 @@ function makeBridge(overrides: Partial<RealtimeVoiceBridge> = {}): RealtimeVoice
 
 function makeRealtimeProvider(
   createBridge: RealtimeVoiceProviderPlugin["createBridge"],
+  overrides: Partial<RealtimeVoiceProviderPlugin> = {},
 ): RealtimeVoiceProviderPlugin {
   return {
     id: "openai",
     label: "OpenAI",
     isConfigured: () => true,
     createBridge,
+    ...overrides,
   };
 }
+
+const PROVIDER_BARGE_IN_CAPABILITIES = {
+  transports: ["gateway-relay"],
+  inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  supportsBargeIn: true,
+  handlesInputAudioBargeIn: true,
+} satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
+
+const PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES = {
+  transports: ["gateway-relay"],
+  inputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  outputAudioFormats: [{ encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 }],
+  supportsBargeIn: true,
+} satisfies NonNullable<RealtimeVoiceProviderPlugin["capabilities"]>;
 
 function makeHandler(
   overrides?: Partial<VoiceCallRealtimeConfig>,
   deps?: {
     manager?: Partial<CallManager>;
     provider?: Partial<VoiceCallProvider>;
+    providerConfig?: Record<string, unknown>;
     realtimeProvider?: RealtimeVoiceProviderPlugin;
+    resolveInstructions?: (call: CallRecord) => string;
   },
 ) {
   const config: VoiceCallRealtimeConfig = {
@@ -104,8 +144,10 @@ function makeHandler(
       ...deps?.provider,
     } as unknown as VoiceCallProvider,
     deps?.realtimeProvider ?? makeRealtimeProvider(() => makeBridge()),
-    { apiKey: "test-key" },
+    deps?.providerConfig ?? { apiKey: "test-key" },
     "/voice/webhook",
+    undefined,
+    deps?.resolveInstructions,
   );
 }
 
@@ -122,7 +164,7 @@ const startRealtimeServer = async (
   }
 
   return await startUpgradeWsServer({
-    urlPath: match[1],
+    urlPath: expectDefined(match[1], "realtime stream path"),
     onUpgrade: (request, socket, head) => {
       handler.handleWebSocketUpgrade(request, socket, head);
     },
@@ -157,6 +199,124 @@ function requireFirstMockCall(calls: readonly unknown[][], label: string): unkno
     throw new Error(`expected ${label} call`);
   }
   return call;
+}
+
+type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
+type RecentTalkEvent = { turnId?: string; type: string };
+
+function makeCallRecord(providerCallId: string): CallRecord {
+  return {
+    callId: "call-1",
+    providerCallId,
+    provider: "twilio",
+    direction: "inbound",
+    state: "ringing",
+    from: "+15550001234",
+    to: "+15550009999",
+    startedAt: Date.now(),
+    transcript: [],
+    processedEventIds: [],
+    metadata: {},
+  };
+}
+
+function parseWebSocketMessage(data: RawData): Record<string, unknown> {
+  const bytes = Buffer.isBuffer(data)
+    ? data
+    : Array.isArray(data)
+      ? Buffer.concat(data)
+      : Buffer.from(data);
+  return JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
+}
+
+async function withBargeInHarness(
+  params: {
+    handlesProviderBargeIn?: boolean;
+    interruptResponseOnInputAudio?: boolean;
+    providerCallId: string;
+  },
+  run: (harness: {
+    callbacks: RealtimeBridgeRequest;
+    call: CallRecord;
+    createBridge: ReturnType<typeof vi.fn>;
+    handleBargeIn: ReturnType<typeof vi.fn>;
+    outboundMessages: Array<Record<string, unknown>>;
+    sendAudio: ReturnType<typeof vi.fn>;
+    ws: WebSocket;
+  }) => Promise<void>,
+): Promise<void> {
+  let callbacks: RealtimeBridgeRequest | undefined;
+  const sendAudio = vi.fn();
+  const handleBargeIn = vi.fn();
+  const call = makeCallRecord(params.providerCallId);
+  const createBridge = vi.fn((request: RealtimeBridgeRequest) => {
+    callbacks = request;
+    return makeBridge({ handleBargeIn, sendAudio });
+  });
+  const capabilities = params.handlesProviderBargeIn
+    ? PROVIDER_BARGE_IN_CAPABILITIES
+    : PROVIDER_WITH_LOCAL_BARGE_IN_CAPABILITIES;
+  const handler = makeHandler(undefined, {
+    manager: {
+      getCallByProviderCallId: vi.fn((): CallRecord => call),
+    },
+    providerConfig: {
+      apiKey: "test-key",
+      ...(params.interruptResponseOnInputAudio === undefined
+        ? {}
+        : { interruptResponseOnInputAudio: params.interruptResponseOnInputAudio }),
+    },
+    realtimeProvider: makeRealtimeProvider(createBridge, {
+      capabilities,
+      id: params.handlesProviderBargeIn ? "openai" : "test",
+    }),
+  });
+  const server = await startRealtimeServer(handler);
+
+  try {
+    const ws = await connectWs(server.url);
+    const outboundMessages: Array<Record<string, unknown>> = [];
+    ws.on("message", (data) => outboundMessages.push(parseWebSocketMessage(data)));
+    try {
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          start: { streamSid: `MZ-${params.providerCallId}`, callSid: params.providerCallId },
+        }),
+      );
+      await waitForRealtimeTest(() => expect(createBridge).toHaveBeenCalled());
+      if (!callbacks) {
+        throw new Error("expected realtime bridge callbacks");
+      }
+      await run({
+        callbacks,
+        call,
+        createBridge,
+        handleBargeIn,
+        outboundMessages,
+        sendAudio,
+        ws,
+      });
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+        ws.close();
+      }
+    }
+  } finally {
+    await server.close();
+  }
+}
+
+function recentTalkEvents(call: CallRecord): RecentTalkEvent[] {
+  return (call.metadata?.recentTalkEvents as RecentTalkEvent[] | undefined) ?? [];
+}
+
+function requireCancelledTurn(call: CallRecord): RecentTalkEvent & { turnId: string } {
+  const cancelled = recentTalkEvents(call).find((event) => event.type === "turn.cancelled");
+  if (!cancelled?.turnId) {
+    throw new Error("expected barge-in to cancel the active turn");
+  }
+  return cancelled as RecentTalkEvent & { turnId: string };
 }
 
 describe("RealtimeCallHandler path routing", () => {
@@ -229,7 +389,7 @@ describe("RealtimeCallHandler path routing", () => {
       throw new Error("Failed to extract realtime stream path");
     }
     const server = await startUpgradeWsServer({
-      urlPath: match[1],
+      urlPath: expectDefined(match[1], "realtime stream path"),
       onUpgrade: (request, socket, head) => {
         handler.handleWebSocketUpgrade(request, socket, head);
       },
@@ -270,9 +430,11 @@ describe("RealtimeCallHandler path routing", () => {
 
   it("joins Telnyx realtime streams to the token-bound call", async () => {
     const processEvent = vi.fn();
+    const resolveInstructions = vi.fn((call: CallRecord) => `instructions:${call.agentId}`);
     const getCall = vi.fn(
       (): CallRecord => ({
         callId: "call-1",
+        agentId: "support",
         providerCallId: "v3:call-1",
         provider: "telnyx",
         direction: "inbound",
@@ -285,7 +447,7 @@ describe("RealtimeCallHandler path routing", () => {
         metadata: { initialMessage: "hello" },
       }),
     );
-    const createBridge = vi.fn(() => makeBridge());
+    const createBridge = vi.fn((_request: RealtimeBridgeRequest) => makeBridge());
     const handler = makeHandler(undefined, {
       manager: {
         processEvent,
@@ -295,6 +457,7 @@ describe("RealtimeCallHandler path routing", () => {
         name: "telnyx",
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
+      resolveInstructions,
     });
     handler.setPublicUrl("https://public.example/voice/webhook");
     const session = handler.issueStreamSession({
@@ -327,6 +490,13 @@ describe("RealtimeCallHandler path routing", () => {
         expect((processEvent.mock.calls[0]?.[0] as NormalizedEvent | undefined)?.callId).toBe(
           "call-1",
         );
+        expect(resolveInstructions).toHaveBeenCalledWith(
+          expect.objectContaining({
+            callId: "call-1",
+            agentId: "support",
+          }),
+        );
+        expect(createBridge.mock.calls[0]?.[0].instructions).toBe("instructions:support");
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -542,17 +712,18 @@ describe("RealtimeCallHandler path routing", () => {
     let callbacks:
       | {
           onClose?: (reason: "completed" | "error") => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
       | undefined;
     const processEvent = vi.fn();
+    const close = vi.fn(() => {
+      callbacks?.onTranscript?.("user", "last words", true);
+      throw new Error("provider close failed");
+    });
     const createBridge = vi.fn(
       (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
         callbacks = request;
-        return makeBridge({
-          close: () => {
-            callbacks?.onClose?.("completed");
-          },
-        });
+        return makeBridge({ close });
       },
     );
     const getCallByProviderCallId = vi.fn(
@@ -603,7 +774,16 @@ describe("RealtimeCallHandler path routing", () => {
           expect(ended.callId).toBe("call-1");
           expect(ended.providerCallId).toBe("CA-complete");
           expect(ended.reason).toBe("completed");
+          const speechIndex = events.findIndex((event) => event.type === "call.speech");
+          const endedIndex = events.findIndex((event) => event.type === "call.ended");
+          expect(speechIndex).toBeGreaterThanOrEqual(0);
+          expect(speechIndex).toBeLessThan(endedIndex);
         });
+
+        const wsClosed = waitForClose(ws);
+        ws.close();
+        await wsClosed;
+        expect(close).toHaveBeenCalledTimes(1);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -628,6 +808,7 @@ describe("RealtimeCallHandler path routing", () => {
         }
       | undefined;
     const sendAudio = vi.fn();
+    const processEvent = vi.fn();
     const call: CallRecord = {
       callId: "call-1",
       providerCallId: "CA-talk-events",
@@ -649,6 +830,7 @@ describe("RealtimeCallHandler path routing", () => {
     );
     const handler = makeHandler(undefined, {
       manager: {
+        processEvent,
         getCallByProviderCallId: vi.fn((): CallRecord => call),
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
@@ -709,6 +891,14 @@ describe("RealtimeCallHandler path routing", () => {
         expect(recent?.[0]?.sessionId).toBe("voice-call:call-1:realtime");
         expect(recent?.[0]?.transport).toBe("gateway-relay");
         expect(call.metadata?.lastTalkEventType).toBe("turn.ended");
+        expect(
+          processEvent.mock.calls
+            .map(([event]) => event as NormalizedEvent)
+            .find((event) => event.type === "call.assistant-speech"),
+        ).toMatchObject({
+          type: "call.assistant-speech",
+          transcript: "hi there",
+        });
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -719,84 +909,139 @@ describe("RealtimeCallHandler path routing", () => {
     }
   });
 
-  it("emits barge-in cancellation with a turn before provider speech_started", async () => {
-    let callbacks:
-      | {
-          onAudio?: (audio: Buffer) => void;
-        }
-      | undefined;
-    const sendAudio = vi.fn();
-    const call: CallRecord = {
-      callId: "call-1",
-      providerCallId: "CA-barge-in",
-      provider: "twilio",
-      direction: "inbound",
-      state: "ringing",
-      from: "+15550001234",
-      to: "+15550009999",
-      startedAt: Date.now(),
-      transcript: [],
-      processedEventIds: [],
-      metadata: {},
-    };
-    const createBridge = vi.fn(
-      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
-        callbacks = request;
-        return makeBridge({ sendAudio });
+  it("cancels the active turn when the provider confirms barge-in", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-barge-in", handlesProviderBargeIn: true },
+      async ({ callbacks, call }) => {
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
+        callbacks?.onClearAudio("barge-in");
+
+        await waitForRealtimeTest(() => {
+          expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
+        });
+
+        const cancelled = requireCancelledTurn(call);
+        expect(
+          recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+        ).toBe(cancelled.turnId);
       },
     );
-    const handler = makeHandler(undefined, {
-      manager: {
-        getCallByProviderCallId: vi.fn((): CallRecord => call),
-      },
-      realtimeProvider: makeRealtimeProvider(createBridge),
-    });
-    const server = await startRealtimeServer(handler);
+  });
 
-    try {
-      const ws = await connectWs(server.url);
-      try {
-        ws.send(
-          JSON.stringify({
-            event: "start",
-            start: { streamSid: "MZ-barge-in", callSid: "CA-barge-in" },
-          }),
-        );
-        await waitForRealtimeTest(() => {
-          expect(createBridge).toHaveBeenCalled();
-        });
+  it("passes the disabled input-interruption policy without cancelling speech-start", async () => {
+    await withBargeInHarness(
+      {
+        providerCallId: "CA-disabled-barge-in",
+        handlesProviderBargeIn: true,
+        interruptResponseOnInputAudio: false,
+      },
+      async ({ callbacks, call, createBridge, outboundMessages }) => {
+        expect(createBridge.mock.calls[0]?.[0].interruptResponseOnInputAudio).toBe(false);
 
         callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
-        const speechPayload = Buffer.alloc(160, 0x00).toString("base64");
-        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
-        ws.send(JSON.stringify({ event: "media", media: { payload: speechPayload } }));
-
         await waitForRealtimeTest(() => {
-          expect(sendAudio).toHaveBeenCalledTimes(2);
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
         });
 
-        const recent = call.metadata?.recentTalkEvents as
-          | Array<{
-              turnId?: string;
-              type: string;
-            }>
-          | undefined;
-        const cancelled = recent?.find((event) => event.type === "turn.cancelled");
-        if (!cancelled) {
-          throw new Error("expected barge-in to cancel the active turn");
+        callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+
+        await Promise.resolve();
+        expect(outboundMessages.some((message) => message.event === "clear")).toBe(false);
+        expect(recentTalkEvents(call).some((event) => event.type === "turn.cancelled")).toBe(false);
+      },
+    );
+  });
+
+  it("clears queued telephony audio when provider barge-in follows response.done", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-late-barge-in", handlesProviderBargeIn: true },
+      async ({ callbacks, call, outboundMessages }) => {
+        callbacks?.onAudio?.(Buffer.alloc(320, 0xff));
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+        callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+        const clearCountBeforeBargeIn = outboundMessages.filter(
+          (message) => message.event === "clear",
+        ).length;
+
+        callbacks?.onClearAudio("barge-in");
+
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
+            clearCountBeforeBargeIn + 1,
+          );
+        });
+        expect(
+          recentTalkEvents(call).filter((event) => event.type === "turn.cancelled"),
+        ).toHaveLength(0);
+      },
+    );
+  });
+
+  it("keeps local barge-in fallback for providers without speech-started events", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-local-barge-in" },
+      async ({ callbacks, call, handleBargeIn, outboundMessages, sendAudio, ws }) => {
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        for (let i = 0; i < 4; i += 1) {
+          ws.send(
+            JSON.stringify({
+              event: "media",
+              media: { payload: Buffer.alloc(160, 0x00).toString("base64") },
+            }),
+          );
         }
-        expect(cancelled.turnId).toMatch(/^turn-\d+$/);
-        expect(recent?.findLast((event) => event.type === "input.audio.delta")?.turnId).not.toBe(
-          cancelled.turnId,
-        );
-      } finally {
-        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-          ws.close();
+
+        await waitForRealtimeTest(() => {
+          expect(sendAudio).toHaveBeenCalledTimes(4);
+          expect(requireCancelledTurn(call).turnId).toMatch(/^turn-\d+$/);
+          expect(outboundMessages.some((message) => message.event === "clear")).toBe(true);
+        });
+
+        const cancelled = requireCancelledTurn(call);
+        expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
+        expect(
+          recentTalkEvents(call).findLast((event) => event.type === "output.audio.done")?.turnId,
+        ).toBe(cancelled.turnId);
+      },
+    );
+  });
+
+  it("clears remote playback after local pacing and output state have finished", async () => {
+    await withBargeInHarness(
+      { providerCallId: "CA-late-local-barge-in" },
+      async ({ callbacks, call, handleBargeIn, outboundMessages, ws }) => {
+        callbacks?.onAudio?.(Buffer.from([1, 2, 3]));
+        await waitForRealtimeTest(() => {
+          expect(outboundMessages.some((message) => message.event === "media")).toBe(true);
+        });
+        callbacks?.onEvent?.({ direction: "server", type: "response.done" });
+        const clearCountBeforeBargeIn = outboundMessages.filter(
+          (message) => message.event === "clear",
+        ).length;
+
+        for (let i = 0; i < 4; i += 1) {
+          ws.send(
+            JSON.stringify({
+              event: "media",
+              media: { payload: Buffer.alloc(160, 0x00).toString("base64") },
+            }),
+          );
         }
-      }
-    } finally {
-      await server.close();
-    }
+
+        await waitForRealtimeTest(() => {
+          expect(handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: false });
+          expect(outboundMessages.filter((message) => message.event === "clear").length).toBe(
+            clearCountBeforeBargeIn + 1,
+          );
+        });
+        expect(
+          recentTalkEvents(call).filter((event) => event.type === "turn.cancelled"),
+        ).toHaveLength(0);
+      },
+    );
   });
 
   it("submits continuing responses only for realtime agent consult calls", async () => {
@@ -812,8 +1057,45 @@ describe("RealtimeCallHandler path routing", () => {
         }
       | undefined;
     let resolveConsult: ((value: unknown) => void) | undefined;
+    let resolveWorkingSubmission: (() => void) | undefined;
+    let rejectWorkingSubmission = false;
+    const resolveFinalSubmissions: Array<() => void> = [];
     let receivedPartialTranscript: string | undefined;
-    const submitToolResult = vi.fn();
+    const submitToolResult = vi.fn(
+      (_callId: string, result: unknown, _options?: unknown): void | Promise<void> => {
+        if (
+          rejectWorkingSubmission &&
+          result &&
+          typeof result === "object" &&
+          "status" in result &&
+          result.status === "working"
+        ) {
+          return Promise.reject(new Error("working result rejected"));
+        }
+        if (
+          _callId === "consult-call" &&
+          result &&
+          typeof result === "object" &&
+          "status" in result &&
+          result.status === "working"
+        ) {
+          return new Promise<void>((resolve) => {
+            resolveWorkingSubmission = resolve;
+          });
+        }
+        if (
+          result &&
+          typeof result === "object" &&
+          "text" in result &&
+          result.text === "The basement lights are on."
+        ) {
+          return new Promise<void>((resolve) => {
+            resolveFinalSubmissions.push(resolve);
+          });
+        }
+        return undefined;
+      },
+    );
     const bridge = makeBridge({
       supportsToolResultContinuation: true,
       submitToolResult,
@@ -824,33 +1106,35 @@ describe("RealtimeCallHandler path routing", () => {
         return bridge;
       },
     );
-    const getCallByProviderCallId = vi.fn(
-      (): CallRecord => ({
-        callId: "call-1",
-        providerCallId: "CA-tool",
-        provider: "twilio",
-        direction: "inbound",
-        state: "ringing",
-        from: "+15550001234",
-        to: "+15550009999",
-        startedAt: Date.now(),
-        transcript: [],
-        processedEventIds: [],
-        metadata: {},
-      }),
-    );
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-tool",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const getCallByProviderCallId = vi.fn((): CallRecord => call);
     const handler = makeHandler(undefined, {
       manager: {
         getCallByProviderCallId,
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    handler.registerToolHandler("openclaw_agent_consult", (_args, _callId, context) => {
-      receivedPartialTranscript = context.partialUserTranscript;
-      return new Promise((resolve) => {
-        resolveConsult = resolve;
-      });
-    });
+    const consultHandler = vi.fn(
+      (_args: unknown, _callId: string, context: { partialUserTranscript?: string }) => {
+        receivedPartialTranscript = context.partialUserTranscript;
+        return new Promise((resolve) => {
+          resolveConsult = resolve;
+        });
+      },
+    );
+    handler.registerToolHandler("openclaw_agent_consult", consultHandler);
     handler.registerToolHandler("custom_lookup", async () => ({ ok: true }));
     const server = await startRealtimeServer(handler);
 
@@ -875,6 +1159,14 @@ describe("RealtimeCallHandler path routing", () => {
           name: "openclaw_agent_consult",
           args: { question: "Are the basement lights on?" },
         });
+        callbacks?.onToolCall?.({
+          itemId: "item-2",
+          callId: "consult-call-2",
+          name: "openclaw_agent_consult",
+          args: { question: "Are the basement lights on?" },
+        });
+        expect(receivedPartialTranscript).toBeUndefined();
+        resolveWorkingSubmission?.();
         await vi.advanceTimersByTimeAsync(350);
         await waitForRealtimeTest(() => {
           expect(receivedPartialTranscript).toBe("Are the basement");
@@ -893,19 +1185,35 @@ describe("RealtimeCallHandler path routing", () => {
           expect(typeof payload?.message).toBe("string");
           expect(workingCall[2]).toEqual({ willContinue: true });
         });
-        expect(submitToolResult).toHaveBeenCalledTimes(1);
+        expect(
+          submitToolResult.mock.calls.filter(
+            ([, result]) =>
+              result &&
+              typeof result === "object" &&
+              "status" in result &&
+              result.status === "working",
+          ),
+        ).toHaveLength(2);
 
         resolveConsult?.({ text: "The basement lights are on." });
 
         await waitForRealtimeTest(() => {
           expect(submitToolResult).toHaveBeenLastCalledWith(
-            "consult-call",
+            "consult-call-2",
             {
               text: "The basement lights are on.",
             },
             undefined,
           );
         });
+        expect(recentTalkEvents(call).some((event) => event.type === "tool.result")).toBe(false);
+        for (const resolve of resolveFinalSubmissions) {
+          resolve();
+        }
+        await waitForRealtimeTest(() => {
+          expect(recentTalkEvents(call).some((event) => event.type === "tool.result")).toBe(true);
+        });
+        expect(consultHandler).toHaveBeenCalledTimes(1);
 
         submitToolResult.mockClear();
         callbacks?.onToolCall?.({
@@ -923,8 +1231,123 @@ describe("RealtimeCallHandler path routing", () => {
         );
         expect(customCallResults).toHaveLength(1);
         expect(customCallResults[0]?.[2]).toBeUndefined();
+
+        submitToolResult.mockClear();
+        rejectWorkingSubmission = true;
+        callbacks?.onToolCall?.({
+          itemId: "item-rejected",
+          callId: "consult-rejected",
+          name: "openclaw_agent_consult",
+          args: { question: "Do not run this twice" },
+        });
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenCalledTimes(1);
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(consultHandler).toHaveBeenCalledTimes(1);
+        expect(submitToolResult).toHaveBeenCalledWith(
+          "consult-rejected",
+          expect.objectContaining({ status: "working" }),
+          { willContinue: true },
+        );
       } finally {
         vi.useRealTimers();
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("terminally satisfies a late native call for a cancelled forced consult", async () => {
+    let callbacks:
+      | {
+          onToolCall?: (event: {
+            itemId: string;
+            callId: string;
+            name: string;
+            args: unknown;
+          }) => void;
+        }
+      | undefined;
+    let sessionHarness: RealtimeVoiceSessionHarness | undefined;
+    realtimeVoiceHarnessTestHooks.onCreate = (harness) => {
+      sessionHarness = harness;
+    };
+    const submitToolResult = vi.fn();
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge({ submitToolResult });
+      },
+    );
+    const call: CallRecord = {
+      callId: "call-1",
+      providerCallId: "CA-cancelled-consult",
+      provider: "twilio",
+      direction: "inbound",
+      state: "ringing",
+      from: "+15550001234",
+      to: "+15550009999",
+      startedAt: Date.now(),
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    };
+    const handler = makeHandler(undefined, {
+      manager: { getCallByProviderCallId: vi.fn(() => call) },
+      realtimeProvider: makeRealtimeProvider(createBridge),
+    });
+    const consult = vi.fn(async () => ({ text: "should not run" }));
+    handler.registerToolHandler("openclaw_agent_consult", consult);
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-cancelled-consult", callSid: call.providerCallId },
+          }),
+        );
+        await waitForRealtimeTest(() => {
+          expect(createBridge).toHaveBeenCalled();
+          expect(sessionHarness).toBeDefined();
+        });
+
+        const coordinator = expectDefined(
+          sessionHarness,
+          "voice-call realtime session harness",
+        ).forcedConsults;
+        const cancelled = coordinator.prepare("cancelled question");
+        if (!cancelled) {
+          throw new Error("expected forced consult handle");
+        }
+        coordinator.markStarted(cancelled);
+        coordinator.markCancelled(cancelled);
+
+        callbacks?.onToolCall?.({
+          itemId: "item-cancelled",
+          callId: "native-cancelled",
+          name: "openclaw_agent_consult",
+          args: { question: "cancelled question" },
+        });
+
+        await waitForRealtimeTest(() => {
+          expect(submitToolResult).toHaveBeenCalledWith(
+            "native-cancelled",
+            {
+              status: "cancelled",
+              message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+            },
+            undefined,
+          );
+        });
+        expect(consult).not.toHaveBeenCalled();
+      } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
         }
@@ -1071,8 +1494,18 @@ describe("RealtimeCallHandler path routing", () => {
           expect(createBridge).toHaveBeenCalled();
         });
 
+        callbacks?.onTranscript?.("user", "Hel", false);
+        callbacks?.onTranscript?.("user", "lo there.", false);
         callbacks?.onTranscript?.("user", "Hello there.", true);
         callbacks?.onTranscript?.("user", "How are you?", true);
+        callbacks?.onTranscript?.("user", "Hel", false);
+        callbacks?.onTranscript?.("user", "lo", true);
+        callbacks?.onTranscript?.("user", "hello", false);
+        callbacks?.onTranscript?.("user", "hello", false);
+        callbacks?.onTranscript?.("user", "hello", true);
+        const longTranscript = `${"prefix ".repeat(200)}final words.`;
+        callbacks?.onTranscript?.("user", longTranscript, false);
+        callbacks?.onTranscript?.("user", longTranscript, true);
 
         const speechTranscripts = processEvent.mock.calls
           .map(([event]) => event as NormalizedEvent)
@@ -1081,9 +1514,13 @@ describe("RealtimeCallHandler path routing", () => {
               event.type === "call.speech",
           )
           .map((event) => event.transcript);
-        expect(speechTranscripts).toContain("Hello there.");
-        expect(speechTranscripts).toContain("How are you?");
-        expect(speechTranscripts).not.toContain("Hello there. How are you?");
+        expect(speechTranscripts).toEqual([
+          "Hello there.",
+          "How are you?",
+          "Hello",
+          "hello",
+          longTranscript,
+        ]);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();
@@ -1479,3 +1916,4 @@ describe("RealtimeCallHandler websocket hardening", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

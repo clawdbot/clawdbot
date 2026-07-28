@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export const DEFAULT_MAX_LOG_BYTES = 120_000;
+const DEFAULT_MAX_LOG_BYTES = 120_000;
 
 const normalizeScriptOutput = (value) => value.replace(/\r?\n/g, "").replace(/\r/g, "");
 const oscPattern = new RegExp(String.raw`\u001b\][^\u0007]*(?:\u0007|\u001b\\)`, "g");

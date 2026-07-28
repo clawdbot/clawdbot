@@ -8,18 +8,18 @@ title: "Voice call plugin"
 sidebarTitle: "Voice call"
 ---
 
-Voice calls for OpenClaw via a plugin. Supports outbound notifications,
-multi-turn conversations, full-duplex realtime voice, streaming
-transcription, and inbound calls with allowlist policies.
+Voice calls for OpenClaw via a plugin: outbound notifications, multi-turn
+conversations, full-duplex realtime voice, streaming transcription, and
+inbound calls with allowlist policies.
 
-**Current providers:** `twilio` (Programmable Voice + Media Streams),
-`telnyx` (Call Control v2), `plivo` (Voice API + XML transfer + GetInput
-speech), `mock` (dev/no network).
+**Providers:** `mock` (dev, no network), `plivo` (Voice API + XML transfer +
+GetInput speech), `telnyx` (Call Control v2), `twilio` (Programmable Voice +
+Media Streams).
 
 <Note>
 The Voice Call plugin runs **inside the Gateway process**. If you use a
-remote Gateway, install and configure the plugin on the machine running
-the Gateway, then restart the Gateway to load it.
+remote Gateway, install and configure the plugin on the machine running the
+Gateway, then restart the Gateway to load it.
 </Note>
 
 ## Quick start
@@ -41,27 +41,24 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    Use the bare package to follow the current official release tag. Pin an
-    exact version only when you need a reproducible install.
-
-    Restart the Gateway afterwards so the plugin loads.
+    Use the bare package to follow the current release tag. Pin an exact
+    version only when you need a reproducible install. Restart the Gateway
+    afterwards so the plugin loads.
 
   </Step>
   <Step title="Configure provider and webhook">
     Set config under `plugins.entries.voice-call.config` (see
-    [Configuration](#configuration) below for the full shape). At minimum:
-    `provider`, provider credentials, `fromNumber`, and a publicly
-    reachable webhook URL.
+    [Configuration](#configuration) below). At minimum: `provider`, provider
+    credentials, `fromNumber`, and a publicly reachable webhook URL.
   </Step>
   <Step title="Verify setup">
     ```bash
     openclaw voicecall setup
+    openclaw voicecall setup --json
     ```
 
-    The default output is readable in chat logs and terminals. It checks
-    plugin enablement, provider credentials, webhook exposure, and that
-    only one audio mode (`streaming` or `realtime`) is active. Use
-    `--json` for scripts.
+    Checks plugin enablement, provider credentials, webhook exposure, and
+    that only one audio mode (`streaming` or `realtime`) is active.
 
   </Step>
   <Step title="Smoke test">
@@ -70,8 +67,8 @@ the Gateway, then restart the Gateway to load it.
     openclaw voicecall smoke --to "+15555550123"
     ```
 
-    Both are dry runs by default. Add `--yes` to actually place a short
-    outbound notify call:
+    Both are dry runs by default. Add `--yes` to place a short outbound
+    notify call:
 
     ```bash
     openclaw voicecall smoke --to "+15555550123" --yes
@@ -89,10 +86,10 @@ starting a provider that cannot receive carrier webhooks.
 
 ## Configuration
 
-If `enabled: true` but the selected provider is missing credentials,
-Gateway startup logs a setup-incomplete warning with the missing keys and
-skips starting the runtime. Commands, RPC calls, and agent tools still
-return the exact missing provider configuration when used.
+If `enabled: true` but the selected provider is missing credentials, Gateway
+startup logs a setup-incomplete warning with the missing keys and skips
+starting the runtime. Commands, RPC calls, and agent tools still return the
+exact missing configuration when used.
 
 <Note>
 Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
@@ -124,6 +121,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           twilio: {
             accountSid: "ACxxxxxxxx",
             authToken: "...",
+            // region: "ie1", // optional: us1 | ie1 | au1; defaults to us1
           },
           telnyx: {
             apiKey: "...",
@@ -158,14 +156,42 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
             defaultMode: "notify", // notify | conversation
           },
 
-          streaming: { enabled: true /* see Streaming transcription */ },
-          realtime: { enabled: false /* see Realtime voice */ },
+          streaming: { enabled: true /* Twilio only; see Streaming transcription */ },
+          realtime: { enabled: false /* see Realtime voice conversations */ },
         },
       },
     },
   },
 }
 ```
+
+### Config reference
+
+Top-level keys under `plugins.entries.voice-call.config` not shown above:
+
+| Key                             | Default      | Notes                                                                                              |
+| ------------------------------- | ------------ | -------------------------------------------------------------------------------------------------- |
+| `enabled`                       | `false`      | Master on/off switch.                                                                              |
+| `inboundPolicy`                 | `"disabled"` | `disabled` \| `allowlist` \| `pairing` \| `open`. See [Inbound calls](#inbound-calls).             |
+| `allowFrom`                     | `[]`         | E.164 allowlist for `inboundPolicy: "allowlist"`.                                                  |
+| `maxDurationSeconds`            | `300`        | Hard per-call duration cap, enforced regardless of answered state.                                 |
+| `staleCallReaperSeconds`        | `120`        | See [Stale call reaper](#stale-call-reaper). `0` disables it.                                      |
+| `silenceTimeoutMs`              | `800`        | End-of-speech silence detection for the classic (non-realtime) flow.                               |
+| `transcriptTimeoutMs`           | `180000`     | Max wait for a caller transcript before giving up on a turn.                                       |
+| `ringTimeoutMs`                 | `30000`      | Ring timeout for outbound calls.                                                                   |
+| `maxConcurrentCalls`            | `1`          | Outbound calls beyond this limit are rejected.                                                     |
+| `outbound.notifyHangupDelaySec` | `3`          | Seconds to wait after TTS before auto-hangup in notify mode.                                       |
+| `skipSignatureVerification`     | `false`      | Local testing only; never enable in production.                                                    |
+| `store`                         | unset        | Overrides the default `$OPENCLAW_STATE_DIR/voice-calls` path (normally `~/.openclaw/voice-calls`). |
+| `agentId`                       | `"main"`     | Agent used for response generation and session storage.                                            |
+| `responseModel`                 | unset        | Overrides the default model for classic (non-realtime) responses.                                  |
+| `responseSystemPrompt`          | generated    | Custom system prompt for classic responses.                                                        |
+| `responseTimeoutMs`             | `30000`      | Timeout for classic response generation (ms).                                                      |
+
+Twilio defaults to its US1 REST endpoint. To process calls in a supported
+non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials from
+that Region. See
+[Twilio's non-US REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 
 <AccordionGroup>
   <Accordion title="Provider exposure and security notes">
@@ -175,30 +201,30 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
     - `skipSignatureVerification` is for local testing only.
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
     - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
-    - Ngrok free-tier URLs can change or add interstitial behaviour; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
+    - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
 
   </Accordion>
   <Accordion title="Streaming connection caps">
-    - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
-    - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
-    - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
-    - `streaming.maxConnections` caps total open media stream sockets (pending + active).
+    - `streaming.preStartTimeoutMs` (default `5000`) closes sockets that never send a valid `start` frame.
+    - `streaming.maxPendingConnections` (default `32`) caps total unauthenticated pre-start sockets.
+    - `streaming.maxPendingConnectionsPerIp` (default `4`) caps unauthenticated pre-start sockets per source IP.
+    - `streaming.maxConnections` (default `128`) caps all open media stream sockets (pending + active).
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Older configs using `provider: "log"`, `twilio.from`, or legacy
-    `streaming.*` OpenAI keys are rewritten by `openclaw doctor --fix`.
-    Runtime fallback still accepts the old voice-call keys for now, but
-    the rewrite path is `openclaw doctor --fix` and the compat shim is
-    temporary.
+    Config parsing normalizes these legacy keys automatically and logs a
+    warning naming the replacement path; the shim is removed in a future
+    release (`2026.6.0`), so run `openclaw doctor --fix` to rewrite committed
+    config to the canonical shape:
 
-    Auto-migrated streaming keys:
-
+    - `provider: "log"` → `provider: "mock"`
+    - `twilio.from` → `fromNumber`
     - `streaming.sttProvider` → `streaming.provider`
     - `streaming.openaiApiKey` → `streaming.providers.openai.apiKey`
     - `streaming.sttModel` → `streaming.providers.openai.model`
     - `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
     - `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
+    - `realtime.agentContext.includeSystemPrompt` is removed (realtime context now uses the generated agent prompt)
 
   </Accordion>
 </AccordionGroup>
@@ -212,31 +238,26 @@ booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
 Voice Call stores generated session keys under the configured agent namespace
-(`agent:<agentId>:voice:*`) so call memory survives Gateway session-key
-canonicalization after restarts. Raw explicit integration keys use the same
-agent namespace. A canonical `agent:<configuredAgentId>:*` key keeps that owner,
-and its main aliases honor core `session.mainKey` and global scope. Foreign or
-malformed `agent:*` input is scoped as an opaque key under the configured agent;
-`global` and `unknown` remain global sentinels. Gateway startup promotes older
-raw keys in default or `{agentId}`-templated stores where the path proves one
-owner. In fixed custom stores, ambiguous legacy rows remain untouched because
-they do not contain enough information to choose an owner; new calls use
-canonical agent-scoped history.
+(`agent:<agentId>:voice:*`). Raw explicit integration keys resolve into the
+same namespace: a canonical `agent:<configuredAgentId>:*` key keeps that
+owner and honors core `session.mainKey`/global-scope aliasing; foreign or
+malformed `agent:*` input is scoped as an opaque key under the configured
+agent; `global` and `unknown` remain global sentinels.
 
 ## Realtime voice conversations
 
-`realtime` selects a full-duplex realtime voice provider for live call
-audio. It is separate from `streaming`, which only forwards audio to
-realtime transcription providers.
+`realtime` selects a full-duplex realtime voice provider for live call audio.
+It is separate from `streaming`, which only forwards audio to realtime
+transcription providers.
 
 <Warning>
 `realtime.enabled` cannot be combined with `streaming.enabled`. Pick one
 audio mode per call.
 </Warning>
 
-Current runtime behaviour:
+Current runtime behavior:
 
-- `realtime.enabled` is supported for Twilio Media Streams.
+- `realtime.enabled` is supported for Twilio and Telnyx.
 - `realtime.provider` is optional. If unset, Voice Call uses the first registered realtime voice provider.
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
@@ -245,6 +266,7 @@ Current runtime behaviour:
 - `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
+- `inboundPolicy` must not be `"disabled"` when `realtime.enabled` is true; `validateProviderConfig` rejects that combination.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
 
 ### Tool policy
@@ -269,8 +291,8 @@ Current runtime behaviour:
 
 Enable `realtime.agentContext` when the voice bridge should sound like the
 configured OpenClaw agent without paying a full agent-consult round trip on
-ordinary turns. The context capsule is added once when the realtime session is
-created, so it does not add per-turn latency. Calls to
+ordinary turns. The context capsule is added once when the realtime session
+is created, so it does not add per-turn latency. Calls to
 `openclaw_agent_consult` still run the full OpenClaw agent and should be used
 for tool work, current information, memory lookups, or workspace state.
 
@@ -305,12 +327,12 @@ for tool work, current information, memory lookups, or workspace state.
 
 <Tabs>
   <Tab title="Google Gemini Live">
-    Defaults: API key from `realtime.providers.google.apiKey`,
-    `GEMINI_API_KEY`, or `GOOGLE_GENERATIVE_AI_API_KEY`; model
-    `gemini-2.5-flash-native-audio-preview-12-2025`; voice `Kore`.
-    `sessionResumption` and `contextWindowCompression` default on for longer,
-    reconnectable calls. Use `silenceDurationMs`, `startSensitivity`, and
-    `endSensitivity` to tune faster turn-taking on telephony audio.
+    Defaults: API key from `realtime.providers.google.apiKey`, `GEMINI_API_KEY`,
+    or `GOOGLE_API_KEY`; model `gemini-3.1-flash-live-preview`;
+    voice `Kore`. `sessionResumption` and `contextWindowCompression` default on
+    for longer, reconnectable calls. Use `silenceDurationMs`,
+    `startSensitivity`, and `endSensitivity` to tune faster turn-taking on
+    telephony audio.
 
     ```json5
     {
@@ -333,7 +355,7 @@ for tool work, current information, memory lookups, or workspace state.
                 providers: {
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
-                    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+                    model: "gemini-3.1-flash-live-preview",
                     speakerVoice: "Kore",
                     silenceDurationMs: 500,
                     startSensitivity: "high",
@@ -377,7 +399,10 @@ options.
 
 ## Streaming transcription
 
-`streaming` selects a realtime transcription provider for live call audio.
+`streaming` connects Twilio Media Streams to a realtime transcription provider.
+The classic streaming path requires `provider: "twilio"`; configuration with
+Telnyx, Plivo, or mock is rejected. Telnyx live audio uses the separately
+authenticated `realtime.enabled` path instead.
 
 Current runtime behavior:
 
@@ -423,8 +448,9 @@ Current runtime behavior:
 
   </Tab>
   <Tab title="xAI">
-    Defaults: API key `streaming.providers.xai.apiKey` or `XAI_API_KEY`;
-    endpoint `wss://api.x.ai/v1/stt`; encoding `mulaw`; sample rate `8000`;
+    Defaults: API key `streaming.providers.xai.apiKey` or `XAI_API_KEY` (falls
+    back to an xAI OAuth auth profile if neither is set); endpoint
+    `wss://api.x.ai/v1/stt`; encoding `mulaw`; sample rate `8000`;
     `endpointingMs: 800`; `interimResults: true`.
 
     ```json5
@@ -457,9 +483,9 @@ Current runtime behavior:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for streaming
-speech on calls. You can override it under the plugin config with the
-**same shape** — it deep-merges with `messages.tts`.
+Voice Call uses the core `tts` configuration for streaming speech on
+calls. You can override it under the plugin config with the **same shape** —
+it deep-merges with `tts`.
 
 ```json5
 {
@@ -476,8 +502,10 @@ speech on calls. You can override it under the plugin config with the
 ```
 
 <Warning>
-**Microsoft speech is ignored for voice calls.** Telephony audio needs PCM;
-the current Microsoft transport does not expose telephony PCM output.
+**Microsoft speech is ignored for voice calls.** Telephony synthesis requires
+a provider that implements telephony-target output; the Microsoft speech
+provider does not, so it is skipped for calls and other providers in the
+fallback chain are tried instead.
 </Warning>
 
 Behavior notes:
@@ -494,12 +522,10 @@ Behavior notes:
   <Tab title="Core TTS only">
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "openai",
-      providers: {
-        openai: { speakerVoice: "alloy" },
-      },
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { speakerVoice: "alloy" },
     },
   },
 }
@@ -566,31 +592,30 @@ Inbound policy defaults to `disabled`. To enable inbound calls, set:
 ```
 
 <Warning>
-`inboundPolicy: "allowlist"` is a low-assurance caller-ID screen. The
-plugin normalizes the provider-supplied `From` value and compares it to
-`allowFrom`. Webhook verification authenticates provider delivery and
-payload integrity, but it does **not** prove PSTN/VoIP caller-number
-ownership. Treat `allowFrom` as caller-ID filtering, not strong caller
-identity.
+`inboundPolicy: "allowlist"` is a low-assurance caller-ID screen. The plugin
+normalizes the provider-supplied `From` value and compares it to `allowFrom`.
+Webhook verification authenticates provider delivery and payload integrity,
+but it does **not** prove PSTN/VoIP caller-number ownership. Treat
+`allowFrom` as caller-ID filtering, not strong caller identity.
 </Warning>
 
 Auto-responses use the agent system. Tune with `responseModel`,
 `responseSystemPrompt`, and `responseTimeoutMs`.
 
-### Per-number Routing
+### Per-number routing
 
 Use `numbers` when one Voice Call plugin receives calls for multiple phone
-numbers and each number should behave like a different line. For example, one
-number can use a casual personal assistant while another uses a business
+numbers and each number should behave like a different line. For example,
+one number can use a casual personal assistant while another uses a business
 persona, a different response agent, and a different TTS voice.
 
-Routes are selected from the provider-supplied dialed `To` number. Keys must be
-E.164 numbers. When a call arrives, Voice Call resolves the matching route once,
-stores the matched route on the call record, and reuses that effective config
-for the greeting, classic auto-response path, realtime consult path, and TTS
-playback. If no route matches, the global Voice Call config is used.
-Outbound calls do not use `numbers`; pass the outbound target, message, and
-session explicitly when initiating the call.
+Routes are selected from the provider-supplied dialed `To` number. Keys must
+be E.164 numbers. When a call arrives, Voice Call resolves the matching
+route once, stores the matched route on the call record, and reuses that
+effective config for the greeting, classic auto-response path, realtime
+consult path, and TTS playback. If no route matches, the global Voice Call
+config is used. Outbound calls do not use `numbers`; pass the outbound
+target, message, and session explicitly when initiating the call.
 
 Route overrides currently support:
 
@@ -631,20 +656,15 @@ you can usually override only the provider voice:
 ### Spoken output contract
 
 For auto-responses, Voice Call appends a strict spoken-output contract to
-the system prompt:
-
-```text
-{"spoken":"..."}
-```
-
-Voice Call extracts speech text defensively:
+the system prompt requiring a `{"spoken":"..."}` JSON reply. Voice Call
+extracts speech text defensively:
 
 - Ignores payloads marked as reasoning/error content.
 - Parses direct JSON, fenced JSON, or inline `"spoken"` keys.
 - Falls back to plain text and removes likely planning/meta lead-in paragraphs.
 
-This keeps spoken playback focused on caller-facing text and avoids
-leaking planning text into audio.
+This keeps spoken playback focused on caller-facing text and avoids leaking
+planning text into audio.
 
 ### Conversation startup behavior
 
@@ -667,14 +687,21 @@ auto-ending the call:
 
 ## Stale call reaper
 
-Use `staleCallReaperSeconds` to end calls that never receive a terminal
-webhook (for example, notify-mode calls that never complete). The default
-is `0` (disabled).
+Use `staleCallReaperSeconds` (default **120**) to end calls that are never
+answered and never reach a live conversation state, for example notify-mode
+calls where the provider never delivers a terminal webhook. Set it to `0` to
+disable.
 
-Recommended ranges:
+The reaper runs every 30 seconds and only ends calls that have no
+`answeredAt` timestamp and are not already in a terminal or live
+(`speaking`/`listening`) state, so answered conversations are never reaped
+by this timer; `maxDurationSeconds` (default 300) is the separate cap that
+ends answered calls that run too long.
 
-- **Production:** `120`–`300` seconds for notify-style flows.
-- Keep this value **higher than `maxDurationSeconds`** so normal calls can finish. A good starting point is `maxDurationSeconds + 30–60` seconds.
+For notify-style flows where carriers can be slow to deliver ring/answer
+webhooks, raise `staleCallReaperSeconds` past the default so slow-but-normal
+calls are not reaped early; `120`-`300` seconds is a reasonable production
+range.
 
 ```json5
 {
@@ -683,7 +710,7 @@ Recommended ranges:
       "voice-call": {
         config: {
           maxDurationSeconds: 300,
-          staleCallReaperSeconds: 360,
+          staleCallReaperSeconds: 120,
         },
       },
     },
@@ -693,9 +720,9 @@ Recommended ranges:
 
 ## Webhook security
 
-When a proxy or tunnel sits in front of the Gateway, the plugin
-reconstructs the public URL for signature verification. These options
-control which forwarded headers are trusted:
+When a proxy or tunnel sits in front of the Gateway, the plugin reconstructs
+the public URL for signature verification. These options control which
+forwarded headers are trusted:
 
 <ParamField path="webhookSecurity.allowedHosts" type="string[]">
   Allowlist hosts from forwarding headers.
@@ -709,10 +736,10 @@ control which forwarded headers are trusted:
 
 Additional protections:
 
-- Webhook **replay protection** is enabled for Twilio and Plivo. Replayed valid webhook requests are acknowledged but skipped for side effects.
+- Webhook **replay protection** is enabled for Twilio, Telnyx, and Plivo. Replayed valid webhook requests are acknowledged but skipped for side effects.
 - Twilio conversation turns include a per-turn token in `<Gather>` callbacks, so stale/replayed speech callbacks cannot satisfy a newer pending transcript turn.
 - Unauthenticated webhook requests are rejected before body reads when the provider's required signature headers are missing.
-- The voice-call webhook uses the shared pre-auth body profile (64 KB / 5 seconds) plus a per-IP in-flight cap before signature verification.
+- The voice-call webhook uses the shared pre-auth body-read profile (64 KB max body, 5-second read timeout) plus a per-key in-flight cap (8 concurrent requests per key by default) before signature verification.
 
 Example with a stable public host:
 
@@ -748,15 +775,15 @@ openclaw voicecall latency                      # summarize turn latency from lo
 openclaw voicecall expose --mode funnel
 ```
 
-When the Gateway is already running, operational `voicecall` commands delegate
-to the Gateway-owned voice-call runtime so the CLI does not bind a second
-webhook server. If no Gateway is reachable, the commands fall back to a
-standalone CLI runtime.
+When the Gateway is already running, operational `voicecall` commands
+delegate to the Gateway-owned voice-call runtime so the CLI does not bind a
+second webhook server. If no Gateway is reachable, the commands fall back to
+a standalone CLI runtime.
 
-`latency` reads `calls.jsonl` from the default voice-call storage path.
-Use `--file <path>` to point at a different log and `--last <n>` to limit
-analysis to the last N records (default 200). Output includes p50/p90/p99
-for turn latency and listen-wait times.
+`latency` reads `calls.jsonl` from the default voice-call storage path. Use
+`--file <path>` to point at a different log and `--last <n>` to limit
+analysis to the last N records (default 200). Output includes min/max/avg,
+p50, and p95 for turn latency and listen-wait times.
 
 ## Agent tool
 
@@ -775,16 +802,19 @@ The voice-call plugin ships a matching agent skill.
 
 ## Gateway RPC
 
-| Method               | Args                                       |
-| -------------------- | ------------------------------------------ |
-| `voicecall.initiate` | `to?`, `message`, `mode?`, `dtmfSequence?` |
-| `voicecall.continue` | `callId`, `message`                        |
-| `voicecall.speak`    | `callId`, `message`                        |
-| `voicecall.dtmf`     | `callId`, `digits`                         |
-| `voicecall.end`      | `callId`                                   |
-| `voicecall.status`   | `callId`                                   |
+| Method                      | Args                                                             | Notes                                                                     |
+| --------------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `voicecall.initiate`        | `to?`, `message`, `mode?`, `sessionKey?`, `requesterSessionKey?` | Falls back to `toNumber` config when `to` is omitted.                     |
+| `voicecall.start`           | `to`, `message?`, `mode?`, `dtmfSequence?`, `sessionKey?`        | Same as `initiate` but also accepts pre-connect `dtmfSequence`.           |
+| `voicecall.continue`        | `callId`, `message`                                              | Blocks until the turn resolves; returns the transcript.                   |
+| `voicecall.continue.start`  | `callId`, `message`                                              | Async variant: returns an `operationId` immediately.                      |
+| `voicecall.continue.result` | `operationId`                                                    | Polls a pending `voicecall.continue.start` operation for its result.      |
+| `voicecall.speak`           | `callId`, `message`                                              | Speaks without waiting; uses the realtime bridge when `realtime.enabled`. |
+| `voicecall.dtmf`            | `callId`, `digits`                                               |                                                                           |
+| `voicecall.end`             | `callId`                                                         |                                                                           |
+| `voicecall.status`          | `callId?`                                                        | Omit `callId` to list all active calls.                                   |
 
-`dtmfSequence` is only valid with `mode: "conversation"`. Notify-mode calls
+`dtmfSequence` is only valid with `mode: "conversation"`; notify-mode calls
 should use `voicecall.dtmf` after the call exists if they need post-connect
 digits.
 
@@ -800,16 +830,17 @@ openclaw voicecall setup --json
 ```
 
 For `twilio`, `telnyx`, and `plivo`, `webhook-exposure` must be green. A
-configured `publicUrl` still fails when it points at local or private network
-space, because the carrier cannot call back into those addresses. Do not use
-`localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
-`192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
+configured `publicUrl` still fails when it points at local or private
+network space, because the carrier cannot call back into those addresses.
+Do not use `localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
+`192.168.x`, `169.254.x`, `fc00::/7`, `fd00::/8`, or other carrier-grade-NAT
+ranges as `publicUrl`.
 
-Twilio notify-mode outbound calls send their initial `<Say>` TwiML directly in
-the create-call request, so the first spoken message does not depend on Twilio
-fetching webhook TwiML. A public webhook is still required for status callbacks,
-conversation calls, pre-connect DTMF, realtime streams, and post-connect call
-control.
+Twilio notify-mode outbound calls send their initial `<Say>` TwiML directly
+in the create-call request, so the first spoken message does not depend on
+Twilio fetching webhook TwiML. A public webhook is still required for status
+callbacks, conversation calls, pre-connect DTMF, realtime streams, and
+post-connect call control.
 
 Use one public exposure path:
 
@@ -847,11 +878,13 @@ Check the selected provider and the required credential fields:
 - Twilio: `twilio.accountSid`, `twilio.authToken`, and `fromNumber`, or
   `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER`.
 - Telnyx: `telnyx.apiKey`, `telnyx.connectionId`, `telnyx.publicKey`, and
-  `fromNumber`.
-- Plivo: `plivo.authId`, `plivo.authToken`, and `fromNumber`.
+  `fromNumber`, or `TELNYX_API_KEY`, `TELNYX_CONNECTION_ID`, and
+  `TELNYX_PUBLIC_KEY`.
+- Plivo: `plivo.authId`, `plivo.authToken`, and `fromNumber`, or
+  `PLIVO_AUTH_ID` and `PLIVO_AUTH_TOKEN`.
 
-Credentials must exist on the Gateway host. Editing a local shell profile does
-not affect an already running Gateway until it restarts or reloads its
+Credentials must exist on the Gateway host. Editing a local shell profile
+does not affect an already running Gateway until it restarts or reloads its
 environment.
 
 ### Calls start but provider webhooks do not arrive
@@ -881,24 +914,23 @@ Common causes:
 When a reverse proxy or tunnel is in front of the Gateway, set
 `webhookSecurity.allowedHosts` to the public hostname, or use
 `webhookSecurity.trustedProxyIPs` for a known proxy address. Use
-`webhookSecurity.trustForwardingHeaders` only when the proxy boundary is under
-your control.
+`webhookSecurity.trustForwardingHeaders` only when the proxy boundary is
+under your control.
 
 ### Signature verification fails
 
 Provider signatures are checked against the public URL OpenClaw reconstructs
 from the incoming request. If signatures fail:
 
-- Confirm the provider webhook URL exactly matches `publicUrl`, including
-  scheme, host, and path.
+- Confirm the provider webhook URL exactly matches `publicUrl`, including scheme, host, and path.
 - For ngrok free-tier URLs, update `publicUrl` when the tunnel hostname changes.
-- Ensure the proxy preserves the original host and proto headers, or configure
-  `webhookSecurity.allowedHosts`.
+- Ensure the proxy preserves the original host and proto headers, or configure `webhookSecurity.allowedHosts`.
 - Do not enable `skipSignatureVerification` outside local testing.
 
 ### Google Meet Twilio joins fail
 
-Google Meet uses this plugin for Twilio dial-in joins. First verify Voice Call:
+Google Meet uses this plugin for Twilio dial-in joins. First verify Voice
+Call:
 
 ```bash
 openclaw voicecall setup
@@ -912,14 +944,14 @@ openclaw googlemeet setup --transport twilio
 ```
 
 If Voice Call is green but the Meet participant never joins, check the Meet
-dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
-the meeting rejects or ignores an incorrect DTMF sequence.
+dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy
+while the meeting rejects or ignores an incorrect DTMF sequence.
 
 Google Meet starts the Twilio phone leg through `voicecall.start` with a
-pre-connect DTMF sequence. PIN-derived sequences include the Google Meet plugin's
-`voiceCall.dtmfDelayMs` as leading Twilio wait digits. The default is 12 seconds
-because Meet dial-in prompts can arrive late. Voice Call then redirects back to
-realtime handling before the intro greeting is requested.
+pre-connect DTMF sequence. PIN-derived sequences include the Google Meet
+plugin's `voiceCall.dtmfDelayMs` (default **12000 ms**) as leading Twilio
+wait digits, because Meet dial-in prompts can arrive late. Voice Call then
+redirects back to realtime handling before the intro greeting is requested.
 
 Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
 join logs this order:
@@ -930,22 +962,21 @@ join logs this order:
 - Voice Call serves realtime TwiML for the Twilio call.
 - Google Meet requests intro speech with `voicecall.speak` after the post-DTMF delay.
 
-`openclaw voicecall tail` still shows persisted call records; it is useful for
-call state and transcripts, but not every webhook/realtime transition appears
-there.
+`openclaw voicecall tail` still shows persisted call records; useful for
+call state and transcripts, but not every webhook/realtime transition
+appears there.
 
 ### Realtime call has no speech
 
-Confirm only one audio mode is enabled. `realtime.enabled` and
+Confirm only one audio mode is enabled: `realtime.enabled` and
 `streaming.enabled` cannot both be true.
 
-For realtime Twilio calls, also verify:
+For realtime Twilio/Telnyx calls, also verify:
 
 - A realtime provider plugin is loaded and registered.
 - `realtime.provider` is unset or names a registered provider.
 - The provider API key is available to the Gateway process.
-- `openclaw logs --follow` shows realtime TwiML served, the realtime bridge
-  started, and the initial greeting queued.
+- `openclaw logs --follow` shows realtime TwiML served, the realtime bridge started, and the initial greeting queued.
 
 ## Related
 

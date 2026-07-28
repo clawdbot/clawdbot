@@ -8,9 +8,11 @@ extension AgentProTab {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Totals")
-                        .font(.headline)
+                        .font(OpenClawType.headline)
                     Spacer()
-                    ProValuePill(value: "\(self.overview?.usage?.days ?? 31)d", color: OpenClawBrand.accent)
+                    ProValuePill(
+                        value: "\(self.overview?.usage?.days ?? 31)d",
+                        color: OpenClawBrand.accentForeground)
                 }
                 HStack(spacing: 10) {
                     self.detailMetric(label: "Cost", value: self.usageValue)
@@ -65,17 +67,23 @@ extension AgentProTab {
             ProIconBadge(systemName: "calendar", color: OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 3) {
                 Text(day.date)
-                    .font(.subheadline.weight(.semibold))
-                Text("\(Self.compactNumber(day.totalTokens ?? 0)) tokens")
-                    .font(.caption)
+                    .font(OpenClawType.subheadSemiBold)
+                Text(verbatim: Self.tokenCountText(day.totalTokens ?? 0))
+                    .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: 8)
             Text(Self.currency(day.totalCost ?? 0))
-                .font(.caption2.weight(.semibold))
+                .font(OpenClawType.caption2SemiBold)
                 .foregroundStyle(OpenClawBrand.accent)
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
+    }
+
+    private static func tokenCountText(_ count: Int) -> String {
+        String(
+            format: String(localized: "%@ tokens"),
+            self.compactNumber(count))
     }
 }

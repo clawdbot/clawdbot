@@ -2,9 +2,9 @@
  * Model resolution, scoping, and initial selection
  */
 
+import { modelsAreEqual } from "@openclaw/ai/internal/runtime";
 import chalk from "chalk";
 import { minimatch } from "minimatch";
-import { modelsAreEqual } from "../../llm/model-utils.js";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ThinkingLevel } from "../runtime/index.js";
@@ -141,7 +141,10 @@ function buildFallbackModel(
     return undefined;
   }
 
-  const baseModel = providerModels[0];
+  const baseModel = providerModels.at(0);
+  if (!baseModel) {
+    return undefined;
+  }
 
   return {
     ...baseModel,
@@ -327,9 +330,10 @@ export interface ResolveCliModelResult {
 export function resolveCliModel(options: {
   cliProvider?: string;
   cliModel?: string;
+  cliThinking?: ThinkingLevel;
   modelRegistry: ModelRegistry;
 }): ResolveCliModelResult {
-  const { cliProvider, cliModel, modelRegistry } = options;
+  const { cliProvider, cliModel, cliThinking, modelRegistry } = options;
 
   if (!cliModel) {
     return { model: undefined, warning: undefined, error: undefined };
@@ -440,14 +444,32 @@ export function resolveCliModel(options: {
   }
 
   if (provider) {
-    const fallbackModel = buildFallbackModel(provider, pattern, availableModels);
+    let fallbackPattern = pattern;
+    let fallbackThinking: ThinkingLevel | undefined;
+    if (!cliThinking) {
+      const lastColon = pattern.lastIndexOf(":");
+      if (lastColon !== -1) {
+        const suffix = pattern.slice(lastColon + 1);
+        if (isValidThinkingLevel(suffix)) {
+          fallbackPattern = pattern.slice(0, lastColon);
+          fallbackThinking = suffix;
+        }
+      }
+    }
+
+    const fallbackModel = buildFallbackModel(provider, fallbackPattern, availableModels);
     if (fallbackModel) {
+      const requestedThinking = cliThinking ?? fallbackThinking;
+      const resolvedModel =
+        requestedThinking && requestedThinking !== "off"
+          ? { ...fallbackModel, reasoning: true }
+          : fallbackModel;
       const fallbackWarning = warning
-        ? `${warning} Model "${pattern}" not found for provider "${provider}". Using custom model id.`
-        : `Model "${pattern}" not found for provider "${provider}". Using custom model id.`;
+        ? `${warning} Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`
+        : `Model "${fallbackPattern}" not found for provider "${provider}". Using custom model id.`;
       return {
-        model: fallbackModel,
-        thinkingLevel: undefined,
+        model: resolvedModel,
+        thinkingLevel: requestedThinking,
         warning: fallbackWarning,
         error: undefined,
       };
@@ -515,7 +537,7 @@ export async function findInitialModel(options: {
     if (resolved.model) {
       return {
         model: resolved.model,
-        thinkingLevel: DEFAULT_THINKING_LEVEL,
+        thinkingLevel: resolved.thinkingLevel ?? DEFAULT_THINKING_LEVEL,
         fallbackMessage: undefined,
       };
     }
@@ -523,18 +545,21 @@ export async function findInitialModel(options: {
 
   // 2. Use first model from scoped models (skip if continuing/resuming)
   if (scopedModels.length > 0 && !isContinuing) {
+    const scopedModel = scopedModels.at(0);
+    if (!scopedModel) {
+      throw new Error("Scoped model list became empty during selection");
+    }
     return {
-      model: scopedModels[0].model,
-      thinkingLevel:
-        scopedModels[0].thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
+      model: scopedModel.model,
+      thinkingLevel: scopedModel.thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
       fallbackMessage: undefined,
     };
   }
 
-  // 3. Try saved default from settings
+  // 3. Try saved default from settings when its auth is configured
   if (defaultProvider && defaultModelId) {
     const found = modelRegistry.find(defaultProvider, defaultModelId);
-    if (found) {
+    if (found && modelRegistry.hasConfiguredAuth(found)) {
       model = found;
       if (defaultThinkingLevel) {
         thinkingLevel = defaultThinkingLevel;

@@ -2,6 +2,7 @@
 import type { SessionEntry } from "../../config/sessions.js";
 
 export type ReplySessionEntryHandle = {
+  clearCurrent(): void;
   get(sessionKey: string): SessionEntry | undefined;
   getCurrent(): SessionEntry | undefined;
   patchCurrent(patch: Partial<SessionEntry>): SessionEntry | undefined;
@@ -16,13 +17,20 @@ export function createReplySessionEntryHandle(params: {
   sessionStore?: Record<string, SessionEntry>;
 }): ReplySessionEntryHandle {
   const entries = params.sessionStore ?? { [params.sessionKey]: params.sessionEntry };
-  let currentEntry = params.sessionEntry;
+  let currentEntry: SessionEntry | undefined = params.sessionEntry;
   entries[params.sessionKey] = currentEntry;
 
   return {
+    clearCurrent: () => {
+      currentEntry = undefined;
+      delete entries[params.sessionKey];
+    },
     get: (sessionKey) => entries[sessionKey],
     getCurrent: () => currentEntry,
     patchCurrent: (patch) => {
+      if (!currentEntry) {
+        return undefined;
+      }
       currentEntry = { ...currentEntry, ...patch };
       entries[params.sessionKey] = currentEntry;
       return currentEntry;

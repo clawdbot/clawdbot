@@ -7,7 +7,10 @@ import {
   installCompletion,
   resolveCompletionProfilePath,
 } from "../cli/completion-runtime.js";
-import type { ShellCompletionStatus } from "../commands/doctor-completion.js";
+import type {
+  CompletionCacheGenerationOptions,
+  ShellCompletionStatus,
+} from "../commands/doctor-completion.js";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
@@ -20,7 +23,10 @@ import type { WizardFlow } from "./setup.types.js";
 type CompletionDeps = {
   resolveCliName: () => string;
   checkShellCompletionStatus: (binName: string) => Promise<ShellCompletionStatus>;
-  ensureCompletionCacheExists: (binName: string) => Promise<boolean>;
+  ensureCompletionCacheExists: (
+    binName: string,
+    options: CompletionCacheGenerationOptions,
+  ) => Promise<boolean>;
   installCompletion: (shell: string, yes: boolean, binName?: string) => Promise<void>;
 };
 
@@ -63,10 +69,11 @@ export async function setupWizardShellCompletion(params: {
 
   const cliName = deps.resolveCliName();
   const completionStatus = await deps.checkShellCompletionStatus(cliName);
+  const generationOptions = { generationMode: "full" } as const;
 
   if (completionStatus.usesSlowPattern) {
     // Case 1: Profile uses slow dynamic pattern - silently upgrade to cached version
-    const cacheGenerated = await deps.ensureCompletionCacheExists(cliName);
+    const cacheGenerated = await deps.ensureCompletionCacheExists(cliName, generationOptions);
     if (cacheGenerated) {
       await deps.installCompletion(completionStatus.shell, true, cliName);
     }
@@ -75,7 +82,7 @@ export async function setupWizardShellCompletion(params: {
 
   if (completionStatus.profileInstalled && !completionStatus.cacheExists) {
     // Case 2: Profile has completion but no cache - auto-fix silently
-    await deps.ensureCompletionCacheExists(cliName);
+    await deps.ensureCompletionCacheExists(cliName, generationOptions);
     return;
   }
 
@@ -97,7 +104,7 @@ export async function setupWizardShellCompletion(params: {
     }
 
     // Generate cache first (required for fast shell startup)
-    const cacheGenerated = await deps.ensureCompletionCacheExists(cliName);
+    const cacheGenerated = await deps.ensureCompletionCacheExists(cliName, generationOptions);
     if (!cacheGenerated) {
       await params.prompter.note(
         t("wizard.completion.cacheFailed", { command: `${cliName} completion --install` }),

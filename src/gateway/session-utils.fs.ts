@@ -2,19 +2,26 @@
 // Parses transcript JSONL files for messages, previews, counts, and usage metadata.
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptTreePathNodes,
-} from "../config/sessions/transcript-tree.js";
+  deriveSessionTotalTokens,
+  hasNonzeroUsage,
+  normalizeUsage,
+  type ContextUsage,
+} from "../agents/usage.js";
+import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
+import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
+import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
+import { readFileWindowFully, readFileWindowFullySync } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -31,7 +38,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
-  normalizeOptionalString,
+  readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -187,12 +194,14 @@ export type ReadRecentSessionMessagesOptions = {
   maxBytes?: number;
   maxLines?: number;
   allowResetArchiveFallback?: boolean;
+  resetArchiveOnly?: boolean;
 };
 
-export type ReadSessionMessagesPageOptions = {
+type ReadSessionMessagesPageOptions = {
   offset: number;
   maxMessages: number;
   allowResetArchiveFallback?: boolean;
+  resetArchiveOnly?: boolean;
 };
 
 export type ReadSessionMessagesAsyncOptions =
@@ -200,15 +209,19 @@ export type ReadSessionMessagesAsyncOptions =
       mode: "full";
       reason: string;
       allowResetArchiveFallback?: boolean;
+      resetArchiveOnly?: boolean;
     }
   | ({
       mode: "recent";
     } & ReadRecentSessionMessagesOptions);
 
-type ReadRecentSessionMessagesResult = {
+export type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   totalMessages: number;
+  /** Raw selected transcript rows parsed from the same read as `messages`. */
+  transcriptEvents?: TranscriptEvent[];
   transcriptPath?: string;
+  transcriptSource?: "active" | "reset-archive";
 };
 
 type ReadSessionMessagesResult = {
@@ -233,55 +246,6 @@ function normalizeRecentSessionReadOptions(opts?: Partial<ReadRecentSessionMessa
   return { maxMessages, maxBytes, maxLines };
 }
 
-export function readRecentSessionMessages(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  opts?: ReadRecentSessionMessagesOptions,
-  agentId?: string,
-): unknown[] {
-  const { maxMessages, maxBytes, maxLines } = normalizeRecentSessionReadOptions(opts);
-  if (maxMessages === 0) {
-    return [];
-  }
-
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return [];
-  }
-
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(filePath);
-  } catch {
-    return [];
-  }
-  if (stat.size === 0) {
-    return [];
-  }
-
-  const readLen = Math.min(stat.size, maxBytes);
-  const readStart = Math.max(0, stat.size - readLen);
-
-  return (
-    withOpenTranscriptFd(filePath, (fd) => {
-      const buf = Buffer.alloc(readLen);
-      const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
-      if (bytesRead <= 0) {
-        return [];
-      }
-      const chunk = buf.toString("utf-8", 0, bytesRead);
-      const lines = chunk
-        .split(/\r?\n/)
-        .slice(readStart > 0 ? 1 : 0)
-        .filter((line) => line.trim().length > 0)
-        .slice(-maxLines);
-
-      return parseRecentTranscriptTailMessages(lines, maxMessages);
-    }) ?? []
-  );
-}
-
 async function readRecentTranscriptTailLinesAsync(
   filePath: string,
   stat: fs.Stats,
@@ -293,7 +257,7 @@ async function readRecentTranscriptTailLinesAsync(
   const handle = await fs.promises.open(filePath, "r");
   try {
     const buffer = Buffer.alloc(readLen);
-    const { bytesRead } = await handle.read(buffer, 0, readLen, readStart);
+    const bytesRead = await readFileWindowFully(handle, buffer, readStart);
     if (bytesRead <= 0) {
       return [];
     }
@@ -319,7 +283,7 @@ function isOversizedTranscriptLine(line: string): boolean {
 
 function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
   for (let index = tokenIndex - 1; index >= 0; index--) {
-    const char = source[index];
+    const char = source.charAt(index);
     if (/\s/.test(char)) {
       continue;
     }
@@ -351,7 +315,7 @@ function extractJsonStringFieldWindow(
     }
     try {
       const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return normalizeOptionalString(decoded);
+      return readNonBlankStringPreservingWhitespace(decoded);
     } catch {
       return undefined;
     }
@@ -413,29 +377,11 @@ function selectBoundedActiveTailRecords(
   entries: TailTranscriptRecord[],
   opts?: { failClosedOnInvalidLeafControl?: boolean },
 ): TailTranscriptRecord[] {
-  const tree = scanSessionTranscriptTree(entries.map((entry) => entry.record));
-  if (opts?.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
-    return [];
-  }
-  if (!tree.hasExplicitLeafUpdate) {
-    return entries;
-  }
-  const recordsByValue = new Map(entries.map((entry) => [entry.record, entry]));
-  const activeBranch = selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap((node) => {
-    const entry = recordsByValue.get(node.entry);
-    return entry ? [entry] : [];
+  return selectSessionTranscriptActiveEntries({
+    entries,
+    recordOf: (entry) => entry.record,
+    failClosedOnInvalidLeafControl: opts?.failClosedOnInvalidLeafControl,
   });
-  const firstActiveRecord = activeBranch[0];
-  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
-  if (firstActiveIndex > 0) {
-    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry?.record.type === "compaction") {
-        return [entry, ...activeBranch];
-      }
-    }
-  }
-  return activeBranch;
 }
 
 function readTranscriptRecords(filePath: string): TailTranscriptRecord[] {
@@ -477,7 +423,10 @@ function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[]
   return messages;
 }
 
-function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number): unknown[] {
+function parseRecentTranscriptTailSnapshot(
+  lines: string[],
+  maxMessages: number,
+): { messages: unknown[]; transcriptEvents: TranscriptEvent[] } {
   const entries = lines.flatMap((line) => {
     const entry = parseTailTranscriptRecord(line);
     return entry ? [entry] : [];
@@ -485,7 +434,10 @@ function parseRecentTranscriptTailMessages(lines: string[], maxMessages: number)
   const selected = selectBoundedActiveTailRecords(entries, {
     failClosedOnInvalidLeafControl: true,
   });
-  return transcriptRecordsToMessages(selected).slice(-maxMessages);
+  return {
+    messages: transcriptRecordsToMessages(selected).slice(-maxMessages),
+    transcriptEvents: selected.map((entry) => entry.record),
+  };
 }
 
 function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
@@ -546,52 +498,6 @@ async function visitTranscriptLinesAsync(
   }
 }
 
-export function visitSessionMessages(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile: string | undefined,
-  visit: (message: unknown, seq: number) => void,
-  agentId?: string,
-): number {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return 0;
-  }
-
-  const messages = transcriptRecordsToMessages(readSelectedTranscriptRecords(filePath));
-  for (const [index, message] of messages.entries()) {
-    visit(message, index + 1);
-  }
-  return messages.length;
-}
-
-export function readSessionMessageCount(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): number {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return 0;
-  }
-  let stat: fs.Stats | null = null;
-  try {
-    stat = fs.statSync(filePath);
-    const cached = getCachedTranscriptMessageCount(filePath, stat);
-    if (typeof cached === "number") {
-      return cached;
-    }
-  } catch {
-    // Count from the transcript reader below when stat metadata is unavailable.
-  }
-  const count = visitSessionMessages(sessionId, storePath, sessionFile, () => undefined, agentId);
-  if (stat) {
-    setCachedTranscriptMessageCount(filePath, stat, count);
-  }
-  return count;
-}
-
 export async function readSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -629,7 +535,9 @@ export async function readSessionMessagesWithSourceAsync(
   }
   const filePath =
     opts.allowResetArchiveFallback === true
-      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId, {
+          resetArchiveOnly: opts.resetArchiveOnly === true,
+        })
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { messages: [] };
@@ -646,7 +554,7 @@ export async function readSessionMessageByIdAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   messageId: string,
-  opts?: { allowResetArchiveFallback?: boolean; agentId?: string },
+  opts?: { allowResetArchiveFallback?: boolean; agentId?: string; resetArchiveOnly?: boolean },
 ): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
   const filePath =
     opts?.allowResetArchiveFallback === true
@@ -655,6 +563,7 @@ export async function readSessionMessageByIdAsync(
           storePath,
           sessionFile,
           opts.agentId,
+          { resetArchiveOnly: opts.resetArchiveOnly === true },
         )
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, opts?.agentId);
   if (!filePath) {
@@ -713,22 +622,6 @@ export async function readSessionMessageCountAsync(
   return await readSessionMessageCountFromPathAsync(filePath);
 }
 
-export function readRecentSessionMessagesWithStats(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile: string | undefined,
-  opts: ReadRecentSessionMessagesOptions,
-  agentId?: string,
-): ReadRecentSessionMessagesResult {
-  const totalMessages = readSessionMessageCount(sessionId, storePath, sessionFile, agentId);
-  const messages = readRecentSessionMessages(sessionId, storePath, sessionFile, opts, agentId);
-  const firstSeq = Math.max(1, totalMessages - messages.length + 1);
-  const messagesWithSeq = messages.map((message, index) =>
-    attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
-  );
-  return { messages: messagesWithSeq, totalMessages };
-}
-
 export async function readRecentSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -761,7 +654,9 @@ async function readRecentSessionMessagesWithSourceAsync(
 
   const filePath =
     opts?.allowResetArchiveFallback === true
-      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId, {
+          resetArchiveOnly: opts.resetArchiveOnly === true,
+        })
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { messages: [] };
@@ -776,21 +671,28 @@ async function readRecentSessionMessagesFromPathAsync(
   filePath: string,
   opts: ReturnType<typeof normalizeRecentSessionReadOptions>,
 ): Promise<unknown[]> {
+  return (await readRecentSessionSnapshotFromPathAsync(filePath, opts)).messages;
+}
+
+async function readRecentSessionSnapshotFromPathAsync(
+  filePath: string,
+  opts: ReturnType<typeof normalizeRecentSessionReadOptions>,
+): Promise<{ messages: unknown[]; transcriptEvents: TranscriptEvent[] }> {
   const { maxMessages } = opts;
 
   let stat: fs.Stats;
   try {
     stat = await fs.promises.stat(filePath);
   } catch {
-    return [];
+    return { messages: [], transcriptEvents: [] };
   }
   if (stat.size === 0) {
-    return [];
+    return { messages: [], transcriptEvents: [] };
   }
   const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
     ...opts,
   });
-  return parseRecentTranscriptTailMessages(lines, maxMessages);
+  return parseRecentTranscriptTailSnapshot(lines, maxMessages);
 }
 
 export async function readRecentSessionMessagesWithStatsAsync(
@@ -802,21 +704,34 @@ export async function readRecentSessionMessagesWithStatsAsync(
 ): Promise<ReadRecentSessionMessagesResult> {
   const filePath =
     opts.allowResetArchiveFallback === true
-      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId, {
+          resetArchiveOnly: opts.resetArchiveOnly === true,
+        })
       : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
   if (!filePath) {
     return { messages: [], totalMessages: 0 };
   }
+  const transcriptSource =
+    opts.allowResetArchiveFallback === true &&
+    findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId) !== filePath
+      ? "reset-archive"
+      : "active";
   const totalMessages = await readSessionMessageCountFromPathAsync(filePath);
-  const messages = await readRecentSessionMessagesFromPathAsync(
+  const snapshot = await readRecentSessionSnapshotFromPathAsync(
     filePath,
     normalizeRecentSessionReadOptions(opts),
   );
-  const firstSeq = Math.max(1, totalMessages - messages.length + 1);
-  const messagesWithSeq = messages.map((message, index) =>
+  const firstSeq = Math.max(1, totalMessages - snapshot.messages.length + 1);
+  const messagesWithSeq = snapshot.messages.map((message, index) =>
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
   );
-  return { messages: messagesWithSeq, totalMessages, transcriptPath: filePath };
+  return {
+    messages: messagesWithSeq,
+    transcriptEvents: snapshot.transcriptEvents,
+    totalMessages,
+    transcriptPath: filePath,
+    transcriptSource,
+  };
 }
 
 export async function readSessionMessagesPageWithStatsAsync(
@@ -833,6 +748,11 @@ export async function readSessionMessagesPageWithStatsAsync(
   if (!filePath) {
     return { messages: [], totalMessages: 0 };
   }
+  const transcriptSource =
+    opts.allowResetArchiveFallback === true &&
+    findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId) !== filePath
+      ? "reset-archive"
+      : "active";
   const index = await readSessionTranscriptIndex(filePath);
   if (!index) {
     return { messages: [], totalMessages: 0, transcriptPath: filePath };
@@ -846,45 +766,11 @@ export async function readSessionMessagesPageWithStatsAsync(
     messages: index.entries
       .slice(start, endExclusive)
       .flatMap((entry) => indexedTranscriptEntryToMessages(entry)),
+    transcriptEvents: index.entries.slice(start, endExclusive).map((entry) => entry.record),
     totalMessages,
     transcriptPath: filePath,
+    transcriptSource,
   };
-}
-
-export function readRecentSessionTranscriptLines(params: {
-  sessionId: string;
-  storePath: string | undefined;
-  sessionFile?: string;
-  agentId?: string;
-  maxLines: number;
-}): { lines: string[]; totalLines: number } | null {
-  const filePath = findExistingTranscriptPath(
-    params.sessionId,
-    params.storePath,
-    params.sessionFile,
-    params.agentId,
-  );
-  if (!filePath) {
-    return null;
-  }
-  const maxLines = Math.max(1, Math.floor(params.maxLines));
-  const lines: string[] = [];
-  let totalLines = 0;
-  try {
-    visitTranscriptLines(filePath, (line) => {
-      if (!line.trim()) {
-        return;
-      }
-      totalLines += 1;
-      lines.push(line);
-      if (lines.length > maxLines) {
-        lines.shift();
-      }
-    });
-  } catch {
-    return null;
-  }
-  return { lines, totalLines };
 }
 
 function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
@@ -931,18 +817,12 @@ function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown
   return parsedSessionEntryToMessage(entry.record, entry.seq);
 }
 
-function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
+export function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
   const message = indexedTranscriptEntryToMessage(entry);
   return message ? [message] : [];
 }
 
-export {
-  archiveFileOnDisk,
-  archiveSessionTranscripts,
-  cleanupArchivedSessionTranscripts,
-  resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
-} from "./session-transcript-files.fs.js";
+export { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
 
 export function capArrayByJsonBytes<T>(
   items: T[],
@@ -955,7 +835,7 @@ export function capArrayByJsonBytes<T>(
   let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1);
   let start = 0;
   while (bytes > maxBytes && start < items.length - 1) {
-    bytes -= parts[start] + 1;
+    bytes -= expectDefined(parts[start], "parts entry at start") + 1;
     start += 1;
   }
   const next = start > 0 ? items.slice(start) : items;
@@ -1130,7 +1010,7 @@ function extractTextFromContent(content: TranscriptMessage["content"]): string |
 
 function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
   const buf = Buffer.alloc(maxBytes);
-  const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
+  const bytesRead = readFileWindowFullySync(fd, buf, 0);
   if (bytesRead <= 0) {
     return null;
   }
@@ -1142,7 +1022,7 @@ async function readTranscriptHeadChunkAsync(
   maxBytes = 8192,
 ): Promise<string | null> {
   const buffer = Buffer.alloc(maxBytes);
-  const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+  const bytesRead = await readFileWindowFully(handle, buffer, 0);
   if (bytesRead <= 0) {
     return null;
   }
@@ -1178,7 +1058,7 @@ function extractFirstUserMessageFromTranscriptChunk(
   return null;
 }
 
-function findExistingTranscriptPath(
+export function findExistingTranscriptPath(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
@@ -1193,10 +1073,13 @@ async function findExistingTranscriptHistoryPathAsync(
   storePath: string | undefined,
   sessionFile?: string,
   agentId?: string,
+  opts?: { resetArchiveOnly?: boolean },
 ): Promise<string | null> {
-  const activePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (activePath) {
-    return activePath;
+  if (opts?.resetArchiveOnly !== true) {
+    const activePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+    if (activePath) {
+      return activePath;
+    }
   }
   for (const archivePath of await resolveSessionTranscriptResetArchiveCandidatesAsync(
     sessionId,
@@ -1206,16 +1089,25 @@ async function findExistingTranscriptHistoryPathAsync(
   )) {
     const stat = await fs.promises.stat(archivePath).catch(() => null);
     if (stat?.isFile()) {
-      const refreshedActivePath = findExistingTranscriptPath(
-        sessionId,
-        storePath,
-        sessionFile,
-        agentId,
-      );
-      if (refreshedActivePath) {
-        return refreshedActivePath;
+      if (opts?.resetArchiveOnly !== true) {
+        const refreshedActivePath = findExistingTranscriptPath(
+          sessionId,
+          storePath,
+          sessionFile,
+          agentId,
+        );
+        if (refreshedActivePath) {
+          return refreshedActivePath;
+        }
       }
-      return archivePath;
+      // Compressed archives materialize to a plain JSONL cache once (archives
+      // are write-once) so every downstream reader — index, tail chunks,
+      // header probes — keeps working without knowing about zstd.
+      try {
+        return materializeSessionArchiveForRead(archivePath);
+      } catch {
+        continue;
+      }
     }
   }
   return null;
@@ -1266,27 +1158,6 @@ function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | nul
   return null;
 }
 
-export function readFirstUserMessageFromTranscript(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-  opts?: { includeInterSession?: boolean },
-): string | null {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return null;
-  }
-
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const chunk = readTranscriptHeadChunk(fd);
-    if (!chunk) {
-      return null;
-    }
-    return extractFirstUserMessageFromTranscriptChunk(chunk, opts);
-  });
-}
-
 const LAST_MSG_MAX_BYTES = 16384;
 const LAST_MSG_MAX_LINES = 20;
 
@@ -1318,9 +1189,12 @@ function readLastMessagePreviewFromOpenTranscript(params: {
   const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
   const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
   const buf = Buffer.alloc(readLen);
-  fs.readSync(params.fd, buf, 0, readLen, readStart);
+  const bytesRead = readFileWindowFullySync(params.fd, buf, readStart);
+  if (bytesRead <= 0) {
+    return null;
+  }
 
-  const chunk = buf.toString("utf-8");
+  const chunk = buf.toString("utf-8", 0, bytesRead);
   const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
   return extractLastMessagePreviewFromTranscriptLines(lines.slice(-LAST_MSG_MAX_LINES));
 }
@@ -1332,7 +1206,7 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
   const readStart = Math.max(0, params.size - LAST_MSG_MAX_BYTES);
   const readLen = Math.min(params.size, LAST_MSG_MAX_BYTES);
   const buffer = Buffer.alloc(readLen);
-  const { bytesRead } = await params.handle.read(buffer, 0, readLen, readStart);
+  const bytesRead = await readFileWindowFully(params.handle, buffer, readStart);
   if (bytesRead <= 0) {
     return null;
   }
@@ -1342,13 +1216,15 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
   return extractLastMessagePreviewFromTranscriptLines(lines.slice(-LAST_MSG_MAX_LINES));
 }
 
-type SessionTranscriptUsageSnapshot = {
+export type SessionTranscriptUsageSnapshot = {
   modelProvider?: string;
   model?: string;
   inputTokens?: number;
   outputTokens?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  contextUsage?: ContextUsage;
+  trailingBytes?: number;
   totalTokens?: number;
   totalTokensFresh?: boolean;
   costUsd?: number;
@@ -1523,6 +1399,9 @@ function extractUsageSnapshotFromTranscriptLine(
     if (typeof usage?.cacheWrite === "number" && Number.isFinite(usage.cacheWrite)) {
       snapshot.cacheWrite = usage.cacheWrite;
     }
+    if (usage?.contextUsage) {
+      snapshot.contextUsage = usage.contextUsage;
+    }
     if (typeof totalTokens === "number") {
       snapshot.totalTokens = totalTokens;
       snapshot.totalTokensFresh = true;
@@ -1589,7 +1468,15 @@ function extractAggregateUsageFromTranscriptLines(
       cacheWrite += current.cacheWrite;
       sawCacheWrite = true;
     }
-    if (typeof current.totalTokens === "number") {
+    if (current.contextUsage) {
+      snapshot.contextUsage = current.contextUsage;
+    } else {
+      delete snapshot.contextUsage;
+    }
+    if (current.contextUsage?.state === "unavailable") {
+      delete snapshot.totalTokens;
+      delete snapshot.totalTokensFresh;
+    } else if (typeof current.totalTokens === "number") {
       snapshot.totalTokens = current.totalTokens;
       snapshot.totalTokensFresh = true;
     }
@@ -1631,43 +1518,12 @@ function extractAggregateUsageFromTranscriptLines(
   return snapshot;
 }
 
-function extractLatestUsageFromTranscriptLines(
-  lines: Iterable<string>,
-): SessionTranscriptUsageSnapshot | null {
-  let latest: SessionTranscriptUsageSnapshot | null = null;
-  for (const line of lines) {
-    latest = extractUsageSnapshotFromTranscriptLine(line) ?? latest;
-  }
-  return latest;
-}
-
 function extractAggregateUsageFromTranscriptChunk(
   chunk: string,
 ): SessionTranscriptUsageSnapshot | null {
   return extractAggregateUsageFromTranscriptLines(
     chunk.split(/\r?\n/).filter((line) => line.trim().length > 0),
   );
-}
-
-export function readLatestSessionUsageFromTranscript(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): SessionTranscriptUsageSnapshot | null {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return null;
-  }
-
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    if (stat.size === 0) {
-      return null;
-    }
-    const chunk = fs.readFileSync(fd, "utf-8");
-    return extractAggregateUsageFromTranscriptChunk(chunk);
-  });
 }
 
 export async function readLatestSessionUsageFromTranscriptAsync(
@@ -1698,62 +1554,6 @@ export async function readLatestSessionUsageFromTranscriptAsync(
   }
 }
 
-export async function readRecentSessionUsageFromTranscriptAsync(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile: string | undefined,
-  agentId: string | undefined,
-  maxBytes: number,
-): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return null;
-  }
-
-  try {
-    const stat = await fs.promises.stat(filePath);
-    if (stat.size === 0) {
-      return null;
-    }
-    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
-      maxMessages: 1,
-      maxLines: 1000,
-      maxBytes,
-    });
-    return extractAggregateUsageFromTranscriptLines(lines);
-  } catch {
-    return null;
-  }
-}
-
-export async function readLatestRecentSessionUsageFromTranscriptAsync(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile: string | undefined,
-  agentId: string | undefined,
-  maxBytes: number,
-): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return null;
-  }
-
-  try {
-    const stat = await fs.promises.stat(filePath);
-    if (stat.size === 0) {
-      return null;
-    }
-    const lines = await readRecentTranscriptTailLinesAsync(filePath, stat, {
-      maxMessages: 1,
-      maxLines: 1000,
-      maxBytes,
-    });
-    return extractLatestUsageFromTranscriptLines(lines);
-  } catch {
-    return null;
-  }
-}
-
 export function readRecentSessionUsageFromTranscript(
   sessionId: string,
   storePath: string | undefined,
@@ -1774,7 +1574,7 @@ export function readRecentSessionUsageFromTranscript(
     const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
     const readStart = Math.max(0, stat.size - readLen);
     const buf = Buffer.alloc(readLen);
-    const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+    const bytesRead = readFileWindowFullySync(fd, buf, readStart);
     if (bytesRead <= 0) {
       return null;
     }
@@ -1823,13 +1623,11 @@ function normalizeRole(role: string | undefined, isTool: boolean): SessionPrevie
 }
 
 function truncatePreviewText(text: string, maxChars: number): string {
-  if (maxChars <= 0 || text.length <= maxChars) {
+  if (text.length <= maxChars) {
     return text;
   }
-  if (maxChars <= 3) {
-    return text.slice(0, maxChars);
-  }
-  return `${text.slice(0, maxChars - 3)}...`;
+  // The preview entry point clamps maxChars to at least 20, so the suffix budget stays positive.
+  return `${truncateUtf16Safe(text, maxChars - 3)}...`;
 }
 
 function extractPreviewText(message: TranscriptPreviewMessage): string | null {
@@ -1885,18 +1683,22 @@ function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
   return null;
 }
 
-function buildPreviewItems(
-  messages: TranscriptPreviewMessage[],
+export function buildSessionPreviewItems(
+  messages: readonly unknown[],
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    const toolCall = isToolCall(message);
-    const role = normalizeRole(message.role, toolCall);
-    let text = extractPreviewText(message);
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const previewMessage = message as TranscriptPreviewMessage;
+    const toolCall = isToolCall(previewMessage);
+    const role = normalizeRole(previewMessage.role, toolCall);
+    let text = extractPreviewText(previewMessage);
     if (!text) {
-      const toolNames = extractToolNames(message);
+      const toolNames = extractToolNames(previewMessage);
       if (toolNames.length > 0) {
         const shown = toolNames.slice(0, 2);
         const overflow = toolNames.length - shown.length;
@@ -1907,7 +1709,7 @@ function buildPreviewItems(
       }
     }
     if (!text) {
-      text = extractMediaSummary(message);
+      text = extractMediaSummary(previewMessage);
     }
     if (!text) {
       continue;
@@ -1946,15 +1748,15 @@ function readRecentMessagesFromTranscript(
     const readStart = Math.max(0, size - readBytes);
     const readLen = Math.min(size, readBytes);
     const buf = Buffer.alloc(readLen);
-    fs.readSync(fd, buf, 0, readLen, readStart);
+    const bytesRead = readFileWindowFullySync(fd, buf, readStart);
 
-    const chunk = buf.toString("utf-8");
+    const chunk = buf.toString("utf-8", 0, bytesRead);
     const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
     const tailLines = lines.slice(-PREVIEW_MAX_LINES);
 
     const collected: TranscriptPreviewMessage[] = [];
     for (let i = tailLines.length - 1; i >= 0; i--) {
-      const line = tailLines[i];
+      const line = expectDefined(tailLines[i], "tail lines entry at i");
       try {
         const parsed = JSON.parse(line);
         const msg = parsed?.message as TranscriptPreviewMessage | undefined;
@@ -1998,9 +1800,10 @@ export function readSessionPreviewItemsFromTranscript(
   for (const readSize of PREVIEW_READ_SIZES) {
     const messages = readRecentMessagesFromTranscript(filePath, boundedItems, readSize);
     if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {
-      return buildPreviewItems(messages, boundedItems, boundedChars);
+      return buildSessionPreviewItems(messages, boundedItems, boundedChars);
     }
   }
 
   return [];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

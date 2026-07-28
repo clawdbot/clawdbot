@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 export function levenshteinDistance(left: string, right: string): number {
   if (left === right) {
     return 0;
@@ -19,14 +20,14 @@ export function levenshteinDistance(left: string, right: string): number {
     for (let rightIndex = 0; rightIndex < right.length; rightIndex += 1) {
       const cost = left[leftIndex] === right[rightIndex] ? 0 : 1;
       current[rightIndex + 1] = Math.min(
-        current[rightIndex] + 1,
-        previous[rightIndex + 1] + 1,
-        previous[rightIndex] + cost,
+        expectDefined(current[rightIndex], "current entry at right index") + 1,
+        expectDefined(previous[rightIndex + 1], "previous entry at right index + 1") + 1,
+        expectDefined(previous[rightIndex], "previous entry at right index") + cost,
       );
     }
     const nextPrevious = current;
     current = previous;
     previous = nextPrevious;
   }
-  return previous[right.length];
+  return expectDefined(previous[right.length], "previous entry at right.length");
 }

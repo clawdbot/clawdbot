@@ -37,6 +37,7 @@ export type InspectedSlackAccount = {
   signingSecretStatus?: SlackCredentialStatus;
   userTokenStatus: SlackCredentialStatus;
   configured: boolean;
+  identity?: "user";
   config: SlackAccountConfig;
 } & SlackAccountSurfaceFields;
 
@@ -79,6 +80,7 @@ export function inspectSlackAccount(params: {
   const enabled = params.cfg.channels?.slack?.enabled !== false && merged.enabled !== false;
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
   const mode = merged.mode ?? "socket";
+  const identity = merged.postAs ?? "bot";
   const isHttpMode = mode === "http";
   const isRelayMode = mode === "relay";
 
@@ -137,6 +139,7 @@ export function inspectSlackAccount(params: {
   return {
     accountId,
     enabled,
+    ...(identity === "user" ? { identity } : {}),
     name: normalizeOptionalString(merged.name),
     mode,
     botToken,
@@ -177,13 +180,19 @@ export function inspectSlackAccount(params: {
         : envUser
           ? "available"
           : "missing",
-    configured: isHttpMode
-      ? (configBot.status !== "missing" || Boolean(envBot)) &&
-        configSigningSecret.status !== "missing"
-      : isRelayMode
-        ? (configBot.status !== "missing" || Boolean(envBot)) && relayConfigured
-        : (configBot.status !== "missing" || Boolean(envBot)) &&
-          (configApp.status !== "missing" || Boolean(envApp)),
+    configured: (() => {
+      const identityTokenConfigured =
+        identity === "user"
+          ? configUser.status !== "missing" || Boolean(envUser)
+          : configBot.status !== "missing" || Boolean(envBot);
+      if (isHttpMode) {
+        return identityTokenConfigured && configSigningSecret.status !== "missing";
+      }
+      if (isRelayMode) {
+        return identityTokenConfigured && relayConfigured;
+      }
+      return identityTokenConfigured && (configApp.status !== "missing" || Boolean(envApp));
+    })(),
     config: merged,
     groupPolicy: merged.groupPolicy,
     textChunkLimit: merged.textChunkLimit,

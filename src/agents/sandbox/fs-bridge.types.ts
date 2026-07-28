@@ -22,6 +22,14 @@ export type SandboxFsStat = {
 export type SandboxFsBridge = {
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath;
   readFile(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<Buffer>;
+  /** Streams a regular file within the sandbox when the backend supports native copying. */
+  copyFile?(params: {
+    sourcePath: string;
+    destinationPath: string;
+    cwd?: string;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<void>;
   writeFile(params: {
     filePath: string;
     cwd?: string;

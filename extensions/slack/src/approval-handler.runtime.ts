@@ -22,7 +22,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   isSlackAnyNativeApprovalClientEnabled,
-  resolveSlackApprovalKind,
   shouldHandleSlackNativeApprovalRequest,
 } from "./approval-native-gates.js";
 import { normalizeSlackApproverId } from "./exec-approvals.js";
@@ -56,7 +55,7 @@ type SlackExecApprovalConfig = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
 >;
 
-export type SlackApprovalHandlerContext = {
+type SlackApprovalHandlerContext = {
   app: App;
   config: SlackExecApprovalConfig;
 };
@@ -453,7 +452,7 @@ export const slackApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdap
       return shouldHandleSlackNativeApprovalRequest({
         cfg: params.cfg,
         accountId: resolved.accountId,
-        approvalKind: resolveSlackApprovalKind(params.request),
+        approvalKind: params.approvalKind,
         request: params.request,
       });
     },

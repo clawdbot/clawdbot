@@ -12,6 +12,13 @@ struct ChatDynamicTypeSourceGuardTests {
         #expect(!sources.composer.contains(".frame(height: self.cleanControlHeight)"))
         #expect(!sources.composer.contains("return self.composerChrome == .clean ? 48 : 64"))
         #expect(sources.composer.contains("@ScaledMetric(relativeTo: .body)"))
+        #expect(sources.composer.contains(".textFieldStyle(.plain)"))
+        #expect(sources.composer.contains(".lineLimit(1...4)"))
+        #expect(sources.composer.contains(".fixedSize(horizontal: false, vertical: true)"))
+        #expect(sources.composer.contains("CleanChatComposerSurface"))
+        #expect(sources.composer.contains(".accessibilityIdentifier(\"chat-composer-surface\")"))
+        #expect(sources.composer.contains("private var sendButtonVisualSize: CGFloat"))
+        #expect(sources.messageViews.contains("self.isUser || self.style == .onboarding || !self.isClean"))
     }
 
     private static func scopedChatTextSources() throws -> (

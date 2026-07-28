@@ -1,7 +1,14 @@
 // Discord tests cover chunk plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { countLines, hasBalancedFences } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { chunkDiscordText, chunkDiscordTextWithMode } from "./chunk.js";
+import { chunkDiscordTextWithMode } from "./chunk.js";
+
+type ChunkOptions = Omit<Parameters<typeof chunkDiscordTextWithMode>[1], "chunkMode">;
+
+function chunkDiscordText(text: string, options: ChunkOptions = {}) {
+  return chunkDiscordTextWithMode(text, { ...options, chunkMode: "length" });
+}
 
 describe("chunkDiscordText", () => {
   it("splits tall messages even when under 2000 chars", () => {
@@ -13,6 +20,18 @@ describe("chunkDiscordText", () => {
     for (const chunk of chunks) {
       expect(countLines(chunk)).toBeLessThanOrEqual(20);
     }
+  });
+
+  it("counts the first line after each flush toward maxLines", () => {
+    expect(chunkDiscordText("first\nsecond", { maxChars: 2000, maxLines: 1 })).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(chunkDiscordText(`${"x".repeat(35)}\nz`, { maxChars: 30, maxLines: 1 })).toEqual([
+      "x".repeat(30),
+      "x".repeat(5),
+      "z",
+    ]);
   });
 
   it("uses default chunk limits for non-finite options", () => {
@@ -89,6 +108,58 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  it("keeps chunks within maxChars when a fenced block's opening line is very long", () => {
+    // Sibling of the closing-fence test above, on the OPENING/reopen side. flush() reopened
+    // continuation chunks with the FULL opening line (info string included), so reopen prefix +
+    // body + closing marker overflowed maxChars (observed 2108 > 2000). Balance is not asserted:
+    // an opening fence line longer than maxChars must be split, orphaning its marker, so no
+    // chunking can keep that physical line both within maxChars and balanced.
+    for (let pad = 1990; pad <= 2010; pad++) {
+      const text = "```" + "a".repeat(pad) + "\nbody line one\nbody line two\n```";
+      for (const chunk of chunkDiscordText(text, { maxChars: 2000, maxLines: 100 })) {
+        expect(chunk.length).toBeLessThanOrEqual(2000);
+      }
+    }
+  });
+
+  it("keeps chunks within maxChars when a fence-open line exceeds a small maxChars", () => {
+    // Minimal repro mirroring the existing 50-char reserve test above.
+    for (let len = 44; len <= 80; len++) {
+      const text = "```" + "a".repeat(len) + "\nbody\nmore body\n```";
+      for (const chunk of chunkDiscordText(text, { maxChars: 50, maxLines: 50 })) {
+        expect(chunk.length).toBeLessThanOrEqual(50);
+      }
+    }
+  });
+
+  it("puts continued code on the line after a reopened fence", () => {
+    const text = `\`\`\`ts\nconst value = '${"x".repeat(80)}';\n\`\`\``;
+    const chunks = chunkDiscordText(text, { maxChars: 30, maxLines: 50 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    const fencedBodyChunks = chunks.filter((chunk) => /^```(?:ts)?\n[^`]/.test(chunk));
+    expect(fencedBodyChunks.length).toBeGreaterThan(1);
+    expect(
+      chunks
+        .filter((chunk) => chunk.startsWith("```"))
+        .every((chunk) => /^```(?:ts)?(?:\n|$)/.test(chunk)),
+    ).toBe(true);
+    expect(chunks.every((chunk) => chunk.length <= 30)).toBe(true);
+  });
+
+  it("keeps the hard size limit when synthetic fence balancing cannot fit", () => {
+    const cases = [
+      { text: "```\nabcdefghij\n```", maxChars: 8 },
+      { text: "~~~~~~~~\nabcdefghij\n~~~~~~~~", maxChars: 18 },
+    ];
+
+    for (const { text, maxChars } of cases) {
+      const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
+      expect(chunks.length).toBeGreaterThan(1);
+      expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
+    }
+  });
+
   it("preserves whitespace when splitting long lines", () => {
     const text = Array.from({ length: 40 }, () => "word").join(" ");
     const chunks = chunkDiscordText(text, { maxChars: 20, maxLines: 50 });
@@ -148,9 +219,9 @@ describe("chunkDiscordText", () => {
     }
 
     // Ensure italics reopen on subsequent chunks
-    expect(chunks[0]).toContain("_1. line");
+    expect(expectDefined(chunks[0], "first Discord chunk")).toContain("_1. line");
     // Second chunk should reopen italics at the start
-    expect(chunks[1].trimStart().startsWith("_")).toBe(true);
+    expect(expectDefined(chunks[1], "second Discord chunk").trimStart().startsWith("_")).toBe(true);
   });
 
   it("keeps reasoning italics balanced when chunks split by char limit", () => {
@@ -200,7 +271,7 @@ describe("chunkDiscordText", () => {
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
 
-    const second = chunks[1];
+    const second = expectDefined(chunks[1], "second Discord chunk");
     expect(second.startsWith("_")).toBe(true);
     expect(second).toContain("  11. indented line");
   });

@@ -8,6 +8,7 @@ import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
+import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.scenarios.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
@@ -54,7 +55,7 @@ export type MantisSlackDesktopSmokeOptions = {
 
 export type MantisSlackDesktopHydrateMode = "prehydrated" | "source";
 
-export type MantisSlackDesktopSmokeResult = {
+type MantisSlackDesktopSmokeResult = {
   approvalCheckpointScreenshotPaths?: string[];
   outputDir: string;
   reportPath: string;
@@ -142,6 +143,27 @@ const DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS = [
   "slack-approval-exec-native",
   "slack-approval-plugin-native",
 ] as const;
+const SUPPORTED_APPROVAL_CHECKPOINT_SCENARIOS = [
+  ...DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS,
+  "slack-codex-approval-exec-native",
+  "slack-codex-approval-plugin-native",
+] as const;
+const DEFAULT_APPROVAL_CHECKPOINT_TIMEOUT_MS = 120_000;
+const CODEX_APPROVAL_PENDING_TIMEOUT_MS = 180_000;
+const CODEX_APPROVAL_RESOLVE_TIMEOUT_MS = 35_000;
+const CODEX_APPROVAL_AGENT_WAIT_TIMEOUT_MS = 185_000;
+const CODEX_APPROVAL_HISTORY_TIMEOUT_MS = 10_000;
+const CODEX_APPROVAL_RESOLVED_UPDATE_TIMEOUT_MS = 180_000;
+const CODEX_APPROVAL_CAPTURE_HEADROOM_MS = 60_000;
+const CODEX_APPROVAL_POST_PENDING_BUDGET_MS =
+  CODEX_APPROVAL_RESOLVE_TIMEOUT_MS +
+  CODEX_APPROVAL_AGENT_WAIT_TIMEOUT_MS +
+  CODEX_APPROVAL_HISTORY_TIMEOUT_MS +
+  CODEX_APPROVAL_RESOLVED_UPDATE_TIMEOUT_MS +
+  CODEX_APPROVAL_CAPTURE_HEADROOM_MS;
+const CODEX_APPROVAL_SCENARIO_BUDGET_MS =
+  CODEX_APPROVAL_PENDING_TIMEOUT_MS + CODEX_APPROVAL_POST_PENDING_BUDGET_MS;
+const DEFAULT_REMOTE_COMMAND_TIMEOUT_SECONDS = 600;
 const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_CLASS_ENV = "OPENCLAW_MANTIS_CRABBOX_CLASS";
@@ -183,15 +205,21 @@ function resolveScenarioIds(params: {
         ? [...DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS]
         : [];
   if (params.approvalCheckpoints) {
-    const allowed = new Set<string>(DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS);
+    const allowed = new Set<string>(SUPPORTED_APPROVAL_CHECKPOINT_SCENARIOS);
     const unsupported = scenarioIds.filter((scenarioId) => !allowed.has(scenarioId));
     if (unsupported.length > 0) {
       throw new Error(
         `--approval-checkpoints only supports approval checkpoint scenarios: ${[
-          ...DEFAULT_APPROVAL_CHECKPOINT_SCENARIOS,
+          ...SUPPORTED_APPROVAL_CHECKPOINT_SCENARIOS,
         ].join(", ")}. Unsupported: ${unsupported.join(", ")}.`,
       );
     }
+    const requested = new Set(scenarioIds);
+    // Slack selects scenarios from catalog order, not CLI order. The watcher
+    // must mirror that order or both sides can block on different checkpoints.
+    return listSlackQaScenarioCatalog()
+      .map((scenario) => scenario.id)
+      .filter((scenarioId) => requested.has(scenarioId));
   }
   return scenarioIds;
 }
@@ -518,6 +546,20 @@ function renderRemoteScript(params: {
   const slackChannelId = shellQuote(params.slackChannelId);
   const scenarioArgs = params.scenarioIds.flatMap((id) => ["--scenario", shellQuote(id)]).join(" ");
   const checkpointScenarioJson = shellQuote(JSON.stringify(params.scenarioIds));
+  const codexScenarioCount = params.scenarioIds.filter((id) =>
+    id.startsWith("slack-codex-approval-"),
+  ).length;
+  // The watcher starts before gateway setup, then waits for pending and resolved
+  // sequentially. The resolved phase includes approval, agent, history, and Slack waits.
+  const approvalCheckpointTimeoutMs =
+    codexScenarioCount > 0
+      ? CODEX_APPROVAL_POST_PENDING_BUDGET_MS
+      : DEFAULT_APPROVAL_CHECKPOINT_TIMEOUT_MS;
+  // Preserve the existing hydration/startup budget, then add every selected
+  // Codex scenario's complete sequential approval budget.
+  const remoteCommandTimeoutSeconds =
+    DEFAULT_REMOTE_COMMAND_TIMEOUT_SECONDS +
+    Math.ceil((codexScenarioCount * CODEX_APPROVAL_SCENARIO_BUDGET_MS) / 1_000);
   return `set -euo pipefail
 out=${shellOutputDir}
 slack_url_override=${slackUrl}
@@ -532,7 +574,7 @@ setup_gateway=${setupGateway}
 approval_checkpoints=${approvalCheckpoints}
 slack_channel_id=${slackChannelId}
 approval_checkpoint_scenarios_json=${checkpointScenarioJson}
-remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-600}"
+remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-${remoteCommandTimeoutSeconds}}"
 if [ -z "\${OPENCLAW_QA_SLACK_CHANNEL_ID:-}" ] && [ -n "$slack_channel_id" ]; then
   export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"
 fi
@@ -554,7 +596,7 @@ if [ -n "\${OPENCLAW_LIVE_OPENAI_KEY:-}" ] && [ -z "\${OPENAI_API_KEY:-}" ]; the
 fi
 if ! command -v node >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/node-apt.log" 2>&1
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >>"$out/node-apt.log" 2>&1
+  curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x | sudo -E bash - >>"$out/node-apt.log" 2>&1
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >>"$out/node-apt.log" 2>&1
 fi
 if ! command -v scrot >/dev/null 2>&1; then
@@ -580,6 +622,7 @@ const token = process.env.OPENCLAW_QA_SLACK_SUT_BOT_TOKEN || process.env.OPENCLA
 const response = await fetch("https://slack.com/api/auth.test", {
   method: "POST",
   headers: { authorization: \`Bearer \${token}\` },
+  signal: AbortSignal.timeout(15_000),
 });
 const body = await response.json();
 process.stdout.write(JSON.stringify({ ok: body.ok, team_id: body.team_id, user_id: body.user_id }));
@@ -652,7 +695,94 @@ qa_status=0
 run_mantis_remote_body() {
   set -e
   echo "remote pwd: $(pwd)"
-  sudo corepack enable || sudo npm install -g pnpm@11
+  node_supports_type_stripping() {
+    node_probe="$(mktemp --suffix=.ts)"
+    printf 'const value: number = 1;\nif (value !== 1) process.exit(1);\n' >"$node_probe"
+    node --experimental-strip-types "$node_probe" >/dev/null 2>&1
+    probe_status=$?
+    rm -f "$node_probe"
+    return "$probe_status"
+  }
+  if ! node_supports_type_stripping; then
+    # Distro Node builds can satisfy the version range while omitting native
+    # TypeScript stripping, which the repository build requires.
+    node_version="$(sed -n 's/^node_version="\\([0-9][0-9.]*\\)"$/\\1/p' scripts/crabbox-untrusted-bootstrap.sh)"
+    case "$node_version" in
+      ''|*[!0-9.]*)
+        echo "Could not resolve the trusted Crabbox Node version." >&2
+        exit 3
+        ;;
+    esac
+    case "$(uname -m)" in
+      x86_64) node_arch=x64 ;;
+      aarch64|arm64) node_arch=arm64 ;;
+      *)
+        echo "Unsupported Node bootstrap architecture: $(uname -m)" >&2
+        exit 3
+        ;;
+    esac
+    node_root="$HOME/.cache/openclaw-mantis/node-v$node_version-linux-$node_arch"
+    if [ ! -x "$node_root/bin/node" ]; then
+      node_tmp="$(mktemp -d)"
+      node_archive="node-v$node_version-linux-$node_arch.tar.xz"
+      node_base_url="https://nodejs.org/dist/v$node_version"
+      # Retry quick transient failures within 120 seconds, but do not start
+      # another long transfer after an attempt consumes that full deadline.
+      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/SHASUMS256.txt" \
+        -o "$node_tmp/SHASUMS256.txt"
+      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/$node_archive" \
+        -o "$node_tmp/$node_archive"
+      (cd "$node_tmp" && grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -)
+      rm -rf "$node_root"
+      mkdir -p "$node_root"
+      tar -xJf "$node_tmp/$node_archive" -C "$node_root" --strip-components=1
+      rm -rf "$node_tmp"
+    fi
+    export PATH="$node_root/bin:$PATH"
+    node_supports_type_stripping || {
+      echo "Official Node $node_version lacks required TypeScript stripping." >&2
+      exit 3
+    }
+  fi
+  node --version
+  read -r pnpm_version pnpm_sha512 < <(node -e '
+const value = require("./package.json").packageManager ?? "";
+const match = /^pnpm@([0-9]+\\.[0-9]+\\.[0-9]+)\\+sha512\\.([0-9a-f]{128})$/.exec(value);
+if (!match) process.exit(1);
+console.log(match[1] + " " + match[2]);
+')
+  active_pnpm_version="$(pnpm --version 2>/dev/null || true)"
+  if [ "$active_pnpm_version" != "$pnpm_version" ]; then
+    # Some desktop images ship an old distro Corepack that enables its shim but
+    # cannot execute current pnpm and may omit npm. Download the exact package,
+    # verify the repository-pinned digest, and run its bundled CLI with Node.
+    pnpm_root="$out/pnpm-$pnpm_version"
+    pnpm_archive="$pnpm_root/pnpm.tgz"
+    mkdir -p "$pnpm_root"
+    # Retry quick transient failures within 120 seconds, but do not start
+    # another long transfer after an attempt consumes that full deadline.
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors \
+      "https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz" \
+      -o "$pnpm_archive"
+    downloaded_pnpm_sha512="$(sha512sum "$pnpm_archive" | awk '{print $1}')"
+    if [ "$downloaded_pnpm_sha512" != "$pnpm_sha512" ]; then
+      echo "pnpm $pnpm_version SHA-512 mismatch." >&2
+      exit 3
+    fi
+    tar -xzf "$pnpm_archive" -C "$pnpm_root"
+    pnpm_cli="$pnpm_root/package/bin/pnpm.cjs"
+    chmod +x "$pnpm_cli"
+    pnpm_bin_dir="$pnpm_root/bin"
+    mkdir -p "$pnpm_bin_dir"
+    ln -sfn "$pnpm_cli" "$pnpm_bin_dir/pnpm"
+    export PATH="$pnpm_bin_dir:$PATH"
+    hash -r
+    active_pnpm_version="$(pnpm --version)"
+  fi
+  if [ "$active_pnpm_version" != "$pnpm_version" ]; then
+    echo "Expected pnpm $pnpm_version, got $active_pnpm_version." >&2
+    exit 3
+  fi
   if [ "$hydrate_mode" = "source" ]; then
     if ! command -v make >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
       sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
@@ -739,7 +869,7 @@ MANTIS_SLACK_PATCH
       checkpoint_dir="$out/approval-checkpoints"
       mkdir -p "$checkpoint_dir"
       export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR="$checkpoint_dir"
-      export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS="\${OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS:-120000}"
+      export OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS="\${OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS:-${approvalCheckpointTimeoutMs}}"
       export OPENCLAW_MANTIS_APPROVAL_CHECKPOINT_SCENARIOS_JSON="$approval_checkpoint_scenarios_json"
       export OPENCLAW_MANTIS_APPROVAL_BROWSER_BIN="$browser_bin"
       cat >"$out/approval-checkpoint-watcher.mjs" <<'MANTIS_APPROVAL_WATCHER'
@@ -749,7 +879,7 @@ MANTIS_SLACK_PATCH
 
 const checkpointDir = process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR;
 const timeoutMs = Number.parseInt(
-  process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS || "120000",
+  process.env.OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS || "${approvalCheckpointTimeoutMs}",
   10,
 );
 	const scenarioIds = JSON.parse(
@@ -1033,9 +1163,9 @@ if [ "$qa_status" -ne 0 ]; then
   find "$out" -maxdepth 3 -type f -printf "%p %s bytes\\n" | sort || true
   for diagnostic_file in \
     "$out/slack-desktop-command.log" \
-    "$out/slack-qa/slack-qa-report.md" \
-    "$out/slack-qa/slack-qa-summary.json" \
-    "$out/slack-qa/slack-qa-observed-messages.json" \
+    "$out/slack-qa/qa-suite-report.md" \
+    "$out/slack-qa/qa-suite-summary.json" \
+    "$out/slack-qa/qa-evidence.json" \
     "$out/remote-command-timeout.txt" \
     "$out/approval-checkpoint-watcher.log" \
     "$out/chrome.log" \
@@ -1456,3 +1586,4 @@ export async function runMantisSlackDesktopSmoke(
 function toErrorObject(error: unknown): Error {
   return error instanceof Error ? error : new Error(formatErrorMessage(error));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

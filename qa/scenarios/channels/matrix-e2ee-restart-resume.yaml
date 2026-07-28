@@ -1,0 +1,35 @@
+title: Matrix E2EE encrypted rooms resume after gateway restart
+scenario:
+  id: matrix-e2ee-restart-resume
+  surface: channels
+  coverage:
+    primary:
+      - matrix.legacy-state
+  execution:
+    profiles: { "matrix:all": 63, "matrix:e2ee-smoke": 5 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 150000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-restart-resume
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Restart Resume Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-messages.js
+  call: runMatrixQaE2eeRestartResumeScenario
+  args:
+    - expr: "scenarioContext"

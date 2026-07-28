@@ -8,7 +8,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-export { clearPluginOwnedSessionState } from "./host-hook-cleanup.js";
 import {
   buildPluginAgentTurnPrepareContext,
   isPluginJsonValue,
@@ -185,7 +184,7 @@ export async function enqueuePluginNextTurnInjection(params: {
   return { ...updated.result, sessionKey: updated.canonicalKey };
 }
 
-export async function drainPluginNextTurnInjections(params: {
+async function drainPluginNextTurnInjections(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
   now?: number;
@@ -281,6 +280,7 @@ export async function patchPluginSessionExtension(params: {
   namespace: string;
   value?: PluginJsonValue;
   unset?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{ ok: true; key: string; value?: PluginJsonValue } | { ok: false; error: string }> {
   const namespace = normalizeNamespace(params.namespace);
   const pluginId = params.pluginId.trim();
@@ -319,6 +319,7 @@ export async function patchPluginSessionExtension(params: {
   const updated = await updateResolvedSessionEntry(
     { cfg: params.cfg, sessionKey: params.sessionKey },
     (entry, context) => {
+      params.assertCurrent?.();
       const entryRecord = entry as Record<string, unknown>;
       const pluginExtensions = { ...entry.pluginExtensions };
       const pluginState = { ...pluginExtensions[pluginId] };
@@ -414,13 +415,6 @@ function projectSessionExtensionValueForSlot(params: {
     return undefined;
   }
   return copyJsonValue(projected);
-}
-
-export async function projectPluginSessionExtensions(params: {
-  sessionKey: string;
-  entry: SessionEntry;
-}): Promise<PluginSessionExtensionProjection[]> {
-  return collectPluginSessionExtensionProjections(params);
 }
 
 function collectPluginSessionExtensionProjections(params: {

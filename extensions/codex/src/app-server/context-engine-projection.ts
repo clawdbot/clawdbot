@@ -4,6 +4,7 @@
  */
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
   developerInstructionAddition?: string;
@@ -31,9 +32,9 @@ const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
-export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 /** Default token reserve kept out of rendered context-engine prompt text. */
-export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
+const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
@@ -97,24 +98,9 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
-/** Reads Codex projection reserve tokens from compaction config. */
-export function resolveCodexContextEngineProjectionReserveTokens(params: {
-  config?: unknown;
-}): number | undefined {
-  const compaction = asRecord(asRecord(asRecord(params.config)?.agents)?.defaults)?.compaction;
-  const configuredReserveTokens = toNonNegativeInt(asRecord(compaction)?.reserveTokens);
-  const configuredReserveTokensFloor = toNonNegativeInt(asRecord(compaction)?.reserveTokensFloor);
-
-  if (configuredReserveTokens !== undefined) {
-    return Math.max(
-      configuredReserveTokens,
-      configuredReserveTokensFloor ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
-    );
-  }
-  if (configuredReserveTokensFloor !== undefined) {
-    return configuredReserveTokensFloor;
-  }
-  return undefined;
+/** Returns the fixed reserve used for Codex context-engine projections. */
+export function resolveCodexContextEngineProjectionReserveTokens(): number {
+  return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
 }
 
 /** Fits projected context prompts under Codex app-server turn/start text limits. */
@@ -230,17 +216,6 @@ function resolveProjectionPromptBudgetTokens(params: {
     Math.max(0, params.contextTokenBudget - minPromptBudget),
   );
   return Math.max(1, params.contextTokenBudget - effectiveReserveTokens);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
-
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
 }
 
 function dropDuplicateTrailingPrompt(messages: AgentMessage[], prompt: string): AgentMessage[] {
@@ -485,9 +460,11 @@ function resolveTextPartMaxChars(maxRenderedContextChars: number): number {
 }
 
 function truncateText(text: string, maxChars: number): string {
-  return text.length > maxChars
-    ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`
-    : text;
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const truncated = truncateUtf16Safe(text, maxChars);
+  return `${truncated}\n[truncated ${text.length - truncated.length} chars]`;
 }
 
 function truncateOlderContext(text: string, maxChars: number): string {
@@ -507,20 +484,5 @@ function truncateOlderContext(text: string, maxChars: number): string {
     return marker.slice(0, maxChars);
   }
   tailChars = maxChars - marker.length;
-  return `${marker}${sliceTailFromCodePointBoundary(text, tailChars).trimStart()}`;
-}
-
-// Keep the kept tail at a code-point boundary so a UTF-16 surrogate pair is
-// never split at the cut: a tail start that lands on a low surrogate would
-// orphan it into U+FFFD, corrupting the first character. Dropping that unit
-// stays within maxChars (it only removes a char), so the bound still holds.
-function sliceTailFromCodePointBoundary(text: string, tailChars: number): string {
-  let start = text.length - tailChars;
-  if (start > 0 && start < text.length) {
-    const code = text.charCodeAt(start);
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      start += 1;
-    }
-  }
-  return text.slice(start);
+  return `${marker}${sliceUtf16Safe(text, -tailChars).trimStart()}`;
 }

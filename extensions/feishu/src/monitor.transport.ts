@@ -2,8 +2,10 @@
 import crypto from "node:crypto";
 import * as http from "node:http";
 import * as Lark from "@larksuiteoapi/node-sdk";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
+import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
   installRequestBodyLimitGuard,
@@ -31,6 +33,7 @@ type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  setSocketTerminator?: (terminate: (() => void) | undefined) => void;
   /**
    * Optional status sink for Feishu health tracking. Lifecycle callbacks
    * publish connected state; validated inbound webhook requests publish
@@ -99,28 +102,6 @@ function respondText(res: http.ServerResponse, statusCode: number, body: string)
   res.end(body);
 }
 
-function normalizeFeishuWebhookRateLimitClient(clientIp: string | undefined): string {
-  if (!clientIp) {
-    return "unknown";
-  }
-  if (clientIp === "::1" || clientIp.startsWith("127.")) {
-    return "loopback";
-  }
-  return clientIp;
-}
-
-function buildFeishuWebhookRateLimitKey(params: {
-  accountId: string;
-  path: string;
-  clientIp?: string;
-}): string {
-  return `${params.accountId}:${params.path}:${normalizeFeishuWebhookRateLimitClient(
-    params.clientIp,
-  )}`;
-}
-
-export { buildFeishuWebhookRateLimitKey as buildFeishuWebhookRateLimitKeyForTest };
-
 function getFeishuWsReconnectDelayMs(attempt: number): number {
   return Math.min(
     FEISHU_WS_RECONNECT_INITIAL_DELAY_MS * 2 ** Math.max(0, attempt - 1),
@@ -151,7 +132,7 @@ function formatFeishuWsErrorForLog(err: unknown): string {
   if (redacted.length <= FEISHU_WS_LOG_ERROR_MAX_LENGTH) {
     return redacted;
   }
-  return `${redacted.slice(0, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
+  return `${truncateUtf16Safe(redacted, FEISHU_WS_LOG_ERROR_MAX_LENGTH)}...`;
 }
 
 function isFeishuWsTerminalError(err: Error): boolean {
@@ -223,6 +204,7 @@ export async function monitorWebSocket({
   runtime,
   abortSignal,
   eventDispatcher,
+  setSocketTerminator,
   statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
@@ -273,6 +255,7 @@ export async function monitorWebSocket({
         onReconnected: publishWsConnected,
         onReconnecting: publishWsReconnecting,
       });
+      setSocketTerminator?.(() => wsClient?.close({ force: true }));
       if (abortSignal?.aborted) {
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
         break;
@@ -285,10 +268,12 @@ export async function monitorWebSocket({
       if (cycleEnd === "abort") {
         log(`feishu[${accountId}]: abort signal received, stopping`);
         cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: true });
+        setSocketTerminator?.(undefined);
         return;
       }
 
       cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
+      setSocketTerminator?.(undefined);
       if (abortSignal?.aborted) {
         break;
       }
@@ -312,6 +297,7 @@ export async function monitorWebSocket({
       }
     } catch (err) {
       cleanupFeishuWsClient({ accountId, wsClient, error, clearIdentity: false });
+      setSocketTerminator?.(undefined);
       if (abortSignal?.aborted) {
         break;
       }
@@ -335,6 +321,7 @@ export async function monitorWebSocket({
     }
   }
   cleanupFeishuWsClient({ accountId, wsClient: undefined, error, clearIdentity: true });
+  setSocketTerminator?.(undefined);
 }
 
 export async function monitorWebhook({

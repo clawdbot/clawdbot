@@ -15,7 +15,7 @@ import {
 import type { PluginInteractiveHandlerRegistration } from "./types.js";
 
 /** Registration result for plugin interactive namespace handlers. */
-export type InteractiveRegistrationResult = {
+type InteractiveRegistrationResult = {
   ok: boolean;
   error?: string;
 };
@@ -32,11 +32,30 @@ export function resolvePluginInteractiveNamespaceMatch(
   });
 }
 
+/** Resolves a handler from registry-owned registrations without changing global state. */
+export function resolvePluginInteractiveRegistrationsMatch(
+  registrations: readonly RegisteredInteractiveHandler[],
+  channel: string,
+  data: string,
+): { registration: RegisteredInteractiveHandler; namespace: string; payload: string } | null {
+  return resolvePluginInteractiveMatch({
+    interactiveHandlers: {
+      get: (key) =>
+        registrations.find(
+          (registration) =>
+            toPluginInteractiveRegistryKey(registration.channel, registration.namespace) === key,
+        ),
+    },
+    channel,
+    data,
+  });
+}
+
 /** Registers one plugin interactive namespace for a channel. */
-export function registerPluginInteractiveHandler(
+function registerPluginInteractiveHandlerWithOptions(
   pluginId: string,
   registration: PluginInteractiveHandlerRegistration,
-  opts?: { pluginName?: string; pluginRoot?: string },
+  opts?: { pluginName?: string; pluginRoot?: string; registryOwned?: true },
 ): InteractiveRegistrationResult {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   const namespace = normalizePluginInteractiveNamespace(registration.namespace);
@@ -59,8 +78,30 @@ export function registerPluginInteractiveHandler(
     pluginId,
     pluginName: opts?.pluginName,
     pluginRoot: opts?.pluginRoot,
+    registryOwned: opts?.registryOwned,
   });
   return { ok: true };
+}
+
+/** Registers one process-global interactive handler. */
+export function registerPluginInteractiveHandler(
+  pluginId: string,
+  registration: PluginInteractiveHandlerRegistration,
+  opts?: { pluginName?: string; pluginRoot?: string },
+): InteractiveRegistrationResult {
+  return registerPluginInteractiveHandlerWithOptions(pluginId, registration, opts);
+}
+
+/** Registers one handler whose lifetime follows its owning plugin registry. */
+export function registerRegistryPluginInteractiveHandler(
+  pluginId: string,
+  registration: PluginInteractiveHandlerRegistration,
+  opts?: { pluginName?: string; pluginRoot?: string },
+): InteractiveRegistrationResult {
+  return registerPluginInteractiveHandlerWithOptions(pluginId, registration, {
+    ...opts,
+    registryOwned: true,
+  });
 }
 
 /** Clears all active plugin interactive handlers. */
@@ -69,7 +110,7 @@ export function clearPluginInteractiveHandlers(): void {
 }
 
 /** Clears stored plugin interactive handler registrations. */
-export function clearPluginInteractiveHandlerRegistrations(): void {
+function clearPluginInteractiveHandlerRegistrations(): void {
   clearPluginInteractiveHandlerRegistrationsState();
 }
 

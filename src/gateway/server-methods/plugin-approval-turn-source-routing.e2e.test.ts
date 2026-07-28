@@ -1,19 +1,19 @@
-// Gateway e2e proof: turn-source routing fields change gateway response behavior.
+// Gateway e2e proof: real delivery routes change approval response behavior.
 //
 // Without turn-source fields: plugin.approval.request expires immediately with
 // {decision: null} because there is no approval client and no turn-source route.
 //
-// With turn-source fields for a routable channel ("tui" is always routable):
-// the approval stays alive and returns {status: "accepted"} because
-// hasApprovalTurnSourceRoute returns true.
+// With a connected approval-capable client: the approval stays alive and
+// returns {status: "accepted"} because it has a real delivery route.
 //
 // This test runs against a real gateway server with no Telegram required.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
-import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { APPROVALS_SCOPE } from "../method-scopes.js";
 import { startGatewayServer } from "../server.js";
@@ -33,11 +33,13 @@ const TEST_ENV_KEYS = [
   "OPENCLAW_GATEWAY_PORT",
 ];
 
-describe("plugin.approval.request turn-source routing (real gateway)", () => {
+describe("plugin.approval.request delivery routing (real gateway)", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
   let tempHome: string;
   let server: Awaited<ReturnType<typeof startGatewayServer>>;
   let requester: Awaited<ReturnType<typeof connectGatewayClient>>;
+  let approvalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+  let connectApprovalClient: () => Promise<Awaited<ReturnType<typeof connectGatewayClient>>>;
 
   beforeAll(async () => {
     envSnapshot = captureEnv(TEST_ENV_KEYS);
@@ -63,7 +65,7 @@ describe("plugin.approval.request turn-source routing (real gateway)", () => {
       bind: "loopback",
       auth: { mode: "token", token },
       controlUiEnabled: false,
-      deferStartupSidecars: true,
+      sidecarStartup: "defer",
     });
 
     // No operator approval client; only a requester with APPROVALS_SCOPE.
@@ -73,11 +75,24 @@ describe("plugin.approval.request turn-source routing (real gateway)", () => {
       token,
       clientDisplayName: "plugin-approval requester",
       scopes: [APPROVALS_SCOPE],
+      requestTimeoutMs: 5_000,
       timeoutMs: 60_000,
     });
+    connectApprovalClient = () =>
+      connectGatewayClient({
+        url,
+        token,
+        clientDisplayName: "plugin approval client",
+        scopes: [APPROVALS_SCOPE],
+        caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+        timeoutMs: 60_000,
+      });
   });
 
   afterAll(async () => {
+    if (approvalClient) {
+      await disconnectGatewayClient(approvalClient).catch(() => undefined);
+    }
     await disconnectGatewayClient(requester).catch(() => undefined);
     await server?.close();
     await fs.rm(tempHome, { recursive: true, force: true, maxRetries: 5 }).catch(() => undefined);
@@ -103,18 +118,15 @@ describe("plugin.approval.request turn-source routing (real gateway)", () => {
     expect((result as { id?: string }).id).toMatch(/^plugin:/);
   });
 
-  it("returns accepted when turn-source route is present (tui channel is always routable)", async () => {
-    // With the fix: turn-source fields forwarded from HookContext to the gateway
-    // call. hasApprovalTurnSourceRoute("tui") returns true, so the record stays alive.
+  it("returns accepted when a real approval client is connected", async () => {
+    approvalClient = await connectApprovalClient();
+
     const result = await requester.request("plugin.approval.request", {
       pluginId: "test-plugin",
       title: "Confirm action",
       description: "Plugin wants to perform an action",
       twoPhase: true,
       timeoutMs: 10_000,
-      turnSourceChannel: "tui",
-      turnSourceTo: "main",
-      turnSourceAccountId: "local",
     });
 
     expect(result).toMatchObject({ status: "accepted" });

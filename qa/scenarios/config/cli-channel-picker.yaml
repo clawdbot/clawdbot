@@ -1,23 +1,30 @@
-title: CLI channel picker evidence
+title: CLI channel picker
 
 scenario:
   id: cli-channel-picker
-  surface: cli-install-update-onboard-doctor
-  category: cli-install-update-onboard-doctor.plugin-and-channel-setup
+  surface: cli
+  category: cli.plugin-and-channel-setup
   coverage:
     primary:
       - cli.channel-picker
-  objective: Link channel onboarding picker e2e coverage to CLI maturity accounting.
+  objective: Drive the real interactive channel picker in an isolated OpenClaw home and verify its persisted configuration.
   successCriteria:
-    - The channel picker remains usable with broken sibling registry diagnostics.
-    - Hidden setup channels are omitted from selectable choices.
-    - Configured and disabled channel states are presented with the expected actions.
+    - The producer launches the compiled OpenClaw CLI through a real PTY with an isolated OPENCLAW_HOME.
+    - The interaction selects Telegram, enters a test token, finishes the picker, and exits successfully.
+    - The written config enables the Telegram plugin and channel, preserves the default group mention gate, and records configure wizard metadata.
+    - Missing final output, a stalled picker, non-zero exit, or mismatched configuration produces failed evidence.
   docsRefs:
-    - docs/channels/qa-channel.md
+    - docs/channels/telegram.md
     - docs/help/testing.md
   codeRefs:
-    - src/commands/onboard-channels.e2e.test.ts
+    - test/e2e/qa-lab/config/cli-channel-picker.ts
+    - scripts/e2e/lib/run-with-pty.mjs
+    - src/flows/channel-setup.ts
   execution:
-    kind: vitest
-    path: src/commands/onboard-channels.e2e.test.ts
-    summary: Vitest e2e coverage for channel onboarding picker behavior.
+    kind: script
+    path: test/e2e/qa-lab/config/cli-channel-picker.ts
+    summary: Spawns the real channel picker under an isolated home, drives it through a PTY, asserts the config write, and emits QA evidence.
+    timeoutMs: 180000
+    args:
+      - --artifact-base
+      - ${outputDir}

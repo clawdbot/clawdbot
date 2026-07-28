@@ -1,16 +1,43 @@
 // Session delivery info tests cover persisted delivery metadata.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
+import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
+
+type SessionEntryFixture = SessionEntry & {
+  route?: ChannelRouteRef;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  channel?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
 
 const storeState = vi.hoisted(() => {
   const state = {
-    store: {} as Record<string, SessionEntry>,
-    stores: {} as Record<string, Record<string, SessionEntry>>,
-    loadSessionStore: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
-    readSessionStoreSnapshot: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
+    store: {} as Record<string, SessionEntryFixture>,
+    stores: {} as Record<string, Record<string, SessionEntryFixture>>,
+    // Mirrors the accessor view contract: raw exact-key get, enumeration only via entries().
+    openSessionEntryReadView: vi.fn((scope: { storePath?: string }) => {
+      const store = state.stores[scope.storePath ?? ""] ?? state.store;
+      return {
+        get: (sessionKey: string) =>
+          Object.hasOwn(store, sessionKey)
+            ? normalizeLegacySessionEntryDelivery(store[sessionKey] as SessionEntry)
+            : undefined,
+        entries: () =>
+          Object.entries(store).map(([sessionKey, entry]) => ({
+            sessionKey,
+            entry: normalizeLegacySessionEntryDelivery(entry),
+          })),
+      };
+    }),
   };
   return state;
 });
@@ -24,9 +51,8 @@ vi.mock("./paths.js", () => ({
     opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
-vi.mock("./store.js", () => ({
-  loadSessionStore: storeState.loadSessionStore,
-  readSessionStoreSnapshot: storeState.readSessionStoreSnapshot,
+vi.mock("./session-accessor.js", () => ({
+  openSessionEntryReadView: storeState.openSessionEntryReadView,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -39,7 +65,7 @@ vi.mock("./targets.js", () => ({
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
 
-const buildEntry = (deliveryContext: SessionEntry["deliveryContext"]): SessionEntry => ({
+const buildEntry = (deliveryContext: DeliveryContext): SessionEntryFixture => ({
   sessionId: "session-1",
   updatedAt: Date.now(),
   deliveryContext,
@@ -53,8 +79,7 @@ beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
   storeState.stores = {};
-  storeState.loadSessionStore.mockClear();
-  storeState.readSessionStoreSnapshot.mockClear();
+  storeState.openSessionEntryReadView.mockClear();
 });
 
 describe("extractDeliveryInfo", () => {
@@ -94,48 +119,32 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
-  it("uses session-store snapshots for direct session keys", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
+  it("reads borrowed accessor views for direct session keys", () => {
+    const sessionKey = "agent:main:telegram:dm:user-123";
     storeState.store[sessionKey] = buildEntry({
-      channel: "webchat",
-      to: "webchat:user-123",
+      channel: "telegram",
+      to: "telegram:user-123",
       accountId: "default",
     });
 
     const result = extractDeliveryInfo(sessionKey);
 
-    expect(result.deliveryContext?.to).toBe("webchat:user-123");
-    expect(storeState.readSessionStoreSnapshot).toHaveBeenCalledWith("/tmp/sessions.json");
-    expect(storeState.loadSessionStore).not.toHaveBeenCalled();
-  });
-
-  it("returns deliveryContext for direct session keys", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
-    storeState.store[sessionKey] = buildEntry({
-      channel: "webchat",
-      to: "webchat:user-123",
-      accountId: "default",
-    });
-
-    const result = extractDeliveryInfo(sessionKey);
-
-    expect(result).toEqual({
-      deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-123",
-        accountId: "default",
-      },
-      threadId: undefined,
+    expect(result.deliveryContext?.to).toBe("telegram:user-123");
+    expect(storeState.openSessionEntryReadView).toHaveBeenCalledWith({
+      storePath: "/tmp/sessions.json",
     });
   });
 
-  it("does not build the normalized index when an exact routable key is present", () => {
-    const sessionKey = "agent:main:webchat:dm:user-123";
+  it("does not enumerate the store when an exact routable key is present", () => {
+    const sessionKey = "agent:main:telegram:dm:user-123";
+    // Enumeration trap: the accessor-view mock lists rows via Object.entries, so
+    // building the normalized fallback index on this cheap path throws here and
+    // extractDeliveryInfo would return no delivery context.
     storeState.store = new Proxy(
       {
         [sessionKey]: buildEntry({
-          channel: "webchat",
-          to: "webchat:user-123",
+          channel: "telegram",
+          to: "telegram:user-123",
           accountId: "default",
         }),
       },
@@ -150,8 +159,28 @@ describe("extractDeliveryInfo", () => {
 
     expect(result).toEqual({
       deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-123",
+        channel: "telegram",
+        to: "telegram:user-123",
+        accountId: "default",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("returns deliveryContext for direct session keys", () => {
+    const sessionKey = "agent:main:telegram:dm:user-123";
+    storeState.store[sessionKey] = buildEntry({
+      channel: "telegram",
+      to: "telegram:user-123",
+      accountId: "default",
+    });
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "telegram",
+        to: "telegram:user-123",
         accountId: "default",
       },
       threadId: undefined,
@@ -180,12 +209,12 @@ describe("extractDeliveryInfo", () => {
   });
 
   it("looks up deliveryContext in per-agent session stores", () => {
-    const sessionKey = "agent:worker:webchat:dm:user-456";
+    const sessionKey = "agent:worker:telegram:dm:user-456";
     storeState.stores["/tmp/sessions.json"] = {};
     storeState.stores["/tmp/worker-sessions.json"] = {
       [sessionKey]: buildEntry({
-        channel: "webchat",
-        to: "webchat:user-456",
+        channel: "telegram",
+        to: "telegram:user-456",
         accountId: "worker-account",
       }),
     };
@@ -194,8 +223,8 @@ describe("extractDeliveryInfo", () => {
 
     expect(result).toEqual({
       deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-456",
+        channel: "telegram",
+        to: "telegram:user-456",
         accountId: "worker-account",
       },
       threadId: undefined,
@@ -203,7 +232,7 @@ describe("extractDeliveryInfo", () => {
   });
 
   it("continues across per-agent stores until it finds a routable deliveryContext", () => {
-    const sessionKey = "agent:shadow:webchat:dm:user-789";
+    const sessionKey = "agent:shadow:telegram:dm:user-789";
     storeState.stores["/tmp/sessions.json"] = {
       [sessionKey]: {
         sessionId: "stale-shadow",
@@ -212,8 +241,8 @@ describe("extractDeliveryInfo", () => {
     };
     storeState.stores["/tmp/shadow-sessions.json"] = {
       [sessionKey]: buildEntry({
-        channel: "webchat",
-        to: "webchat:user-789",
+        channel: "telegram",
+        to: "telegram:user-789",
         accountId: "shadow-account",
       }),
     };
@@ -222,8 +251,8 @@ describe("extractDeliveryInfo", () => {
 
     expect(result).toEqual({
       deliveryContext: {
-        channel: "webchat",
-        to: "webchat:user-789",
+        channel: "telegram",
+        to: "telegram:user-789",
         accountId: "shadow-account",
       },
       threadId: undefined,
@@ -237,8 +266,8 @@ describe("extractDeliveryInfo", () => {
       channel: "telegram",
       to: "group:98765",
       accountId: "main",
+      threadId: "55",
     });
-    storeState.store[baseKey].lastThreadId = "55";
 
     const result = extractDeliveryInfo(topicKey);
 

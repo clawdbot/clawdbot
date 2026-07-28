@@ -7,18 +7,69 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClientFactory } from "./client-factory.js";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { runCodexAppServerAttempt } from "./run-attempt.js";
-import { createCodexTestModel } from "./test-support.js";
+import {
+  readCodexAppServerBinding,
+  registerCodexTestSessionIdentity,
+  resetCodexTestBindingStore,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
+import type { CodexAppServerClientFactory } from "./shared-client.js";
+import {
+  adaptCodexTestClientFactory,
+  createCodexTestModel,
+  type CodexTestAppServerClientFactory,
+} from "./test-support.js";
+
+// The keyed router, client runtime, and subagent monitor each add handlers on
+// the physical client; single-slot mocks would keep only the last one.
+function multiplexedClientFactory(
+  factory: CodexTestAppServerClientFactory,
+): CodexAppServerClientFactory {
+  return adaptCodexTestClientFactory(async (...args) => {
+    const client = await factory(...args);
+    const notificationHandlers = new Set<Parameters<typeof client.addNotificationHandler>[0]>();
+    const requestHandlers = new Set<Parameters<typeof client.addRequestHandler>[0]>();
+    client.addNotificationHandler((notification) =>
+      Promise.all(
+        [...notificationHandlers].map((handler) => Promise.resolve(handler(notification))),
+      ).then(() => undefined),
+    );
+    client.addRequestHandler(async (request) => {
+      for (const handler of requestHandlers) {
+        const result = await handler(request);
+        if (result !== undefined) {
+          return result;
+        }
+      }
+      return undefined;
+    });
+    client.addNotificationHandler = (handler) => {
+      notificationHandlers.add(handler);
+      return () => notificationHandlers.delete(handler);
+    };
+    client.addRequestHandler = (handler) => {
+      requestHandlers.add(handler);
+      return () => requestHandlers.delete(handler);
+    };
+    return client;
+  });
+}
 
 let tempDir: string;
 
-function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
+function createParams(
+  sessionFile: string,
+  workspaceDir: string,
+  sessionKey = "agent:main:session-1",
+): EmbeddedRunAttemptParams {
+  registerCodexTestSessionIdentity(sessionFile, "session-1", sessionKey);
   return {
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "agent:main:session-1",
+    sessionKey,
     sessionFile,
     workspaceDir,
     runId: "run-1",
@@ -93,6 +144,7 @@ function getMockRuntimeIdentity() {
 
 function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -100,6 +152,7 @@ function mockClientRuntimeMethods() {
 
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
+    resetCodexTestBindingStore();
     vi.useRealTimers();
     resetAgentEventsForTest();
     vi.stubEnv("OPENCLAW_TRAJECTORY", "0");
@@ -132,7 +185,7 @@ describe("Codex app-server main thread cleanup", () => {
       return {};
     });
 
-    const clientFactory: CodexAppServerClientFactory = async () => {
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
       return {
         ...mockClientRuntimeMethods(),
         request,
@@ -141,10 +194,12 @@ describe("Codex app-server main thread cleanup", () => {
           return () => undefined;
         },
         addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
       } as never;
-    };
+    });
 
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      bindingStore: testCodexAppServerBindingStore,
       clientFactory,
     });
     await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
@@ -161,7 +216,7 @@ describe("Codex app-server main thread cleanup", () => {
     });
 
     const result = await run;
-    expect(result.aborted).toBe(false);
+    expect(readAttemptTerminal(result).aborted).toBe(false);
     expect(request).toHaveBeenCalledWith(
       "thread/unsubscribe",
       { threadId: "thread-1" },
@@ -174,9 +229,62 @@ describe("Codex app-server main thread cleanup", () => {
     ]);
   });
 
-  it("unsubscribes the main Codex thread when turn start fails", async () => {
+  it("keeps an incognito thread subscribed for live in-process reuse", async () => {
+    const sessionFile = path.join(tempDir, "incognito-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-workspace");
+    const sessionKey = "agent:main:dashboard:incognito-live-thread";
+    const requests: Array<{ method: string; params: unknown }> = [];
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      requests.push({ method, params });
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      if (method === "turn/start") {
+        return turnStartResult();
+      }
+      return {};
+    });
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
+      return {
+        ...mockClientRuntimeMethods(),
+        request,
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      } as never;
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
+      bindingStore: testCodexAppServerBindingStore,
+      clientFactory,
+    });
+    await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/start"), {
+      interval: 1,
+      timeout: 5_000,
+    });
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    const result = await run;
+    expect(readAttemptTerminal(result)).toMatchObject({ aborted: false, timedOut: false });
+    expect(requests.map((entry) => entry.method)).toEqual(["thread/start", "turn/start"]);
+    expect(requests[0]?.params).toEqual(expect.objectContaining({ ephemeral: true }));
+  });
+
+  it("unsubscribes an incognito Codex thread when turn start fails", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
+    const sessionKey = "agent:main:dashboard:incognito-failed-turn";
     const requests: Array<{ method: string; params: unknown }> = [];
     const request = vi.fn(async (method: string, params?: unknown) => {
       requests.push({ method, params });
@@ -189,17 +297,19 @@ describe("Codex app-server main thread cleanup", () => {
       return {};
     });
 
-    const clientFactory: CodexAppServerClientFactory = async () => {
+    const clientFactory: CodexAppServerClientFactory = multiplexedClientFactory(async () => {
       return {
         ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
       } as never;
-    };
+    });
 
     await expect(
-      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      runCodexAppServerAttempt(createParams(sessionFile, workspaceDir, sessionKey), {
+        bindingStore: testCodexAppServerBindingStore,
         clientFactory,
       }),
     ).rejects.toThrow("turn start exploded");
@@ -213,5 +323,6 @@ describe("Codex app-server main thread cleanup", () => {
       { threadId: "thread-1" },
       { timeoutMs: 5_000 },
     );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 });

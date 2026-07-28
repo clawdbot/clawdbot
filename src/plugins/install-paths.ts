@@ -96,7 +96,7 @@ export function resolveDefaultPluginNpmDir(
 }
 
 /** Encodes an npm package name into a managed npm project directory name. */
-export function encodePluginNpmProjectDirName(packageName: string): string {
+function encodePluginNpmProjectDirName(packageName: string): string {
   const trimmed = packageName.trim();
   if (!trimmed) {
     throw new Error("invalid npm package name: missing");
@@ -130,7 +130,7 @@ export function resolvePluginNpmGenerationProjectDirPrefix(packageName: string):
 }
 
 /** Encodes a package generation fingerprint into a compact project directory suffix. */
-export function encodePluginNpmGenerationKeyDirName(generationKey: string): string {
+function encodePluginNpmGenerationKeyDirName(generationKey: string): string {
   const digest = createHash("sha256").update(generationKey).digest("hex");
   return `g-${digest.slice(0, PLUGIN_NPM_GENERATION_KEY_HASH_CHARS)}`;
 }

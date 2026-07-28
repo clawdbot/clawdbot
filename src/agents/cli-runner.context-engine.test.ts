@@ -103,6 +103,7 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
       env: {},
     },
     reusableCliSession: {
+      mode: "reuse",
       sessionId: "existing-external-cli-session",
     },
     hadSessionFile: true,

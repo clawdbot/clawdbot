@@ -7,12 +7,15 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveRootPath } from "../../infra/boundary-path.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 export type SshSandboxSettings = {
@@ -115,7 +118,7 @@ function assertValidExecRemoteCommand(command: string): void {
     if (!frame) {
       throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
     }
-    const char = command[index];
+    const char = command.charAt(index);
 
     if (frame.escaping) {
       frame.escaping = false;
@@ -250,12 +253,15 @@ function assertValidExecRemoteCommand(command: string): void {
     throw new Error("Malformed SSH/OpenShell exec command: trailing backslash escape.");
   }
   if (pendingHeredocs.length > 0) {
+    const pending = pendingHeredocs.at(0);
+    if (!pending) {
+      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
+    }
     throw new Error(
-      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pendingHeredocs[0].delimiter}.`,
+      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pending.delimiter}.`,
     );
   }
-  for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = frames[index];
+  for (const frame of frames.toReversed()) {
     if (frame.quote === "single") {
       throw new Error("Malformed SSH/OpenShell exec command: unclosed single quote.");
     }
@@ -308,7 +314,7 @@ export function buildValidatedExecRemoteCommand(params: {
   return buildExecRemoteCommand(params);
 }
 
-export const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
+const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
   "set -e",
   'target="$1"',
   'root="$2"',
@@ -389,10 +395,11 @@ function readPlaceholderToken(command: string, index: number): string | null {
 
 function hasRedirectionTargetAfter(command: string, index: number): boolean {
   let cursor = index;
-  while (command[cursor] === " " || command[cursor] === "\t") {
+  while (command.charAt(cursor) === " " || command.charAt(cursor) === "\t") {
     cursor += 1;
   }
-  return command[cursor] !== undefined && !/[;&|()<>\r\n]/.test(command[cursor]);
+  const next = command.charAt(cursor);
+  return next !== "" && !/[;&|()<>\r\n]/.test(next);
 }
 
 function isLikelyGeneratedWorkflowPlaceholder(command: string, index: number): boolean {
@@ -672,42 +679,37 @@ export async function runSshSandboxCommand(
     remoteCommand: params.remoteCommand,
     tty: params.tty,
   });
+  const [executable, ...args] = argv;
+  if (!executable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
-  return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(argv[0], argv.slice(1), {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: sshEnv,
-      signal: params.signal,
-    });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
-            code: exitCode,
-            stdout,
-            stderr,
-          }),
-        );
-        return;
-      }
-      resolve({ stdout, stderr, code: exitCode });
-    });
-
-    if (params.stdin !== undefined) {
-      child.stdin.end(params.stdin);
-      return;
-    }
-    child.stdin.end();
+  const result = await spawnCommand([executable, ...args], {
+    baseEnv: sshEnv,
+    cancelSignal: params.signal,
+    encoding: "buffer",
+    input: params.stdin ?? Buffer.alloc(0),
+    maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+    reject: false,
+    stripFinalNewline: false,
   });
+  if (params.signal?.aborted || result.isCanceled) {
+    throw createAbortError("Aborted");
+  }
+  if (result.failed && !isPlainCommandExitFailure(result)) {
+    throw toErrorObject(result, "SSH command execution failed");
+  }
+  const stdout = Buffer.from(result.stdout);
+  const stderr = Buffer.from(result.stderr);
+  const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
+  if (exitCode !== 0 && !params.allowFailure) {
+    throw Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
+      code: exitCode,
+      stdout,
+      stderr,
+    });
+  }
+  return { stdout, stderr, code: exitCode };
 }
 
 export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
@@ -772,13 +774,17 @@ export async function uploadDirectoryToSshTarget(params: {
     session: params.session,
     remoteCommand,
   });
+  const [sshExecutable, ...sshArgs] = sshArgv;
+  if (!sshExecutable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: params.signal,
     });
-    const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
+    const ssh = spawn(sshExecutable, sshArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,
@@ -790,20 +796,34 @@ export async function uploadDirectoryToSshTarget(params: {
     let sshClosed = false;
     let tarCode = 0;
     let sshCode = 0;
-
-    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
-    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    let settled = false;
 
     const fail = (error: unknown) => {
-      tar.kill("SIGKILL");
-      ssh.kill("SIGKILL");
+      if (settled) {
+        return;
+      }
+      settled = true;
+      for (const child of [tar, ssh]) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Preserve the pipeline error while still terminating the peer.
+        }
+      }
       reject(toErrorObject(error, "Non-Error rejection"));
     };
 
+    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
+    tar.stderr.on("error", fail);
+    tar.stdout.on("error", fail);
+    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
+    ssh.stdout.on("error", fail);
+    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    ssh.stderr.on("error", fail);
+    ssh.stdin?.on("error", fail);
+
     tar.on("error", fail);
     ssh.on("error", fail);
-    tar.stdout.pipe(ssh.stdin);
 
     tar.on("close", (code) => {
       tarClosed = true;
@@ -817,9 +837,10 @@ export async function uploadDirectoryToSshTarget(params: {
     });
 
     function maybeResolve() {
-      if (!tarClosed || !sshClosed) {
+      if (settled || !tarClosed || !sshClosed) {
         return;
       }
+      settled = true;
       if (tarCode !== 0) {
         reject(
           new Error(
@@ -837,6 +858,13 @@ export async function uploadDirectoryToSshTarget(params: {
         return;
       }
       resolve();
+    }
+
+    try {
+      // Readable pipe errors do not close the writable peer automatically.
+      tar.stdout.pipe(ssh.stdin);
+    } catch (error) {
+      fail(error);
     }
   });
 }
@@ -901,3 +929,4 @@ async function writeSecretMaterial(
   await fs.chmod(pathname, 0o600);
   return pathname;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

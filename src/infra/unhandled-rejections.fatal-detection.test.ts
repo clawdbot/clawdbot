@@ -122,13 +122,18 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   });
 
   describe("configuration errors", () => {
-    it("exits on configuration error codes", () => {
-      const configurationCases = [
-        { code: "INVALID_CONFIG", message: "Invalid config" },
-        { code: "MISSING_API_KEY", message: "Missing API key" },
-      ] as const;
+    it("uses exit 78 only for invalid configuration", () => {
+      expectExitCodeFromUnhandled(
+        Object.assign(new Error("Invalid config"), { code: "INVALID_CONFIG" }),
+        [78],
+        "configuration error",
+      );
 
-      for (const { code, message } of configurationCases) {
+      const transientCredentialCases = [
+        { code: "MISSING_API_KEY", message: "Missing API key" },
+        { code: "MISSING_CREDENTIALS", message: "Missing credentials" },
+      ] as const;
+      for (const { code, message } of transientCredentialCases) {
         expectExitCodeFromUnhandled(
           Object.assign(new Error(message), { code }),
           [1],

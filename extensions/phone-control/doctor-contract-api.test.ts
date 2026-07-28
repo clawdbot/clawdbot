@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -52,7 +53,7 @@ describe("phone-control doctor state migration", () => {
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, JSON.stringify(legacyState));
 
-    const migration = stateMigrations[0];
+    const migration = expectDefined(stateMigrations[0], "phone-control state migration");
     await expect(
       migration.detectLegacyState({
         config: {},
@@ -85,8 +86,46 @@ describe("phone-control doctor state migration", () => {
         .openPluginStateKeyedStore({
           namespace: "armed",
           maxEntries: 1,
+          overflowPolicy: "reject-new",
         })
         .lookup("current"),
     ).resolves.toEqual(legacyState);
+  });
+
+  it("does not overwrite a generation-keyed arm lease", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "phone-control", "armed.json");
+    const legacyState = {
+      version: 1,
+      armedAtMs: 100,
+      expiresAtMs: 200,
+      removedFromDeny: ["sms.send"],
+    };
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, JSON.stringify(legacyState));
+    const context = createDoctorContext(env);
+    const store = context.openPluginStateKeyedStore<Record<string, unknown>>({
+      namespace: "armed",
+      maxEntries: 1,
+      overflowPolicy: "reject-new",
+    });
+    await store.register("generation-1", { version: 3, generation: "generation-1" });
+
+    const result = await stateMigrations[0]?.migrateLegacyState({
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context,
+    });
+
+    expect(result?.changes).toEqual([]);
+    expect(result?.warnings).toEqual([
+      "Left Phone Control armed-state source in place because plugin state exists",
+    ]);
+    await expect(store.lookup("generation-1")).resolves.toEqual({
+      version: 3,
+      generation: "generation-1",
+    });
+    await expect(fs.access(sourcePath)).resolves.toBeUndefined();
   });
 });

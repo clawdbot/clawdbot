@@ -15,12 +15,14 @@ export type DispatchFromConfigResult = {
   sendPolicyDenied?: boolean;
   observedReplyDelivery?: boolean;
   noVisibleReplyFallbackEligible?: boolean;
+  noVisibleReplyFallbackDelivered?: boolean;
   beforeAgentRunBlocked?: boolean;
   sessionMetadataChanges?: CommandSessionMetadataChange[];
 };
 
 export type DispatchFromConfigParams = {
   ctx: FinalizedMsgContext;
+  /** Full runtime config captured by the channel; reply resolution refreshes it per turn. */
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<InternalGetReplyOptions, "onBlockReply">;
@@ -28,7 +30,7 @@ export type DispatchFromConfigParams = {
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   fastAbortResolver?: TryFastAbortFromMessage;
   formatAbortReplyTextResolver?: FormatAbortReplyText;
-  /** Optional patch applied to the already loaded config before reply resolution. */
+  /** Optional patch applied to the current runtime config before reply resolution. */
   configOverride?: OpenClawConfig;
 };
 

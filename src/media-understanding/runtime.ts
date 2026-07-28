@@ -1,7 +1,9 @@
 // Public file-oriented media-understanding runtime for image, audio, video, and
 // structured extraction calls outside normal channel message handling.
 import path from "node:path";
-import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
@@ -94,20 +96,18 @@ function buildFileContext(params: {
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
   if (remoteRef) {
     return {
-      MediaUrl: remoteRef,
-      MediaType: mediaType,
+      media: [{ url: remoteRef, contentType: mediaType }],
       ...scopeFields,
     };
   }
   return {
-    MediaPath: params.filePath,
-    MediaType: mediaType,
+    media: [{ path: params.filePath, contentType: mediaType }],
     ...scopeFields,
   };
 }
 
 function isRemoteMediaReference(value: string): boolean {
-  return /^https?:\/\//i.test(value.trim());
+  return hasHttpUrlPrefix(value.trim());
 }
 
 function concreteMime(mime: string | undefined): string | undefined {
@@ -147,9 +147,9 @@ export async function runMediaUnderstandingFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const cfg =
+  const cfg: OpenClawConfig =
     requestPrompt || requestTimeoutSeconds !== undefined
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -169,7 +169,7 @@ export async function runMediaUnderstandingFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const ctx = buildFileContext({
     ...params,
@@ -195,6 +195,8 @@ export async function runMediaUnderstandingFile(
   }
 
   const providerRegistry = buildProviderRegistry(undefined, cfg);
+  const agentDir =
+    params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
@@ -207,7 +209,8 @@ export async function runMediaUnderstandingFile(
       ctx,
       attachments: cache,
       media: attachments,
-      agentDir: params.agentDir,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(agentDir ? { agentDir } : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
@@ -274,6 +277,11 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   const describeImage = provider?.describeImage ?? describeImageWithModel;
+  const agentDir =
+    params.agentDir ??
+    (params.agentId
+      ? resolveAgentDir(params.cfg, params.agentId)
+      : resolveDefaultAgentDir(params.cfg));
   return await describeImage({
     buffer: params.image.buffer,
     fileName: params.image.fileName,
@@ -284,7 +292,8 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     maxTokens: params.maxTokens,
     timeoutMs,
     cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 }
@@ -309,10 +318,15 @@ async function readImageDescriptionInput(params: {
     params.mediaUrl ??
     (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
   if (!remoteRef) {
+    const { buffer } = await readLocalFileSafely({ filePath: params.filePath });
     return {
-      buffer: (await readLocalFileSafely({ filePath: params.filePath })).buffer,
+      buffer,
       fileName: basenameFromMediaReference(params.filePath),
-      mime: params.mime,
+      mime: await detectMime({
+        buffer,
+        filePath: params.filePath,
+        headerMime: concreteMime(params.mime),
+      }),
     };
   }
   const attachments = normalizeMediaAttachments(
@@ -330,7 +344,9 @@ async function readImageDescriptionInput(params: {
     return {
       buffer: media.buffer,
       fileName: media.fileName || basenameFromMediaReference(remoteRef),
-      mime: concreteMime(params.mime) ?? media.mime,
+      // The attachment cache has already resolved MIME from bytes, filename, and headers.
+      // Keep the caller hint only as a fallback for cache implementations with no MIME result.
+      mime: media.mime ?? concreteMime(params.mime),
     };
   } finally {
     await cache.cleanup();
@@ -378,9 +394,9 @@ export async function describeVideoFile(
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const cfg =
+  const cfg: OpenClawConfig =
     params.language || params.prompt
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -395,7 +411,7 @@ export async function transcribeAudioFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return result;

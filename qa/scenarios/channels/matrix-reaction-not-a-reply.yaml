@@ -1,0 +1,21 @@
+title: Matrix reactions do not trigger a fresh bot reply
+scenario:
+  id: matrix-reaction-not-a-reply
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-send-read-edit-delete
+  execution:
+    profiles: { "matrix:all": 23, "matrix:transport": 22 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 8000
+    retryCount: 0
+    config:
+      matrixRequireCanary: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-reaction.js
+  call: runReactionNotAReplyScenario
+  args:
+    - expr: "scenarioContext"

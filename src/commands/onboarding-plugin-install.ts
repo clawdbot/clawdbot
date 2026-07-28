@@ -6,10 +6,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveBundledInstallPlanForCatalogEntry } from "../cli/plugin-install-plan.js";
-import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../cli/plugins-registry-refresh.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -49,6 +50,7 @@ import {
 } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
@@ -80,6 +82,8 @@ type OnboardingPluginInstallResult = {
   installed: boolean;
   pluginId: string;
   status: OnboardingPluginInstallStatus;
+  /** Sanitized actionable detail for non-interactive callers. */
+  error?: string;
 };
 
 async function markOnboardingPluginInstalled(
@@ -381,7 +385,11 @@ function resolveInstallDefaultChoice(params: {
   if (updateChannel === "dev") {
     return "local";
   }
-  if (updateChannel === "stable" || updateChannel === "beta") {
+  if (
+    updateChannel === "stable" ||
+    updateChannel === "extended-stable" ||
+    updateChannel === "beta"
+  ) {
     return remoteDefault();
   }
   if (entryDefault === "local") {
@@ -457,7 +465,7 @@ async function promptInstallChoice(params: {
     if (realSources.length === 1) {
       // Callers that already selected a plugin/channel can skip an extra prompt
       // when there is only one viable source.
-      return realSources[0];
+      return expectDefined(realSources[0], "real sources entry at 0");
     }
   }
 
@@ -533,7 +541,31 @@ function summarizeInstallError(message: string): string {
   if (!cleaned) {
     return "Unknown install failure";
   }
-  return cleaned.length > 180 ? `${cleaned.slice(0, 179)}…` : cleaned;
+  return cleaned.length > 180 ? `${truncateUtf16Safe(cleaned, 179)}…` : cleaned;
+}
+
+const ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS = 12_000;
+
+function formatInstallErrorDetail(message: string): string {
+  const cleaned = message
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => sanitizeTerminalText(line))
+    .join("\n")
+    .trim();
+  if (cleaned.length <= ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS) {
+    return cleaned;
+  }
+  const marker = "\n… (installer output truncated)";
+  return `${truncateUtf16Safe(cleaned, ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS - marker.length).trimEnd()}${marker}`;
+}
+
+const testing = { formatInstallErrorDetail, summarizeInstallError };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.onboardingPluginInstallTestApi")
+  ] = testing;
 }
 
 function isTimeoutError(error: unknown): boolean {
@@ -901,6 +933,7 @@ async function installPluginFromOverride(params: {
 
   const { result } = installOutcome;
   if (!result.ok) {
+    const errorDetail = formatInstallErrorDetail(result.error);
     await prompter.note(
       [
         t("wizard.plugins.installFailed", {
@@ -911,12 +944,13 @@ async function installPluginFromOverride(params: {
       ].join("\n"),
       t("wizard.plugins.installTitle"),
     );
-    runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+    runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
     return {
       cfg: params.cfg,
       installed: false,
       pluginId: entry.pluginId,
       status: "failed",
+      error: errorDetail,
     };
   }
 
@@ -1092,6 +1126,7 @@ export async function ensureOnboardingPluginInstalled(params: {
   workspaceDir?: string;
   promptInstall?: boolean;
   autoConfirmSingleSource?: boolean;
+  beforePersistentEffect?: () => Promise<void>;
 }): Promise<OnboardingPluginInstallResult> {
   const { entry, prompter, runtime, workspaceDir } = params;
   let next = params.cfg;
@@ -1100,6 +1135,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     // Any install override mutates config/install records, so guard it with the
     // same write-mode check as normal installs.
     assertConfigWriteAllowedInCurrentMode();
+    await params.beforePersistentEffect?.();
     return await installPluginFromOverride({
       cfg: next,
       entry,
@@ -1137,6 +1173,10 @@ export async function ensureOnboardingPluginInstalled(params: {
     ? resolveNpmInstallSpecsForUpdateChannel({
         spec: npmSpec,
         updateChannel,
+        officialPackageName: entry.trustedSourceLinkedOfficialInstall
+          ? parseRegistryNpmSpec(npmSpec)?.name
+          : undefined,
+        coreVersion: VERSION,
       })
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
@@ -1217,6 +1257,7 @@ export async function ensureOnboardingPluginInstalled(params: {
 
   let shouldTryNpm = choice === "npm";
   if (choice === "clawhub" && clawhubInstallSpec) {
+    await params.beforePersistentEffect?.();
     const installOutcome = await installPluginFromClawHubSpecWithProgress({
       cfg: next,
       entry,
@@ -1286,14 +1327,16 @@ export async function ensureOnboardingPluginInstalled(params: {
       ].join("\n"),
       t("wizard.plugins.installTitle"),
     );
+    const errorDetail = formatInstallErrorDetail(result.error);
 
     if (!npmInstallSpec || !shouldFallbackClawHubToNpm({ result, npmSpec: npmInstallSpec })) {
-      runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
       return {
         cfg: next,
         installed: false,
         pluginId: entry.pluginId,
         status: "failed",
+        error: errorDetail,
       };
     }
 
@@ -1306,12 +1349,13 @@ export async function ensureOnboardingPluginInstalled(params: {
       initialValue: true,
     });
     if (!shouldTryNpm) {
-      runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
       return {
         cfg: next,
         installed: false,
         pluginId: entry.pluginId,
         status: "failed",
+        error: errorDetail,
       };
     }
   }
@@ -1334,6 +1378,7 @@ export async function ensureOnboardingPluginInstalled(params: {
     };
   }
 
+  await params.beforePersistentEffect?.();
   const installOutcome = await installPluginFromNpmSpecWithProgress({
     cfg: next,
     entry,
@@ -1383,7 +1428,7 @@ export async function ensureOnboardingPluginInstalled(params: {
       spec: resolveNpmInstallRecordSpec({
         requestedSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
         resolution: result.npmResolution,
-        pinResolvedRegistrySpec: entry.trustedSourceLinkedOfficialInstall === true,
+        pinResolvedRegistrySpec: false,
       }),
       installPath: result.targetDir,
       version: result.version,
@@ -1462,11 +1507,14 @@ export async function ensureOnboardingPluginInstalled(params: {
     }
   }
 
-  runtime.error?.(`Plugin install failed: ${sanitizeTerminalText(result.error)}`);
+  const errorDetail = formatInstallErrorDetail(result.error);
+  runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
   return {
     cfg: next,
     installed: false,
     pluginId: entry.pluginId,
     status: "failed",
+    error: errorDetail,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

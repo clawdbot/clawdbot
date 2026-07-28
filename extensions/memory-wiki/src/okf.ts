@@ -56,13 +56,13 @@ type OkfImportedPage = {
   created: boolean;
 };
 
-export type ImportMemoryWikiOkfWarning = {
+type ImportMemoryWikiOkfWarning = {
   code: "invalid-concept" | "missing-type" | "unreadable-entry";
   path: string;
   message: string;
 };
 
-export type ImportMemoryWikiOkfResult = {
+type ImportMemoryWikiOkfResult = {
   bundlePath: string;
   bundleName: string;
   okfVersion?: string;

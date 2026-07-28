@@ -16,4 +16,4 @@ Fetch, list, and write files on paired nodes via dedicated node commands. Bypass
 
 ## Surface
 
-contracts: tools
+contracts: `tools`

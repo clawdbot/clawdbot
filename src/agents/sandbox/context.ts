@@ -4,7 +4,6 @@
  * Prepares workspace layout, backend handle, filesystem bridge, browser bridge, and registry state for one run.
  */
 import fs from "node:fs/promises";
-import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   ensureBrowserControlAuth,
@@ -15,19 +14,18 @@ import {
   resolveBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { SkillEligibilityContext } from "../../skills/types.js";
-import { resolveUserPath } from "../../utils.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
+import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { SANDBOX_STATE_DIR } from "./constants.js";
+import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
-import { resolveSandboxScopeKey, resolveSandboxWorkspaceDir } from "./shared.js";
-import type { SandboxContext, SandboxDockerConfig, SandboxWorkspaceInfo } from "./types.js";
-import { resolveMaterializedSandboxSkillsWorkspaceDir } from "./workspace-mounts.js";
+import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
+import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
 async function syncSandboxSkillsToWorkspace(params: {
@@ -36,35 +34,42 @@ async function syncSandboxSkillsToWorkspace(params: {
   config?: OpenClawConfig;
   agentId: string;
   rawSessionKey: string;
-}): Promise<SkillEligibilityContext | undefined> {
+  execOverrides?: ExecPolicyOverrides;
+}): Promise<{ eligibility?: SkillEligibilityContext; skillUsagePaths?: SkillUsagePath[] }> {
   try {
-    const [{ syncSkillsToWorkspace }, { getRemoteSkillEligibility }, { canExecRequestNode }] =
-      await Promise.all([
-        import("../../skills/loading/workspace.js"),
-        import("../../skills/runtime/remote.js"),
-        import("../exec-defaults.js"),
-      ]);
+    const [
+      { syncSkillsToWorkspace },
+      { getRemoteSkillEligibility },
+      { resolveNodeExecEligibility },
+    ] = await Promise.all([
+      import("../../skills/loading/workspace.js"),
+      import("../../skills/runtime/remote.js"),
+      import("../exec-defaults.js"),
+    ]);
+    const nodeSkills = resolveNodeExecEligibility({
+      cfg: params.config,
+      sessionKey: params.rawSessionKey,
+      agentId: params.agentId,
+      execOverrides: params.execOverrides,
+    });
     const eligibility: SkillEligibilityContext = {
+      nodeSkills,
       remote: getRemoteSkillEligibility({
-        advertiseExecNode: canExecRequestNode({
-          cfg: params.config,
-          sessionKey: params.rawSessionKey,
-          agentId: params.agentId,
-        }),
+        advertiseExecNode: nodeSkills.canExec,
       }),
     };
-    await syncSkillsToWorkspace({
+    const skillUsagePaths = await syncSkillsToWorkspace({
       sourceWorkspaceDir: params.sourceWorkspaceDir,
       targetWorkspaceDir: params.targetWorkspaceDir,
       config: params.config,
       agentId: params.agentId,
       eligibility,
     });
-    return eligibility;
+    return { eligibility, skillUsagePaths };
   } catch (error) {
     const message = error instanceof Error ? error.message : JSON.stringify(error);
     defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-    return undefined;
+    return {};
   }
 }
 
@@ -73,6 +78,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   agentId: string;
   rawSessionKey: string;
   config?: OpenClawConfig;
+  execOverrides?: ExecPolicyOverrides;
   workspaceDir?: string;
 }): Promise<{
   agentWorkspaceDir: string;
@@ -80,28 +86,18 @@ async function ensureSandboxWorkspaceLayout(params: {
   sandboxWorkspaceDir: string;
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
+  skillUsagePaths?: SkillUsagePath[];
   workspaceDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
+  const { agentWorkspaceDir, sandboxWorkspaceDir, scopeKey, skillsWorkspaceDir, workspaceDir } =
+    resolveSandboxWorkspaceLayoutPaths({
+      cfg,
+      rawSessionKey,
+      workspaceDir: params.workspaceDir,
+    });
 
-  const agentWorkspaceDir = resolveUserPath(
-    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
-  );
-  const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
-  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
-  const sandboxWorkspaceDir =
-    cfg.scope === "shared" ? workspaceRoot : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const workspaceDir = cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
-  const materializedSkillsRoot = resolveSandboxWorkspaceDir(
-    path.join(SANDBOX_STATE_DIR, "skills-workspaces"),
-    scopeKey,
-  );
-  const skillsWorkspaceDir =
-    cfg.workspaceAccess === "rw"
-      ? resolveMaterializedSandboxSkillsWorkspaceDir(materializedSkillsRoot)
-      : sandboxWorkspaceDir;
-
-  let skillsEligibility: SkillEligibilityContext | undefined;
+  let syncedSkills: Awaited<ReturnType<typeof syncSandboxSkillsToWorkspace>>;
   if (cfg.workspaceAccess !== "rw") {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
@@ -109,21 +105,23 @@ async function ensureSandboxWorkspaceLayout(params: {
       params.config?.agents?.defaults?.skipBootstrap,
       params.config?.agents?.defaults?.skipOptionalBootstrapFiles,
     );
-    skillsEligibility = await syncSandboxSkillsToWorkspace({
+    syncedSkills = await syncSandboxSkillsToWorkspace({
       sourceWorkspaceDir: agentWorkspaceDir,
       targetWorkspaceDir: sandboxWorkspaceDir,
       config: params.config,
       agentId: params.agentId,
       rawSessionKey,
+      execOverrides: params.execOverrides,
     });
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
-    skillsEligibility = await syncSandboxSkillsToWorkspace({
+    syncedSkills = await syncSandboxSkillsToWorkspace({
       sourceWorkspaceDir: agentWorkspaceDir,
       targetWorkspaceDir: skillsWorkspaceDir,
       config: params.config,
       agentId: params.agentId,
       rawSessionKey,
+      execOverrides: params.execOverrides,
     });
   }
 
@@ -132,35 +130,17 @@ async function ensureSandboxWorkspaceLayout(params: {
     scopeKey,
     sandboxWorkspaceDir,
     skillsWorkspaceDir,
-    ...(skillsEligibility ? { skillsEligibility } : {}),
+    ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
+    ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
     workspaceDir,
   };
 }
 
-export async function resolveSandboxDockerUser(params: {
-  docker: SandboxDockerConfig;
-  workspaceDir: string;
-  stat?: (workspaceDir: string) => Promise<{ uid: number; gid: number }>;
-}): Promise<SandboxDockerConfig> {
-  const configuredUser = params.docker.user?.trim();
-  if (configuredUser) {
-    return params.docker;
-  }
-  const stat = params.stat ?? ((workspaceDir: string) => fs.stat(workspaceDir));
-  try {
-    const workspaceStat = await stat(params.workspaceDir);
-    const uid = Number.isInteger(workspaceStat.uid) ? workspaceStat.uid : null;
-    const gid = Number.isInteger(workspaceStat.gid) ? workspaceStat.gid : null;
-    if (uid === null || gid === null || uid < 0 || gid < 0) {
-      return params.docker;
-    }
-    return { ...params.docker, user: `${uid}:${gid}` };
-  } catch {
-    return params.docker;
-  }
-}
-
-function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: string }) {
+function resolveSandboxSession(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+}) {
   const rawSessionKey = params.sessionKey?.trim();
   if (!rawSessionKey) {
     return null;
@@ -168,6 +148,7 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
 
   const runtime = resolveSandboxRuntimeStatus({
     cfg: params.config,
+    agentId: params.agentId,
     sessionKey: rawSessionKey,
   });
   if (!runtime.sandboxed) {
@@ -175,6 +156,15 @@ function resolveSandboxSession(params: { config?: OpenClawConfig; sessionKey?: s
   }
 
   const cfg = resolveSandboxConfigForAgent(params.config, runtime.agentId);
+  if (cfg.backend === "ssh") {
+    // Never let an unresolved inline SSH credential silently fall through to
+    // ambient host SSH identities for this agent.
+    assertSshSandboxSecretOwnerAvailable({
+      config: params.config,
+      scope: cfg.scope,
+      agentId: runtime.agentId,
+    });
+  }
   return { rawSessionKey, runtime, cfg };
 }
 
@@ -198,6 +188,9 @@ function resolveSandboxWorkspaceInfoWorkdir(params: {
 
 export async function resolveSandboxContext(params: {
   config?: OpenClawConfig;
+  agentId?: string;
+  execOverrides?: ExecPolicyOverrides;
+  requireCurrentConfig?: boolean;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {
@@ -211,14 +204,21 @@ export async function resolveSandboxContext(params: {
     await (await import("./prune.js")).maybePruneSandboxes(cfg);
   }
 
-  const { agentWorkspaceDir, scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
-    await ensureSandboxWorkspaceLayout({
-      cfg,
-      agentId: runtime.agentId,
-      rawSessionKey,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-    });
+  const {
+    agentWorkspaceDir,
+    scopeKey,
+    skillsEligibility,
+    skillUsagePaths,
+    skillsWorkspaceDir,
+    workspaceDir,
+  } = await ensureSandboxWorkspaceLayout({
+    cfg,
+    agentId: runtime.agentId,
+    rawSessionKey,
+    config: params.config,
+    execOverrides: params.execOverrides,
+    workspaceDir: params.workspaceDir,
+  });
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -234,6 +234,9 @@ export async function resolveSandboxContext(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
     cfg: resolvedCfg,
+    ...(params.requireCurrentConfig !== undefined
+      ? { requireCurrentConfig: params.requireCurrentConfig }
+      : {}),
   });
   await updateRegistry({
     containerName: backend.runtimeId,
@@ -296,6 +299,7 @@ export async function resolveSandboxContext(params: {
     agentWorkspaceDir,
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
+    ...(skillUsagePaths ? { skillUsagePaths } : {}),
     workspaceAccess: resolvedCfg.workspaceAccess,
     runtimeId: backend.runtimeId,
     runtimeLabel: backend.runtimeLabel,
@@ -326,14 +330,20 @@ export async function ensureSandboxWorkspaceForSession(params: {
   }
   const { rawSessionKey, cfg, runtime } = resolved;
 
-  const { agentWorkspaceDir, scopeKey, skillsEligibility, skillsWorkspaceDir, workspaceDir } =
-    await ensureSandboxWorkspaceLayout({
-      cfg,
-      agentId: runtime.agentId,
-      rawSessionKey,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-    });
+  const {
+    agentWorkspaceDir,
+    scopeKey,
+    skillsEligibility,
+    skillUsagePaths,
+    skillsWorkspaceDir,
+    workspaceDir,
+  } = await ensureSandboxWorkspaceLayout({
+    cfg,
+    agentId: runtime.agentId,
+    rawSessionKey,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  });
 
   const containerWorkdir = resolveSandboxWorkspaceInfoWorkdir({
     cfg,
@@ -348,6 +358,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     ...(containerWorkdir ? { containerWorkdir } : {}),
     skillsWorkspaceDir,
     ...(skillsEligibility ? { skillsEligibility } : {}),
+    ...(skillUsagePaths ? { skillUsagePaths } : {}),
     workspaceAccess: cfg.workspaceAccess,
   };
 }

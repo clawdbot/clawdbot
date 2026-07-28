@@ -1,4 +1,3 @@
-// Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import {
   listAgentIds,
@@ -7,12 +6,14 @@ import {
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
-import { resolveModel } from "../../../agents/embedded-agent-runner/model.js";
+import { resolveModelAsync } from "../../../agents/embedded-agent-runner/model.js";
 import { normalizeAgentRuntimeTools } from "../../../agents/runtime-plan/tools.js";
 import {
   filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../../../agents/tool-schema-projection.js";
+// Doctor warnings for active tools whose schemas cannot be projected to the selected runtime.
+import { buildReadableToolsByName } from "../../../agents/tools-effective-inventory-build.js";
 import type { AnyAgentTool } from "../../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -21,21 +22,34 @@ import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-mod
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
-function resolveRuntimeModelContext(params: {
-  cfg: OpenClawConfig;
-  agentDir: string;
-  workspaceDir: string;
-  provider: string;
-  modelId: string;
-}): {
+type RuntimeModelContext = {
   modelApi?: string;
   model?: ProviderRuntimeModel;
   modelCompat?: ReturnType<typeof extractModelCompat>;
   modelContextWindowTokens?: number;
-} {
-  const model = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-    workspaceDir: params.workspaceDir,
-  }).model as ProviderRuntimeModel | undefined;
+};
+
+async function resolveRuntimeModelContext(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+}): Promise<RuntimeModelContext> {
+  // Doctor runs before agent lifecycle publication; async resolution prepares discovery instead
+  // of reporting an unpublished synchronous runtime as a broken provider.
+  const resolution = await resolveModelAsync(
+    params.provider,
+    params.modelId,
+    params.agentDir,
+    params.cfg,
+    {
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+    },
+  );
+  const model = resolution.model as ProviderRuntimeModel | undefined;
   if (!model) {
     return {};
   }
@@ -60,27 +74,6 @@ function formatDiagnostic(params: {
   );
 }
 
-function buildReadableToolsByName(
-  tools: readonly AnyAgentTool[],
-): ReadonlyMap<string, AnyAgentTool> {
-  const toolsByName = new Map<string, AnyAgentTool>();
-  let toolCount: number;
-  try {
-    toolCount = tools.length;
-  } catch {
-    return toolsByName;
-  }
-  for (let index = 0; index < toolCount; index += 1) {
-    try {
-      const tool = tools[index];
-      toolsByName.set(tool.name, tool);
-    } catch {
-      // Unreadable names are surfaced as schema projection diagnostics.
-    }
-  }
-  return toolsByName;
-}
-
 function readToolByIndex(tools: readonly AnyAgentTool[], index: number): AnyAgentTool | undefined {
   try {
     return tools[index];
@@ -98,10 +91,10 @@ function readPluginId(tool: AnyAgentTool | undefined): string | undefined {
 }
 
 /** Collect per-agent warnings for active plugin tools rejected by runtime schema projection. */
-export function collectActiveToolSchemaProjectionWarnings(params: {
+export async function collectActiveToolSchemaProjectionWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): string[] {
+}): Promise<string[]> {
   if (params.cfg.plugins?.enabled === false) {
     return [];
   }
@@ -113,10 +106,11 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
     const modelRef = resolveDoctorPrimaryModelRef(params.cfg, agentConfig?.model);
     const agentDir = resolveAgentDir(params.cfg, agentId, env);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId, env);
-    let runtimeModelContext: ReturnType<typeof resolveRuntimeModelContext> = {};
+    let runtimeModelContext: RuntimeModelContext = {};
     try {
-      runtimeModelContext = resolveRuntimeModelContext({
+      runtimeModelContext = await resolveRuntimeModelContext({
         cfg: params.cfg,
+        agentId,
         agentDir,
         workspaceDir,
         provider: modelRef.provider,

@@ -1,5 +1,6 @@
-// Copilot tests cover event bridge plugin behavior.
 import type { SessionEvent } from "@github/copilot-sdk";
+// Copilot tests cover event bridge plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
 
@@ -9,10 +10,17 @@ const MODEL_REF = {
   provider: "github-copilot",
 } as const;
 const REGISTERED_EVENT_TYPES = [
+  "user.message",
+  "system.message",
+  "skill.invoked",
+  "system.notification",
   "assistant.message_delta",
   "assistant.reasoning_delta",
+  "assistant.reasoning",
+  "assistant.turn_start",
   "assistant.message",
   "assistant.usage",
+  "tool.user_requested",
   "tool.execution_start",
   "tool.execution_complete",
   "session.plan_changed",
@@ -186,10 +194,13 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
     expect(bridge.snapshot().startedCount).toBe(0);
-    expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "write" },
-      { meta: "child write", toolName: "write" },
-    ]);
+    expect(bridge.snapshot().toolMetas).toEqual([{ meta: "child write", toolName: "write" }]);
+    expect(
+      bridge.recordSendResult({
+        ...makeAssistantMessageEvent("child final"),
+        agentId: "child-1",
+      } as SessionEvent),
+    ).toBe(false);
     await bridge.awaitDeltaChain();
     expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
@@ -215,6 +226,42 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().assistantTexts).toEqual(["ab", "x"]);
+  });
+
+  it("ignored child and ephemeral users do not split a root assistant API call", () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("assistant.message", {
+      ...makeAssistantMessageEvent("first", {
+        apiCallId: "shared-call",
+        messageId: "chunk-a",
+      }),
+      id: "assistant-chunk-a",
+    } as SessionEvent);
+    session.emit("user.message", {
+      ...makeEvent("user.message", { content: "child" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("user.message", {
+      ...makeEvent("user.message", { content: "ephemeral" }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit("assistant.message", {
+      ...makeAssistantMessageEvent("second", {
+        apiCallId: "shared-call",
+        messageId: "chunk-b",
+      }),
+      id: "assistant-chunk-b",
+    } as SessionEvent);
+    bridge.flushTranscriptProjection();
+
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9 })?.content).toEqual([
+      { type: "text", text: "firstsecond" },
+    ]);
   });
 
   it("onAssistantDelta receives appended text, live sessionId, and current usage", async () => {
@@ -413,6 +460,27 @@ describe("attachEventBridge", () => {
     expect(longerBridge.finalizeAssistantTexts()).toEqual(["longer text"]);
   });
 
+  it("does not let an ephemeral assistant replace the final root response", () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+    const persisted = makeAssistantMessageEvent("persisted final");
+    session.emit("assistant.message", persisted);
+
+    expect(
+      bridge.recordSendResult({
+        ...makeAssistantMessageEvent("ephemeral final"),
+        ephemeral: true,
+        id: "ephemeral-final",
+      } as SessionEvent),
+    ).toBe(false);
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 9 })?.content).toEqual([
+      { text: "persisted final", type: "text" },
+    ]);
+  });
+
   it("assistant.message with toolRequests produces toolCall content and toolUse stopReason", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
@@ -556,7 +624,11 @@ describe("attachEventBridge", () => {
         title: "Plan updated",
         source: "copilot-sdk",
         explanation: "Plan ready",
-        steps: ["# Plan", "inspect", "patch"],
+        steps: [
+          { step: "# Plan", status: "pending" },
+          { step: "inspect", status: "pending" },
+          { step: "patch", status: "pending" },
+        ],
         actions: ["approve", "edit"],
         requestId: "request-1",
         recommendedAction: "approve",
@@ -603,7 +675,9 @@ describe("attachEventBridge", () => {
       isAborted: () => false,
     });
 
-    bridge.recordSendResult(makeAssistantMessageEvent("done", { outputTokens: 7 }));
+    bridge.recordSendResult(
+      makeAssistantMessageEvent("done", { apiCallId: "usage-without-id", outputTokens: 7 }),
+    );
     session.emit(
       "assistant.usage",
       makeEvent("assistant.usage", {
@@ -689,7 +763,7 @@ describe("attachEventBridge", () => {
     });
   });
 
-  it("tool.execution_complete uses detailedContent or content on success and error.message on failure", () => {
+  it("tool.execution_complete updates one tool meta per call and marks failures", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
       getSdkSessionId: () => "sdk-session-id",
@@ -722,10 +796,8 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().toolMetas).toEqual([
-      { toolName: "bash" },
       { meta: "details", toolName: "bash" },
-      { toolName: "read" },
-      { meta: "failed", toolName: "read" },
+      { meta: "failed", toolName: "read", isError: true },
     ]);
   });
 
@@ -777,6 +849,34 @@ describe("attachEventBridge", () => {
 
     expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
     expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("invalidates shared tool context synchronously after every successful compaction", () => {
+    const session = createFakeSession();
+    const onContextCompacted = vi.fn();
+    attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onContextCompacted,
+    });
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    expect(onContextCompacted).not.toHaveBeenCalled();
+
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    expect(onContextCompacted).toHaveBeenCalledTimes(1);
+
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    expect(onContextCompacted).toHaveBeenCalledTimes(2);
   });
 
   it("waits for an active compaction and its completion callback", async () => {
@@ -1014,6 +1114,41 @@ describe("attachEventBridge", () => {
     expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })).toBeUndefined();
   });
 
+  it("keeps ephemeral deltas live without folding their text into the terminal message", async () => {
+    const session = createFakeSession();
+    const onAssistantDelta = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onAssistantDelta,
+    });
+
+    session.emit("assistant.message_delta", {
+      ...makeEvent("assistant.message_delta", {
+        deltaContent: "hidden text",
+        messageId: "ephemeral-message",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    session.emit("assistant.reasoning_delta", {
+      ...makeEvent("assistant.reasoning_delta", {
+        deltaContent: "hidden reasoning",
+        reasoningId: "ephemeral-reasoning",
+      }),
+      ephemeral: true,
+    } as SessionEvent);
+    bridge.recordSendResult(makeAssistantMessageEvent("visible"));
+    await bridge.awaitDeltaChain();
+
+    expect(onAssistantDelta).toHaveBeenCalledWith(
+      expect.objectContaining({ delta: "hidden text", text: "hidden text" }),
+    );
+    expect(bridge.buildAssistantMessage({ modelRef: MODEL_REF, now: () => 13 })?.content).toEqual([
+      { type: "thinking", thinking: "hidden reasoning" },
+      { type: "text", text: "visible" },
+    ]);
+  });
+
   it("detach is idempotent after the first unsubscribe pass", () => {
     const order: string[] = [];
     const session = createFakeSession({
@@ -1110,7 +1245,10 @@ describe("attachEventBridge", () => {
 
     const first = bridge.snapshot();
     (first.assistantTexts as string[]).push("mutated");
-    (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0].toolName = "mutated";
+    expectDefined(
+      (first.toolMetas as Array<{ meta?: string; toolName: string }>)[0],
+      "Copilot tool metadata",
+    ).toolName = "mutated";
     (first.usage as { input?: number }).input = 999;
 
     const second = bridge.snapshot();
@@ -1125,3 +1263,4 @@ describe("attachEventBridge", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

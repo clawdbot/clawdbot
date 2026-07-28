@@ -9,7 +9,7 @@ import {
   type AbortCutoff,
 } from "./abort-cutoff.js";
 import {
-  abortSessionRunTarget,
+  abortSessionRunTargetWithOutcome,
   formatAbortReplyText,
   isAbortTrigger,
   setAbortMemory,
@@ -89,7 +89,13 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
-  abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
+  const abortOutcome = abortSessionRunTargetWithOutcome({
+    key: abortTarget.key,
+    sessionId: abortTarget.sessionId,
+  });
+  if (abortOutcome.active && !abortOutcome.aborted) {
+    return abortOutcome;
+  }
 
   const persisted = await persistAbortTargetEntry({
     entry: abortTarget.entry,
@@ -101,6 +107,7 @@ async function applyAbortTarget(params: {
   if (!persisted && params.abortKey) {
     setAbortMemory(params.abortKey, true);
   }
+  return abortOutcome;
 }
 
 function buildAbortTargetApplyParams(
@@ -143,7 +150,7 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
       `stop: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
     );
   }
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
 
   // Trigger internal hook for stop command
   const hookEvent = createInternalHookEvent(
@@ -164,7 +171,12 @@ export const handleStopCommand: CommandHandler = async (params, allowTextCommand
     requesterSessionKey: abortTarget.key ?? params.sessionKey,
   });
 
-  return { shouldContinue: false, reply: { text: formatAbortReplyText(stopped) } };
+  const rejectionReason =
+    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(stopped, rejectionReason) },
+  };
 };
 
 export const handleAbortTrigger: CommandHandler = async (params, allowTextCommands) => {
@@ -184,6 +196,11 @@ export const handleAbortTrigger: CommandHandler = async (params, allowTextComman
     sessionEntry: params.sessionEntry,
     sessionStore: params.sessionStore,
   });
-  await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
-  return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  const abortOutcome = await applyAbortTarget(buildAbortTargetApplyParams(params, abortTarget));
+  const rejectionReason =
+    abortOutcome.active && !abortOutcome.aborted ? ("finalizing" as const) : undefined;
+  return {
+    shouldContinue: false,
+    reply: { text: formatAbortReplyText(undefined, rejectionReason) },
+  };
 };

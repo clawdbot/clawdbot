@@ -3,7 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
+import {
+  applyQueueDropPolicy,
+  countPendingQueueItems,
+  shouldSkipQueueItem,
+} from "../../../utils/queue-helpers.js";
 import {
   createOverflowSummaryRetrySource,
   kickFollowupDrainIfIdle,
@@ -11,11 +15,12 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
-import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
+import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
 import {
   completeFollowupRunLifecycle,
   isFollowupRunAborted,
   markFollowupRunEnqueued,
+  type EnqueueFollowupRunOptions,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
@@ -98,9 +103,13 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
+  options: EnqueueFollowupRunOptions = {},
 ): boolean {
   if (isFollowupRunAborted(run)) {
     return false;
+  }
+  if (options.position === "front") {
+    run.protectFromQueueOverflow = true;
   }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
@@ -118,11 +127,20 @@ export function enqueueFollowupRun(
   if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
     return false;
   }
-  queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
+  // drop:new rejects this source without mutating the existing queue. Do not
+  // publish an external queued identity for work that will never be admitted.
+  const pendingCount = countPendingQueueItems(queue.items, queue.inFlight);
+  if (queue.dropPolicy === "new" && queue.cap > 0 && pendingCount >= queue.cap) {
+    completeFollowupRunLifecycle(run);
+    return false;
+  }
+  if (!markFollowupRunEnqueued(run)) {
+    return false;
+  }
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
+    inFlight: queue.inFlight,
     summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
     onDrop: (dropped) => {
       if (queue.dropPolicy === "summarize") {
@@ -133,6 +151,7 @@ export function enqueueFollowupRun(
         completeFollowupRunLifecycle(item);
       }
     },
+    isProtected: (item) => item.protectFromQueueOverflow === true,
   });
   if (queue.dropPolicy === "summarize") {
     const overflow = queue.summarySources.length - queue.summaryLines.length;
@@ -142,34 +161,44 @@ export function enqueueFollowupRun(
         const contextKey = resolveFollowupDeliveryContextKey(item);
         const lastElision = queue.summaryElisions.at(-1);
         if (lastElision?.contextKey === contextKey) {
+          const compactSource = createOverflowSummaryRetrySource(item);
           lastElision.count += 1;
-          lastElision.source = createOverflowSummaryRetrySource(item);
-          lastElision.sourceRefs.add(item);
-        } else {
-          if (queue.summaryElisions.length >= queue.cap) {
-            const evicted = queue.summaryElisions.shift();
-            if (evicted) {
-              queue.evictedSummaryCount += evicted.count;
-              completeFollowupRunLifecycle(evicted.source);
-            }
+          lastElision.sources.push(compactSource);
+          lastElision.sourceRefs.set(item, compactSource);
+          if (queue.activeSummarySources.has(item)) {
+            queue.activeSummarySources.add(compactSource);
           }
+        } else {
+          const compactSource = createOverflowSummaryRetrySource(item);
           queue.summaryElisions.push({
             contextKey,
             count: 1,
-            source: createOverflowSummaryRetrySource(item),
-            sourceRefs: new WeakSet([item]),
+            sources: [compactSource],
+            sourceRefs: new WeakMap([[item, compactSource]]),
           });
+          if (queue.activeSummarySources.has(item)) {
+            queue.activeSummarySources.add(compactSource);
+          }
         }
-        completeFollowupRunLifecycle(item);
+        trimSummaryElisionsToCap(queue);
       }
     }
   }
   if (!shouldEnqueue) {
+    completeFollowupRunLifecycle(run);
     return false;
   }
+  // Only admitted items refresh debounce; rejected overflow must not starve
+  // protected stranded-reply retries waiting for the quiet window.
+  queue.lastEnqueuedAt = Date.now();
+  queue.lastRun = run.run;
 
-  queue.items.push(run);
-  markFollowupRunEnqueued(run);
+  run.queueAbortSignal = queue.abortController.signal;
+  if (options.position === "front") {
+    queue.items.unshift(run);
+  } else {
+    queue.items.push(run);
+  }
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }
@@ -190,9 +219,15 @@ export function getFollowupQueueDepth(key: string): number {
   if (!queue) {
     return 0;
   }
-  return queue.items.length;
+  return countPendingQueueItems(queue.items, queue.inFlight);
 }
 
-export function resetRecentQueuedMessageIdDedupe(): void {
+function resetRecentQueuedMessageIdDedupe(): void {
   RECENT_QUEUE_MESSAGE_IDS.clear();
+}
+
+if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueEnqueueTestApi")] = {
+    resetRecentQueuedMessageIdDedupe,
+  };
 }

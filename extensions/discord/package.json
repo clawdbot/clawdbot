@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "repository": {
     "type": "git",
@@ -8,19 +8,23 @@
   },
   "type": "module",
   "dependencies": {
+    "@discord/embedded-app-sdk": "2.5.0",
     "@discordjs/voice": "0.19.2",
-    "discord-api-types": "0.38.48",
+    "discord-api-types": "0.38.50",
     "libopus-wasm": "0.2.0",
-    "typebox": "1.1.39",
-    "undici": "8.5.0",
-    "ws": "8.21.0"
+    "mdast-util-from-markdown": "2.0.3",
+    "p-map": "7.0.5",
+    "typebox": "1.3.6",
+    "undici": "8.6.0",
+    "ws": "8.21.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.11"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -37,6 +41,16 @@
     },
     "channel": {
       "id": "discord",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "DISCORD_BOT_TOKEN"
+          ]
+        }
+      },
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Discord",
       "selectionLabel": "Discord (Bot API)",
       "detailLabel": "Discord Bot",
@@ -46,18 +60,24 @@
       "systemImage": "bubble.left.and.bubble.right",
       "markdownCapable": true,
       "preferSessionLookupForAnnounceTarget": true,
+      "setup": {
+        "fields": [
+          {
+            "key": "token",
+            "kind": "string",
+            "sensitive": true,
+            "cli": { "flags": "--token <token>", "description": "Discord bot token" }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": { "flags": "--use-env", "description": "Use DISCORD_BOT_TOKEN" }
+          }
+        ]
+      },
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
-      },
-      "configuredState": {
-        "env": {
-          "allOf": [
-            "DISCORD_BOT_TOKEN"
-          ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasDiscordConfiguredState"
       }
     },
     "install": {
@@ -67,10 +87,19 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11"
+      "openclawVersion": "2026.7.2",
+      "staticAssets": [
+        {
+          "source": "./assets/embedded-app-sdk.mjs",
+          "output": "assets/embedded-app-sdk.mjs"
+        }
+      ]
+    },
+    "assetScripts": {
+      "build": "node ../../scripts/build-discord-activity-sdk.mjs"
     },
     "release": {
       "publishToClawHub": true,

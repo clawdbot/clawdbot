@@ -13,6 +13,7 @@ describe("resolveWhatsAppOutboundSessionRoute", () => {
     expect(route).toEqual({
       sessionKey: "agent:main:whatsapp:channel:120363401234567890@newsletter",
       baseSessionKey: "agent:main:whatsapp:channel:120363401234567890@newsletter",
+      recipientSessionExact: true,
       peer: {
         kind: "channel",
         id: "120363401234567890@newsletter",
@@ -33,6 +34,7 @@ describe("resolveWhatsAppOutboundSessionRoute", () => {
     expect(route).toEqual({
       sessionKey: "agent:main:whatsapp:direct:+15551234567",
       baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
+      recipientSessionExact: true,
       peer: {
         kind: "direct",
         id: "+15551234567",
@@ -40,6 +42,21 @@ describe("resolveWhatsAppOutboundSessionRoute", () => {
       chatType: "direct",
       from: "+15551234567",
       to: "+15551234567",
+    });
+  });
+
+  it("uses the inbound account suffix for named-account groups", () => {
+    const route = resolveWhatsAppOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "work",
+      target: "123@g.us",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work",
+      baseSessionKey: "agent:main:whatsapp:group:123@g.us",
+      recipientSessionExact: true,
     });
   });
 });

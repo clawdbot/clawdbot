@@ -59,6 +59,132 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
+  it("processes only reconnect catch-up appends within the dedupe age", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      appendReplyWindow: {
+        afterMs: Date.now() - 30 * 60_000,
+        untilMs: Date.now() + 30 * 60_000,
+        maxAgeMs: 20 * 60_000,
+      },
+    });
+
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "catch-up-1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "missed while reconnecting" },
+          messageTimestamp: Math.floor(Date.now() / 1000) - 15 * 60,
+          pushName: "Reconnect Tester",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "catch-up-old", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "before the recovery window" },
+          messageTimestamp: Math.floor(Date.now() / 1000) - 25 * 60,
+          pushName: "Reconnect Tester",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("ends reconnect catch-up while preserving fresh appends after the window expires", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage, {
+      appendReplyWindow: {
+        afterMs: Date.now() - 30 * 60_000,
+        untilMs: Date.now() - 1,
+        maxAgeMs: 20 * 60_000,
+      },
+    });
+
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "catch-up-late", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "arrived after recovery" },
+          messageTimestamp: Math.floor(Date.now() / 1000) - 5 * 60,
+          pushName: "Reconnect Tester",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "fresh-after-catch-up", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "fresh after recovery" },
+          messageTimestamp: Math.floor(Date.now() / 1000),
+          pushName: "Reconnect Tester",
+        },
+      ],
+    });
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    await listener.close();
+  });
+
+  it("processes a distinct catch-up message from the boundary second", async () => {
+    // Baileys timestamps use whole seconds. Freeze this inclusive boundary so
+    // async monitor startup cannot age the fixture beyond maxAgeMs.
+    const nowMs = 1_700_000_000_000;
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(nowMs);
+    try {
+      const onMessage = vi.fn(async () => {});
+      const boundarySeconds = nowMs / 1000 - 20 * 60;
+      const { listener, sock } = await startInboxMonitor(onMessage, {
+        appendReplyWindow: {
+          afterMs: boundarySeconds * 1000,
+          untilMs: nowMs + 30 * 60_000,
+          maxAgeMs: 20 * 60_000,
+        },
+      });
+      try {
+        sock.ev.emit("messages.upsert", {
+          type: "append",
+          messages: [
+            {
+              key: {
+                id: "catch-up-same-second",
+                fromMe: false,
+                remoteJid: "999@s.whatsapp.net",
+              },
+              message: { conversation: "same second, different message" },
+              messageTimestamp: boundarySeconds,
+              pushName: "Reconnect Tester",
+            },
+          ],
+        });
+        await waitForMessageCalls(onMessage, 1);
+
+        expect(onMessage).toHaveBeenCalledTimes(1);
+      } finally {
+        await listener.close();
+      }
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
   it("skips append messages with NaN/non-finite timestamps", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);

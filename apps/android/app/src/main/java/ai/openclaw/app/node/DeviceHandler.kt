@@ -3,6 +3,7 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPhotoReadPermission
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.ActivityManager
@@ -322,11 +323,8 @@ class DeviceHandler private constructor(
     val photosGranted =
       if (!photosEnabled) {
         false
-      } else if (Build.VERSION.SDK_INT >= 33) {
-        // Android 13 split media permissions; earlier versions use external storage.
-        hasPermission(Manifest.permission.READ_MEDIA_IMAGES)
       } else {
-        hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
+        hasPhotoReadPermission(appContext)
       }
     val motionGranted = hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
     val notificationsGranted =
@@ -428,14 +426,18 @@ class DeviceHandler private constructor(
           put(
             "contacts",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.READ_CONTACTS),
+              granted =
+                hasPermission(Manifest.permission.READ_CONTACTS) &&
+                  hasPermission(Manifest.permission.WRITE_CONTACTS),
               promptableWhenDenied = true,
             ),
           )
           put(
             "calendar",
             permissionStateJson(
-              granted = hasPermission(Manifest.permission.READ_CALENDAR),
+              granted =
+                hasPermission(Manifest.permission.READ_CALENDAR) &&
+                  hasPermission(Manifest.permission.WRITE_CALENDAR),
               promptableWhenDenied = true,
             ),
           )

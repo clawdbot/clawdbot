@@ -1,0 +1,35 @@
+title: Matrix E2EE stale own devices can be removed without deleting the current device
+scenario:
+  id: matrix-e2ee-stale-device-hygiene
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 80, "matrix:e2ee-deep": 14 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-stale-device-hygiene
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE Stale Device Hygiene Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-verification.js
+  call: runMatrixQaE2eeStaleDeviceHygieneScenario
+  args:
+    - expr: "scenarioContext"

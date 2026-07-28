@@ -7,10 +7,10 @@ title: "Onboarding (macOS app)"
 sidebarTitle: "Onboarding: macOS App"
 ---
 
-This doc describes the **current** first-run setup flow. The goal is a
-smooth "day 0" experience: pick where the Gateway runs, connect auth, run the
-wizard, and let the agent bootstrap itself.
-For a general overview of onboarding paths, see [Onboarding Overview](/start/onboarding-overview).
+The macOS app's first-run flow: pick where the Gateway runs, connect a
+verified AI backend, grant permissions, and hand off to the agent's own
+bootstrap ritual.
+For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
 <Steps>
 <Step title="Approve macOS warning">
@@ -31,8 +31,8 @@ For a general overview of onboarding paths, see [Onboarding Overview](/start/onb
 Security trust model:
 
 - By default, OpenClaw is a personal agent: one trusted operator boundary.
-- Shared/multi-user setups require lock-down (split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security)).
-- Local onboarding now defaults new configs to `tools.profile: "coding"` so fresh local setups keep filesystem/runtime tools without forcing the unrestricted `full` profile.
+- Shared/multi-user setups need lock-down: split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security).
+- Local onboarding defaults new configs to `tools.profile: "coding"` so fresh setups keep filesystem/runtime tools without the unrestricted `full` profile.
 - If hooks/webhooks or other untrusted content feeds are enabled, use a strong modern model tier and keep strict tool policy/sandboxing.
 
 </Step>
@@ -43,52 +43,98 @@ Security trust model:
 
 Where does the **Gateway** run?
 
-- **This Mac (Local only):** onboarding can configure auth and write credentials
-  locally.
+- **This Mac (Local only):** onboarding configures auth and writes credentials locally.
 - **Remote (over SSH/Tailnet):** onboarding does **not** configure local auth;
-  credentials must exist on the gateway host. The remote gateway token field
-  stores the token used by the macOS app to connect to that Gateway; existing
-  non-plaintext `gateway.remote.token` values are preserved until you replace
-  them.
+  credentials must already exist on the gateway host. The remote gateway token
+  field stores the token the macOS app uses to connect to that Gateway;
+  existing `gateway.remote.token` SecretRef values are preserved until you
+  replace them.
 - **Configure later:** skip setup and leave the app unconfigured.
 
 <Tip>
 **Gateway auth tip:**
 
-- The wizard now generates a **token** even for loopback, so local WS clients must authenticate.
-- If you disable auth, any local process can connect; use that only on fully trusted machines.
-- Use a **token** for multi-machine access or non-loopback binds.
+- Gateway auth mode defaults to `token` even for loopback binds, so local WS clients must authenticate.
+- Setting `gateway.auth.mode: "none"` lets any local process connect; use that only on fully trusted machines.
+- Use a token for multi-machine access or non-loopback binds.
 
 </Tip>
 </Step>
+<Step title="CLI">
+  Local setup installs the global `openclaw` CLI via npm, pnpm, or bun,
+  preferring npm first. Node remains the recommended runtime for the Gateway
+  itself. Existing compatible installations are reused.
+</Step>
+<Step title="Connect your AI">
+  A connected Gateway that already has a configured agent model skips this
+  page entirely and opens the normal agent UI. OpenClaw and provider setup
+  only run for a fresh or incomplete Gateway.
+
+Once the Gateway is ready, onboarding looks for AI access you already have:
+a Claude Code or Codex login, `OPENAI_API_KEY` / `ANTHROPIC_API_KEY`, or a
+tool-capable model with at least 16K of measured effective context already
+installed in a reachable Ollama or LM Studio server. Detection runs on the
+Gateway host, including when the macOS app connects to a Linux Gateway. The best
+option is tested with a real completion and only saved
+after it answers; when a test fails the app automatically tries the next option
+and shows why the previous one failed. If several options are found you can
+switch between them before continuing. Automatic local discovery never pulls
+or downloads a model.
+
+To use a Claude subscription when the Gateway host has no Claude CLI login, run
+`claude setup-token` on any machine with Claude Code installed, then paste the
+printed token as **Anthropic setup-token** under **Connect with an API key or
+token**.
+
+Installed Gemini CLI, Antigravity, Pi, and OpenCode CLIs are shown for context
+when they cannot be selected as the reusable guided-setup inference route.
+Gemini and Antigravity cannot enforce the tool-free inference probe. Pi and
+OpenCode are whole-agent harnesses rather than setup inference routes; their
+session integrations require separate runtime and plugin setup.
+
+You can also sign in through the provider's own OAuth or device-pairing flow.
+The built-in choices include OpenAI/ChatGPT, OpenRouter, GitHub Copilot, Google
+Gemini CLI, xAI, MiniMax Global and CN, and Chutes. The list comes from the
+Gateway's active text-inference provider plugins rather than a fixed app list,
+so another provider can opt in without adding provider-specific macOS code.
+
+The manual key/token picker uses the same provider registry. In every route,
+the provider supplies its starter model and configuration; OpenClaw verifies
+the credential with the same live test before storing its auth profile. Next
+remains locked until one backend has passed, so the first agent chat cannot
+start without working inference. After that live check passes, OpenClaw becomes
+available to help configure the remaining workspace, Gateway, channels, and
+other optional features. When OpenClaw offers a short list of choices, the app
+shows native option cards; choosing one sends the selection, and **Skip for
+now** always leaves the choice optional. OpenClaw is also available later under
+Settings → OpenClaw.
+</Step>
+<Step title="Import memories (shown when detected)">
+For a local Gateway, onboarding checks the Mac for memories from supported AI
+tools: Claude Code auto-memory, Codex consolidated memories, and Hermes memory
+files. When any are found, this page lists each source with its memory count
+and lets you import the selected sources into the agent workspace under
+`memory/imports/` for indexed recall. Already-imported files are skipped, and
+the page never appears when there is nothing to import. Skipping is safe; the
+dashboard's Memory import page offers the same import later with per-file
+control.
+</Step>
 <Step title="Permissions">
+
 <Frame caption="Choose what permissions do you want to give OpenClaw">
 <img src="/assets/macos-onboarding/05-permissions.png" alt="" />
 </Frame>
 
-Onboarding requests TCC permissions needed for:
-
-- Automation (AppleScript)
-- Notifications
-- Accessibility
-- Screen Recording
-- Microphone
-- Speech Recognition
-- Camera
-- Location
+Onboarding requests TCC permissions for: Automation (AppleScript), Notifications, Accessibility, Screen Recording, Microphone, Speech Recognition, Camera, and Location.
 
 </Step>
-<Step title="CLI">
-  <Info>This step is optional</Info>
-  The app can install the global `openclaw` CLI via npm, pnpm, or bun.
-  It prefers npm first, then pnpm, then bun if that is the only detected
-  package manager. For the Gateway runtime, Node remains the recommended path.
-</Step>
-<Step title="Onboarding Chat (dedicated session)">
-  After setup, the app opens a dedicated onboarding chat session so the agent can
-  introduce itself and guide next steps. This keeps first-run guidance separate
-  from your normal conversation. See [Bootstrapping](/start/bootstrapping) for
-  what happens on the gateway host during the first agent run.
+<Step title="Finish">
+  After inference passes, OpenClaw owns the remaining optional setup and can
+  hand you off to the normal agent chat. Finishing the permission walkthrough
+  opens that same chat; the app does not create a workspace or launch a separate
+  agent setup conversation before OpenClaw. See
+  [Bootstrapping](/start/bootstrapping) for what happens on the gateway host
+  during the agent's first real turn.
 </Step>
 </Steps>
 

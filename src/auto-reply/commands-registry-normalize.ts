@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /** Normalizes slash-command text aliases and builds command detection caches. */
 import {
   normalizeLowercaseStringOrEmpty,
@@ -28,7 +29,7 @@ function appendMultilineTail(head: string, tail: string | undefined, spec?: Text
   if (!tail) {
     return head;
   }
-  if (!spec || spec.key === "skill") {
+  if (!spec || spec.key === "skill" || spec.key === "learn") {
     return `${head}\n${tail}`;
   }
   if (spec.key === "reset") {
@@ -80,7 +81,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const normalized = colonMatch
     ? (() => {
         const [, command, rest] = colonMatch;
-        const normalizedRest = rest.trimStart();
+        const normalizedRest = expectDefined(rest, "commands registry normalize rest").trimStart();
         return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
       })()
     : singleLine;

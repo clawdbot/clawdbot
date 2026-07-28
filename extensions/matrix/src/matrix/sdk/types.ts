@@ -1,4 +1,5 @@
 // Matrix type declarations define plugin contracts.
+import type * as MatrixSdkTypes from "matrix-js-sdk/lib/types.js";
 import type { MatrixSyncState } from "../sync-state.js";
 import type {
   MatrixVerificationRequestLike,
@@ -39,46 +40,11 @@ export type MatrixClientEventMap = {
   "verification.summary": [summary: MatrixVerificationSummary];
 };
 
-export type EncryptedFile = {
-  url: string;
-  key: {
-    kty: string;
-    key_ops: string[];
-    alg: string;
-    k: string;
-    ext: boolean;
-  };
-  iv: string;
-  hashes: Record<string, string>;
-  v: string;
-};
-
-export type FileWithThumbnailInfo = {
-  size?: number;
-  mimetype?: string;
-  thumbnail_url?: string;
-  thumbnail_file?: EncryptedFile;
-  thumbnail_info?: {
-    w?: number;
-    h?: number;
-    mimetype?: string;
-    size?: number;
-  };
-};
-
-export type DimensionalFileInfo = FileWithThumbnailInfo & {
-  w?: number;
-  h?: number;
-};
-
-export type TimedFileInfo = FileWithThumbnailInfo & {
-  duration?: number;
-};
-
-export type VideoFileInfo = DimensionalFileInfo &
-  TimedFileInfo & {
-    duration?: number;
-  };
+export type EncryptedFile = MatrixSdkTypes.EncryptedFile;
+export type FileWithThumbnailInfo = MatrixSdkTypes.FileInfo;
+export type DimensionalFileInfo = MatrixSdkTypes.ImageInfo;
+export type TimedFileInfo = MatrixSdkTypes.FileInfo & MatrixSdkTypes.AudioInfo;
+export type VideoFileInfo = MatrixSdkTypes.VideoInfo;
 
 export type MessageEventContent = {
   msgtype?: string;
@@ -88,7 +54,7 @@ export type MessageEventContent = {
   filename?: string;
   url?: string;
   file?: EncryptedFile;
-  info?: Record<string, unknown>;
+  info?: MatrixSdkTypes.MediaEventInfo | Record<string, unknown>;
   "m.relates_to"?: Record<string, unknown>;
   "m.new_content"?: unknown;
   "m.mentions"?: {

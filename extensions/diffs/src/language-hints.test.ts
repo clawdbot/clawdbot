@@ -19,6 +19,16 @@ describe("normalizeSupportedLanguageHint", () => {
     ]);
   });
 
+  it("normalizes language hint casing", async () => {
+    await expect(normalizeHints(["Python", "TypeScript"])).resolves.toEqual([
+      "python",
+      "typescript",
+    ]);
+    await expect(
+      normalizeSupportedLanguageHint("AbAp", { languagePackAvailable: true }),
+    ).resolves.toBe("abap");
+  });
+
   it("normalizes common aliases to base viewer languages", async () => {
     await expect(
       normalizeHints(["ts", "c++", "c#", "bash", "dockerfile", "rb", "kt", "ps1"]),
@@ -36,17 +46,7 @@ describe("normalizeSupportedLanguageHint", () => {
 
   it("keeps mainstream languages in the base viewer without the language pack", async () => {
     await expect(
-      normalizeHints([
-        "ruby",
-        "swift",
-        "kotlin",
-        "r",
-        "dart",
-        "lua",
-        "powershell",
-        "xml",
-        "toml",
-      ]),
+      normalizeHints(["ruby", "swift", "kotlin", "r", "dart", "lua", "powershell", "xml", "toml"]),
     ).resolves.toEqual([
       "ruby",
       "swift",

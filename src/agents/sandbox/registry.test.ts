@@ -181,6 +181,7 @@ describe("registry race safety", () => {
     await expect(readRegistry()).resolves.toEqual({ entries: [] });
     await expect(readRegistryEntry("legacy-container")).resolves.toBeNull();
     await expect(fs.access(SANDBOX_REGISTRY_PATH)).resolves.toBeUndefined();
+    await expectPathMissing(path.join(TEST_STATE_DIR, "state", "openclaw.sqlite"));
   });
 
   it("normalizes legacy registry entries after explicit migration", async () => {

@@ -4,9 +4,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateToolsEffectiveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { buildEffectiveToolInventoryGroups } from "../../agents/tools-effective-inventory-groups.js";
 import type {
   EffectiveToolInventoryNotice,
@@ -17,6 +17,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { sessionDeliveryOrigin } from "../../utils/delivery-context.shared.js";
+import { getConnectedNodePluginToolsVersion } from "../node-plugin-tool-snapshot.js";
 import {
   applyFinalEffectiveToolPolicy,
   buildBundleMcpToolsFromCatalog,
@@ -24,7 +26,7 @@ import {
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
   listAgentIds,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   peekSessionMcpRuntime,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -37,6 +39,7 @@ import {
   resolveSessionModelRef,
 } from "./tools-effective.runtime.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const TOOLS_EFFECTIVE_FRESH_TTL_MS = 10_000;
 const TOOLS_EFFECTIVE_STALE_TTL_MS = 120_000;
@@ -55,6 +58,7 @@ type TrustedToolsEffectiveContext = {
   runtimeConfigCacheKey: string;
   pluginRegistryVersion: number;
   channelRegistryVersion: number;
+  nodePluginToolsVersion: number;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
@@ -93,6 +97,7 @@ function buildToolsEffectiveCacheKey(params: {
     config: context.runtimeConfigCacheKey,
     pluginRegistry: context.pluginRegistryVersion,
     channelRegistry: context.channelRegistryVersion,
+    nodePluginTools: context.nodePluginToolsVersion,
     // MCP fingerprint/server names intentionally stay out of this key: the MCP
     // layer is applied after the base cache, so warm/stale runtime state alone
     // never invalidates base entries.
@@ -377,16 +382,19 @@ function filterMcpTools(params: {
   return applyFinalEffectiveToolPolicy({
     bundledTools: params.mcpTools,
     config: params.context.cfg,
-    sessionKey: params.context.sessionKey,
-    agentId: params.context.agentId,
-    modelProvider: params.context.modelProvider,
-    modelId: params.context.modelId,
-    messageProvider: params.context.messageProvider,
-    agentAccountId: params.context.accountId,
-    groupId: params.context.groupId,
-    groupChannel: params.context.groupChannel,
-    groupSpace: params.context.groupSpace,
-    spawnedBy: params.context.spawnedBy,
+    conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      config: params.context.cfg,
+      sessionKey: params.context.sessionKey,
+      agentId: params.context.agentId,
+      modelProvider: params.context.modelProvider,
+      modelId: params.context.modelId,
+      messageProvider: params.context.messageProvider,
+      agentAccountId: params.context.accountId,
+      groupId: params.context.groupId,
+      groupChannel: params.context.groupChannel,
+      groupSpace: params.context.groupSpace,
+      spawnedBy: params.context.spawnedBy,
+    }),
     warn: logWarn,
   });
 }
@@ -459,7 +467,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadSessionEntry(
+  const loaded = loadSessionEntryReadOnly(
     params.sessionKey,
     params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
   );
@@ -498,6 +506,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   }
 
   const delivery = deliveryContextFromSession(loaded.entry);
+  const origin = sessionDeliveryOrigin(loaded.entry);
   const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
   const workspaceDir =
     normalizeOptionalString(loaded.entry.spawnedWorkspaceDir) ??
@@ -505,6 +514,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
   const pluginRegistryVersion = getActivePluginRegistryVersion();
   const channelRegistryVersion = getActivePluginChannelRegistryVersion();
+  const nodePluginToolsVersion = getConnectedNodePluginToolsVersion();
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
@@ -514,35 +524,27 @@ function resolveTrustedToolsEffectiveContext(params: {
     runtimeConfigCacheKey,
     pluginRegistryVersion,
     channelRegistryVersion,
+    nodePluginToolsVersion,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
-    messageProvider:
-      delivery?.channel ??
-      loaded.entry.lastChannel ??
-      loaded.entry.channel ??
-      loaded.entry.origin?.provider,
-    accountId: delivery?.accountId ?? loaded.entry.lastAccountId ?? loaded.entry.origin?.accountId,
+    messageProvider: delivery?.channel ?? origin?.provider,
+    accountId: delivery?.accountId ?? origin?.accountId,
     currentChannelId: delivery?.to,
     currentThreadTs:
       delivery?.threadId != null
         ? stringifyRouteThreadId(delivery.threadId)
-        : loaded.entry.lastThreadId != null
-          ? stringifyRouteThreadId(loaded.entry.lastThreadId)
-          : loaded.entry.origin?.threadId != null
-            ? stringifyRouteThreadId(loaded.entry.origin.threadId)
-            : undefined,
+        : origin?.threadId != null
+          ? stringifyRouteThreadId(origin.threadId)
+          : undefined,
     groupId: loaded.entry.groupId,
     groupChannel: loaded.entry.groupChannel,
     groupSpace: loaded.entry.space,
     spawnedBy: normalizeOptionalString(loaded.entry.spawnedBy),
     replyToMode: resolveReplyToMode(
       loaded.cfg,
-      delivery?.channel ??
-        loaded.entry.lastChannel ??
-        loaded.entry.channel ??
-        loaded.entry.origin?.provider,
-      delivery?.accountId ?? loaded.entry.lastAccountId ?? loaded.entry.origin?.accountId,
-      loaded.entry.chatType ?? loaded.entry.origin?.chatType,
+      delivery?.channel ?? origin?.provider,
+      delivery?.accountId ?? origin?.accountId,
+      loaded.entry.chatType ?? origin?.chatType,
     ),
   };
 }
@@ -552,15 +554,14 @@ async function handleToolsEffectiveRequest(params: {
   respond: RespondFn;
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"];
 }) {
-  if (!validateToolsEffectiveParams(params.rawParams)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid tools.effective params: ${formatValidationErrors(validateToolsEffectiveParams.errors)}`,
-      ),
-    );
+  if (
+    !assertValidParams(
+      params.rawParams,
+      validateToolsEffectiveParams,
+      "tools.effective",
+      params.respond,
+    )
+  ) {
     return;
   }
   const cfg = params.context.getRuntimeConfig();

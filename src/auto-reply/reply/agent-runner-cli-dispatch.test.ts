@@ -1,6 +1,7 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import {
   emitAgentEvent,
@@ -13,6 +14,14 @@ import {
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
+
+type RunCliAgentWithLifecycleParams = Parameters<typeof runCliAgentWithLifecycle>[0];
+type ReasoningTextPayload = Parameters<
+  NonNullable<RunCliAgentWithLifecycleParams["onReasoningText"]>
+>[0];
+type ReasoningProgressPayload = Parameters<
+  NonNullable<RunCliAgentWithLifecycleParams["onReasoningProgress"]>
+>[0];
 
 const cliDispatchState = vi.hoisted(() => ({
   runCliAgentMock: vi.fn(),
@@ -29,10 +38,401 @@ afterEach(() => {
 });
 
 describe("runCliAgentWithLifecycle", () => {
+  it("bridges typed CLI plan events", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: [
+            { step: "Inspect", status: "completed" },
+            { step: "Patch", status: "pending" },
+          ],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-bridge",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-bridge",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith({
+      phase: "update",
+      title: "Plan updated",
+      explanation: undefined,
+      source: "codex-exec",
+      steps: [
+        { step: "Inspect", status: "completed" },
+        { step: "Patch", status: "pending" },
+      ],
+    });
+  });
+
+  it("normalizes shipped string-step plan events to pending typed steps", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "plan",
+        data: {
+          phase: "update",
+          title: "Plan updated",
+          source: "codex-exec",
+          steps: ["Inspect", "  ", "Patch"],
+        },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onPlanUpdate = vi.fn(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-plan-legacy",
+      provider: "codex-cli",
+      onPlanUpdate,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "codex-cli",
+        model: "codex",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-plan-legacy",
+      },
+    });
+
+    expect(onPlanUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        steps: [
+          { step: "Inspect", status: "pending" },
+          { step: "Patch", status: "pending" },
+        ],
+      }),
+    );
+  });
+
+  it("bridges thinking events to reasoning text and dedupes identical snapshots", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking", delta: "", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking more", delta: " more", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Visible answer", delta: "Visible answer" },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onReasoningText = vi.fn<(payload: ReasoningTextPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-bridge",
+      provider: "claude-cli",
+      onReasoningText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-bridge",
+      },
+    });
+
+    expect(onReasoningText).toHaveBeenCalledTimes(2);
+    expect(onReasoningText.mock.calls.map((call) => call[0])).toEqual([
+      { text: "Thinking", isReasoningSnapshot: true },
+      { text: "Thinking more", isReasoningSnapshot: true },
+    ]);
+    expect(result.payloads).toEqual([
+      { text: "Thinking more", isReasoning: true },
+      { text: "Visible answer" },
+    ]);
+  });
+
+  it("keeps durable reasoning when the CLI has no visible final answer", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Only thinking", delta: "Only thinking", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Only thinking more", delta: " more", isReasoningSnapshot: true },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-without-answer",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-without-answer",
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "Only thinking more", isReasoning: true }]);
+  });
+
+  it("bridges thinking token progress without adding durable reasoning", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 200 },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-thinking-progress",
+      provider: "claude-cli",
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-thinking-progress",
+      },
+    });
+
+    expect(onReasoningProgress.mock.calls.map((call) => call[0])).toEqual([
+      { progressTokens: 50 },
+      { progressTokens: 200 },
+    ]);
+    expect(result.payloads).toEqual([{ text: "Visible answer" }]);
+  });
+
+  it("stamps onActivity for every delivered bridge event, including reasoning-only progress", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 200 },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onActivity = vi.fn();
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-reasoning-progress",
+      provider: "claude-cli",
+      onActivity,
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-activity-reasoning-progress",
+      },
+    });
+
+    // A run in a long pure-reasoning stretch must keep stamping activity, or
+    // stale-takeover reclaims it while it is visibly thinking. Stamps are
+    // per-event (delivery-independent), so dedupe downstream does not matter.
+    expect(onReasoningProgress).toHaveBeenCalledTimes(2);
+    expect(onActivity).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps stamping onActivity when bridges are suppressed for silent runs", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { progressTokens: 50 },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Silent answer", delta: "Silent answer" },
+      });
+      return { payloads: [], meta: { durationMs: 1 } };
+    });
+    const onActivity = vi.fn();
+    const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+    const onReasoningProgress = vi.fn<(payload: ReasoningProgressPayload) => Promise<void>>(
+      async () => undefined,
+    );
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-suppressed",
+      provider: "claude-cli",
+      suppressAssistantBridge: true,
+      onActivity,
+      onAssistantText,
+      onReasoningProgress,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-activity-suppressed",
+      },
+    });
+
+    // silentExpected runs suppress deliveries, but their events are still real
+    // liveness evidence — without these stamps a healthy silent run would be
+    // reclaimed as run_stalled at the takeover window.
+    expect(onAssistantText).not.toHaveBeenCalled();
+    expect(onReasoningProgress).not.toHaveBeenCalled();
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("stamps onActivity for assistant text without caller callbacks for that stream", async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Deep thought", delta: "Deep thought", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Visible answer", delta: "Visible answer" },
+      });
+      return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
+    });
+    const onActivity = vi.fn();
+    const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
+
+    await runCliAgentWithLifecycle({
+      runId: "run-activity-assistant",
+      provider: "claude-cli",
+      onActivity,
+      onAssistantText,
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-activity-assistant",
+      },
+    });
+
+    // Every real event stamps, independent of which callbacks are registered.
+    expect(onAssistantText).toHaveBeenCalledTimes(1);
+    expect(onActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not add a durable reasoning payload when the CLI emits no thinking", async () => {
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Visible answer" }],
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    const result = await runCliAgentWithLifecycle({
+      runId: "run-no-thinking",
+      provider: "claude-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "hello",
+        provider: "claude-cli",
+        model: "claude",
+        thinkLevel: "high",
+        timeoutMs: 1_000,
+        runId: "run-no-thinking",
+      },
+    });
+
+    expect(result.payloads).toEqual([{ text: "Visible answer" }]);
+  });
+
   it("keeps the captured lifecycle generation on start and terminal events", async () => {
     const events: Array<{
       stream?: string;
       lifecycleGeneration?: string;
+      agentId?: string;
       data?: Record<string, unknown>;
     }> = [];
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -53,6 +453,7 @@ describe("runCliAgentWithLifecycle", () => {
         provider: "claude-cli",
         runParams: {
           sessionId: "session-1",
+          agentId: "support",
           sessionFile: "/tmp/session.jsonl",
           workspaceDir: "/tmp/workspace",
           prompt: "hello",
@@ -72,6 +473,7 @@ describe("runCliAgentWithLifecycle", () => {
     expect(
       lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
+    expect(lifecycleEvents.every((event) => event.agentId === "support")).toBe(true);
   });
 
   it("preserves restart ownership when the CLI resolves after cancellation", async () => {
@@ -118,6 +520,44 @@ describe("runCliAgentWithLifecycle", () => {
       stopReason: "restart",
     });
     expect(events.some((event) => event.stream === "assistant")).toBe(false);
+  });
+
+  it("attributes a structured CLI watchdog timeout on the terminal event", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-timeout") {
+        events.push(event);
+      }
+    });
+    cliDispatchState.runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("CLI produced no output", { reason: "timeout" }),
+    );
+
+    await expect(
+      runCliAgentWithLifecycle({
+        runId: "run-timeout",
+        provider: "claude-cli",
+        runParams: {
+          sessionId: "session-1",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          prompt: "hello",
+          provider: "claude-cli",
+          model: "claude",
+          thinkLevel: "off",
+          timeoutMs: 1_000,
+          runId: "run-timeout",
+        },
+      }),
+    ).rejects.toThrow("CLI produced no output");
+    stop();
+
+    expect(
+      events.find((event) => event.stream === "lifecycle" && event.data?.phase === "error")?.data,
+    ).toMatchObject({
+      stopReason: "timeout",
+      timeoutPhase: "provider",
+    });
   });
 
   it("propagates yielded result metadata on lifecycle end", async () => {

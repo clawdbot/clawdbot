@@ -41,10 +41,6 @@ import {
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-export async function loadWhatsAppChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
 async function loadWhatsAppSetupSurface() {
   return await import("./setup-surface.js");
 }
@@ -111,6 +107,7 @@ export function createWhatsAppPluginBase(params: {
   groups: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["groups"]>;
   setupWizard: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupWizard"]>;
   setup: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setup"]>;
+  setupContract?: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["setupContract"]>;
   isConfigured: NonNullable<ChannelPlugin<ResolvedWhatsAppAccount>["config"]>["isConfigured"];
 }) {
   const collectWhatsAppSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
@@ -158,7 +155,7 @@ export function createWhatsAppPluginBase(params: {
       docsLabel: "whatsapp",
       blurb: "works with your own number; recommend a separate phone + eSIM.",
       systemImage: "message",
-      showConfigured: false,
+      exposure: { configured: false },
       quickstartAllowFrom: true,
       forceAccountBinding: true,
       preferSessionLookupForAnnounceTarget: true,
@@ -176,19 +173,23 @@ export function createWhatsAppPluginBase(params: {
         },
       },
     },
-    // `channels.whatsapp.accounts.*` (account add/remove, and `enabled` flips)
-    // must restart the channel so a disabled account's provider is torn down;
+    // Root/account `enabled` flips must restart the channel so a disabled
+    // provider is torn down;
     // the broad `channels.whatsapp` noop prefix below otherwise swallows it as a
     // hot no-op and leaves the account connected until a full restart.
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
+      configPrefixes: [
+        "channels.whatsapp.enabled",
+        "channels.whatsapp.accounts",
+        "channels.whatsapp.selfChatMode",
+      ],
       noopPrefixes: ["channels.whatsapp"],
     },
     gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
-      isEnabled: (account, cfg) => account.enabled && cfg.web?.enabled !== false,
+      isEnabled: (account) => account.enabled,
       disabledReason: () => "disabled",
       isConfigured: params.isConfigured,
       hasPersistedAuthState: ({ cfg }) => hasAnyWhatsAppAuth(cfg),
@@ -211,6 +212,7 @@ export function createWhatsAppPluginBase(params: {
     },
     doctor: whatsappDoctor,
     setup: params.setup,
+    ...(params.setupContract ? { setupContract: params.setupContract } : {}),
     groups: params.groups,
   });
   return {

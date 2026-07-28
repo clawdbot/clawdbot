@@ -1,16 +1,13 @@
 /** Control-plane provider discovery helpers that keep runtime imports lazy until catalog hooks run. */
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import type { LoadPluginRegistryParams, PluginRegistrySnapshot } from "./plugin-registry.js";
 import { copyProviderCatalogResultProjection } from "./provider-catalog-result.js";
-import type { ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
-const DISCOVERY_ORDER: readonly ProviderDiscoveryOrder[] = ["simple", "profile", "paired", "late"];
+const DISCOVERY_ORDER: readonly ProviderCatalogOrder[] = ["simple", "profile", "paired", "late"];
 const DANGEROUS_PROVIDER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const providerRuntimeLoader = createLazyImportLoader(
   () => import("./provider-discovery.runtime.js"),
@@ -21,7 +18,7 @@ function loadProviderRuntime() {
 }
 
 function resolveProviderCatalogHook(provider: ProviderPlugin) {
-  return provider.catalog ?? provider.discovery;
+  return provider.catalog;
 }
 
 function resolveProviderCatalogOrderHook(provider: ProviderPlugin) {
@@ -37,7 +34,7 @@ function isSafeProviderConfigKey(value: string): boolean {
 }
 
 /** Options for resolving plugin providers that can contribute model catalog entries. */
-export type ResolveRuntimePluginDiscoveryProvidersParams = {
+type ResolveRuntimePluginDiscoveryProvidersParams = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -49,28 +46,6 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
-
-export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegistryParams & {
-  index?: PluginRegistrySnapshot;
-  includeDisabled?: boolean;
-};
-
-/** Lists provider ids advertised by installed manifests, including disabled entries when requested. */
-export function resolveInstalledPluginProviderContributionIds(
-  params: ResolveInstalledPluginProviderContributionIdsParams = {},
-): string[] {
-  const registryParams =
-    params.candidates && params.preferPersisted === undefined
-      ? { ...params, preferPersisted: false }
-      : params;
-  return sortUniqueStrings(
-    listManifestProviderContributionIds({
-      ...registryParams,
-      index: params.index,
-      includeDisabled: params.includeDisabled,
-    }),
-  );
-}
 
 /** Loads provider runtime discovery and filters to providers that can produce catalog order entries. */
 export async function resolveRuntimePluginDiscoveryProviders(
@@ -84,13 +59,13 @@ export async function resolveRuntimePluginDiscoveryProviders(
 /** Groups plugin providers into stable discovery phases for catalog probing. */
 export function groupPluginDiscoveryProvidersByOrder(
   providers: ProviderPlugin[],
-): Record<ProviderDiscoveryOrder, ProviderPlugin[]> {
+): Record<ProviderCatalogOrder, ProviderPlugin[]> {
   const grouped = {
     simple: [],
     profile: [],
     paired: [],
     late: [],
-  } as Record<ProviderDiscoveryOrder, ProviderPlugin[]>;
+  } as Record<ProviderCatalogOrder, ProviderPlugin[]>;
 
   for (const provider of providers) {
     const order = resolveProviderCatalogOrderHook(provider)?.order ?? "late";
@@ -102,18 +77,6 @@ export function groupPluginDiscoveryProvidersByOrder(
   }
 
   return grouped;
-}
-
-/** Matches a normalized provider filter against all provider-owned identifiers. */
-export function providerMatchesFilter(params: {
-  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
-  providerFilter: string;
-}): boolean {
-  return [
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-    ...(params.provider.hookAliases ?? []),
-  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
 /** Normalizes a plugin discovery response into safe provider-config keys. */

@@ -8,6 +8,12 @@ import {
 } from "../../agents/model-selection-shared.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  adoptPersistedSessionSnapshot,
+  SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+  sessionModelOverrideChangesApplied,
+} from "../../config/sessions/session-snapshot-merge.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -36,14 +42,27 @@ function splitBody(body: string) {
   };
 }
 
-async function loadResetModelCatalog(cfg: OpenClawConfig): Promise<ModelCatalogEntry[]> {
-  const { loadModelCatalog } = await import("../../agents/model-catalog.js");
-  return loadModelCatalog({ config: cfg });
+async function loadResetModelCatalog(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ModelCatalogEntry[]> {
+  const { loadPreparedModelCatalog } = await import("../../agents/prepared-model-catalog.js");
+  return loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    readOnly: true,
+  });
 }
 
 async function resolveResetFallbackModels(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<string[]> {
   if (params.agentId) {
     const { resolveAgentModelFallbacksOverride } = await import("../../agents/agent-scope.js");
@@ -61,21 +80,14 @@ async function buildResetAllowedModelKeys(params: {
   defaultProvider: string;
   defaultModel?: string;
   fallbackModels: readonly string[];
+  agentId?: string;
 }): Promise<Set<string>> {
-  const rawAllowlist = Object.keys(params.cfg.agents?.defaults?.models ?? {});
-  if (rawAllowlist.length > 0 || params.cfg.models?.providers) {
-    return buildAllowedModelSetWithFallbacks(params).allowedKeys;
-  }
-
-  const allowedKeys = new Set<string>();
-  for (const entry of params.catalog) {
-    allowedKeys.add(modelKey(entry.provider, entry.id));
-  }
+  const allowed = buildAllowedModelSetWithFallbacks(params);
   const defaultModel = params.defaultModel?.trim();
-  if (defaultModel) {
-    allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
+  if (allowed.allowAny && defaultModel) {
+    allowed.allowedKeys.add(modelKey(normalizeProviderId(params.defaultProvider), defaultModel));
   }
-  return allowedKeys;
+  return allowed.allowedKeys;
 }
 
 function buildSelectionFromExplicit(params: {
@@ -107,40 +119,54 @@ function buildSelectionFromExplicit(params: {
   };
 }
 
-function applySelectionToSession(params: {
+async function applySelectionToSession(params: {
   selection: ModelDirectiveSelection;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
-}) {
+}): Promise<boolean> {
   const { selection, sessionEntryHandle, sessionStore, sessionKey, storePath } = params;
   const sessionEntry = sessionEntryHandle?.getCurrent() ?? params.sessionEntry;
   if (!sessionEntry || !sessionKey) {
-    return;
+    return true;
   }
-  const { updated } = applyModelOverrideToSessionEntry({
-    entry: sessionEntry,
+  const initialSessionEntry = { ...sessionEntry };
+  const nextSessionEntry = { ...sessionEntry };
+  applyModelOverrideToSessionEntry({
+    entry: nextSessionEntry,
     selection,
   });
-  if (!updated) {
-    return;
+  let appliedEntry = nextSessionEntry;
+  let selectionApplied = true;
+  if (storePath) {
+    const { persistReplySessionEntry } = await import("./session-entry-persistence.js");
+    const persistence = await persistReplySessionEntry({
+      storePath,
+      sessionKey,
+      initialEntry: initialSessionEntry,
+      entry: nextSessionEntry,
+      touchedFields: SESSION_MODEL_OVERRIDE_TRANSACTION_FIELDS,
+    });
+    if (persistence.status === "lifecycle-invalidated") {
+      throw new SessionWorkStartInvalidatedError(persistence.error);
+    }
+    const persistedEntry = persistence.entry;
+    appliedEntry = persistedEntry;
+    selectionApplied = sessionModelOverrideChangesApplied({
+      initial: initialSessionEntry,
+      next: nextSessionEntry,
+      current: persistedEntry,
+    });
   }
+  adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
   if (sessionEntryHandle) {
     sessionEntryHandle.replaceCurrent(sessionEntry);
   } else if (sessionStore) {
     sessionStore[sessionKey] = sessionEntry;
   }
-  if (storePath) {
-    void import("../../config/sessions/session-accessor.js")
-      .then(({ replaceSessionEntry }) =>
-        replaceSessionEntry({ storePath, sessionKey }, sessionEntry),
-      )
-      .catch(() => {
-        // Ignore persistence errors; session still proceeds.
-      });
-  }
+  return selectionApplied;
 }
 
 /** Applies a model override embedded in a reset command body. */
@@ -148,6 +174,8 @@ function applySelectionToSession(params: {
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
   resetTriggered: boolean;
   bodyStripped?: string;
   sessionCtx: TemplateContext;
@@ -175,7 +203,14 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const catalog = params.modelCatalog ?? (await loadResetModelCatalog(params.cfg));
+  const catalog =
+    params.modelCatalog ??
+    (await loadResetModelCatalog({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    }));
   const allowedModelKeys = await buildResetAllowedModelKeys({
     cfg: params.cfg,
     catalog,
@@ -185,6 +220,7 @@ export async function applyResetModelOverride(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    agentId: params.agentId,
   });
   if (allowedModelKeys.size === 0) {
     return {};
@@ -206,13 +242,15 @@ export async function applyResetModelOverride(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys,
+      cfg: params.cfg,
+      agentId: params.agentId,
     });
 
   let selection: ModelDirectiveSelection | undefined;
   let consumed = 0;
 
   if (providers.has(normalizeProviderId(first)) && second) {
-    // Support reset bodies like `openai gpt-5.5 rest of prompt`.
+    // Support reset bodies like `openai gpt-5.6-sol rest of prompt`.
     const composite = `${normalizeProviderId(first)}/${second}`;
     const resolved = resolveSelection(composite);
     if (resolved.selection) {
@@ -250,10 +288,12 @@ export async function applyResetModelOverride(params: {
   }
 
   const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  params.sessionCtx.commandText = cleanedBody;
+  params.sessionCtx.agentText = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;
   params.sessionCtx.BodyForCommands = cleanedBody;
 
-  applySelectionToSession({
+  const selectionApplied = await applySelectionToSession({
     selection,
     sessionEntry: params.sessionEntry,
     sessionEntryHandle: params.sessionEntryHandle,
@@ -262,5 +302,5 @@ export async function applyResetModelOverride(params: {
     storePath: params.storePath,
   });
 
-  return { selection, cleanedBody };
+  return { selection: selectionApplied ? selection : undefined, cleanedBody };
 }

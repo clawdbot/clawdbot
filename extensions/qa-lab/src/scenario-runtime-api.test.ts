@@ -4,12 +4,12 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import type { QaTransportCapabilities } from "./qa-transport.js";
-import {
-  createQaScenarioRuntimeApi,
-  type QaScenarioRuntimeConstants,
-  type QaScenarioRuntimeDeps,
-} from "./scenario-runtime-api.js";
+import type { QaTransportAdapter } from "./qa-transport.js";
+import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
+
+type CreateQaScenarioRuntimeApiParams = Parameters<typeof createQaScenarioRuntimeApi>[0];
+type QaScenarioRuntimeConstants = CreateQaScenarioRuntimeApiParams["constants"];
+type QaScenarioRuntimeDeps = CreateQaScenarioRuntimeApiParams["deps"];
 
 function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRuntimeDeps {
   const fn = vi.fn();
@@ -46,10 +46,12 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     patchConfig: fn,
     applyConfig: fn,
     readConfigSnapshot: fn,
+    restartGatewayWithConfigPatch: fn,
     createSession: fn,
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    seedQaSessionTranscript: fn,
     readGatewayLogs: fn,
     markGatewayLogCursor: fn,
     scanGatewayLogSentinels: fn,
@@ -84,7 +86,6 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     liveTurnTimeoutMs: fn,
     resolveQaLiveTurnTimeoutMs: fn,
     splitModelRef: fn,
-    qaChannelPlugin: { id: "qa-channel" },
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,
@@ -113,13 +114,13 @@ const browserAndWebRuntimeTools = [
 ] as const;
 
 describe("createQaScenarioRuntimeApi", () => {
-  it("builds a markdown-flow runtime surface from generic transport capabilities", async () => {
+  it("builds a markdown-flow runtime surface from the transport adapter", async () => {
     const state = createQaBusState();
     const resetSpy = vi.spyOn(state, "reset");
     const inboundSpy = vi.spyOn(state, "addInboundMessage");
     const outboundSpy = vi.spyOn(state, "addOutboundMessage");
     const readSpy = vi.spyOn(state, "readMessage");
-    const waitForCondition: QaTransportCapabilities["waitForCondition"] = async <T>(
+    const waitForCondition: QaTransportAdapter["waitForCondition"] = async <T>(
       check: () => T | Promise<T | null | undefined> | null | undefined,
     ): Promise<T> => {
       const value = await check();
@@ -133,20 +134,31 @@ describe("createQaScenarioRuntimeApi", () => {
       lab: { baseUrl: "http://127.0.0.1:1234" },
       transport: {
         state,
-        capabilities: {
-          waitForCondition,
-          getNormalizedMessageState: state.getSnapshot.bind(state),
-          resetNormalizedMessageState: async () => {
-            state.reset();
-          },
-          sendInboundMessage: state.addInboundMessage.bind(state),
-          injectOutboundMessage: state.addOutboundMessage.bind(state),
-          waitForOutboundMessage: state.waitFor.bind(state),
-          readNormalizedMessage: state.readMessage.bind(state),
-          executeGenericAction: vi.fn(async () => undefined),
-          waitForReady: vi.fn(async () => undefined),
-          assertNoFailureReplies: vi.fn(),
+        reset: async () => {
+          state.reset();
         },
+        sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+          state.addInboundMessage(input),
+        sendNativeCommand: async (
+          input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
+            command: string;
+          },
+        ) => {
+          const { command, ...message } = input;
+          state.addInboundMessage({
+            ...message,
+            text: `/${command}`,
+            nativeCommand: { name: command },
+          });
+        },
+        waitForNoOutbound: vi.fn(async () => undefined),
+        waitForOutbound: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+        waitForOutboundSequence: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+        waitForCondition,
       },
     };
     const scenario = {
@@ -182,6 +194,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
+    expect(api.seedQaSessionTranscript).toBe(deps.seedQaSessionTranscript);
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }

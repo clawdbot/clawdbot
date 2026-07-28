@@ -12,7 +12,6 @@ export { resolveDefaultVitestPool, resolveLocalVitestMaxWorkers, resolveLocalVit
 
 export const rootVitestProjects = [
   "test/vitest/vitest.unit.config.ts",
-  "test/vitest/vitest.unit-ui.config.ts",
   "test/vitest/vitest.infra.config.ts",
   "test/vitest/vitest.boundary.config.ts",
   "test/vitest/vitest.contracts-channel-surface.config.ts",
@@ -33,6 +32,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.commands-light.config.ts",
   "test/vitest/vitest.commands.config.ts",
   "test/vitest/vitest.auto-reply.config.ts",
+  "test/vitest/vitest.agents-core-isolated.config.ts",
   "test/vitest/vitest.agents-core.config.ts",
   "test/vitest/vitest.agents-embedded-agent.config.ts",
   "test/vitest/vitest.agents-support.config.ts",
@@ -40,6 +40,7 @@ export const rootVitestProjects = [
   "test/vitest/vitest.daemon.config.ts",
   "test/vitest/vitest.media.config.ts",
   "test/vitest/vitest.unit-fast.config.ts",
+  "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   "test/vitest/vitest.plugin-sdk-light.config.ts",
   "test/vitest/vitest.plugin-sdk.config.ts",

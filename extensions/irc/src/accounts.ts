@@ -1,18 +1,21 @@
 // Irc plugin module implements accounts behavior.
+import { resolveAccountWithDefaultFallback } from "openclaw/plugin-sdk/account-core";
 import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
-import {
-  parseOptionalDelimitedEntries,
-  tryReadSecretFileSync,
-} from "openclaw/plugin-sdk/channel-core";
+import { parseOptionalDelimitedEntries } from "openclaw/plugin-sdk/channel-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig, IrcAccountConfig, IrcNickServConfig } from "./types.js";
+
+type CredentialUnavailableDiagnostic = Extract<
+  ReturnType<typeof tryReadSecretFileSync>,
+  { status: "configured_unavailable" }
+>["diagnostic"];
 
 const TRUTHY_ENV = new Set(["true", "1", "yes", "on"]);
 
@@ -29,6 +32,8 @@ export type ResolvedIrcAccount = {
   realname: string;
   password: string;
   passwordSource: "env" | "passwordFile" | "config" | "none";
+  tokenStatus?: "available" | "configured_unavailable" | "missing";
+  credentialDiagnostics?: CredentialUnavailableDiagnostic[];
   config: IrcAccountConfig;
 };
 
@@ -50,27 +55,21 @@ function parseIntEnv(value?: string): number | undefined {
   return parsed;
 }
 
-const { listAccountIds: listIrcAccountIds, resolveDefaultAccountId: resolveDefaultIrcAccountId } =
-  createAccountListHelpers("irc", {
-    normalizeAccountId,
-    hasImplicitDefaultAccount: (cfg) =>
-      Boolean(
-        (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
-        (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
-      ),
-  });
+const {
+  listAccountIds: listIrcAccountIds,
+  resolveDefaultAccountId: resolveDefaultIrcAccountId,
+  resolveAccountConfig: mergeIrcAccountConfig,
+} = createAccountListHelpers<IrcAccountConfig>("irc", {
+  normalizeAccountId,
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["nickserv"],
+  hasImplicitDefaultAccount: (cfg) =>
+    Boolean(
+      (cfg.channels?.irc?.host?.trim() || process.env.IRC_HOST?.trim()) &&
+      (cfg.channels?.irc?.nick?.trim() || process.env.IRC_NICK?.trim()),
+    ),
+});
 export { listIrcAccountIds, resolveDefaultIrcAccountId };
-
-function mergeIrcAccountConfig(cfg: CoreConfig, accountId: string): IrcAccountConfig {
-  return resolveMergedAccountConfig<IrcAccountConfig>({
-    channelConfig: cfg.channels?.irc as IrcAccountConfig | undefined,
-    accounts: cfg.channels?.irc?.accounts as Record<string, Partial<IrcAccountConfig>> | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    normalizeAccountId,
-    nestedObjectKeys: ["nickserv"],
-  });
-}
 
 function resolvePassword(accountId: string, merged: IrcAccountConfig) {
   if (accountId === DEFAULT_ACCOUNT_ID) {
@@ -81,12 +80,20 @@ function resolvePassword(accountId: string, merged: IrcAccountConfig) {
   }
 
   if (merged.passwordFile?.trim()) {
+    let diagnostic: CredentialUnavailableDiagnostic | undefined;
     const filePassword = tryReadSecretFileSync(merged.passwordFile, "IRC password file", {
       rejectSymlink: true,
+      credentialDiagnostic: {
+        configPath: `channels.irc.accounts.${accountId}.passwordFile`,
+        report: (value) => {
+          diagnostic = value;
+        },
+      },
     });
     if (filePassword) {
       return { password: filePassword, source: "passwordFile" as const };
     }
+    return { password: "", source: "passwordFile" as const, diagnostic };
   }
 
   const configPassword = normalizeResolvedSecretInputString({
@@ -100,7 +107,13 @@ function resolvePassword(accountId: string, merged: IrcAccountConfig) {
   return { password: "", source: "none" as const };
 }
 
-function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig): IrcNickServConfig {
+function resolveNickServConfig(
+  accountId: string,
+  nickserv?: IrcNickServConfig,
+): {
+  config: IrcNickServConfig;
+  diagnostic?: CredentialUnavailableDiagnostic;
+} {
   const base = nickserv ?? {};
   const envPassword =
     accountId === DEFAULT_ACCOUNT_ID ? process.env.IRC_NICKSERV_PASSWORD?.trim() : undefined;
@@ -115,10 +128,17 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
     }) ||
     envPassword ||
     "";
+  let diagnostic: CredentialUnavailableDiagnostic | undefined;
   if (!resolvedPassword && passwordFile) {
     resolvedPassword =
       tryReadSecretFileSync(passwordFile, "IRC NickServ password file", {
         rejectSymlink: true,
+        credentialDiagnostic: {
+          configPath: `channels.irc.accounts.${accountId}.nickserv.passwordFile`,
+          report: (value) => {
+            diagnostic = value;
+          },
+        },
       }) ?? "";
   }
 
@@ -129,14 +149,13 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig):
     password: resolvedPassword || undefined,
     registerEmail: base.registerEmail?.trim() || envRegisterEmail || undefined,
   };
-  return merged;
+  return { config: merged, diagnostic };
 }
 
 export function resolveIrcAccount(params: {
   cfg: CoreConfig;
   accountId?: string | null;
 }): ResolvedIrcAccount {
-  const hasExplicitAccountId = Boolean(params.accountId?.trim());
   const baseEnabled = params.cfg.channels?.irc?.enabled !== false;
 
   const resolve = (accountId: string) => {
@@ -182,7 +201,10 @@ export function resolveIrcAccount(params: {
     ).trim();
 
     const passwordResolution = resolvePassword(accountId, merged);
-    const nickserv = resolveNickServConfig(accountId, merged.nickserv);
+    const nickservResolution = resolveNickServConfig(accountId, merged.nickserv);
+    const diagnostics = [passwordResolution.diagnostic, nickservResolution.diagnostic].filter(
+      (diagnostic): diagnostic is CredentialUnavailableDiagnostic => Boolean(diagnostic),
+    );
 
     const config: IrcAccountConfig = {
       ...merged,
@@ -193,7 +215,7 @@ export function resolveIrcAccount(params: {
       nick,
       username,
       realname,
-      nickserv,
+      nickserv: nickservResolution.config,
     };
 
     return {
@@ -209,28 +231,24 @@ export function resolveIrcAccount(params: {
       realname,
       password: passwordResolution.password,
       passwordSource: passwordResolution.source,
+      tokenStatus:
+        diagnostics.length > 0
+          ? "configured_unavailable"
+          : passwordResolution.password || nickservResolution.config.password
+            ? "available"
+            : "missing",
+      ...(diagnostics.length > 0 ? { credentialDiagnostics: diagnostics } : {}),
       config,
     } satisfies ResolvedIrcAccount;
   };
 
-  const normalized = normalizeAccountId(params.accountId);
-  const primary = resolve(normalized);
-  if (hasExplicitAccountId) {
-    return primary;
-  }
-  if (primary.configured) {
-    return primary;
-  }
-
-  const fallbackId = resolveDefaultIrcAccountId(params.cfg);
-  if (fallbackId === primary.accountId) {
-    return primary;
-  }
-  const fallback = resolve(fallbackId);
-  if (!fallback.configured) {
-    return primary;
-  }
-  return fallback;
+  return resolveAccountWithDefaultFallback({
+    accountId: params.accountId,
+    normalizeAccountId,
+    resolvePrimary: resolve,
+    hasCredential: (account) => account.configured,
+    resolveDefaultAccountId: () => resolveDefaultIrcAccountId(params.cfg),
+  });
 }
 
 export function listEnabledIrcAccounts(cfg: CoreConfig): ResolvedIrcAccount[] {

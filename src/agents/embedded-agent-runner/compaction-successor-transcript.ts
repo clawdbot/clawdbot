@@ -235,8 +235,7 @@ function buildSuccessorEntries(params: {
 
   const entryById = new Map<string, SessionEntry>();
   const originalIndexById = new Map<string, number>();
-  for (let index = 0; index < allEntries.length; index += 1) {
-    const entry = allEntries[index];
+  for (const [index, entry] of allEntries.entries()) {
     entryById.set(entry.id, entry);
     originalIndexById.set(entry.id, index);
   }

@@ -7,6 +7,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   collectLegacyPluginManifestContractMigrations,
+  legacyPluginManifestContractMigrationToHealthFinding,
   maybeRepairLegacyPluginManifestContracts,
 } from "./doctor-plugin-manifests.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -167,6 +168,40 @@ describe("doctor plugin manifest legacy contract repair", () => {
         pluginId: "cortex",
       },
     ]);
+  });
+
+  it("maps legacy manifest migrations to structured health findings", async () => {
+    const pluginsRoot = await suiteTempDirs.make("finding-capability");
+    const root = path.join(pluginsRoot, "openai");
+    fs.mkdirSync(root, { recursive: true });
+    writePackageJson(root);
+    writeManifest(root, {
+      id: "openai",
+      speechProviders: ["openai"],
+      configSchema: { type: "object" },
+    });
+
+    const [migration] = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(pluginsRoot),
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [pluginsRoot],
+    });
+
+    if (migration === undefined) {
+      throw new Error("expected legacy manifest migration");
+    }
+    expect(legacyPluginManifestContractMigrationToHealthFinding(migration)).toStrictEqual({
+      checkId: "core/doctor/legacy-plugin-manifests",
+      severity: "warning",
+      message: "Plugin manifest openai uses legacy top-level capability keys.",
+      path: path.join(root, "openclaw.plugin.json"),
+      target: "openai",
+      requirement: "contracts-capability-keys",
+      fixHint:
+        "Run `openclaw doctor --fix` to rewrite legacy plugin manifest capability keys under contracts.*.",
+    });
   });
 
   it("rewrites legacy top-level capability keys into contracts", async () => {

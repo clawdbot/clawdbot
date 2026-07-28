@@ -35,6 +35,7 @@ export type WebChannelStatus = {
   lastRunActivityAt?: number | null;
   lastError?: string | null;
   healthState?: WebChannelHealthState;
+  terminalDisconnect?: boolean;
 };
 
 export type WebMonitorTuning = {

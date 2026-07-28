@@ -257,15 +257,15 @@ export function registerBrowserStateCommands(
   set
     .command("media")
     .description("Emulate prefers-color-scheme")
-    .argument("<dark|light|none>", "dark/light/none")
+    .argument("<dark|light|no-preference|none>", "dark/light/no-preference/none")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (value: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const v = normalizeOptionalLowercaseString(value);
       const colorScheme =
-        v === "dark" ? "dark" : v === "light" ? "light" : v === "none" ? "none" : null;
+        v === "dark" || v === "light" || v === "no-preference" || v === "none" ? v : null;
       if (!colorScheme) {
-        defaultRuntime.error(danger("Expected dark|light|none"));
+        defaultRuntime.error(danger("Expected dark|light|no-preference|none"));
         defaultRuntime.exit(1);
         return;
       }

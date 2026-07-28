@@ -1,0 +1,52 @@
+title: WhatsApp commands list reply
+
+scenario:
+  id: whatsapp-commands-command
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify WhatsApp renders the full native command catalog.
+  successCriteria:
+    - The command catalog is returned in a WhatsApp DM.
+    - The joined reply includes session and verbose commands.
+  codeRefs:
+    - src/auto-reply/reply/commands-core.ts
+    - extensions/qa-lab/src/live-transports/whatsapp/adapter.runtime.ts
+  execution:
+    profiles: { "whatsapp:mock-default": 33 }
+    kind: flow
+    channel: whatsapp
+    config:
+      expectedAny: [/session, /verbose]
+    summary: Request the WhatsApp command catalog and verify representative entries.
+
+flow:
+  steps:
+    - name: commands renders the full catalog
+      actions:
+        - resetTransport: true
+        - set: startIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /commands
+        - waitForOutbound:
+            conversation: { id: whatsapp-command-dm, kind: direct }
+            sinceIndex: { ref: startIndex }
+            textIncludes: /session
+            timeoutMs: 60000
+        - call: sleep
+          args: [1000]
+        - set: joinedReply
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(startIndex).map((message) => message.text).join('\\n')"
+        - assert:
+            expr: "config.expectedAny.every((needle) => joinedReply.includes(needle))"
+            message:
+              expr: "`commands reply missing expected text: ${joinedReply}`"
+      detailsExpr: joinedReply

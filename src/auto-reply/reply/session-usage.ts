@@ -131,8 +131,12 @@ export async function persistSessionUsageUpdate(params: {
     typeof params.promptTokens === "number" &&
     Number.isFinite(params.promptTokens) &&
     params.promptTokens > 0;
+  const hasUsableLastCallUsage =
+    Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
+  const hasUsableUsageContextSnapshot =
+    params.usageIsContextSnapshot === true && params.usage?.contextUsage?.state !== "unavailable";
   const hasFreshContextSnapshot =
-    Boolean(params.lastCallUsage) || hasPromptTokens || params.usageIsContextSnapshot === true;
+    hasUsableLastCallUsage || hasPromptTokens || hasUsableUsageContextSnapshot;
   const compactionTokensAfter = resolveNonNegativeTokenCount(params.compactionTokensAfter);
   const hasCompactionSnapshot = compactionTokensAfter !== undefined;
 
@@ -234,7 +238,7 @@ export async function persistSessionUsageUpdate(params: {
           ) {
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
@@ -285,7 +289,7 @@ export async function persistSessionUsageUpdate(params: {
             // zero persisted for the previously empty session.
             patch.totalTokensFresh = false;
           }
-          return preserveSessionModelState
+          return preserveUserFacingRunState
             ? patch
             : applyCliSessionIdToSessionPatch(params, entry, patch);
         },

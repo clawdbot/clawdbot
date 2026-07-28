@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+HARNESS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${OPENCLAW_INSTALL_SMOKE_SOURCE_DIR:-$HARNESS_ROOT}"
+ROOT_DIR="$(cd "$ROOT_DIR" && pwd)"
 # shellcheck source=./docker/install-sh-common/version-parse.sh
-source "$ROOT_DIR/scripts/docker/install-sh-common/version-parse.sh"
-source "$ROOT_DIR/scripts/lib/docker-build.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+source "$HARNESS_ROOT/scripts/docker/install-sh-common/version-parse.sh"
+source "$HARNESS_ROOT/scripts/lib/docker-build.sh"
+source "$HARNESS_ROOT/scripts/lib/docker-e2e-package.sh"
 DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 INSTALL_SMOKE_DOCKER_RUN_TIMEOUT="${OPENCLAW_INSTALL_SMOKE_DOCKER_RUN_TIMEOUT:-2700s}"
 
@@ -76,7 +78,9 @@ console.log(
 assert_pack_unpacked_size_budget() {
   local label="$1"
   local pack_json_file="$2"
-  node --input-type=module - "$label" "$pack_json_file" <<'NODE'
+  (
+    cd "$HARNESS_ROOT"
+    node --input-type=module - "$label" "$pack_json_file" <<'NODE'
 import { readFileSync } from "node:fs";
 import { collectPackUnpackedSizeErrors } from "./scripts/lib/npm-pack-budget.mjs";
 
@@ -104,6 +108,7 @@ if (errors.length > 0) {
   process.exit(1);
 }
 NODE
+  )
 }
 
 print_pack_delta_audit() {
@@ -272,33 +277,34 @@ allocate_host_port() {
   '
 }
 
-restore_local_dist_from_image() {
-  local image="$1"
-  local container_id=""
-
-  echo "==> Reuse local dist/ from Docker image: $image"
-  container_id="$(docker_e2e_docker_cmd create "$image")"
-  rm -rf "$ROOT_DIR/dist"
-  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
-    docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
-    return 1
-  fi
-  docker_e2e_docker_cmd rm -f "$container_id" >/dev/null
-}
-
 ensure_local_update_dist_import_closure() {
-  if node scripts/check-package-dist-imports.mjs "$ROOT_DIR"; then
+  if node "$HARNESS_ROOT/scripts/check-package-dist-imports.mjs" "$ROOT_DIR"; then
     return 0
   fi
+  if [[ "$UPDATE_SKIP_LOCAL_BUILD" == "1" ]]; then
+    echo "ERROR: reused Docker image package dist failed import-closure check; exact-image mode forbids a local rebuild" >&2
+    return 1
+  fi
   echo "WARN: reused Docker image dist failed import-closure check; rebuilding local release artifacts" >&2
-  pnpm build
+  (
+    cd "$ROOT_DIR"
+    pnpm build
+  )
+}
+
+read_candidate_version() {
+  node -e '
+const fs = require("node:fs");
+const packageJson = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+process.stdout.write(packageJson.version);
+' "$ROOT_DIR/package.json"
 }
 
 prepare_update_tarball() {
-  local pack_json
-  local baseline_pack_json
   local pack_json_file
   local baseline_pack_json_file
+  local -a package_args
+  local package_tgz
   local packed_update_version
   pack_json_file="${UPDATE_DIR}/pack.json"
   baseline_pack_json_file="${UPDATE_DIR}/baseline-pack.json"
@@ -308,21 +314,35 @@ prepare_update_tarball() {
   else
     echo "==> Build local release artifacts for update smoke"
     if [[ -n "$UPDATE_DIST_IMAGE" ]]; then
-      restore_local_dist_from_image "$UPDATE_DIST_IMAGE"
+      docker_e2e_restore_package_dist_from_image "$UPDATE_DIST_IMAGE"
       ensure_local_update_dist_import_closure
     elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
-      pnpm build
+      (
+        cd "$ROOT_DIR"
+        pnpm build
+      )
     fi
-    UPDATE_EXPECT_VERSION="$(
-      node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'
+    UPDATE_EXPECT_VERSION="$(read_candidate_version)"
+    package_args=(
+      --source-dir "$ROOT_DIR"
+      --output-dir "$UPDATE_DIR"
+      --pack-json "$pack_json_file"
+      --skip-build
+    )
+    if [[ "${OPENCLAW_INSTALL_SMOKE_ALLOW_UNRELEASED_CHANGELOG:-true}" == "true" ]]; then
+      package_args+=(--allow-unreleased-changelog)
+    fi
+    package_tgz="$(
+      node "$HARNESS_ROOT/scripts/package-openclaw-for-docker.mjs" "${package_args[@]}"
     )"
-    node --import tsx scripts/write-package-dist-inventory.ts
-    node scripts/check-package-dist-imports.mjs "$ROOT_DIR"
-    quiet_npm pack --ignore-scripts --json --pack-destination "$UPDATE_DIR" >"$pack_json_file"
+    UPDATE_TGZ_FILE="$(basename "$package_tgz")"
   fi
-  UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"
   if [[ -z "$UPDATE_PACKAGE_SPEC" ]]; then
-    node scripts/check-openclaw-package-tarball.mjs "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+    node "$HARNESS_ROOT/scripts/check-openclaw-package-tarball.mjs" \
+      --require-bundled-workspace-deps \
+      "${UPDATE_DIR}/${UPDATE_TGZ_FILE}"
+  else
+    UPDATE_TGZ_FILE="$(read_pack_tarball_filename "$pack_json_file")"
   fi
   print_pack_audit "update" "$pack_json_file"
   assert_pack_unpacked_size_budget "update" "$pack_json_file"
@@ -418,8 +438,8 @@ else
   docker_build_run install-smoke-build \
     --platform "$SMOKE_PLATFORM" \
     -t "$SMOKE_IMAGE" \
-    -f "$ROOT_DIR/scripts/docker/install-sh-smoke/Dockerfile" \
-    "$ROOT_DIR/scripts/docker"
+    -f "$HARNESS_ROOT/scripts/docker/install-sh-smoke/Dockerfile" \
+    "$HARNESS_ROOT/scripts/docker"
 fi
 
 if [[ "$SKIP_UPDATE" == "1" ]]; then
@@ -531,8 +551,8 @@ else
     docker_build_run install-nonroot-build \
       --platform "$NONROOT_PLATFORM" \
       -t "$NONROOT_IMAGE" \
-      -f "$ROOT_DIR/scripts/docker/install-sh-nonroot/Dockerfile" \
-      "$ROOT_DIR/scripts/docker"
+      -f "$HARNESS_ROOT/scripts/docker/install-sh-nonroot/Dockerfile" \
+      "$HARNESS_ROOT/scripts/docker"
   fi
 
   echo "==> Run installer non-root test: $INSTALL_URL"
@@ -569,4 +589,4 @@ run_install_smoke_container --rm -t \
   -e OPENCLAW_NO_ONBOARD=1 \
   -e OPENCLAW_NO_PROMPT=1 \
   -e DEBIAN_FRONTEND=noninteractive \
-  "$NONROOT_IMAGE" -lc "curl -fsSL \"$CLI_INSTALL_URL\" | bash -s -- --set-npm-prefix --no-onboard"
+  "$NONROOT_IMAGE" -lc 'set -o pipefail; curl -fsSL --connect-timeout 30 --max-time 300 -- "$OPENCLAW_INSTALL_CLI_URL" | bash -s -- --set-npm-prefix --no-onboard'

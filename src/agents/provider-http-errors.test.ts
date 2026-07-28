@@ -136,6 +136,21 @@ describe("provider error utils", () => {
     );
   });
 
+  it("does not split UTF-16 surrogate pairs when truncating provider error details", async () => {
+    const safePrefix = "a".repeat(218);
+    const message = `${safePrefix}😀suffix`;
+    const response = new Response(
+      JSON.stringify({
+        error: { message, code: "utf16_test" },
+      }),
+      { status: 400 },
+    );
+
+    await expect(assertOkOrThrowProviderError(response, "Provider API error")).rejects.toThrow(
+      `Provider API error (400): ${safePrefix}… [code=utf16_test]`,
+    );
+  });
+
   it("keeps HTTP status metadata when error body reads fail", async () => {
     const response = {
       ok: false,
@@ -159,6 +174,56 @@ describe("provider error utils", () => {
       statusCode: 503,
       message: "Provider API error (503)",
     } satisfies Partial<ProviderHttpError>);
+  });
+
+  it("propagates a bounded error-body timeout instead of hanging normalization", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel,
+        }),
+        { status: 503 },
+      );
+      const assertion = expect(
+        assertOkOrThrowHttpError(response, "Provider API error", {
+          bodyTimeoutMs: () => 50,
+          onBodyTimeout: ({ timeoutMs }) => new Error(`provider body timed out ${timeoutMs}`),
+        }),
+      ).rejects.toThrow("provider body timed out 50");
+
+      await vi.advanceTimersByTimeAsync(50);
+      await assertion;
+      expect(cancel).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates an already-expired lazy error-body deadline", async () => {
+    const cancel = vi.fn();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull() {
+          return new Promise<void>(() => {});
+        },
+        cancel,
+      }),
+      { status: 503 },
+    );
+
+    await expect(
+      assertOkOrThrowHttpError(response, "Provider API error", {
+        bodyTimeoutMs: () => {
+          throw new Error("provider deadline already expired");
+        },
+      }),
+    ).rejects.toThrow("provider deadline already expired");
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 
   it("releases provider error body reader locks after bounded reads complete", async () => {
@@ -199,6 +264,12 @@ describe("provider error utils", () => {
     await expect(readResponseTextLimited(response, 8)).resolves.toBe("provider");
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops partial UTF-8 characters when provider error body reads truncate", async () => {
+    const response = new Response(new Blob([new TextEncoder().encode("ab😀cd")]).stream());
+
+    await expect(readResponseTextLimited(response, 3)).resolves.toBe("ab");
   });
 
   it("attaches structured provider error metadata", async () => {
@@ -287,6 +358,19 @@ describe("provider error utils", () => {
     ).rejects.toThrow("Provider catalog failed: JSON response exceeds 2048 bytes");
 
     expect(streamed.getReadCount()).toBeLessThan(20);
+  });
+
+  it("rejects provider JSON responses with invalid UTF-8 bytes instead of silently replacing them", async () => {
+    const invalidUtf8Bytes = new Uint8Array([0x7b, 0x22, 0x6b, 0x65, 0x79, 0x22, 0x3a, 0xff, 0x7d]);
+    const response = new Response(invalidUtf8Bytes.buffer, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+
+    await expect(readProviderJsonResponse(response, "Provider JSON failed")).rejects.toMatchObject({
+      message: "Provider JSON failed: malformed JSON response",
+      cause: expect.any(TypeError) as unknown,
+    });
   });
 
   it("caps successful text responses instead of buffering oversized bodies", async () => {

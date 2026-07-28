@@ -15,7 +15,7 @@ async function waitFor(
 
 describeLive("browser (live): remote CDP tab persistence", () => {
   it("creates, lists, focuses, and closes tabs via Playwright", { timeout: 60_000 }, async () => {
-    const pw = await import("./pw-ai.js");
+    const { pwAi: pw } = await import("./pw-ai.js");
     await pw.closePlaywrightBrowserConnection().catch(() => {});
 
     const created = await pw.createPageViaPlaywright({ cdpUrl: CDP_URL, url: "about:blank" });

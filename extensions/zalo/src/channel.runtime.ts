@@ -54,7 +54,7 @@ export async function startZaloGatewayAccount(
   const fetcher = resolveZaloProxyFetch(account.config.proxy);
   try {
     const probe = await probeZalo(token, 2500, fetcher);
-    const name = probe.ok ? probe.bot?.name?.trim() : null;
+    const name = probe.ok ? probe.bot?.account_name?.trim() : null;
     if (name) {
       zaloBotLabel = ` (${name})`;
     }

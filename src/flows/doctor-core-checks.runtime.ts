@@ -8,22 +8,21 @@ import {
 import {
   listAgentEntries,
   listAgentIds,
+  resolveAgentDir,
   resolveDefaultAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import {
-  findModelInCatalog,
-  loadModelCatalog,
-  type ModelCatalogEntry,
-} from "../agents/model-catalog.js";
+import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolName } from "../agents/tool-policy.js";
 import {
@@ -42,6 +41,10 @@ import {
 import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { buildGatewayProbeConnectionDetails } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  formatLocalAudioSelection,
+  inspectLocalAudioSelection,
+} from "../media-understanding/local-audio.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
@@ -65,6 +68,38 @@ export function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[]
     agentId,
   });
   return collectUnavailableAgentSkills(report);
+}
+
+export async function collectLocalAudioAccelerationFindings(): Promise<readonly HealthFinding[]> {
+  const selection = await inspectLocalAudioSelection();
+  const available = selection.candidates.filter((candidate) => candidate.available);
+  if (available.length === 0) {
+    return [];
+  }
+  const summary = formatLocalAudioSelection(selection);
+  if (summary) {
+    return [
+      {
+        checkId: "core/doctor/local-audio-acceleration",
+        severity: "info",
+        message: `Local STT auto-selection: ${summary}.`,
+        path: "tools.media.models",
+      },
+    ];
+  }
+  const blockers = available
+    .map((candidate) => `${candidate.command}: ${candidate.reason}`)
+    .join("; ");
+  return [
+    {
+      checkId: "core/doctor/local-audio-acceleration",
+      severity: "info",
+      message: `Local STT commands were found but none are ready for auto-selection: ${blockers}.`,
+      path: "tools.media.models",
+      fixHint:
+        "Install the matching local model/runtime, or configure an audio-capable tools.media.models CLI entry.",
+    },
+  ];
 }
 
 export async function collectGatewayHealthFindings(
@@ -792,9 +827,12 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
   const activeBundleTools = applyFinalEffectiveToolPolicy({
     bundledTools: params.bundleRuntime.tools,
     config: params.cfg,
-    agentId: params.agentId,
-    modelProvider: params.modelRef.provider,
-    modelId: params.modelRef.model,
+    conversationCapabilityProfile: resolveConversationCapabilityProfile({
+      config: params.cfg,
+      agentId: params.agentId,
+      modelProvider: params.modelRef.provider,
+      modelId: params.modelRef.model,
+    }),
     warn: () => {},
     toolPolicyAuditLogLevel: "debug",
   });
@@ -1002,9 +1040,12 @@ function shouldReportBundleMcpRuntimeDiagnostic(params: {
     applyFinalEffectiveToolPolicy({
       bundledTools: collectBundleMcpDiagnosticSentinels(params),
       config: params.cfg,
-      agentId: params.agentId,
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
+      conversationCapabilityProfile: resolveConversationCapabilityProfile({
+        config: params.cfg,
+        agentId: params.agentId,
+        modelProvider: params.modelRef.provider,
+        modelId: params.modelRef.model,
+      }),
       warn: () => {},
       toolPolicyAuditLogLevel: "debug",
     }).length > 0
@@ -1037,7 +1078,6 @@ function isAcpRuntimeAgent(cfg: OpenClawConfig, agentId: string): boolean {
 export async function collectRuntimeToolSchemaFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
-  const catalog = await loadModelCatalog({ config: cfg });
   const findings: HealthFinding[] = [];
   const bundleRuntimeByWorkspace = new Map<string, BundleMcpToolRuntime>();
   const bundleRuntimeLoadErrorsByWorkspace = new Map<string, HealthFinding>();
@@ -1047,6 +1087,11 @@ export async function collectRuntimeToolSchemaFindings(
       if (isAcpRuntimeAgent(cfg, agentId)) {
         continue;
       }
+      const catalog = await loadPreparedModelCatalog({
+        config: cfg,
+        agentId,
+        agentDir: resolveAgentDir(cfg, agentId),
+      });
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
       const modelRef = resolveDefaultModelForAgent({
         cfg,
@@ -1128,3 +1173,4 @@ export async function collectRuntimeToolSchemaFindings(
   }
   return findings;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ read_when:
   - You are iterating on end-to-end QA automation
 ---
 
-`qa-channel` is a bundled synthetic message transport for automated OpenClaw QA. It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state deterministic and fully inspectable.
+`qa-channel` is a repo-local synthetic message transport for automated OpenClaw QA (`extensions/qa-channel`, private package, excluded from packaged installs). It is not a production channel - it exists to exercise the same channel plugin boundary used by real transports while keeping state deterministic and fully inspectable.
 
 ## What it does
 
@@ -40,18 +40,20 @@ Account keys:
 
 - `enabled` - master toggle for this account.
 - `name` - optional display label.
-- `baseUrl` - synthetic bus URL.
-- `botUserId` - Matrix-style bot user id used in target grammar.
-- `botDisplayName` - display name for outbound messages.
-- `pollTimeoutMs` - long-poll wait window. Integer between 100 and 30000.
-- `allowFrom` - sender allowlist (user ids or `"*"`). Direct messages and
-  allowlisted group policy both use these synthetic sender ids.
+- `baseUrl` - synthetic bus URL. The account counts as configured once this is set.
+- `botUserId` - synthetic bot user id used in target grammar (default: `openclaw`).
+- `botDisplayName` - display name for outbound messages (default: `OpenClaw QA`).
+- `pollTimeoutMs` - long-poll wait window. Integer between 100 and 30000 (default: 1000).
+- `allowFrom` - sender allowlist (user ids or `"*"`; default: `["*"]`). DMs are
+  always `open` policy; allowlisted group policy also uses these synthetic
+  sender ids.
 - `groupPolicy` - shared-room policy: `"open"` (default), `"allowlist"`, or
   `"disabled"`.
 - `groupAllowFrom` - optional shared-room sender allowlist. When omitted under
   `"allowlist"`, QA Channel falls back to `allowFrom`.
 - `groups.<room>.requireMention` - require a bot mention before replying in a
-  specific group/channel room. `groups."*"` sets the default.
+  specific group/channel room (default: false). `groups."*"` sets the default;
+  per-room `tools` / `toolsBySender` set tool policy overrides.
 - `defaultTo` - fallback target when none is supplied.
 - `actions.messages` / `actions.reactions` / `actions.search` / `actions.threads` - per-action tool gating.
 
@@ -68,7 +70,7 @@ Host-side self-check (writes a Markdown report under `.artifacts/qa-e2e/`):
 pnpm qa:e2e
 ```
 
-This routes through `qa-lab`, starts the in-repo QA bus, boots the bundled `qa-channel` runtime slice, and runs a deterministic self-check.
+This routes through `qa-lab`, starts the in-repo QA bus, boots the `qa-channel` runtime slice, and runs a deterministic self-check.
 
 Full repo-backed scenario suite:
 
@@ -88,8 +90,7 @@ Builds the QA site, starts the Docker-backed gateway + QA Lab stack, and prints 
 
 ## Related
 
-- [QA overview](/concepts/qa-e2e-automation) - overall stack, transport adapters, scenario authoring
-- [Matrix QA](/concepts/qa-matrix) - example live-transport runner that drives a real channel
+- [QA overview](/concepts/qa-e2e-automation) - overall stack, transport adapters, Matrix profiles, and scenario authoring
 - [Pairing](/channels/pairing)
 - [Groups](/channels/groups)
 - [Channels overview](/channels)

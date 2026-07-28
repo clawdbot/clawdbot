@@ -1,15 +1,18 @@
 // Durable receipts make legacy cron migration retries independent of mutable runtime rows.
+import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../../infra/node-sqlite.js";
 import type { DB as OpenClawStateDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import type { LegacyCronMigrationSource } from "./legacy-store-migration.js";
 
 type CronMigrationDatabase = Pick<OpenClawStateDatabase, "migration_runs" | "migration_sources">;
@@ -34,6 +37,30 @@ function hasLegacyCronMigrationReceiptInDatabase(
 
 export function hasLegacyCronMigrationReceipt(source: LegacyCronMigrationSource): boolean {
   return hasLegacyCronMigrationReceiptInDatabase(openOpenClawStateDatabase().db, source);
+}
+
+function tableExists(db: DatabaseSync, tableName: string): boolean {
+  return (
+    db
+      .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(tableName) !== undefined
+  );
+}
+
+export function hasLegacyCronMigrationReceiptReadOnly(source: LegacyCronMigrationSource): boolean {
+  const statePath = resolveOpenClawStateSqlitePath(process.env);
+  if (!fs.existsSync(statePath)) {
+    return false;
+  }
+  const db = openNodeSqliteDatabase(statePath, { readOnly: true });
+  try {
+    if (!tableExists(db, "migration_sources")) {
+      return false;
+    }
+    return hasLegacyCronMigrationReceiptInDatabase(db, source);
+  } finally {
+    db.close();
+  }
 }
 
 export function acquireLegacyCronMigrationReceipt(

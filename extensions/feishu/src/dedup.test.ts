@@ -1,41 +1,29 @@
 // Feishu tests cover dedup plugin behavior.
-import fs from "node:fs/promises";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../runtime-api.js";
+import { feishuDedupeState } from "./dedup-state.js";
 import {
+  claimUnprocessedFeishuMessage,
+  finalizeFeishuMessageProcessing,
   hasProcessedFeishuMessage,
-  testingHooks,
-  tryRecordMessagePersistent,
   warmupDedupFromPluginState,
 } from "./dedup.js";
-import { setFeishuRuntime } from "./runtime.js";
 
 let tempDir: string | undefined;
 let previousStateDir: string | undefined;
 
-beforeEach(async () => {
+beforeEach(() => {
   previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-dedup-"));
+  tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-feishu-dedup-"));
   process.env.OPENCLAW_STATE_DIR = tempDir;
-  setFeishuRuntime({
-    state: {
-      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
-        createPluginStateSyncKeyedStoreForTests("feishu", options),
-    },
-  } as unknown as PluginRuntime);
-  testingHooks.resetFeishuDedupForTests();
+  feishuDedupeState.reset();
 });
 
-afterEach(async () => {
+afterEach(() => {
   vi.useRealTimers();
-  testingHooks.resetFeishuDedupForTests();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -43,53 +31,111 @@ afterEach(async () => {
     process.env.OPENCLAW_STATE_DIR = previousStateDir;
   }
   if (tempDir) {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    fs.rmSync(tempDir, { recursive: true, force: true });
   }
   tempDir = undefined;
 });
 
-describe("Feishu persistent dedupe", () => {
-  it("records message ids in plugin state", async () => {
-    await expect(tryRecordMessagePersistent("msg-1", "account-a")).resolves.toBe(true);
-    await expect(tryRecordMessagePersistent("msg-1", "account-a")).resolves.toBe(false);
-    await expect(hasProcessedFeishuMessage("msg-1", "account-a")).resolves.toBe(true);
-    await expect(hasProcessedFeishuMessage("msg-1", "account-b")).resolves.toBe(false);
+// Simulates a process restart: a fresh guard has empty memory and no in-flight
+// claims, so any duplicate verdict must come from the persisted SQLite rows.
+async function restartFeishuDedup(): Promise<void> {
+  feishuDedupeState.reset();
+}
+
+describe("Feishu claimable dedupe", () => {
+  it("prevents replay after a restart once a message is committed", async () => {
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
+    ).resolves.toBe(true);
+
+    await restartFeishuDedup();
+    await expect(
+      claimUnprocessedFeishuMessage({ messageId: "msg-4", namespace: "account-a" }),
+    ).resolves.toEqual({ kind: "duplicate" });
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-4", namespace: "account-a" }),
+    ).resolves.toBe(false);
+  });
+
+  it("commits a held claim without reclaiming it", async () => {
+    const claim = await claimUnprocessedFeishuMessage({
+      messageId: "msg-5",
+      namespace: "account-a",
+    });
+    expect(claim.kind).toBe("claimed");
+    if (claim.kind !== "claimed") {
+      throw new Error(`expected claimed result, received ${claim.kind}`);
+    }
+    await expect(
+      finalizeFeishuMessageProcessing({
+        messageId: "msg-5",
+        namespace: "account-a",
+        processingClaim: claim.handle,
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      finalizeFeishuMessageProcessing({
+        messageId: "msg-5",
+        namespace: "account-a",
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("dedupes cross-account broadcast claims through the shared namespace", async () => {
+    // Multi-account groups deliver the same event once per bot account; the
+    // shared "broadcast" namespace lets the first account claim dispatch.
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
+    ).resolves.toBe(true);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
+    ).resolves.toBe(false);
+
+    await restartFeishuDedup();
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-6", namespace: "broadcast" }),
+    ).resolves.toBe(false);
   });
 
   it("warms memory from persisted plugin state", async () => {
-    await expect(tryRecordMessagePersistent("msg-2", "account-a")).resolves.toBe(true);
-    testingHooks.resetFeishuDedupMemoryForTests();
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),
+    ).resolves.toBe(true);
+    await restartFeishuDedup();
 
     await expect(warmupDedupFromPluginState("account-a")).resolves.toBe(1);
-    await expect(tryRecordMessagePersistent("msg-2", "account-a")).resolves.toBe(false);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-7", namespace: "account-a" }),
+    ).resolves.toBe(false);
   });
 
-  it("ignores expired persisted entries", async () => {
+  it("ignores committed messages after the TTL expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
-    await expect(tryRecordMessagePersistent("msg-3", "account-a")).resolves.toBe(true);
-    testingHooks.resetFeishuDedupMemoryForTests();
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-8", namespace: "account-a" }),
+    ).resolves.toBe(true);
+    await restartFeishuDedup();
 
     vi.setSystemTime(1_000 + 24 * 60 * 60 * 1000 + 1);
-    await expect(hasProcessedFeishuMessage("msg-3", "account-a")).resolves.toBe(false);
+    await expect(hasProcessedFeishuMessage("msg-8", "account-a")).resolves.toBe(false);
   });
 
-  it("ignores legacy JSON dedupe files at runtime", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(2_000);
-    const legacyPath = path.join(tempDir as string, "feishu", "dedup", "account-a.json");
-    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
-    await fs.writeFile(
-      legacyPath,
-      JSON.stringify({
-        "msg-legacy": 1_000,
-        "msg-expired": 2_000 - 24 * 60 * 60 * 1000 - 1,
-      }),
-      "utf8",
-    );
+  it("keeps deduping in memory and logs when plugin-state persistence fails", async () => {
+    // A regular file where the state dir should be makes every SQLite open fail.
+    const blockedPath = path.join(tempDir as string, "not-a-dir");
+    fs.writeFileSync(blockedPath, "x", "utf8");
+    process.env.OPENCLAW_STATE_DIR = path.join(blockedPath, "nested");
+    const log = vi.fn();
 
-    await expect(hasProcessedFeishuMessage("msg-legacy", "account-a")).resolves.toBe(false);
-    await expect(tryRecordMessagePersistent("msg-legacy", "account-a")).resolves.toBe(true);
-    await expect(hasProcessedFeishuMessage("msg-expired", "account-a")).resolves.toBe(false);
+    await expect(
+      finalizeFeishuMessageProcessing({ messageId: "msg-9", namespace: "account-a", log }),
+    ).resolves.toBe(true);
+    await expect(
+      claimUnprocessedFeishuMessage({ messageId: "msg-9", namespace: "account-a", log }),
+    ).resolves.toEqual({ kind: "duplicate" });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining("feishu-dedup: persistent state error"),
+    );
   });
 });

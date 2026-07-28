@@ -20,6 +20,7 @@ import {
 } from "../../scripts/run-oxlint-shards.mjs";
 import {
   filterSparseMissingOxlintTargets,
+  runOxlintCliEntry,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -33,7 +34,7 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
       return;
     }
     await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, 25);
+      setTimeout(resolvePoll, 5);
     });
   }
   throw new Error("condition was not met before timeout");
@@ -49,6 +50,60 @@ function isProcessAlive(pid: number): boolean {
 }
 
 describe("run-oxlint", () => {
+  it("ends a failing run with a stable final status line", async () => {
+    const priorExitCode = process.exitCode;
+    const lines: unknown[] = [];
+    try {
+      process.exitCode = 0;
+      await runOxlintCliEntry(
+        async () => {
+          process.exitCode = 2;
+        },
+        (line: unknown) => lines.push(line),
+      );
+      expect(lines).toEqual(["[oxlint] FAILED (exit 2)"]);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("converts a wrapper crash into a nonzero exit with the status line last", async () => {
+    // The original incident: a crashed wrapper printed only a stack trace, and
+    // truncated output read as success. The marker must be the final line.
+    const priorExitCode = process.exitCode;
+    const lines: unknown[] = [];
+    try {
+      process.exitCode = 0;
+      await runOxlintCliEntry(
+        async () => {
+          throw new Error("artifact prep failed");
+        },
+        (line: unknown) => lines.push(line),
+      );
+      expect(process.exitCode).toBe(1);
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toBeInstanceOf(Error);
+      expect(lines[1]).toBe("[oxlint] FAILED (exit 1)");
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("stays silent on a clean run", async () => {
+    const priorExitCode = process.exitCode;
+    const lines: unknown[] = [];
+    try {
+      process.exitCode = 0;
+      await runOxlintCliEntry(
+        async () => {},
+        (line: unknown) => lines.push(line),
+      );
+      expect(lines).toEqual([]);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
   it("prepares extension package boundary artifacts for normal lint runs", () => {
     expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
     expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
@@ -69,7 +124,7 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
-    expect(packageJson.scripts.lint).toBe("node scripts/run-oxlint-shards.mjs");
+    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
     expect(packageJson.scripts["lint:core"]).toBe(
       "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     );
@@ -78,6 +133,22 @@ describe("run-oxlint", () => {
     );
     expect(shardedLintRunner).toContain("prepare-extension-package-boundary-artifacts.mjs");
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
+  });
+
+  it("prepares the worktree toolchain before the complete lint pre-step", () => {
+    const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
+      scripts: Record<string, string>;
+    };
+    const lintRunner = readFileSync("scripts/run-lint.mjs", "utf8");
+
+    expect(packageJson.scripts.lint).toBe("node scripts/run-lint.mjs");
+    expect(lintRunner.indexOf("ensureRepoToolNodeModulesLink(")).toBeGreaterThan(-1);
+    expect(
+      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
+    ).toBeGreaterThan(lintRunner.indexOf("ensureRepoToolNodeModulesLink("));
+    expect(lintRunner.indexOf('path.resolve("scripts", "run-oxlint-shards.mjs")')).toBeGreaterThan(
+      lintRunner.indexOf('path.resolve("scripts", "control-ui-i18n-verify.ts")'),
+    );
   });
 
   it("holds one parent heavy-check lock for sharded lint runs", () => {
@@ -92,14 +163,6 @@ describe("run-oxlint", () => {
     expect(lockIndex).toBeGreaterThan(-1);
     expect(lockIndex).toBeGreaterThan(skipLockIndex);
     expect(childSkipIndex).toBeGreaterThan(lockIndex);
-  });
-
-  it("keeps a serial oxlint shard path available", () => {
-    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
-
-    expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
-    expect(shardedLintRunner).toContain('platform === "win32"');
-    expect(shardedLintRunner).toContain("runShardsSerial");
   });
 
   it("serializes broad oxlint shards on constrained local hosts", () => {
@@ -127,6 +190,25 @@ describe("run-oxlint", () => {
         env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
         platform: "linux",
         hostResources: constrainedHost,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps oxlint shards parallel on dedicated CI runner classes", () => {
+    // Blacksmith's 16 vCPU class carries 32GB; the local-Mac 48GB threshold
+    // must not force CI serial (measured: serial shards cost 89s vs ~47s).
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 32 * 1024 ** 3, logicalCpuCount: 16 },
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 },
       }),
     ).toBe(true);
   });
@@ -310,7 +392,7 @@ describe("run-oxlint", () => {
             CHILD_PID_PATH: childPidPath,
             OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
             OPENCLAW_OXLINT_SHARD_KILL_GRACE_MS: "25",
-            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "1000",
+            OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: "250",
           },
           extraArgs: [],
           runner,
@@ -516,9 +598,9 @@ describe("run-oxlint", () => {
             "  try { process.kill(pid, 0); return true; } catch { return false; }",
             "};",
             "const waitFor = async (predicate) => {",
-            "  for (let attempt = 0; attempt < 100; attempt += 1) {",
+            "  for (let attempt = 0; attempt < 500; attempt += 1) {",
             "    if (predicate()) return true;",
-            "    await sleep(25);",
+            "    await sleep(5);",
             "  }",
             "  return false;",
             "};",

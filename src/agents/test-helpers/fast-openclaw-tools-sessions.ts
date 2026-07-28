@@ -11,6 +11,10 @@ vi.mock("../tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => stubTool("agents_list"),
 }));
 
+vi.mock("../tools/computer-tool.js", () => ({
+  createComputerTool: () => stubTool("computer"),
+}));
+
 vi.mock("../tools/cron-tool.js", () => ({
   createCronTool: () => stubTool("cron"),
 }));

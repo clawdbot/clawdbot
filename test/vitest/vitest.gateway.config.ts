@@ -22,7 +22,7 @@ export function createGatewayVitestConfig(env?: Record<string, string | undefine
   });
 }
 
-export function createGatewayProjectShardVitestConfig() {
+function createGatewayProjectShardVitestConfig() {
   return createProjectShardVitestConfig(gatewayProjectConfigs);
 }
 

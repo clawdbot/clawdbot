@@ -1,6 +1,6 @@
 // Outbound delivery formatting produces human CLI summaries for direct and
 // gateway send results.
-import { getChatChannelMeta } from "../../channels/chat-meta.js";
+import { findChatChannelMeta } from "../../channels/chat-meta.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -32,7 +32,7 @@ const resolveChannelLabel = (channel: string) => {
   // Some legacy chat channels are not plugins; keep their human labels for CLI output.
   const normalized = normalizeChatChannelId(channel);
   if (normalized) {
-    return getChatChannelMeta(normalized).label;
+    return findChatChannelMeta(normalized)?.label ?? channel;
   }
   return channel;
 };
@@ -43,13 +43,15 @@ const resolveChannelLabel = (channel: string) => {
 export function formatOutboundDeliverySummary(
   channel: string,
   result?: OutboundDeliveryResult,
+  opts?: { action?: string },
 ): string {
+  const action = opts?.action ?? "Sent";
   if (!result) {
-    return `✅ Sent via ${resolveChannelLabel(channel)}. Message ID: unknown`;
+    return `✅ ${action} via ${resolveChannelLabel(channel)}. Message ID: unknown`;
   }
 
   const label = resolveChannelLabel(result.channel);
-  const base = `✅ Sent via ${label}. Message ID: ${result.messageId}`;
+  const base = `✅ ${action} via ${label}. Message ID: ${result.messageId}`;
 
   if ("chatId" in result) {
     return `${base} (chat ${result.chatId})`;

@@ -2,7 +2,7 @@
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeSessionStoreForTest } from "../config/sessions/test-helpers.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   buildCodexNativeWebSearchTool,
   describeCodexNativeWebSearch,
@@ -217,12 +217,23 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.inactiveReason).toBe("tool_policy_denied");
   });
 
-  it("keeps native search inactive when inherited session policy denies web_search", () => {
+  it("keeps native search inactive when inherited session policy denies web_search", async () => {
     const agentId = `native-inherited-deny-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const sessionKey = `agent:${agentId}:subagent:limited`;
-    const storePath = path.join(os.tmpdir(), `openclaw-native-inherited-deny-${agentId}.json`);
-    writeSessionStoreForTest(storePath, {
-      [sessionKey]: {
+    const storePath = path.join(
+      os.tmpdir(),
+      `openclaw-native-inherited-deny-${agentId}`,
+      "agents",
+      agentId,
+      "sessions",
+      "sessions.json",
+    );
+    await replaceSessionEntry(
+      {
+        sessionKey,
+        storePath,
+      },
+      {
         sessionId: "limited-session",
         updatedAt: Date.now(),
         spawnDepth: 1,
@@ -230,7 +241,7 @@ describe("resolveCodexNativeSearchActivation", () => {
         subagentControlScope: "children",
         inheritedToolDeny: ["web_search"],
       },
-    });
+    );
 
     const result = resolveCodexNativeSearchActivation({
       config: {

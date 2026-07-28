@@ -3,6 +3,9 @@
  *
  * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
  */
+import { parseRetryAfterHttpDateMs } from "@openclaw/ai/internal/retry-after";
+import { emitModelTransportDebug } from "@openclaw/ai/transports";
+import { formatModelTransportDebugUrl } from "@openclaw/ai/transports";
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -18,6 +21,7 @@ import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
+import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
   mergeSsrFPolicies,
@@ -28,8 +32,12 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
-import { formatModelTransportDebugUrl } from "./model-transport-url.js";
+import {
+  containsSecretSentinel,
+  resolveSecretSentinel,
+  SECRET_SENTINEL_PATTERN,
+  swapSecretSentinelsInText,
+} from "../secrets/sentinel.js";
 import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
 import {
   ensureModelProviderLocalService,
@@ -59,15 +67,6 @@ const SSE_SANITIZE_BUFFER_MAX_CHARS = 16 * 1024 * 1024;
 
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
-const RETRY_AFTER_HTTP_DATE_RE =
-  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
-const HTTP_DATE_MONTH_INDEX = new Map(
-  ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map(
-    (month, index) => [month, index],
-  ),
-);
-const OBSOLETE_ASCTIME_HTTP_DATE_RE =
-  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -97,30 +96,56 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
+async function cancelReaderBestEffort(
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+  reason?: unknown,
+): Promise<void> {
+  // Reader cancellation is cleanup. An upstream cancel failure must not replace
+  // the wrapper's authoritative stream error or downstream cancellation.
+  await reader?.cancel(reason).catch(() => undefined);
+}
+
 function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
   const source = response.body;
   if (!source) {
     return response;
   }
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let total = 0;
-  const capped = source.pipeThrough(
-    new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        const nextTotal = total + chunk.byteLength;
-        if (nextTotal > maxBytes) {
-          const remaining = maxBytes - total;
-          if (remaining > 0) {
-            controller.enqueue(chunk.subarray(0, remaining));
-          }
-          total = maxBytes;
-          controller.terminate();
+  // Own the reader: Node can leak an internal pipeThrough writer rejection when
+  // downstream cancellation races the cap terminating the transform.
+  const capped = new ReadableStream<Uint8Array>({
+    start() {
+      reader = source.getReader();
+    },
+    async pull(controller) {
+      try {
+        const chunk = await reader?.read();
+        if (!chunk || chunk.done) {
+          controller.close();
           return;
         }
-        total = nextTotal;
-        controller.enqueue(chunk);
-      },
-    }),
-  );
+        const remaining = maxBytes - total;
+        if (chunk.value.byteLength > remaining) {
+          if (remaining > 0) {
+            controller.enqueue(chunk.value.subarray(0, remaining));
+          }
+          total = maxBytes;
+          controller.close();
+          void cancelReaderBestEffort(reader);
+          return;
+        }
+        total += chunk.value.byteLength;
+        controller.enqueue(chunk.value);
+      } catch (error) {
+        controller.error(error);
+        void cancelReaderBestEffort(reader, error);
+      }
+    },
+    async cancel(reason) {
+      await cancelReaderBestEffort(reader, reason);
+    },
+  });
   return new Response(capped, response);
 }
 
@@ -173,12 +198,12 @@ function sanitizeOpenAISdkSseResponse(
             buffer += decoder.decode(chunk.value, { stream: true });
           }
         } catch (error) {
-          await reader?.cancel(error).catch(() => {});
+          await cancelReaderBestEffort(reader, error);
           controller.error(error);
         }
       },
       async cancel(reason) {
-        await reader?.cancel(reason);
+        await cancelReaderBestEffort(reader, reason);
       },
     });
     const headers = new Headers(response.headers);
@@ -261,12 +286,12 @@ function sanitizeOpenAISdkSseResponse(
           }
         }
       } catch (error) {
-        await reader?.cancel(error).catch(() => {});
+        await cancelReaderBestEffort(reader, error);
         controller.error(error);
       }
     },
     async cancel(reason) {
-      await reader?.cancel(reason);
+      await cancelReaderBestEffort(reader, reason);
     },
   });
 
@@ -290,10 +315,6 @@ function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
 
 function isJsonContentType(contentType: string): boolean {
   return /\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType);
-}
-
-function isOpenAISdkStreamContentType(contentType: string): boolean {
-  return /\btext\/event-stream\b/i.test(contentType) || isJsonContentType(contentType);
 }
 
 type OpenAISdkStreamBodyKind = "html" | "json" | "sse" | "unknown";
@@ -349,7 +370,7 @@ async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISd
     text += decoder.decode();
     return classifyOpenAISdkStreamBodyPrefix(text);
   } finally {
-    void reader.cancel().catch(() => undefined);
+    void cancelReaderBestEffort(reader);
   }
 }
 
@@ -370,7 +391,20 @@ async function normalizeOpenAISdkStreamContentType(params: {
   localServiceLease?: ProviderLocalServiceLease;
 }): Promise<Response> {
   const contentType = params.response.headers.get("content-type") ?? "";
-  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+  if (!params.response.ok || !params.response.body) {
+    return params.response;
+  }
+  if (/\btext\/event-stream\b/i.test(contentType)) {
+    return params.response;
+  }
+  if (isJsonContentType(contentType)) {
+    // Some OpenAI-compatible gateways stream real SSE (`data: {...}`) but mislabel
+    // the response as JSON. Without relabeling, the JSON-wrap fallback below would
+    // re-prefix each frame as `data: data: {...}`, breaking JSON.parse in the SDK.
+    const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
+    if (kind === "sse") {
+      return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
+    }
     return params.response;
   }
   if (!contentType.trim()) {
@@ -450,58 +484,12 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const trimmedRetryAfter = trimmedRetryAfterSeconds;
-  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
-    return undefined;
-  }
-
-  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
-  if (Number.isNaN(retryAt)) {
+  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfterSeconds);
+  if (retryAt === undefined) {
     return undefined;
   }
 
   return Math.max(0, (retryAt - Date.now()) / 1000);
-}
-
-function parseRetryAfterHttpDateMs(value: string): number {
-  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
-  if (match) {
-    const month = HTTP_DATE_MONTH_INDEX.get(match[1] ?? "");
-    if (month === undefined) {
-      return Number.NaN;
-    }
-    const year = Number.parseInt(match[6] ?? "", 10);
-    const day = Number.parseInt((match[2] ?? "").trim(), 10);
-    const hours = Number.parseInt(match[3] ?? "", 10);
-    const minutes = Number.parseInt(match[4] ?? "", 10);
-    const seconds = Number.parseInt(match[5] ?? "", 10);
-    if (
-      day < 1 ||
-      day > 31 ||
-      hours > 23 ||
-      minutes > 59 ||
-      seconds > 59 ||
-      [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
-    ) {
-      return Number.NaN;
-    }
-    const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
-    const parsedDate = new Date(timestamp);
-    return parsedDate.getUTCFullYear() === year &&
-      parsedDate.getUTCMonth() === month &&
-      parsedDate.getUTCDate() === day &&
-      parsedDate.getUTCHours() === hours &&
-      parsedDate.getUTCMinutes() === minutes &&
-      parsedDate.getUTCSeconds() === seconds
-      ? timestamp
-      : Number.NaN;
-  }
-
-  const parsed = Date.parse(value);
-  if (!Number.isNaN(parsed)) {
-    return parsed;
-  }
-  return Number.NaN;
 }
 
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
@@ -550,12 +538,6 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
-const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
-  (held) => {
-    void held.finalize();
-  },
-);
-
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -569,53 +551,18 @@ function buildManagedResponse(
     void release().finally(finalizeLocalServiceLease);
     return response;
   }
-  const source = response.body;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let released = false;
-  const cleanupRegistrationToken = {};
-  const finalize = async () => {
-    if (released) {
-      return;
-    }
-    released = true;
-    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
-    try {
-      await reader?.cancel().catch(() => undefined);
-      await release().catch(() => undefined);
-    } finally {
-      finalizeLocalServiceLease();
-    }
-  };
-  const wrappedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
-    async pull(controller) {
+  const wrappedBody = wrapGuardedBodyStream({
+    body: response.body,
+    // Lease release must survive a failed guard release so local services do not leak.
+    cleanup: async () => {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
-          controller.close();
-          await finalize();
-          return;
-        }
-        refreshTimeout?.();
-        controller.enqueue(chunk.value);
-      } catch (error) {
-        controller.error(error);
-        await finalize();
-      }
-    },
-    async cancel(reason) {
-      try {
-        await reader?.cancel(reason);
+        await release().catch(() => undefined);
       } finally {
-        await finalize();
+        finalizeLocalServiceLease();
       }
     },
+    refreshTimeout,
   });
-  // Stream consumers should cancel deterministically; this catches abandoned
-  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
-  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
@@ -774,6 +721,63 @@ export function resolveProviderTransportSsrFPolicy(params: {
   );
 }
 
+function headersContainSecretSentinel(headers: HeadersInit | undefined): boolean {
+  if (!headers) {
+    return false;
+  }
+  for (const value of new Headers(headers).values()) {
+    if (containsSecretSentinel(value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function swapSecretSentinelsInUrl(url: string): { text: string; unknown: string[] } {
+  if (!containsSecretSentinel(url)) {
+    return { text: url, unknown: [] };
+  }
+  const unknown = new Set<string>();
+  const text = url.replace(new RegExp(SECRET_SENTINEL_PATTERN.source, "g"), (sentinel) => {
+    const value = resolveSecretSentinel(sentinel);
+    if (value === undefined) {
+      unknown.add(sentinel);
+      return sentinel;
+    }
+    // Sentinels are URL-safe placeholders. Encode the real bytes so query/path structure is stable.
+    return encodeURIComponent(value);
+  });
+  return { text, unknown: [...unknown] };
+}
+
+function swapSecretSentinelsForEgress(params: { url: string; headers?: HeadersInit }): {
+  url: string;
+  headers?: Headers;
+} {
+  if (!containsSecretSentinel(params.url) && !headersContainSecretSentinel(params.headers)) {
+    return { url: params.url };
+  }
+  const urlSwap = swapSecretSentinelsInUrl(params.url);
+  const headers = params.headers ? new Headers(params.headers) : undefined;
+  const unknown = new Set(urlSwap.unknown);
+  if (headers) {
+    for (const [name, value] of headers.entries()) {
+      const swapped = swapSecretSentinelsInText(value);
+      headers.set(name, swapped.text);
+      for (const sentinel of swapped.unknown) {
+        unknown.add(sentinel);
+      }
+    }
+  }
+  const unresolved = unknown.values().next().value;
+  if (unresolved) {
+    throw new Error(
+      `Secret sentinel ${unresolved} is not registered in this process; refusing to send request`,
+    );
+  }
+  return { url: urlSwap.text, ...(headers ? { headers } : {}) };
+}
+
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
@@ -803,7 +807,7 @@ export function buildGuardedModelFetch(
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
-    const url =
+    const rawUrl =
       request?.url ??
       (input instanceof URL
         ? input.toString()
@@ -812,6 +816,12 @@ export function buildGuardedModelFetch(
           : (() => {
               throw new Error("Unsupported fetch input for transport-aware model request");
             })());
+    const rawHeaders = request?.headers ?? init?.headers;
+    const swappedEgress = swapSecretSentinelsForEgress({
+      url: rawUrl,
+      headers: rawHeaders,
+    });
+    const url = swappedEgress.url;
     const policy = resolveProviderTransportSsrFPolicy({
       baseUrl: model.baseUrl,
       url,
@@ -827,13 +837,15 @@ export function buildGuardedModelFetch(
       request &&
       ({
         method: request.method,
-        headers: request.headers,
+        headers: swappedEgress.headers ?? request.headers,
         body: request.body ?? undefined,
         redirect: request.redirect,
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const baseInit = requestInit ?? init;
+    const baseInit =
+      requestInit ??
+      (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
     const baseSignal = baseInit?.signal ?? undefined;
     const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
@@ -861,14 +873,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        // Log the pre-swap URL: the swapped URL can carry an injected credential in its path.
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(rawUrl)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        baseInit?.headers,
+        rawHeaders,
         localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
@@ -919,3 +932,4 @@ export function buildGuardedModelFetch(
       : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

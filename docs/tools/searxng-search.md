@@ -83,16 +83,7 @@ Plugin-level settings for the SearXNG instance:
 }
 ```
 
-The `baseUrl` field also accepts SecretRef objects.
-
-Transport rules:
-
-- `https://` works for public or private SearXNG hosts
-- `http://` is only accepted for trusted private-network or loopback hosts
-- public SearXNG hosts must use `https://`
-- private/internal hosts use the self-hosted network guard; public `https://`
-  hosts stay on the strict web-search guard and cannot redirect to private
-  addresses
+`baseUrl` also accepts a SecretRef object (for example `{ source: "env", id: "SEARXNG_BASE_URL" }`).
 
 ## Environment variable
 
@@ -102,9 +93,10 @@ Set `SEARXNG_BASE_URL` as an alternative to config:
 export SEARXNG_BASE_URL="http://localhost:8888"
 ```
 
-When `SEARXNG_BASE_URL` is set and no explicit provider is configured, auto-detection
-picks SearXNG automatically (at the lowest priority -- any API-backed provider with a
-key wins first).
+Resolution order: configured `baseUrl` string, then an inline env SecretRef on
+`baseUrl`, then `SEARXNG_BASE_URL`. When none of the config paths are set and
+`SEARXNG_BASE_URL` is present with no explicit provider chosen, auto-detection
+picks SearXNG.
 
 ## Plugin config reference
 
@@ -114,6 +106,9 @@ key wins first).
 | `categories` | Comma-separated categories such as `general`, `news`, or `science` |
 | `language`   | Language code for results such as `en`, `de`, or `fr`              |
 
+The `web_search` tool call also accepts `count` (1-10 results), `categories`,
+and `language` as per-call overrides.
+
 ## Notes
 
 - **JSON API** -- uses SearXNG's native `format=json` endpoint, not HTML scraping
@@ -121,18 +116,23 @@ key wins first).
   returns a direct image URL
 - **No API key** -- works with any SearXNG instance out of the box
 - **Base URL validation** -- `baseUrl` must be a valid `http://` or `https://`
-  URL; public hosts must use `https://`
-- **Network guard** -- private/internal SearXNG endpoints opt in to
-  private-network access; public `https://` SearXNG endpoints keep strict SSRF
-  protection
-- **Auto-detection order** -- SearXNG is checked after API-backed providers
-  with configured keys (order 200). Key-free providers such as DuckDuckGo or
-  Ollama Web Search are not auto-selected without an explicit provider choice
+  URL
+- **Network guard** -- `http://` base URLs must target a trusted private or
+  loopback host (public hosts must use `https://`); `https://` base URLs that
+  resolve to a private/internal address get the same self-hosted allowance,
+  while `https://` base URLs that resolve publicly keep strict SSRF protection
+- **Auto-detection order** -- SearXNG requires a configured `baseUrl` (order
+  200 among providers that already have their required credential). Key-free
+  providers such as DuckDuckGo or Ollama Web Search never win auto-detection
+  implicitly; they only activate on an explicit `provider` choice
 - **Self-hosted** -- you control the instance, queries, and upstream search engines
 - **Categories** default to `general` when not configured
 - **Category fallback** -- if a non-`general` category request succeeds but
   returns zero results, OpenClaw retries the same query once with `general`
   before returning an empty result set
+- **Result caching** -- identical queries (same query, count, categories,
+  language, and base URL) are cached in-process for a short TTL
+- **Version requirement** -- the plugin declares `minHostVersion: >=2026.6.9`
 
 <Tip>
   For SearXNG JSON API to work, make sure your SearXNG instance has the `json`

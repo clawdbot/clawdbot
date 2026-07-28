@@ -13,7 +13,7 @@ export type ContextEngineHostSupport = {
   capabilities: readonly ContextEngineHostCapability[];
 };
 
-export const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
+const GENERIC_CLI_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "after-turn",
   "maintain",
@@ -46,7 +46,7 @@ export const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST = {
   ],
 } as const satisfies ContextEngineHostSupport;
 
-export type ContextEngineHostSupportEvaluation =
+type ContextEngineHostSupportEvaluation =
   | {
       ok: true;
       requirements?: ContextEngineHostRequirements;

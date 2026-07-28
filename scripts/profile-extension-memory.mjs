@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import pMap from "p-map";
 import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
@@ -15,6 +16,7 @@ import { formatErrorMessage } from "./lib/error-format.mjs";
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
+const DEFAULT_CHILD_SHUTDOWN_GRACE_MS = 1_000;
 const DEFAULT_TOP = 10;
 const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
 const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
@@ -24,7 +26,7 @@ const PARENT_SIGNAL_EXIT_CODES = new Map([
   ["SIGINT", 130],
   ["SIGTERM", 143],
 ]);
-const activeCaseChildren = new Set();
+const activeCaseChildren = new Map();
 const parentSignalHandlers = new Map();
 let parentSignalHandlersInstalled = false;
 let parentSignalShutdownStarted = false;
@@ -203,6 +205,7 @@ export async function runCase({
   name,
   body,
   timeoutMs,
+  shutdownGraceMs = DEFAULT_CHILD_SHUTDOWN_GRACE_MS,
   spawnImpl = spawn,
 }) {
   return await new Promise((resolve) => {
@@ -216,7 +219,7 @@ export async function runCase({
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    trackActiveCaseChild(child);
+    trackActiveCaseChild(child, shutdownGraceMs);
 
     let stdout = createOutputCapture();
     let stderr = createOutputCapture();
@@ -265,7 +268,7 @@ export async function runCase({
     child.on("close", (code, signal) => {
       void (async () => {
         if (timedOut) {
-          await waitForChildProcessTreeExit(child, 1_000);
+          await waitForChildProcessTreeExit(child, shutdownGraceMs);
         }
         const stderrText = formatCapturedOutput(stderr);
         settle({
@@ -321,8 +324,8 @@ function childProcessTreeIsAlive(child) {
   }
 }
 
-function trackActiveCaseChild(child) {
-  activeCaseChildren.add(child);
+function trackActiveCaseChild(child, shutdownGraceMs) {
+  activeCaseChildren.set(child, shutdownGraceMs);
   installParentSignalHandlers();
 }
 
@@ -365,7 +368,7 @@ function removeInstalledParentSignalHandlers() {
 
 function handleParentSignal(signal) {
   if (parentSignalShutdownStarted) {
-    for (const child of activeCaseChildren) {
+    for (const child of activeCaseChildren.keys()) {
       signalChildProcessTree(child, "SIGKILL");
     }
     return;
@@ -375,17 +378,21 @@ function handleParentSignal(signal) {
 }
 
 async function cleanupActiveCaseChildrenForParentSignal(signal) {
-  const children = [...activeCaseChildren];
-  for (const child of children) {
+  const children = [...activeCaseChildren.entries()];
+  for (const [child] of children) {
     signalChildProcessTree(child, signal);
   }
-  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
-  for (const child of children) {
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
+  for (const [child] of children) {
     if (childProcessTreeIsAlive(child)) {
       signalChildProcessTree(child, "SIGKILL");
     }
   }
-  await Promise.all(children.map((child) => waitForChildProcessTreeExit(child, 1_000)));
+  await Promise.all(
+    children.map(([child, shutdownGraceMs]) => waitForChildProcessTreeExit(child, shutdownGraceMs)),
+  );
   removeInstalledParentSignalHandlers();
   process.exit(PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
 }
@@ -489,15 +496,9 @@ async function main() {
           timeoutMs: options.combinedTimeoutMs,
         });
 
-    const pending = [...selectedEntries];
-    const results = [];
-
-    async function worker() {
-      while (pending.length > 0) {
-        const next = pending.shift();
-        if (next === undefined) {
-          return;
-        }
+    const results = await pMap(
+      selectedEntries,
+      async (next) => {
         const result = await runCase({
           repoRoot,
           env,
@@ -506,7 +507,7 @@ async function main() {
           body: buildImportBody([next.file], "IMPORTED"),
           timeoutMs: options.timeoutMs,
         });
-        results.push({
+        const entry = {
           dir: next.dir,
           file: next.file,
           status: result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail",
@@ -516,16 +517,14 @@ async function main() {
               ? result.maxRssMb - baseline.maxRssMb
               : null,
           stderrPreview: summarizeStderr(result.stderr),
-        });
+        };
 
         const status = result.timedOut ? "timeout" : result.code === 0 ? "ok" : "fail";
         const rss = result.maxRssMb === null ? "n/a" : `${result.maxRssMb.toFixed(1)} MB`;
         console.log(`[extension-memory] ${next.dir}: ${status} ${rss}`);
-      }
-    }
-
-    await Promise.all(
-      Array.from({ length: Math.min(options.concurrency, selectedEntries.length) }, () => worker()),
+        return entry;
+      },
+      { concurrency: options.concurrency, stopOnError: true },
     );
 
     results.sort((a, b) => a.dir.localeCompare(b.dir));

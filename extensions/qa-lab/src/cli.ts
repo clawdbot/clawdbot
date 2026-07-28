@@ -1,5 +1,6 @@
 // Qa Lab plugin module implements cli behavior.
 import type { Command } from "commander";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
 import type {
@@ -21,8 +22,6 @@ import {
 import type { QaProviderMode, QaProviderModeInput } from "./run-config.js";
 import { hasQaScenarioPack } from "./scenario-catalog.js";
 
-type QaLabCliRuntime = typeof import("./cli.runtime.js");
-
 type QaScenarioRunCliOptions = {
   repoRoot?: QaSuiteCommandOptions["repoRoot"];
   outputDir?: QaSuiteCommandOptions["outputDir"];
@@ -32,6 +31,7 @@ type QaScenarioRunCliOptions = {
   altModel?: QaSuiteCommandOptions["alternateModel"];
   concurrency?: QaSuiteCommandOptions["concurrency"];
   allowFailures?: QaSuiteCommandOptions["allowFailures"];
+  failFast?: QaSuiteCommandOptions["failFast"];
   fast?: QaSuiteCommandOptions["fastMode"];
 };
 
@@ -58,6 +58,7 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
   { optionName: "altModel", flag: "--alt-model" },
   { optionName: "concurrency", flag: "--concurrency" },
   { optionName: "allowFailures", flag: "--allow-failures" },
+  { optionName: "failFast", flag: "--fail-fast" },
   { optionName: "fast", flag: "--fast" },
 ] as const;
 
@@ -80,15 +81,10 @@ type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   disk?: QaSuiteCommandOptions["disk"];
   preflight?: QaSuiteCommandOptions["preflight"];
   runtimePair?: QaSuiteCommandOptions["runtimePair"];
-  runtimeParityTier?: QaSuiteCommandOptions["runtimeParityTier"];
+  runtimePairLane?: QaSuiteCommandOptions["runtimePairLane"];
 };
 
-let qaLabCliRuntimePromise: Promise<QaLabCliRuntime> | null = null;
-
-async function loadQaLabCliRuntime(): Promise<QaLabCliRuntime> {
-  qaLabCliRuntimePromise ??= import("./cli.runtime.js");
-  return await qaLabCliRuntimePromise;
-}
+const loadQaLabCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
 
 function invalidQaCliArgument(message: string): Error & { code: string; exitCode: number } {
   const error = new Error(message) as Error & { code: string; exitCode: number };
@@ -147,7 +143,7 @@ function collectCliSuppliedQaRunFlags(
 }
 
 function formatFlagList(flags: readonly string[]): string {
-  return flags.length === 1 ? flags[0] : flags.join(", ");
+  return flags.join(", ");
 }
 
 function validateQaRunMode(opts: QaRunCliOptions, command: Command) {
@@ -439,6 +435,7 @@ export function registerQaLabCli(program: Command) {
       "Write artifacts without setting a failing exit code when scenarios fail",
       false,
     )
+    .option("--fail-fast", "Stop after the first failed QA scenario")
     .option("--fast", "Enable provider fast mode where supported", false);
   qaRun.action(async (opts: QaRunCliOptions, command: Command) => {
     validateQaRunMode(opts, command);
@@ -457,6 +454,7 @@ export function registerQaLabCli(program: Command) {
         alternateModel: opts.altModel,
         concurrency: opts.concurrency,
         allowFailures: opts.allowFailures,
+        ...(opts.failFast ? { failFast: true } : {}),
         fastMode: opts.fast,
       });
       return;
@@ -474,10 +472,7 @@ export function registerQaLabCli(program: Command) {
     .option("--runner <kind>", "Execution runner: host or multipass", "host")
     .option("--transport <id>", "QA transport id", "qa-channel")
     .option("--channel-driver <id>", "QA channel driver: qa-channel, crabline, or live")
-    .option(
-      "--channel <id>",
-      "Internal host QA channel override for --channel-driver; defaults to scenario/default",
-    )
+    .option("--channel <id>", "Channel id for --channel-driver crabline or live")
     .option("--provider-mode <mode>", formatQaProviderModeHelp())
     .option("--model <ref>", "Primary provider/model ref")
     .option("--alt-model <ref>", "Alternate provider/model ref")
@@ -506,6 +501,7 @@ export function registerQaLabCli(program: Command) {
       "Write artifacts without setting a failing exit code when scenarios fail",
       false,
     )
+    .option("--fail-fast", "Stop after the first failed QA scenario")
     .option("--fast", "Enable provider fast mode where supported", false)
     .option(
       "--thinking <level>",
@@ -519,8 +515,8 @@ export function registerQaLabCli(program: Command) {
     .option("--disk <size>", "Multipass disk size")
     .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. openclaw,codex")
     .option(
-      "--runtime-parity-tier <tier>",
-      "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
+      "--runtime-pair-lane <lane>",
+      "Add scenarios in a runtimePairLane (core, extended, soak; repeatable or comma-separated)",
       collectString,
       [],
     )
@@ -544,13 +540,14 @@ export function registerQaLabCli(program: Command) {
         enabledPluginIds: opts.enablePlugin,
         concurrency: opts.concurrency,
         allowFailures: opts.allowFailures,
+        ...(opts.failFast ? { failFast: true } : {}),
         image: opts.image,
         cpus: opts.cpus,
         memory: opts.memory,
         disk: opts.disk,
         preflight: opts.preflight,
         runtimePair: opts.runtimePair,
-        runtimeParityTier: opts.runtimeParityTier,
+        runtimePairLane: opts.runtimePairLane,
       });
     });
 
@@ -1006,3 +1003,4 @@ export function registerQaLabCli(program: Command) {
     lane.register(qa);
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

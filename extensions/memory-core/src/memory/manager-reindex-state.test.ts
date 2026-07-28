@@ -6,7 +6,6 @@ import {
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  isMemoryIndexIdentityDirty,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 
@@ -53,6 +52,12 @@ function createIdentityParams(
     ftsTokenizer: "unicode61",
     ...overrides,
   };
+}
+
+function isMemoryIndexIdentityDirty(
+  params: Parameters<typeof resolveMemoryIndexIdentityState>[0],
+): boolean {
+  return resolveMemoryIndexIdentityState(params).status !== "valid";
 }
 
 describe("memory reindex state", () => {

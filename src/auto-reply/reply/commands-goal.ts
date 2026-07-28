@@ -7,10 +7,11 @@ import {
   clearSessionGoal,
   createSessionGoal,
   formatSessionGoalStatus,
-  getSessionEntry,
   getSessionGoal,
+  updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "../../config/sessions.js";
+import { loadSessionEntry as getSessionEntry } from "../../config/sessions/session-accessor.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import type {
@@ -31,6 +32,7 @@ const GOAL_ACTIONS = new Set([
   "complete",
   "create",
   "done",
+  "edit",
   "pause",
   "resume",
   "set",
@@ -124,7 +126,13 @@ function applyGoalPromptToContext(ctx: HandleCommandsParams["ctx"], message: str
     BodyForCommands?: string;
     BodyForAgent?: string;
     BodyStripped?: string;
+    commandText?: string;
+    agentText?: string;
+    rawText?: string;
   };
+  mutableCtx.commandText = message;
+  mutableCtx.agentText = message;
+  mutableCtx.rawText = message;
   mutableCtx.Body = message;
   mutableCtx.RawBody = message;
   mutableCtx.CommandBody = message;
@@ -164,6 +172,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
   if (unauthorized) {
     return unauthorized;
   }
+  const actor = { type: "human" as const };
+  const goalAgentId = params.agentId;
 
   try {
     switch (parsed.action) {
@@ -189,17 +199,37 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           storePath: params.storePath,
           objective,
           fallbackEntry: params.sessionEntry,
+          actor,
+          agentId: goalAgentId,
         });
         syncGoalSessionEntry(params);
         markCommandSessionMetadataChanged(params);
         applyGoalContinuationPrompt(params, formatGoalContinuationPrompt(goal.objective));
         return goalContinuation();
       }
+      case "edit": {
+        const objective = normalizeOptionalString(parsed.text);
+        if (!objective) {
+          return goalReply("Usage: /goal edit <objective>");
+        }
+        const goal = await updateSessionGoalObjective({
+          sessionKey: params.sessionKey,
+          storePath: params.storePath,
+          objective,
+          actor,
+          agentId: goalAgentId,
+        });
+        syncGoalSessionEntry(params);
+        markCommandSessionMetadataChanged(params);
+        return goalReply(`Goal updated: ${goal.objective}`);
+      }
       case "pause": {
         const goal = await updateSessionGoalStatus({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "paused",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -211,6 +241,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "active",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -225,6 +257,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "complete",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -237,6 +271,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
           sessionKey: params.sessionKey,
           storePath: params.storePath,
           status: "blocked",
+          actor,
+          agentId: goalAgentId,
           ...(parsed.text ? { note: parsed.text } : {}),
         });
         syncGoalSessionEntry(params);
@@ -247,6 +283,8 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
         const removed = await clearSessionGoal({
           sessionKey: params.sessionKey,
           storePath: params.storePath,
+          actor,
+          agentId: goalAgentId,
         });
         syncGoalSessionEntry(params);
         if (removed) {
@@ -256,7 +294,7 @@ export const handleGoalCommand: CommandHandler = async (params, allowTextCommand
       }
       default:
         return goalReply(
-          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal pause|resume|complete|block|clear",
+          "Usage: /goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear",
         );
     }
   } catch (error) {

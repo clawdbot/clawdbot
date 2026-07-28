@@ -4,9 +4,14 @@
  * Transport adapters use this module to turn provider-specific response bodies,
  * request ids, and binary payload guardrails into stable OpenClaw error shapes.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
-import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
+import {
+  readResponseTextPrefix,
+  readResponseWithLimit,
+  type ReadResponseTextPrefixOptions,
+} from "../infra/http-body.js";
 import { redactSensitiveText } from "../logging/redact.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../../packages/normalization-core/src/string-coerce.js";
@@ -15,6 +20,30 @@ const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Shared timeout and byte-limit options for provider response consumption. */
+type ProviderResponseReadOptions = ReadResponseTextPrefixOptions & {
+  maxBytes?: number;
+};
+
+/** Options for bounded provider error-body normalization. */
+type ProviderHttpErrorOptions = {
+  statusPrefix?: string;
+  bodyTimeoutMs?: ReadResponseTextPrefixOptions["timeoutMs"];
+  onBodyTimeout?: NonNullable<ReadResponseTextPrefixOptions["onTimeout"]>;
+};
+
+class ProviderErrorBodyTimeout extends Error {
+  readonly timeoutError: unknown;
+
+  constructor(timeoutError: unknown) {
+    super(timeoutError instanceof Error ? timeoutError.message : String(timeoutError), {
+      cause: timeoutError,
+    });
+    this.name = "ProviderErrorBodyTimeout";
+    this.timeoutError = timeoutError;
+  }
+}
 
 /** Returns a plain object view for provider JSON payloads when one exists. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -25,7 +54,7 @@ export function asObject(value: unknown): Record<string, unknown> | undefined {
 
 /** Trims provider error details to a log- and prompt-safe preview length. */
 export function truncateErrorDetail(detail: string, limit = 220): string {
-  return detail.length <= limit ? detail : `${detail.slice(0, limit - 1)}…`;
+  return detail.length <= limit ? detail : `${truncateUtf16Safe(detail, limit - 1)}…`;
 }
 
 /** Redacts secrets before preserving a bounded provider error body preview. */
@@ -37,67 +66,23 @@ function redactProviderErrorBody(body: string): string {
 export async function readResponseTextLimited(
   response: Response,
   limitBytes = 16 * 1024,
+  options?: ReadResponseTextPrefixOptions,
 ): Promise<string> {
   if (limitBytes <= 0) {
     return "";
   }
-  const reader = response.body?.getReader();
-  if (!reader) {
-    return "";
-  }
-
-  const decoder = new TextDecoder();
-  let total = 0;
-  let text = "";
-  let reachedLimit = false;
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.byteLength === 0) {
-        continue;
-      }
-      const remaining = limitBytes - total;
-      if (remaining <= 0) {
-        reachedLimit = true;
-        break;
-      }
-      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
-      total += chunk.byteLength;
-      text += decoder.decode(chunk, { stream: true });
-      if (total >= limitBytes) {
-        reachedLimit = true;
-        break;
-      }
-    }
-    text += decoder.decode();
-  } finally {
-    if (reachedLimit) {
-      // Stop the upstream body once the diagnostic budget is full.
-      await reader.cancel().catch(() => {});
-    }
-    try {
-      reader.releaseLock();
-    } catch {
-      // Error-body reads are diagnostic best effort; release failures must not
-      // hide the bounded provider error text already captured.
-    }
-  }
-
-  return text;
+  return (await readResponseTextPrefix(response, limitBytes, options)).text;
 }
 
 /** Reads a successful provider text response under a byte cap. */
 export async function readProviderTextResponse(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
+  opts?: ProviderResponseReadOptions,
 ): Promise<string> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    ...opts,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
   });
@@ -176,8 +161,35 @@ type ProviderHttpErrorInfo = {
 };
 
 /** Extracts normalized provider error metadata while keeping the raw body bounded and redacted. */
-async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response).catch(() => ""));
+async function extractProviderErrorInfo(
+  response: Response,
+  options?: ProviderHttpErrorOptions,
+): Promise<ProviderHttpErrorInfo> {
+  const bodyTimeoutMs = options?.bodyTimeoutMs;
+  const rawBody = trimToUndefined(
+    await readResponseTextLimited(response, 16 * 1024, {
+      timeoutMs:
+        typeof bodyTimeoutMs === "function"
+          ? () => {
+              try {
+                return bodyTimeoutMs();
+              } catch (error) {
+                throw new ProviderErrorBodyTimeout(error);
+              }
+            }
+          : bodyTimeoutMs,
+      onTimeout: (params) =>
+        new ProviderErrorBodyTimeout(
+          options?.onBodyTimeout?.(params) ??
+            new Error(`Provider error body timed out after ${params.timeoutMs}ms`),
+        ),
+    }).catch((error: unknown) => {
+      if (error instanceof ProviderErrorBodyTimeout) {
+        throw error.timeoutError;
+      }
+      return "";
+    }),
+  );
   const requestId = extractProviderRequestId(response);
   if (!rawBody) {
     return requestId ? { requestId } : {};
@@ -266,9 +278,9 @@ export function formatProviderHttpErrorMessage(params: {
 export async function createProviderHttpError(
   response: Response,
   label: string,
-  options?: { statusPrefix?: string },
+  options?: ProviderHttpErrorOptions,
 ): Promise<Error> {
-  const info = await extractProviderErrorInfo(response);
+  const info = await extractProviderErrorInfo(response, options);
   return new ProviderHttpError(
     formatProviderHttpErrorMessage({
       label,
@@ -291,19 +303,24 @@ export async function createProviderHttpError(
 export async function assertOkOrThrowProviderError(
   response: Response,
   label: string,
+  options?: Omit<ProviderHttpErrorOptions, "statusPrefix">,
 ): Promise<void> {
   if (response.ok) {
     return;
   }
-  throw await createProviderHttpError(response, label);
+  throw await createProviderHttpError(response, label, options);
 }
 
 /** Throws a normalized generic HTTP error when a fetch response is not OK. */
-export async function assertOkOrThrowHttpError(response: Response, label: string): Promise<void> {
+export async function assertOkOrThrowHttpError(
+  response: Response,
+  label: string,
+  options?: Omit<ProviderHttpErrorOptions, "statusPrefix">,
+): Promise<void> {
   if (response.ok) {
     return;
   }
-  throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
+  throw await createProviderHttpError(response, label, { ...options, statusPrefix: "HTTP " });
 }
 
 /**
@@ -315,15 +332,16 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
 export async function readProviderJsonResponse<T>(
   response: Response,
   label: string,
-  opts?: { maxBytes?: number },
+  opts?: ProviderResponseReadOptions,
 ): Promise<T> {
   const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    ...opts,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as T;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
@@ -333,8 +351,9 @@ export async function readProviderJsonResponse<T>(
 export async function readProviderJsonObjectResponse(
   response: Response,
   label: string,
+  opts?: ProviderResponseReadOptions,
 ): Promise<Record<string, unknown>> {
-  const payload = await readProviderJsonResponse<unknown>(response, label);
+  const payload = await readProviderJsonResponse<unknown>(response, label, opts);
   const object = asObject(payload);
   if (!object) {
     throw new Error(`${label}: malformed JSON response`);
@@ -347,8 +366,9 @@ export async function readProviderJsonArrayFieldResponse(
   response: Response,
   label: string,
   field: string,
+  opts?: ProviderResponseReadOptions,
 ): Promise<unknown[]> {
-  const payload = await readProviderJsonObjectResponse(response, label);
+  const payload = await readProviderJsonObjectResponse(response, label, opts);
   const value = payload[field];
   if (!Array.isArray(value)) {
     throw new Error(`${label}: malformed JSON response`);
@@ -385,13 +405,12 @@ export async function readProviderBinaryResponse(
   response: Response,
   label: string,
   kind = "binary",
-  opts?: {
-    maxBytes?: number;
-  },
+  opts?: ProviderResponseReadOptions,
 ): Promise<Uint8Array> {
   assertProviderBinaryResponseContent(response, label, kind);
   const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
   const bytes = await readResponseWithLimit(response, maxBytes, {
+    ...opts,
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`${label}: ${kind} response exceeds ${maxBytesLocal} bytes`),
   });

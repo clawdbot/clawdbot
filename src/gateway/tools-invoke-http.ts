@@ -84,6 +84,7 @@ export async function handleToolsInvokeHttpRequest(
     agentTo,
     agentThreadId,
     senderIsOwner,
+    conversationReadOrigin: "direct-operator",
     toolCallIdPrefix: "http",
   });
   if (outcome.ok) {

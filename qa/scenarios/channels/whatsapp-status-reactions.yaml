@@ -1,0 +1,19 @@
+title: WhatsApp status reactions are observable
+scenario:
+  id: whatsapp-status-reactions
+  surface: channels
+  coverage:
+    primary:
+      - channels.reply-message-actions
+  execution:
+    profiles: { "whatsapp:default": 5, "whatsapp:mock-default": 29 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 60000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-status-reactions }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppStatusReactionsScenario
+  args: [{ expr: whatsappScenarioContext }]

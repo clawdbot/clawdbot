@@ -16,7 +16,6 @@ import {
   ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT,
   type SshSandboxSession,
   uploadDirectoryToSshTarget,
-  VALIDATE_REMOTE_WORKDIR_SCRIPT,
 } from "./ssh.js";
 
 const sessions: SshSandboxSession[] = [];
@@ -249,20 +248,20 @@ describe("sandbox ssh helpers", () => {
 
       const { stdout } = await execFileAsync("/bin/sh", [
         "-c",
-        VALIDATE_REMOTE_WORKDIR_SCRIPT,
-        "openclaw-validate-workdir",
-        project,
-        path.join(root, "workspace"),
+        buildRemoteWorkdirValidationCommand({
+          workdir: project,
+          root: path.join(root, "workspace"),
+        }),
       ]);
 
       expect(stdout.trim()).toBe(canonicalProject);
       await expect(
         execFileAsync("/bin/sh", [
           "-c",
-          VALIDATE_REMOTE_WORKDIR_SCRIPT,
-          "openclaw-validate-workdir",
-          path.join(root, "workspace", "missing"),
-          path.join(root, "workspace"),
+          buildRemoteWorkdirValidationCommand({
+            workdir: path.join(root, "workspace", "missing"),
+            root: path.join(root, "workspace"),
+          }),
         ]),
       ).rejects.toThrow(/remote directory not found/);
       await expect(fs.stat(path.join(root, "workspace", "missing"))).rejects.toThrow();
@@ -280,10 +279,10 @@ describe("sandbox ssh helpers", () => {
       await expect(
         execFileAsync("/bin/sh", [
           "-c",
-          VALIDATE_REMOTE_WORKDIR_SCRIPT,
-          "openclaw-validate-workdir",
-          path.join(workspace, "escape"),
-          workspace,
+          buildRemoteWorkdirValidationCommand({
+            workdir: path.join(workspace, "escape"),
+            root: workspace,
+          }),
         ]),
       ).rejects.toThrow(/unsafe remote directory symlink/);
     },
@@ -299,10 +298,10 @@ describe("sandbox ssh helpers", () => {
 
       const { stdout } = await execFileAsync("/bin/sh", [
         "-c",
-        VALIDATE_REMOTE_WORKDIR_SCRIPT,
-        "openclaw-validate-workdir",
-        canonicalProject,
-        "/",
+        buildRemoteWorkdirValidationCommand({
+          workdir: canonicalProject,
+          root: "/",
+        }),
       ]);
 
       expect(stdout.trim()).toBe(canonicalProject);

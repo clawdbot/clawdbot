@@ -1,8 +1,11 @@
 // Process supervisor manages long-running child and PTY process lifecycles.
 import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getShellConfig } from "../../agents/shell-utils.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { createChildAdapter } from "./adapters/child.js";
 import { createPtyAdapter } from "./adapters/pty.js";
 import { createRunRegistry } from "./registry.js";
@@ -15,22 +18,22 @@ import type {
   TerminationReason,
 } from "./types.js";
 
-type SupervisorLogRuntime = typeof import("./supervisor-log.runtime.js");
-
 type ActiveRun = {
   run: ManagedRun;
   scopeKey?: string;
 };
 
+type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};
+
 const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
-let supervisorLogRuntimePromise: Promise<SupervisorLogRuntime> | undefined;
-
-function loadSupervisorLogRuntime(): Promise<SupervisorLogRuntime> {
-  supervisorLogRuntimePromise ??= import("./supervisor-log.runtime.js");
-  return supervisorLogRuntimePromise;
-}
+const loadSupervisorLogRuntime = createLazyRuntimeModule(
+  () => import("./supervisor-log.runtime.js"),
+);
 
 function clampTimeout(value?: number): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -58,7 +61,7 @@ function appendCapturedOutput(
   }
   const marker = `[openclaw: captured ${stream} truncated to last ${maxChars} chars]\n`;
   const tailChars = Math.max(0, maxChars - marker.length);
-  return `${marker}${next.slice(-tailChars)}`;
+  return `${marker}${sliceUtf16Safe(next, -tailChars)}`;
 }
 
 function isTimeoutReason(reason: TerminationReason) {
@@ -90,12 +93,13 @@ function resolveElapsedTimeoutReason(params: {
     return null;
   }
   elapsedDeadlines.sort((a, b) => a.deadlineMs - b.deadlineMs);
-  return elapsedDeadlines[0].reason;
+  return expectDefined(elapsedDeadlines[0], "elapsed deadlines entry at 0").reason;
 }
 
 export function createProcessSupervisor(): ProcessSupervisor {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
+  const startingScopes = new Map<string, StartingScope>();
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
@@ -120,9 +124,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
     }
   };
 
-  const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
+  const startRun = async (input: SpawnInput, scopeKey?: string): Promise<ManagedRun> => {
     const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
-    const scopeKey = normalizeOptionalString(input.scopeKey);
     if (input.replaceExistingScope && scopeKey) {
       cancelScope(scopeKey, "manual-cancel");
     }
@@ -144,9 +147,12 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let settled = false;
     let stdout = "";
     let stderr = "";
+    let stdoutListener = input.onStdout;
+    let stderrListener = input.onStderr;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
+    let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
     const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
 
@@ -210,6 +216,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
               windowsVerbatimArguments: input.windowsVerbatimArguments,
               input: input.input,
               stdinMode: input.stdinMode,
+              secretInput: input.secretInput,
             });
 
       registry.updateState(runId, "running", { pid: adapter.pid });
@@ -229,8 +236,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
       };
 
-      cancelAdapter = (_reason: TerminationReason) => {
-        if (settled || forceKillTimer) {
+      cancelAdapter = (reason: TerminationReason) => {
+        if (settled || cancelRequested) {
+          return;
+        }
+        cancelRequested = true;
+        // Windows has no catchable SIGTERM equivalent: the adapter implements it
+        // with asynchronous taskkill, so waiting the cleanup grace only delays an
+        // already-expired deadline before the same forced tree termination.
+        if (
+          process.platform === "win32" &&
+          (reason === "overall-timeout" || reason === "no-output-timeout")
+        ) {
+          adapter.kill("SIGKILL");
           return;
         }
         adapter.kill("SIGTERM");
@@ -259,14 +277,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (captureOutput) {
           stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
-        input.onStdout?.(chunk);
+        stdoutListener?.(chunk);
         touchOutput();
       });
       adapter.onStderr((chunk) => {
         if (captureOutput) {
           stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
-        input.onStderr?.(chunk);
+        stderrListener?.(chunk);
         touchOutput();
       });
 
@@ -337,6 +355,10 @@ export function createProcessSupervisor(): ProcessSupervisor {
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
         },
+        detachOutput: () => {
+          stdoutListener = undefined;
+          stderrListener = undefined;
+        },
       };
 
       active.set(runId, {
@@ -354,6 +376,44 @@ export function createProcessSupervisor(): ProcessSupervisor {
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;
     }
+  };
+
+  const spawn = (input: SpawnInput): Promise<ManagedRun> => {
+    const scopeKey = normalizeOptionalString(input.scopeKey);
+    if (!scopeKey) {
+      return startRun(input);
+    }
+
+    const starting = startingScopes.get(scopeKey) ?? { runs: new Set<Promise<ManagedRun>>() };
+    startingScopes.set(scopeKey, starting);
+
+    // Ordinary runs start together, but replacements fence later arrivals so
+    // delayed cancellation cannot accidentally terminate a newer scoped run.
+    const previous = input.replaceExistingScope
+      ? Array.from(starting.runs)
+      : starting.replacement
+        ? [starting.replacement]
+        : [];
+    const pending =
+      previous.length > 0
+        ? Promise.allSettled(previous).then(() => startRun(input, scopeKey))
+        : startRun(input, scopeKey);
+    starting.runs.add(pending);
+    if (input.replaceExistingScope) {
+      starting.replacement = pending;
+    }
+
+    const clearPendingStart = () => {
+      starting.runs.delete(pending);
+      if (starting.replacement === pending) {
+        delete starting.replacement;
+      }
+      if (starting.runs.size === 0 && startingScopes.get(scopeKey) === starting) {
+        startingScopes.delete(scopeKey);
+      }
+    };
+    void pending.then(clearPendingStart, clearPendingStart);
+    return pending;
   };
 
   return {

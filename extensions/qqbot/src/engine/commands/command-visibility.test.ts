@@ -1,14 +1,14 @@
 // Qqbot tests cover group command visibility classification.
 import { describe, expect, it } from "vitest";
-import { classifyCoreCommandForGroup, parseSlashCommandName } from "./command-visibility.js";
+import { classifyCoreCommandForGroup } from "./command-visibility.js";
 
 describe("QQBot command visibility", () => {
   it("parses slash command names case-insensitively", () => {
-    expect(parseSlashCommandName(" /NEW now ")).toBe("new");
-    expect(parseSlashCommandName("/CONFIG: show")).toBe("config");
-    expect(parseSlashCommandName("/config：show")).toBe("config");
-    expect(parseSlashCommandName("/config@bot show")).toBe("config");
-    expect(parseSlashCommandName("hello")).toBeUndefined();
+    expect(classifyCoreCommandForGroup(" /NEW now ").commandName).toBe("new");
+    expect(classifyCoreCommandForGroup("/CONFIG: show").commandName).toBe("config");
+    expect(classifyCoreCommandForGroup("/config：show").commandName).toBe("config");
+    expect(classifyCoreCommandForGroup("/config@bot show").commandName).toBe("config");
+    expect(classifyCoreCommandForGroup("hello").commandName).toBeUndefined();
   });
 
   it("keeps safe collaboration commands visible in groups", () => {

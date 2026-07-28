@@ -5,12 +5,19 @@ type McpLoopbackRuntime = {
   nonOwnerToken: string;
 };
 
-export type McpLoopbackToolCallResult = {
+export type McpLoopbackToolCallTerminalOutcome =
+  | { outcome: "blocked"; deniedReason: string }
+  | { outcome: "cancelled" | "failed" | "timed_out" | "unknown"; result?: unknown };
+
+export type McpLoopbackToolCallOutcome =
+  | { outcome: "completed"; result?: unknown }
+  | McpLoopbackToolCallTerminalOutcome;
+
+type McpLoopbackToolCallResult = {
   toolName: string;
   args: Record<string, unknown>;
-  result?: unknown;
-  isError: boolean;
-};
+  correlationId?: string;
+} & McpLoopbackToolCallOutcome;
 
 export type McpLoopbackToolCallStart = Pick<McpLoopbackToolCallResult, "toolName" | "args">;
 
@@ -20,7 +27,7 @@ type McpLoopbackToolCallCapture = {
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
-  onToolCallStart?: (call: McpLoopbackToolCallStart) => void;
+  onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
   onToolCallUpdate?: (calls: {
     previous: McpLoopbackToolCallStart;
     current: McpLoopbackToolCallStart;
@@ -32,15 +39,16 @@ type McpLoopbackToolCallCapture = {
   activityWaiters: Set<() => void>;
 };
 
-export type McpLoopbackRequestCaptureHandle = {
+type McpLoopbackRequestCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   classified: boolean;
   finished: boolean;
 };
 
-export type McpLoopbackToolCallCaptureHandle = {
+type McpLoopbackToolCallCaptureHandle = {
   capture: McpLoopbackToolCallCapture;
   call: McpLoopbackToolCallStart;
+  correlationId?: string;
   prepared: boolean;
   finished: boolean;
 };
@@ -76,7 +84,7 @@ export function beginMcpLoopbackToolCallCapture(params: {
   onRequestStart?: () => void;
   onRequestClassified?: () => void;
   onRequestFinish?: () => void;
-  onToolCallStart?: (call: McpLoopbackToolCallStart) => void;
+  onToolCallStart?: (call: McpLoopbackToolCallStart) => string | void;
   onToolCallUpdate?: (calls: {
     previous: McpLoopbackToolCallStart;
     current: McpLoopbackToolCallStart;
@@ -196,12 +204,14 @@ export function markMcpLoopbackToolCallStarted(params: {
   const call = { toolName, args: params.args };
   capture.inFlight += 1;
   notifyMcpLoopbackToolCallCaptureActivity(capture);
+  let correlationId: string | undefined;
   try {
-    capture.onToolCallStart?.(call);
+    const observedCorrelationId = capture.onToolCallStart?.(call);
+    correlationId = typeof observedCorrelationId === "string" ? observedCorrelationId : undefined;
   } catch {
     // Delivery observation is diagnostic state; it must not alter tool execution.
   }
-  return { capture, call, prepared: false, finished: false };
+  return { capture, call, correlationId, prepared: false, finished: false };
 }
 
 /** Update an admitted call with the final arguments produced by gateway hooks. */
@@ -223,23 +233,29 @@ export function updateMcpLoopbackToolCallCapture(
 }
 
 /** Report a completed call without letting observer failures alter tool execution. */
-export function recordMcpLoopbackToolCallResult(params: {
-  captureHandle: McpLoopbackToolCallCaptureHandle;
-  toolName: string;
-  args: Record<string, unknown>;
-  result?: unknown;
-  isError: boolean;
-}): void {
+export function recordMcpLoopbackToolCallResult(
+  params: {
+    captureHandle: McpLoopbackToolCallCaptureHandle;
+    toolName: string;
+    args: Record<string, unknown>;
+  } & McpLoopbackToolCallOutcome,
+): void {
   const toolName = params.toolName.trim();
   if (!toolName) {
     return;
   }
   try {
+    const outcome: McpLoopbackToolCallOutcome =
+      params.outcome === "blocked"
+        ? { outcome: "blocked", deniedReason: params.deniedReason }
+        : { outcome: params.outcome, result: params.result };
     params.captureHandle.capture.onToolCallResult({
       toolName,
       args: params.args,
-      result: params.result,
-      isError: params.isError,
+      ...outcome,
+      ...(params.captureHandle.correlationId
+        ? { correlationId: params.captureHandle.correlationId }
+        : {}),
     });
   } catch {
     // Delivery observation is diagnostic state; it must not turn a successful tool call into error.
@@ -333,14 +349,6 @@ export function clearMcpLoopbackToolCallCapture(captureKey: string): void {
   deleteMcpLoopbackToolCallCapture(captureKey.trim());
 }
 
-/** Clear transient capture state between isolated tests. */
-export function clearMcpLoopbackToolCallCapturesForTest(): void {
-  for (const captureKey of toolCallCaptures.keys()) {
-    deleteMcpLoopbackToolCallCapture(captureKey);
-  }
-  nextToolCallCaptureGeneration = 0;
-}
-
 /** Return a copy of the active loopback runtime, if one has been installed. */
 export function getActiveMcpLoopbackRuntime(): McpLoopbackRuntime | undefined {
   return activeRuntime ? { ...activeRuntime } : undefined;
@@ -351,14 +359,6 @@ export function setActiveMcpLoopbackRuntime(runtime: McpLoopbackRuntime): void {
   activeRuntime = { ...runtime };
 }
 
-/** Choose the bearer token matching owner/non-owner caller identity. */
-export function resolveMcpLoopbackBearerToken(
-  runtime: McpLoopbackRuntime,
-  senderIsOwner: boolean,
-): string {
-  return senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken;
-}
-
 /** Clear loopback runtime only when the owning token matches the active runtime. */
 export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): void {
   if (activeRuntime?.ownerToken === ownerToken) {
@@ -366,32 +366,32 @@ export function clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken: string): v
   }
 }
 
-/** Build the MCP server config injected into agents for loopback tool access. */
-export function createMcpLoopbackServerConfig(port: number) {
+const MCP_AUTH_HEADERS = {
+  Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+} as const;
+
+const MCP_CAPTURE_HEADERS = {
+  "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
+} as const;
+
+function createMcpServerConfig(port: number, headers: Record<string, string>) {
   return {
     mcpServers: {
       openclaw: {
         type: "http",
         url: `http://127.0.0.1:${port}/mcp`,
         alwaysLoad: true,
-        headers: {
-          Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-          "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-          "x-openclaw-session-id": "${OPENCLAW_MCP_SESSION_ID}",
-          "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
-          "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
-          "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
-          "x-openclaw-current-channel-id": "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
-          "x-openclaw-current-thread-ts": "${OPENCLAW_MCP_CURRENT_THREAD_TS}",
-          "x-openclaw-current-message-id": "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
-          "x-openclaw-current-inbound-audio": "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
-          "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
-          "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
-          "x-openclaw-require-explicit-message-target":
-            "${OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET}",
-          "x-openclaw-cli-capture-key": "${OPENCLAW_MCP_CLI_CAPTURE_KEY}",
-        },
+        headers,
       },
     },
   };
+}
+
+/** Build the MCP server config injected into agents for loopback tool access. */
+export function createMcpLoopbackServerConfig(port: number) {
+  return createMcpServerConfig(port, { ...MCP_AUTH_HEADERS, ...MCP_CAPTURE_HEADERS });
+}
+
+export function createMcpAttachGrantServerConfig(port: number) {
+  return createMcpServerConfig(port, MCP_AUTH_HEADERS);
 }

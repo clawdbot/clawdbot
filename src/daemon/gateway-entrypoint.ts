@@ -14,7 +14,7 @@ export function isGatewayDistEntrypointPath(inputPath: string): boolean {
   return /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(inputPath);
 }
 
-export function buildGatewayInstallEntrypointCandidates(root?: string): string[] {
+function buildGatewayInstallEntrypointCandidates(root?: string): string[] {
   if (!root) {
     return [];
   }

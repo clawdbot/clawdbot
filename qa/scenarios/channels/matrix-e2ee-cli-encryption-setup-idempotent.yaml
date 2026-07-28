@@ -1,0 +1,35 @@
+title: Matrix E2EE CLI encryption setup is idempotent on encrypted accounts
+scenario:
+  id: matrix-e2ee-cli-encryption-setup-idempotent
+  surface: channels
+  coverage:
+    primary:
+      - matrix.encryption-setup
+  execution:
+    profiles: { "matrix:all": 86, "matrix:e2ee-cli": 2 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 120000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        encryption: true
+        startupVerification: off
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: true
+            key: e2ee-cli-encryption-setup-idempotent
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA E2EE CLI Encryption Setup Idempotent Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-account.js
+  call: runMatrixQaE2eeCliEncryptionSetupIdempotentScenario
+  args:
+    - expr: "scenarioContext"

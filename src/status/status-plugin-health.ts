@@ -224,7 +224,9 @@ function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapshot): string {
+export function formatCompactPluginHealthLine(
+  snapshot: StatusPluginHealthSnapshot,
+): string | undefined {
   const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
   const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
   const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
@@ -243,7 +245,7 @@ export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapsh
     diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
   ].filter((part): part is string => Boolean(part));
 
-  return parts.length === 0 ? "🔌 Plugins: OK" : `⚠️ Plugins: ${parts.join(" · ")}`;
+  return parts.length === 0 ? undefined : `⚠️ Plugins: ${parts.join(" · ")}`;
 }
 
 function formatPluginList(ids: readonly string[], limit: number): string {
@@ -295,7 +297,9 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
         .filter((id) => !shouldRunNotLoadedSet.has(id))
         .toSorted(byLocale)
     : [];
-  const disabled = snapshot.plugins.filter((plugin) => plugin.status === "disabled").length;
+  const disabledPlugins = snapshot.plugins
+    .filter((plugin) => plugin.status === "disabled")
+    .toSorted((left, right) => byLocale(left.id, right.id));
   const errors = snapshot.plugins
     .filter((plugin) => plugin.status === "error")
     .toSorted((left, right) => byLocale(left.id, right.id));
@@ -323,10 +327,40 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
       byLocale(left.configuredId, right.configuredId) || byLocale(left.source, right.source),
   );
   const lines = [
-    formatCompactPluginHealthLine(snapshot),
+    formatCompactPluginHealthLine(snapshot) ?? "🔌 Plugins: OK",
     `Loaded: ${loaded.length}${loaded.length > 0 ? ` (${formatPluginList(loaded, 8)})` : ""}`,
-    `Disabled: ${disabled}`,
+    `Disabled: ${disabledPlugins.length}`,
   ];
+
+  if (disabledPlugins.length > 0) {
+    // Disable decisions record their reason on `error` (config off, allow/denylist,
+    // overridden-by/memory-slot arbitration). Group ids per distinct reason so the
+    // detailed view answers "why is this plugin off" without a /plugins round-trip,
+    // and a restrictive allowlist folds into one bounded line instead of dozens.
+    const disabledByReason = new Map<string, string[]>();
+    for (const plugin of disabledPlugins) {
+      const reason = plugin.error ?? "disabled";
+      const ids = disabledByReason.get(reason);
+      if (ids) {
+        ids.push(plugin.id);
+      } else {
+        disabledByReason.set(reason, [plugin.id]);
+      }
+    }
+    const reasonEntries = [...disabledByReason.entries()].toSorted((left, right) =>
+      byLocale(left[0], right[0]),
+    );
+    lines.push(
+      ...reasonEntries
+        .slice(0, 8)
+        .map(([reason, ids]) => `- ${reason}: ${ids.length} (${formatPluginList(ids, 8)})`),
+    );
+    if (reasonEntries.length > 8) {
+      // Unlike the per-plugin buckets, the count above tallies plugins, not
+      // reasons, so a reader cannot infer that reason lines were truncated.
+      lines.push(`- +${reasonEntries.length - 8} more reasons`);
+    }
+  }
 
   if (installedNotActive.length > 0) {
     // Installed/discovered plugins not loaded in the runtime registry. Neutral

@@ -6,9 +6,24 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
-import { createMusicGenerateTool } from "./music-generate-tool.js";
+import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
+
+function createMusicGenerateTool(
+  params: Parameters<typeof createMusicGenerateToolImpl>[0],
+): ReturnType<typeof createMusicGenerateToolImpl> {
+  const options = params ?? {};
+  return createMusicGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "music",
+      "musicGenerationModel",
+    ),
+  });
+}
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -119,7 +134,10 @@ const musicGenerateBackgroundMocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../../config/config.js", () => configMocks);
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  ...configMocks,
+}));
 vi.mock("../../media/store.js", () => mediaStoreMocks);
 vi.mock("../../media/web-media.js", async () => {
   const actual = await vi.importActual<typeof import("../../media/web-media.js")>(
@@ -177,9 +195,9 @@ function resetMusicGenerateMocks() {
   taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
   musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockReset();
-  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue(
-    true,
-  );
+  musicGenerateBackgroundMocks.musicGenerationTaskLifecycle.wakeTaskCompletion.mockResolvedValue({
+    status: "delivered",
+  });
 }
 
 function detailsOf(result: { details?: unknown }): Record<string, unknown> {
@@ -267,8 +285,8 @@ describe("createMusicGenerateTool", () => {
       }),
     );
 
-    expect(tool.description).toContain("call music_generate");
-    expect(tool.description).toContain("do not just write lyrics");
+    expect(tool.description).toContain("Make/generate music => call");
+    expect(tool.description).toContain("lyrics-only request => text only");
     expect(JSON.stringify(tool.parameters)).toContain("For song/style requests, use prompt");
   });
 
@@ -560,7 +578,7 @@ describe("createMusicGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(musicGenerateBackground.musicGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(true);
+      .mockResolvedValue({ status: "delivered" });
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",
       model: "lyria-3-clip-preview",
@@ -1158,3 +1176,4 @@ describe("createMusicGenerateTool", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

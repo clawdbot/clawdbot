@@ -1,7 +1,7 @@
 // Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
-import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
+import { collectSessionMaintenancePreserveKeysForStore } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
@@ -52,7 +52,7 @@ type RemovedSessionArtifactCleanup = {
   }) => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceParams = {
+type FileBackedSessionStoreMaintenanceParams = {
   storePath: string;
   store: Record<string, SessionEntry>;
   activeSessionKey?: string;
@@ -62,9 +62,10 @@ export type FileBackedSessionStoreMaintenanceParams = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   log: SessionMaintenanceLogger;
   artifacts: RemovedSessionArtifactCleanup;
+  commitReducedStore?: () => Promise<void>;
 };
 
-export type FileBackedSessionStoreMaintenanceResult = {
+type FileBackedSessionStoreMaintenanceResult = {
   changedStore: boolean;
 };
 
@@ -167,7 +168,9 @@ async function cleanupRemovedSessionArtifacts(params: {
       restrictToStoreDir: true,
     });
   }
-  if (archivedDirs.size === 0 && params.maintenance.resetArchiveRetentionMs == null) {
+  // null retention keeps archived transcripts: they are conversation history,
+  // and the disk budget (not a wall-clock timer) is the only eviction path.
+  if (params.maintenance.resetArchiveRetentionMs == null) {
     return;
   }
   const targetDirs =
@@ -175,17 +178,13 @@ async function cleanupRemovedSessionArtifacts(params: {
       ? [...archivedDirs]
       : [path.dirname(path.resolve(params.operation.storePath))];
   // Both retention reasons ride one cleanup call so each save enumerates the
-  // sessions dir at most once; reset retention defaults on, so a listing per
-  // reason would scan twice per save.
+  // sessions dir at most once; a listing per reason would scan twice per save.
   await params.operation.artifacts.cleanupArchivedSessionTranscripts({
     directories: targetDirs,
-    rules:
-      params.maintenance.resetArchiveRetentionMs != null
-        ? [
-            { reason: "deleted", olderThanMs: params.maintenance.pruneAfterMs },
-            { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
-          ]
-        : [{ reason: "deleted", olderThanMs: params.maintenance.pruneAfterMs }],
+    rules: [
+      { reason: "deleted", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+      { reason: "reset", olderThanMs: params.maintenance.resetArchiveRetentionMs },
+    ],
   });
 }
 
@@ -195,9 +194,11 @@ async function applyEnforcedMaintenance(params: {
   beforeCount: number;
   forceMaintenance: boolean;
 }): Promise<FileBackedSessionStoreMaintenanceResult> {
-  const preserveSessionKeys = collectSessionMaintenancePreserveKeys([
-    params.operation.activeSessionKey,
-  ]);
+  const preserveSessionKeys = collectSessionMaintenancePreserveKeysForStore({
+    storePath: params.operation.storePath,
+    store: params.operation.store,
+    baseKeys: [params.operation.activeSessionKey],
+  });
   const removedSessionFiles = new Map<string, string | undefined>();
   const modelRunPruned = shouldRunModelRunPrune({
     maintenance: params.maintenance,
@@ -251,6 +252,7 @@ async function applyEnforcedMaintenance(params: {
     maintenance: params.maintenance,
     warnOnly: false,
     log: params.operation.log,
+    commitEvictedIndex: params.operation.commitReducedStore,
   });
   await params.operation.onMaintenanceApplied?.({
     mode: params.maintenance.mode,

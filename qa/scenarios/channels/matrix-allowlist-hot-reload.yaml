@@ -1,0 +1,32 @@
+title: Matrix allowlist hot reload
+
+scenario:
+  id: matrix-allowlist-hot-reload
+  surface: channels
+  coverage:
+    primary:
+      - channels.allowlist-hot-reload
+  objective: Verify removing the observer from Matrix groupAllowFrom takes effect without restarting the Gateway.
+  successCriteria:
+    - The observer receives a reply while allowlisted.
+    - The same observer is blocked after a hot config patch.
+  docsRefs:
+    - docs/channels/matrix.md
+  codeRefs:
+    - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
+  execution:
+    profiles: { "matrix:all": 46, "matrix:release": 1, "matrix:transport": 45 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 75000
+    retryCount: 0
+    suiteIsolation: isolated
+    summary: Exercise Matrix observer-role allowlist hot reload through normalized transport state.
+    config:
+      accountId: sut
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-config.js
+  call: runMatrixQaAllowlistHotReloadScenario
+  args:
+    - expr: "scenarioContext"

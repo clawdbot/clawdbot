@@ -48,10 +48,19 @@ export function parseRunWithEnvArgs(argv) {
 }
 
 /**
- * Resolves node to the current executable so wrapper and child use the same runtime.
+ * Resolves bare Node command names to the current executable so wrapper and child use the same
+ * runtime. Windows command lookup is case-insensitive; explicit paths remain caller-owned.
  */
-export function resolveSpawnCommand(command, args, execPath = process.execPath) {
-  if (command === "node") {
+export function resolveSpawnCommand(
+  command,
+  args,
+  execPath = process.execPath,
+  platform = process.platform,
+) {
+  const normalizedCommand = platform === "win32" ? command.toLowerCase() : command;
+  const isNodeCommand =
+    normalizedCommand === "node" || (platform === "win32" && normalizedCommand === "node.exe");
+  if (isNodeCommand) {
     return {
       command: execPath,
       args,

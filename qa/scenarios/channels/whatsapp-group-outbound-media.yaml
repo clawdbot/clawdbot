@@ -1,0 +1,20 @@
+title: WhatsApp direct Gateway send delivers media to a group
+scenario:
+  id: whatsapp-group-outbound-media
+  surface: channels
+  coverage:
+    primary:
+      - whatsapp.outbound-image
+      - whatsapp.outbound-document
+  execution:
+    profiles: { "whatsapp:mock-default": 21 }
+    kind: flow
+    channel: whatsapp
+    timeoutMs: 120000
+    retryCount: 1
+    suiteIsolation: isolated
+    config: { whatsappScenarioId: whatsapp-group-outbound-media }
+flow:
+  module: ./live-transports/whatsapp/scenario-runtime.js
+  call: runWhatsAppGroupOutboundMediaScenario
+  args: [{ expr: whatsappScenarioContext }]

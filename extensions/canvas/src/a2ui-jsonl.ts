@@ -9,8 +9,8 @@ const A2UI_ACTION_KEYS = [
   "createSurface",
 ] as const;
 
-/** Supported A2UI message dialects accepted by the Canvas host. */
-export type A2UIVersion = "v0.8" | "v0.9";
+/** A2UI message dialects recognized by the Canvas validator. */
+type A2UIVersion = "v0.8" | "v0.9";
 
 /** Builds a minimal A2UI JSONL payload that renders text in a single surface. */
 export function buildA2UITextJsonl(text: string) {
@@ -41,7 +41,7 @@ export function buildA2UITextJsonl(text: string) {
 }
 
 /** Validates A2UI JSONL and returns the detected dialect/version metadata. */
-export function validateA2UIJsonl(jsonl: string) {
+function validateA2UIJsonl(jsonl: string) {
   const lines = jsonl.split(/\r?\n/);
   const errors: string[] = [];
   let sawV08 = false;
@@ -66,6 +66,16 @@ export function validateA2UIJsonl(jsonl: string) {
       return;
     }
     const record = obj as Record<string, unknown>;
+    const explicitVersion = record.version;
+    // Bundled v0.8 is strict and unversioned; v0.9 identifies every message.
+    if (explicitVersion === "v0.8") {
+      errors.push(`line ${idx + 1}: A2UI v0.8 messages must not include a version field`);
+      return;
+    }
+    if (explicitVersion !== undefined && explicitVersion !== "v0.9") {
+      errors.push(`line ${idx + 1}: unsupported A2UI version: ${JSON.stringify(explicitVersion)}`);
+      return;
+    }
     const actionKeys = A2UI_ACTION_KEYS.filter((key) => key in record);
     if (actionKeys.length !== 1) {
       errors.push(
@@ -73,7 +83,9 @@ export function validateA2UIJsonl(jsonl: string) {
       );
       return;
     }
-    if (actionKeys[0] === "createSurface") {
+    // v0.9 requires an explicit version, but keep recognizing legacy
+    // createSurface payloads so older generators still fail closed.
+    if (explicitVersion === "v0.9" || actionKeys[0] === "createSurface") {
       sawV09 = true;
     } else {
       sawV08 = true;
@@ -92,4 +104,13 @@ export function validateA2UIJsonl(jsonl: string) {
 
   const version: A2UIVersion = sawV09 ? "v0.9" : "v0.8";
   return { version, messageCount };
+}
+
+/** Validates A2UI JSONL against the Canvas runtime's currently supported dialect. */
+export function validateSupportedA2UIJsonl(jsonl: string) {
+  const result = validateA2UIJsonl(jsonl);
+  if (result.version !== "v0.8") {
+    throw new Error("Detected unsupported A2UI v0.9 JSONL. OpenClaw currently supports v0.8 only.");
+  }
+  return result;
 }

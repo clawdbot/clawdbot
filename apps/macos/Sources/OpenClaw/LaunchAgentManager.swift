@@ -8,13 +8,32 @@ enum LaunchAgentManager {
 
     static func status() async -> Bool {
         guard FileManager().fileExists(atPath: self.plistURL.path) else { return false }
+        return await self.isLoaded()
+    }
+
+    private static func isLoaded() async -> Bool {
         let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(launchdLabel)"])
         return result == 0
     }
 
-    static func set(enabled: Bool, bundlePath: String) async {
+    @discardableResult
+    static func set(
+        enabled: Bool,
+        bundlePath: String,
+        loaded: Bool? = nil,
+        writePlist: ((String) -> Void)? = nil) async -> Bool
+    {
         if enabled {
-            self.writePlist(bundlePath: bundlePath)
+            let persist = writePlist ?? { self.writePlist(bundlePath: $0) }
+            persist(bundlePath)
+            let alreadyLoaded = if let loaded {
+                loaded
+            } else {
+                await self.isLoaded()
+            }
+            // Startup hydrates the toggle from launchd. Reinstalling the active job here
+            // would boot out the app that is still responsible for bootstrapping it again.
+            guard !alreadyLoaded else { return false }
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
             _ = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             _ = await self.runLaunchctl(["kickstart", "-k", "gui/\(getuid())/\(launchdLabel)"])
@@ -23,6 +42,7 @@ enum LaunchAgentManager {
             // bootout would terminate the launchd job immediately (and crash the app if launched via agent).
             try? FileManager().removeItem(at: self.plistURL)
         }
+        return true
     }
 
     private static func writePlist(bundlePath: String) {

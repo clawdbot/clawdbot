@@ -1,5 +1,6 @@
 // Cron shared tests cover shared cron CLI parsing, display, and error helpers.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -8,7 +9,7 @@ import {
   getCronChannelOptions,
   parseAt,
   parseCronToolsAllow,
-  parseDurationMs,
+  parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
 } from "./shared.js";
@@ -90,6 +91,101 @@ describe("printCronList", () => {
     expectLogsToInclude(logs, "isolated");
   });
 
+  it("truncates and aligns names by sanitized terminal display width", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const prefix19 = "x".repeat(19);
+    const prefix20 = "x".repeat(20);
+    const prefix21 = "x".repeat(21);
+    const injectedMarker = "cron-table-injection";
+    const injectedControl = `\u001B]0;${injectedMarker}\u0007`;
+    const cases = [
+      { name: `${prefix20}🚀tail`, expected: `${prefix20}...` },
+      { name: `${prefix21}Atail`, expected: `${prefix21}...` },
+      { name: `${prefix19}表tail`, expected: `${prefix19}表...` },
+      { name: `${prefix20}e\u0301tail`, expected: `${prefix20}e\u0301...` },
+      { name: `${prefix19}👨‍👩‍👧‍👦tail`, expected: `${prefix19}👨‍👩‍👧‍👦...` },
+      { name: `${prefix20}👨‍👩‍👧‍👦`, expected: `${prefix20}👨‍👩‍👧‍👦` },
+      { name: `${prefix20}${injectedControl}🚀tail`, expected: `${prefix20}...` },
+    ];
+
+    printCronList(
+      cases.map(({ name }, index) => createBaseJob({ id: `unicode-name-${index}`, name })),
+      runtime,
+    );
+
+    const header = logs[0] ?? "";
+    const rows = logs.slice(1);
+    const scheduleColumn = visibleWidth(header.slice(0, header.indexOf("Schedule")));
+    expect(rows).toHaveLength(cases.length);
+    for (const [index, row] of rows.entries()) {
+      const scheduleIndex = row.indexOf("at ");
+      expect(scheduleIndex).toBeGreaterThan(-1);
+      expect(visibleWidth(row.slice(0, scheduleIndex))).toBe(scheduleColumn);
+      expect(row).toContain(cases[index]?.expected);
+    }
+    const output = logs.join("\n");
+    expect(Buffer.from(output, "utf8").toString("utf8")).toBe(output);
+    expect(output).not.toContain("\uFFFD");
+    expect(output).not.toContain(injectedMarker);
+  });
+
+  it("sanitizes and bounds named-session targets", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const injectedMarker = "cron-target-injection";
+    const sessionTarget = `session:${"x".repeat(20)}\u001B]0;${injectedMarker}\u0007`;
+    const job = createBaseJob({
+      id: "target-job",
+      sessionTarget: sessionTarget as CronJob["sessionTarget"],
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([[job.id, { label: "target-delivery", detail: "destination" }]]),
+    });
+
+    const header = logs[0] ?? "";
+    const row = logs[1] ?? "";
+    const deliveryColumn = visibleWidth(header.slice(0, header.indexOf("Delivery")));
+    const deliveryIndex = row.indexOf("target-delivery");
+    expect(deliveryIndex).toBeGreaterThan(-1);
+    expect(visibleWidth(row.slice(0, deliveryIndex))).toBe(deliveryColumn);
+    expect(row).toContain("sessio...");
+    expect(row).not.toContain(injectedMarker);
+  });
+
+  it("shows declaration metadata and existing run status", () => {
+    const job = createBaseJob({
+      declarationKey: "daily-report",
+      displayName: "Daily summary",
+      owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+      sessionTarget: "isolated",
+      state: {
+        nextRunAtMs: Date.now() + 60_000,
+        lastRunAtMs: Date.now() - 60_000,
+        lastRunStatus: "error",
+        lastError: "boom",
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: "offline",
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expect(list.logs[0]).toContain("Declaration");
+    expect(list.logs[0]).toContain("Owner");
+    expectLogsToInclude(list.logs, "daily-report");
+    expectLogsToInclude(list.logs, "Daily summary");
+    expectLogsToInclude(list.logs, "agent:ops:main");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "declaration: daily-report");
+    expectLogsToInclude(show.logs, "display name: Daily summary");
+    expectLogsToInclude(show.logs, "owner agent: ops");
+    expectLogsToInclude(show.logs, "last error: boom");
+    expectLogsToInclude(show.logs, "last delivery: not-delivered");
+    expectLogsToInclude(show.logs, "last delivery error: offline");
+  });
+
   it("tolerates malformed rows in human-readable output", () => {
     const { logs, runtime } = createRuntimeLogCapture();
     const malformedJob = {
@@ -119,6 +215,118 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expectLogsToInclude(logs, "(stagger 5m)");
+  });
+
+  it("marks trigger schedules and shows evaluation details", () => {
+    const job = createBaseJob({
+      schedule: { kind: "every", everyMs: 30_000 },
+      trigger: { script: "json({ fire: true })", once: true },
+      state: {
+        triggerEvalCount: 4,
+        lastTriggerEvalAtMs: Date.now() - 30_000,
+        lastTriggerFireAtMs: Date.now() - 60_000,
+      },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "every 30s+trigger");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
+  });
+
+  it("shows on-exit schedules in list and show output", () => {
+    const job = createBaseJob({
+      id: "on-exit-job",
+      name: "Watch build",
+      schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" },
+      sessionTarget: "main",
+      state: {},
+      payload: { kind: "systemEvent", text: "done" },
+    });
+
+    const list = createRuntimeLogCapture();
+    printCronList([job], list.runtime);
+    expectLogsToInclude(list.logs, "on-exit pnpm build @ /repo");
+
+    const show = createRuntimeLogCapture();
+    printCronShow(job, show.runtime);
+    expectLogsToInclude(show.logs, "schedule: on-exit pnpm build @ /repo");
+  });
+
+  it("shows the consecutive failure count for chronically failing jobs", () => {
+    const failing = createBaseJob({
+      id: "failing-job",
+      name: "Failing",
+      state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
+    });
+    const singleFailure = createBaseJob({
+      id: "single-failure-job",
+      name: "Failed Once",
+      state: { lastRunStatus: "error", consecutiveErrors: 1, lastError: "boom" },
+    });
+
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList([failing, singleFailure], runtime);
+
+    expectLogsToInclude(logs, "error (12x)");
+    // A single failure keeps the bare status token; the count only marks repeats.
+    const singleLine = logs.find((line) => line.includes("single-failure-job")) ?? "";
+    expect(singleLine).toContain("error");
+    expect(singleLine).not.toContain("(1x)");
+  });
+
+  it("caps the failure count so the status column never overflows", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    printCronList(
+      [
+        createBaseJob({
+          id: "minute-cron-job",
+          state: { lastRunStatus: "error", consecutiveErrors: 1440, lastError: "boom" },
+        }),
+      ],
+      runtime,
+    );
+    expectLogsToInclude(logs, "error (99+x)");
+    expect(logs.join("\n")).not.toContain("1440");
+  });
+
+  it("keeps the --json status field free of the failure-count decoration", () => {
+    const job = createBaseJob({
+      id: "json-job",
+      state: { lastRunStatus: "error", consecutiveErrors: 12, lastError: "boom" },
+    });
+    const enriched = enrichCronJsonWithStatus({
+      jobs: [job],
+    }) as { jobs: Array<{ status?: string }> };
+    expect(enriched.jobs[0]?.status).toBe("error");
+    expect(enrichCronJsonWithStatus(job)).toMatchObject({
+      status: "error",
+      state: { consecutiveErrors: 12, lastError: "boom" },
+    });
+  });
+
+  it("shows last error and failure count in cron show output", () => {
+    const failing = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({
+        id: "show-failing-job",
+        state: { lastRunStatus: "error", consecutiveErrors: 3, lastError: "provider exploded" },
+      }),
+      failing.runtime,
+    );
+    expectLogsToInclude(failing.logs, "status: error (3x)");
+    expectLogsToInclude(failing.logs, "last error: provider exploded");
+
+    const healthy = createRuntimeLogCapture();
+    printCronShow(
+      createBaseJob({ id: "healthy-job", state: { lastRunStatus: "ok" } }),
+      healthy.runtime,
+    );
+    expectLogsToInclude(healthy.logs, "status: ok");
+    expectLogsToInclude(healthy.logs, "last error: -");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -318,26 +526,29 @@ describe("coerceCronDeliveryPreviews", () => {
   });
 });
 
-describe("parseDurationMs", () => {
+describe("parsePositiveCronDurationMs", () => {
   it("parses valid positive durations", () => {
-    expect(parseDurationMs("500ms")).toBe(500);
-    expect(parseDurationMs("30s")).toBe(30_000);
-    expect(parseDurationMs("1.5h")).toBe(5_400_000);
-    expect(parseDurationMs("1d")).toBe(86_400_000);
+    expect(parsePositiveCronDurationMs("500ms")).toBe(500);
+    expect(parsePositiveCronDurationMs("30s")).toBe(30_000);
+    expect(parsePositiveCronDurationMs("1.5h")).toBe(5_400_000);
+    expect(parsePositiveCronDurationMs("1h30m")).toBe(5_400_000);
+    expect(parsePositiveCronDurationMs("1d")).toBe(86_400_000);
   });
 
   it("rejects non-positive and malformed durations", () => {
-    expect(parseDurationMs("0s")).toBeNull();
-    expect(parseDurationMs("-5s")).toBeNull();
-    expect(parseDurationMs("abc")).toBeNull();
-    expect(parseDurationMs("")).toBeNull();
+    expect(parsePositiveCronDurationMs("0s")).toBeNull();
+    expect(parsePositiveCronDurationMs("0.5ms")).toBe(1);
+    expect(parsePositiveCronDurationMs("0.001ms")).toBeNull();
+    expect(parsePositiveCronDurationMs("-5s")).toBeNull();
+    expect(parsePositiveCronDurationMs("abc")).toBeNull();
+    expect(parsePositiveCronDurationMs("")).toBeNull();
   });
 
   it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
     // A finite mantissa can still overflow once multiplied by a large unit factor.
-    expect(parseDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
+    expect(parsePositiveCronDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
     // A large-but-finite result is still accepted.
-    expect(parseDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
+    expect(parsePositiveCronDurationMs(`9${"0".repeat(15)}ms`)).toBe(9_000_000_000_000_000);
   });
 });
 

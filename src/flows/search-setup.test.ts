@@ -1,4 +1,6 @@
 // Search setup tests cover search provider setup and config changes.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
@@ -77,7 +79,7 @@ const mockGrokProvider = vi.hoisted(() => ({
     }
     const model = await prompter.select({
       message: "Grok model",
-      options: [{ value: "grok-4-1-fast", label: "grok-4-1-fast" }],
+      options: [{ value: "grok-4.3", label: "grok-4.3" }],
     });
     const pluginEntries = (config.plugins as { entries?: Record<string, unknown> } | undefined)
       ?.entries;
@@ -227,7 +229,7 @@ describe("runSearchSetupFlow", () => {
       .fn()
       .mockResolvedValueOnce("grok")
       .mockResolvedValueOnce("yes")
-      .mockResolvedValueOnce("grok-4-1-fast");
+      .mockResolvedValueOnce("grok-4.3");
     const text = vi.fn().mockResolvedValue("xai-test-key");
     const prompter = createWizardPrompter({
       select: select as never,
@@ -247,7 +249,7 @@ describe("runSearchSetupFlow", () => {
     expect(next.tools?.web?.search?.provider).toBe("grok");
     expect(next.tools?.web?.search?.enabled).toBe(true);
     expect(xaiConfig?.xSearch?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
+    expect(xaiConfig?.xSearch?.model).toBe("grok-4.3");
   });
 
   it("shows provider notes in every search provider row label", async () => {
@@ -265,7 +267,7 @@ describe("runSearchSetupFlow", () => {
 
     expect(grokOption).toEqual(
       expect.objectContaining({
-        label: "Grok (Search with xAI · API key required)",
+        label: "Grok (Search with xAI · xAI API key required)",
       }),
     );
     expect(grokOption).not.toHaveProperty("hint");
@@ -358,7 +360,12 @@ describe("runSearchSetupFlow", () => {
 
     expect(note).toHaveBeenCalledWith(mockGrokProvider.credentialNote, mockGrokProvider.label);
     expect(text).toHaveBeenCalledTimes(1);
-    expect(note.mock.invocationCallOrder[1]).toBeLessThan(text.mock.invocationCallOrder[0]);
+    expect(note.mock.invocationCallOrder[1]).toBeLessThan(
+      expectDefined(
+        text.mock.invocationCallOrder[0],
+        "text.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("shows provider credential notes before SecretRef setup notes", async () => {
@@ -434,7 +441,7 @@ describe("runSearchSetupFlow", () => {
       .fn()
       .mockResolvedValueOnce("grok")
       .mockResolvedValueOnce("yes")
-      .mockResolvedValueOnce("grok-4-1-fast");
+      .mockResolvedValueOnce("grok-4.3");
     const prompter = createWizardPrompter({
       select: select as never,
     });
@@ -473,7 +480,7 @@ describe("runSearchSetupFlow", () => {
     expect(next.tools?.web?.search?.provider).toBe("grok");
     expect(next.tools?.web?.search?.enabled).toBe(false);
     expect(xaiConfig?.xSearch?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
+    expect(xaiConfig?.xSearch?.model).toBe("grok-4.3");
   });
 
   it("allows an explicit setup flow to reenable credential-ready web_search", async () => {

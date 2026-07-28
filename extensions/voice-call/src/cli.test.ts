@@ -1,81 +1,192 @@
 // Voice Call tests cover cli plugin behavior.
+import { Command } from "commander";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { describe, expect, it } from "vitest";
-import { testing } from "./cli.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
 
-describe("voice-call CLI gateway fallback", () => {
-  it("treats abnormal local gateway closes as standalone-runtime fallback candidates", () => {
-    expect(
-      testing.isGatewayUnavailableForLocalFallback(
-        new Error("gateway closed (1006 abnormal closure (no close frame)): no close reason"),
-      ),
-    ).toBe(true);
-  });
-});
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  callGatewayFromCli: callGatewayFromCliMock,
+}));
 
-describe("parseVoiceCallIntOption", () => {
-  it("parses decimal integer option values", () => {
-    expect(testing.parseVoiceCallIntOption("250", "--poll", { min: 50 })).toBe(250);
-    expect(testing.parseVoiceCallIntOption(" 25 ", "--since")).toBe(25);
-  });
+import { registerVoiceCallCli } from "./cli.js";
 
-  it("rejects non-decimal JavaScript numeric syntax", () => {
-    expect(() => testing.parseVoiceCallIntOption("0x10", "--last")).toThrow(
-      "Invalid numeric value for --last: 0x10",
-    );
-    expect(() => testing.parseVoiceCallIntOption("1e3", "--last")).toThrow(
-      "Invalid numeric value for --last: 1e3",
-    );
-  });
+function captureStdout() {
+  let output = "";
+  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+    output += String(chunk);
+    return true;
+  }) as typeof process.stdout.write);
+  return {
+    output: () => output,
+    restore: () => writeSpy.mockRestore(),
+  };
+}
 
-  it("rejects unsafe integers and max-bound violations", () => {
-    expect(() => testing.parseVoiceCallIntOption("9007199254740993", "--last", { min: 1 })).toThrow(
-      "Invalid numeric value for --last: 9007199254740993",
-    );
-    expect(() =>
-      testing.parseVoiceCallIntOption("65536", "--port", { min: 1, max: 65535 }),
-    ).toThrow("Invalid numeric value for --port: 65536");
-  });
-});
-
-describe("voice-call CLI timeout helpers", () => {
-  it("caps gateway operation timeout grace", () => {
-    expect(testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: 10_000 } as never)).toBe(
-      30_000,
-    );
-    expect(testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: 60_000 } as never)).toBe(
-      65_000,
-    );
-    expect(
-      testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: Number.MAX_SAFE_INTEGER } as never),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(
-      testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: Number.MAX_VALUE } as never),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
+describe("voice-call CLI status fallback", () => {
+  afterEach(() => {
+    callGatewayFromCliMock.mockReset();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
-  it("caps gateway continue timeout totals", () => {
-    expect(testing.resolveGatewayContinueTimeoutMs({ transcriptTimeoutMs: 180_000 } as never)).toBe(
-      220_000,
-    );
-    expect(
-      testing.resolveGatewayContinueTimeoutMs({
-        transcriptTimeoutMs: Number.MAX_SAFE_INTEGER,
-      } as never),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  function buildProgram(
+    manager: Record<string, unknown>,
+    config: Record<string, unknown> = {},
+  ): Command {
+    const program = new Command();
+    registerVoiceCallCli({
+      program,
+      config: config as never,
+      ensureRuntime: async () => ({ manager }) as never,
+      logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
+    });
+    return program;
+  }
+
+  async function runStatusWithUnavailableGateway(
+    manager: Record<string, unknown>,
+    error = new Error("connect ECONNREFUSED 127.0.0.1:18789"),
+  ): Promise<unknown> {
+    callGatewayFromCliMock.mockRejectedValue(error);
+    const program = buildProgram(manager);
+    const capturer = captureStdout();
+    try {
+      await program.parseAsync(["voicecall", "status", "--call-id", "call-1", "--json"], {
+        from: "user",
+      });
+    } finally {
+      capturer.restore();
+    }
+    return JSON.parse(capturer.output().trim());
+  }
+
+  it("uses the manager's persisted fallback when the gateway is unavailable", async () => {
+    const result = await runStatusWithUnavailableGateway({
+      getActiveCalls: () => [],
+      getCallFromMemoryOrStore: async () => ({
+        callId: "call-1",
+        providerCallId: "CA123",
+        state: "completed",
+        endReason: "completed",
+        endedAt: 1,
+      }),
+    });
+    expect(result).toMatchObject({ callId: "call-1", state: "completed" });
   });
 
-  it("caps gateway polling deadlines", () => {
-    expect(testing.resolveVoiceCallDeadlineMs(5_000, 10_000)).toBe(15_000);
-    expect(testing.resolveVoiceCallDeadlineMs(Number.MAX_SAFE_INTEGER, 10_000)).toBe(
-      10_000 + MAX_TIMER_TIMEOUT_MS,
+  it("reports found:false when the call is neither active nor persisted", async () => {
+    const result = await runStatusWithUnavailableGateway({
+      getActiveCalls: () => [],
+      getCallFromMemoryOrStore: async () => undefined,
+    });
+    expect(result).toEqual({ found: false });
+  });
+
+  it("falls back after an abnormal local gateway close", async () => {
+    const result = await runStatusWithUnavailableGateway(
+      {
+        getActiveCalls: () => [],
+        getCallFromMemoryOrStore: async () => ({ callId: "call-1", state: "completed" }),
+      },
+      new Error("gateway closed (1006 abnormal closure (no close frame)): no close reason"),
+    );
+    expect(result).toMatchObject({ callId: "call-1", state: "completed" });
+  });
+
+  it("rejects non-decimal tail options through the registered command", async () => {
+    const program = buildProgram({});
+    await expect(
+      program.parseAsync(["voicecall", "tail", "--since", "0x10"], { from: "user" }),
+    ).rejects.toThrow("Invalid numeric value for --since: 0x10");
+  });
+
+  it("caps oversized operation timeouts through the start command", async () => {
+    callGatewayFromCliMock.mockResolvedValue({ callId: "call-1" });
+    const program = buildProgram({}, { ringTimeoutMs: Number.MAX_SAFE_INTEGER });
+    await program.parseAsync(["voicecall", "start", "--to", "+15550001111"], {
+      from: "user",
+    });
+    expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+      "voicecall.start",
+      { json: true, timeout: String(MAX_TIMER_TIMEOUT_MS) },
+      { to: "+15550001111", mode: "conversation" },
+      { progress: false },
     );
   });
 
-  it("caps gateway continue poll timeouts from async operation payloads", () => {
-    expect(
-      testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.MAX_SAFE_INTEGER }, 45_000),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(testing.readGatewayPollTimeoutMs({ pollTimeoutMs: Number.NaN }, 45_000)).toBe(45_000);
+  it("caps oversized legacy continue timeouts through the command", async () => {
+    callGatewayFromCliMock
+      .mockRejectedValueOnce(new Error("unknown method: voicecall.continue.start"))
+      .mockResolvedValueOnce({ success: true, transcript: "done" });
+    const program = buildProgram({}, { transcriptTimeoutMs: Number.MAX_SAFE_INTEGER });
+    await program.parseAsync(
+      ["voicecall", "continue", "--call-id", "call-1", "--message", "hello"],
+      { from: "user" },
+    );
+    expect(callGatewayFromCliMock).toHaveBeenLastCalledWith(
+      "voicecall.continue",
+      { json: true, timeout: String(MAX_TIMER_TIMEOUT_MS) },
+      { callId: "call-1", message: "hello" },
+      { progress: false },
+    );
+  });
+
+  it("uses the configured continue deadline when the gateway poll timeout is non-finite", async () => {
+    callGatewayFromCliMock.mockResolvedValueOnce({
+      operationId: "op-1",
+      status: "pending",
+      pollTimeoutMs: Number.NaN,
+    });
+    vi.spyOn(Date, "now").mockReturnValueOnce(0).mockReturnValue(50_000);
+    const program = buildProgram({}, { transcriptTimeoutMs: 100 });
+    await expect(
+      program.parseAsync(["voicecall", "continue", "--call-id", "call-1", "--message", "hello"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("voicecall continue timed out waiting for gateway operation");
+    expect(callGatewayFromCliMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds a withheld continue.result RPC to the overall poll deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    callGatewayFromCliMock
+      .mockResolvedValueOnce({
+        operationId: "op-1",
+        status: "pending",
+        pollTimeoutMs: 1_500,
+      })
+      .mockResolvedValueOnce({ status: "pending" })
+      .mockImplementationOnce(
+        async (_method: string, opts: { timeout: string }) =>
+          await new Promise((_, reject) => {
+            setTimeout(
+              () => reject(new Error(`gateway timeout after ${opts.timeout}ms`)),
+              Number(opts.timeout),
+            );
+          }),
+      );
+
+    const program = buildProgram({}, { transcriptTimeoutMs: 100 });
+    const startedAtMs = Date.now();
+    const execution = program.parseAsync(
+      ["voicecall", "continue", "--call-id", "call-1", "--message", "hello"],
+      { from: "user" },
+    );
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(callGatewayFromCliMock).toHaveBeenNthCalledWith(
+      3,
+      "voicecall.continue.result",
+      { json: true, timeout: "500" },
+      { operationId: "op-1" },
+      { progress: false },
+    );
+    const rejected = expect(execution).rejects.toThrow("gateway timeout after 500ms");
+    await vi.advanceTimersByTimeAsync(500);
+    await rejected;
+    expect(Date.now() - startedAtMs).toBe(1_500);
   });
 });

@@ -1,10 +1,6 @@
 // Line plugin module implements webhook behavior.
 import type { webhook } from "@line/bot-sdk";
 import type { NextFunction, Request, Response } from "express";
-import {
-  createMessageReceiveContext,
-  type MessageReceiveContext,
-} from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 
@@ -33,17 +29,12 @@ function parseWebhookBody(rawBody?: string | null): webhook.CallbackRequest | nu
   return parseLineWebhookBody(rawBody);
 }
 
-function logLineWebhookDispatchError(runtime: RuntimeEnv | undefined, err: unknown): void {
-  runtime?.error?.(danger(`line webhook dispatch failed: ${String(err)}`));
-}
-
 export function createLineWebhookMiddleware(
   options: LineWebhookOptions,
 ): (req: Request, res: Response, _next: NextFunction) => Promise<void> {
   const { channelSecret, onEvents, runtime } = options;
 
   return async (req: Request, res: Response, _next: NextFunction): Promise<void> => {
-    let receiveContext: MessageReceiveContext<webhook.CallbackRequest> | undefined;
     try {
       const signature = req.headers["x-line-signature"];
 
@@ -76,28 +67,12 @@ export function createLineWebhookMiddleware(
         return;
       }
 
-      receiveContext = createMessageReceiveContext({
-        id: `${Date.now()}:line:webhook`,
-        channel: "line",
-        message: body,
-        ackPolicy: "after_receive_record",
-        onAck: () => {
-          res.status(200).json({ status: "ok" });
-        },
-      });
-
-      if (receiveContext.shouldAckAfter("receive_record")) {
-        await receiveContext.ack();
-      }
-
       if (body.events && body.events.length > 0) {
         logVerbose(`line: received ${body.events.length} webhook events`);
-        void Promise.resolve()
-          .then(() => onEvents(body))
-          .catch((err: unknown) => logLineWebhookDispatchError(runtime, err));
+        await onEvents(body);
       }
+      res.status(200).json({ status: "ok" });
     } catch (err) {
-      await receiveContext?.nack(err);
       runtime?.error?.(danger(`line webhook error: ${String(err)}`));
       if (!res.headersSent) {
         res.status(500).json({ error: "Internal server error" });

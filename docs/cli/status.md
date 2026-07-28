@@ -15,29 +15,89 @@ openclaw status --deep
 openclaw status --usage
 ```
 
-Notes:
+| Flag                    | Description                                                                                                     |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `--all`                 | Full diagnosis (read-only, pasteable). Includes security audit, plugin compatibility, and memory-vector probes. |
+| `--deep`                | Runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal). Also enables the security audit.         |
+| `--usage`               | Prints normalized provider usage windows as `X% left`.                                                          |
+| `--json`                | Machine-readable output.                                                                                        |
+| `--verbose` / `--debug` | Also print the raw Gateway target resolution before the report.                                                 |
 
-- `--deep` runs live probes (WhatsApp Web + Telegram + Discord + Slack + Signal).
-- Plain `openclaw status` stays on the fast read-only path and marks memory as `not checked` instead of unavailable when it skips memory inspection. Heavy security audit, plugin compatibility, and memory-vector probes are left to `openclaw status --all`, `openclaw status --deep`, `openclaw security audit`, and `openclaw memory status --deep`.
-- `status --json --all` reports memory details from the active memory plugin runtime selected by `plugins.slots.memory`. Custom memory plugins can leave built-in `agents.defaults.memorySearch.enabled` disabled and still report their own files, chunks, vector, and FTS state.
+Plain `openclaw status` stays on the fast read-only path and marks memory as
+`not checked` instead of unavailable when it skips memory inspection. Heavy
+security audit, plugin compatibility, and memory-vector probes are left to
+`openclaw status --all`, `openclaw status --deep`, `openclaw security audit`,
+and `openclaw memory status --deep`.
+
+## Session and model resolution
+
+- Session status output separates `Execution:` from `Runtime:`. `Execution`
+  is the sandbox path (`direct`, `docker/*`), while `Runtime` tells you
+  whether the session is using `OpenClaw Default`, `OpenAI Codex`, a CLI
+  backend, or an ACP backend such as `codex (acp/acpx)`. See
+  [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime
+  distinction.
+- When the current session snapshot is sparse, `/status` can backfill token
+  and cache counters from the most recent transcript usage log. Existing
+  nonzero live values still win over transcript fallback values.
+- Transcript fallback can also recover the active runtime model label when
+  the live session entry is missing it. If that transcript model differs
+  from the selected model, status resolves the context window against the
+  recovered runtime model instead of the selected one.
+- For prompt-size accounting, transcript fallback prefers the larger
+  prompt-oriented total when session metadata is missing or smaller, so
+  custom-provider sessions do not collapse to `0` token displays.
+- When a session is pinned to a model that differs from the configured
+  primary, status prints both values, the reason (`session override`), and
+  the hint `/model default`. The configured primary applies to new or
+  unpinned sessions; existing pinned sessions keep their session selection
+  until cleared.
+- Output includes per-agent session stores when multiple agents are
+  configured.
+
+## Usage and quota
+
 - `--usage` prints normalized provider usage windows as `X% left`.
-- Session status output separates `Execution:` from `Runtime:`. `Execution` is the sandbox path (`direct`, `docker/*`), while `Runtime` tells you whether the session is using `OpenClaw Default`, `OpenAI Codex`, a CLI backend, or an ACP backend such as `codex (acp/acpx)`. See [Agent runtimes](/concepts/agent-runtimes) for the provider/model/runtime distinction.
-- MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota, so OpenClaw inverts them before display; count-based fields win when present. `model_remains` responses prefer the chat-model entry, derive the window label from timestamps when needed, and include the model name in the plan label.
-- When the current session snapshot is sparse, `/status` can backfill token and cache counters from the most recent transcript usage log. Existing nonzero live values still win over transcript fallback values.
-- `/status` includes compact Gateway process uptime and host system uptime.
-- Transcript fallback can also recover the active runtime model label when the live session entry is missing it. If that transcript model differs from the selected model, status resolves the context window against the recovered runtime model instead of the selected one.
-- When a session is pinned to a model that differs from the configured primary, status prints both values, the reason (`session override`), and the clear hint (`/model default`). The configured primary applies to new or unpinned sessions; existing pinned sessions keep their session selection until cleared.
-- For prompt-size accounting, transcript fallback prefers the larger prompt-oriented total when session metadata is missing or smaller, so custom-provider sessions do not collapse to `0` token displays.
-- Output includes per-agent session stores when multiple agents are configured.
-- Overview includes Gateway + node host service install/runtime status when available.
+- MiniMax's raw `usage_percent` / `usagePercent` fields are remaining quota,
+  so OpenClaw inverts them before display; count-based fields win when
+  present. `model_remains` responses prefer the chat-model entry, derive the
+  window label from timestamps when needed, and include the model name in
+  the plan label.
+- Model pricing refresh failures are shown as optional pricing warnings.
+  They do not mean the Gateway or channels are unhealthy.
+
+## Overview and update status
+
+- Overview includes Gateway + node host service install/runtime status when
+  available, plus compact Gateway process uptime and host system uptime.
 - Overview includes update channel + git SHA (for source checkouts).
-- Update info surfaces in the Overview; if an update is available, status prints a hint to run `openclaw update` (see [Updating](/install/updating)).
-- Model pricing refresh failures are shown as optional pricing warnings. They do
-  not mean the Gateway or channels are unhealthy.
-- Read-only status surfaces (`status`, `status --json`, `status --all`) resolve supported SecretRefs for their targeted config paths when possible.
-- If a supported channel SecretRef is configured but unavailable in the current command path, status stays read-only and reports degraded output instead of crashing. Human output shows warnings such as "configured token unavailable in this command path", and JSON output includes `secretDiagnostics`.
-- When command-local SecretRef resolution succeeds, status prefers the resolved snapshot and clears transient "secret unavailable" channel markers from the final output.
-- `status --all` includes a Secrets overview row and a diagnosis section that summarizes secret diagnostics (truncated for readability) without stopping report generation.
+- Update info surfaces in the Overview; if an update is available, status
+  prints a hint to run `openclaw update` (see [Updating](/install/updating)).
+
+## Secrets
+
+- When the running Gateway has any isolated SecretRef owner from startup, reload, or a config write, status includes `degradedSecretOwners` in JSON and a **Degraded secrets** overview row in human output. Each entry names the owner, degradation state (`cold` or `stale`), config paths, and redacted reason. Cold owners are unavailable; stale owners continue with last-known-good values.
+- Read-only status surfaces (`status`, `status --json`, `status --all`)
+  resolve supported SecretRefs for their targeted config paths when
+  possible.
+- If a supported channel SecretRef is configured but unavailable in the
+  current command path, status stays read-only and reports degraded output
+  instead of crashing. Human output shows warnings such as "configured token
+  unavailable in this command path", and JSON output includes
+  `secretDiagnostics`.
+- When command-local SecretRef resolution succeeds, status prefers the
+  resolved snapshot and clears transient "secret unavailable" channel
+  markers from the final output.
+- `status --all` includes a Secrets overview row and a diagnosis section
+  that summarizes secret diagnostics (truncated for readability) without
+  stopping report generation.
+
+## Memory
+
+`status --json --all` reports memory details from the active memory plugin
+runtime selected by `plugins.slots.memory`. Custom memory plugins can leave
+built-in `memory.search.enabled` disabled and still report
+their own files, chunks, vector, and FTS state.
 
 ## Related
 

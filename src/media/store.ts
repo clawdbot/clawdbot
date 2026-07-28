@@ -1,50 +1,53 @@
 // Media store persists loaded media files and metadata for later references.
 import "../infra/fs-safe-defaults.js";
 import crypto from "node:crypto";
-import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
+import type { request as httpRequest } from "node:http";
 import path from "node:path";
-import { pipeline } from "node:stream/promises";
 import {
   basenameFromAnyPath,
   extnameFromAnyPath,
   nameFromAnyPath,
 } from "@openclaw/media-core/file-name";
-import { detectMime, extensionForMime } from "@openclaw/media-core/mime";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { toErrorObject } from "../infra/errors.js";
+import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { fileStore } from "../infra/file-store.js";
 import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/fs-safe.js";
-import { retainSafeHeadersForCrossOriginRedirect } from "../infra/net/redirect-headers.js";
-import { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import type { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { resolveConfigDir } from "../utils.js";
+import { downloadMediaToFile, setMediaStoreDownloadDepsForTest } from "./store.download.js";
 import { isFsSafeError, readLocalFileSafely, type FsSafeLikeError } from "./store.runtime.js";
+import { formatMediaLimitMb, MEDIA_FILE_MODE } from "./store.shared.js";
 
 const resolveMediaDir = () => path.join(resolveConfigDir(), "media");
 /** Default per-file media-store byte cap used by inbound staging and plugin SDK callers. */
 export const MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 const MAX_BYTES = MEDIA_MAX_BYTES;
 const DEFAULT_TTL_MS = 2 * 60 * 1000; // 2 minutes
-// Files are intentionally readable by non-owner UIDs so Docker sandbox containers can access
-// inbound media. The containing state/media directories remain 0o700, which is the trust boundary.
-const MEDIA_FILE_MODE = 0o644;
+type RequestImpl = typeof httpRequest;
+type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 type CleanOldMediaOptions = {
   recursive?: boolean;
   pruneEmptyDirs?: boolean;
 };
-type RequestImpl = typeof httpRequest;
-type ResolvePinnedHostnameImpl = typeof resolvePinnedHostname;
 
-const defaultHttpRequestImpl: RequestImpl = httpRequest;
-const defaultHttpsRequestImpl: RequestImpl = httpsRequest;
-const defaultResolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = resolvePinnedHostname;
+/** Overrides network dependencies for media-store tests. */
+function setMediaStoreNetworkDepsForTest(deps?: {
+  httpRequest?: RequestImpl;
+  httpsRequest?: RequestImpl;
+  resolvePinnedHostname?: ResolvePinnedHostnameImpl;
+}): void {
+  setMediaStoreDownloadDepsForTest(deps);
+}
 
-function formatMediaLimitMb(maxBytes: number): string {
-  return `${(maxBytes / (1024 * 1024)).toFixed(0)}MB`;
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.mediaStoreTestApi")] = {
+    setMediaStoreNetworkDepsForTest,
+  };
 }
 
 function resolveMediaSubdir(subdir: string, caller: string): string {
@@ -96,21 +99,6 @@ function openMediaStore(maxBytes = MAX_BYTES) {
   });
 }
 
-let httpRequestImpl: RequestImpl = defaultHttpRequestImpl;
-let httpsRequestImpl: RequestImpl = defaultHttpsRequestImpl;
-let resolvePinnedHostnameImpl: ResolvePinnedHostnameImpl = defaultResolvePinnedHostnameImpl;
-
-/** Overrides network dependencies for media-store tests and restores defaults when omitted. */
-export function setMediaStoreNetworkDepsForTest(deps?: {
-  httpRequest?: RequestImpl;
-  httpsRequest?: RequestImpl;
-  resolvePinnedHostname?: ResolvePinnedHostnameImpl;
-}): void {
-  httpRequestImpl = deps?.httpRequest ?? defaultHttpRequestImpl;
-  httpsRequestImpl = deps?.httpsRequest ?? defaultHttpsRequestImpl;
-  resolvePinnedHostnameImpl = deps?.resolvePinnedHostname ?? defaultResolvePinnedHostnameImpl;
-}
-
 /**
  * Sanitize a filename for cross-platform safety.
  * Removes chars unsafe on Windows/SharePoint/all platforms.
@@ -123,7 +111,7 @@ function sanitizeFilename(name: string): string {
   }
   const sanitized = base.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   // Collapse multiple underscores, trim leading/trailing, limit length
-  return sanitized.replace(/_+/g, "_").replace(/^_|_$/g, "").slice(0, 60);
+  return truncateUtf16Safe(sanitized.replace(/_+/g, "_").replace(/^_|_$/g, ""), 60);
 }
 
 /** Restores the caller-facing filename from media-store paths with embedded UUID suffixes. */
@@ -173,21 +161,26 @@ function isMissingPathError(err: unknown): boolean {
 }
 
 async function retryAfterRecreatingDir<T>(dir: string, run: () => Promise<T>): Promise<T> {
-  try {
-    return await run();
-  } catch (err) {
-    const noSpaceError = findErrorWithCode(err, "ENOSPC");
-    if (noSpaceError) {
-      throw noSpaceError;
-    }
-    if (!isMissingPathError(err)) {
-      throw err;
-    }
-    // Recursive cleanup can prune an empty directory between mkdir and the later
-    // file open/write. Recreate once and retry the media write path.
-    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-    return await run();
-  }
+  return await retryAsync(
+    async () => {
+      try {
+        return await run();
+      } catch (err) {
+        throw findErrorWithCode(err, "ENOSPC") ?? err;
+      }
+    },
+    {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      shouldRetry: isMissingPathError,
+      onRetry: async () => {
+        // Cleanup can prune the directory between mkdir and file open. Recreate
+        // it once; further failures remain terminal instead of looping.
+        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      },
+    },
+  );
 }
 
 // Maps the cleanup mode onto the prune sweep depth. The fs-safe prune walker keys descent off
@@ -213,107 +206,13 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMed
     recursive: options.recursive ?? true,
     pruneEmptyDirs: options.pruneEmptyDirs,
   });
+  // Trust metadata must not outlive the staged file that it authorizes.
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
 }
 
 function looksLikeUrl(src: string) {
-  return /^https?:\/\//i.test(src);
-}
-
-function discardIgnoredHttpResponse(res: NodeJS.ReadableStream): void {
-  res.resume();
-}
-
-/**
- * Download media to disk while capturing the first few KB for mime sniffing.
- */
-async function downloadToFile(
-  url: string,
-  dest: string,
-  headers?: Record<string, string>,
-  maxRedirects = 5,
-  maxBytes = MAX_BYTES,
-): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
-  return await new Promise((resolve, reject) => {
-    let parsedUrl: URL;
-    try {
-      parsedUrl = new URL(url);
-    } catch {
-      reject(new Error("Invalid URL"));
-      return;
-    }
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      reject(new Error(`Invalid URL protocol: ${parsedUrl.protocol}. Only HTTP/HTTPS allowed.`));
-      return;
-    }
-    const requestImpl = parsedUrl.protocol === "https:" ? httpsRequestImpl : httpRequestImpl;
-    resolvePinnedHostnameImpl(parsedUrl.hostname)
-      .then((pinned) => {
-        const req = requestImpl(parsedUrl, { headers, lookup: pinned.lookup }, (res) => {
-          if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
-            const location = res.headers.location;
-            if (!location || maxRedirects <= 0) {
-              discardIgnoredHttpResponse(res);
-              reject(new Error(`Redirect loop or missing Location header`));
-              return;
-            }
-            let redirectUrl: URL;
-            try {
-              redirectUrl = new URL(location, url);
-            } catch {
-              discardIgnoredHttpResponse(res);
-              reject(new Error("Invalid redirect Location header"));
-              return;
-            }
-            const redirectHeaders =
-              redirectUrl.origin === parsedUrl.origin
-                ? headers
-                : retainSafeHeadersForCrossOriginRedirect(headers);
-            discardIgnoredHttpResponse(res);
-            resolve(
-              downloadToFile(redirectUrl.href, dest, redirectHeaders, maxRedirects - 1, maxBytes),
-            );
-            return;
-          }
-          if (!res.statusCode || res.statusCode >= 400) {
-            discardIgnoredHttpResponse(res);
-            reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
-            return;
-          }
-          let total = 0;
-          const sniffChunks: Buffer[] = [];
-          let sniffLen = 0;
-          const out = createWriteStream(dest, { mode: MEDIA_FILE_MODE });
-          res.on("data", (chunk) => {
-            total += chunk.length;
-            if (sniffLen < 16384) {
-              sniffChunks.push(chunk);
-              sniffLen += chunk.length;
-            }
-            if (total > maxBytes) {
-              req.destroy(new Error(`Media exceeds ${formatMediaLimitMb(maxBytes)} limit`));
-            }
-          });
-          pipeline(res, out)
-            .then(() => {
-              const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
-              const rawHeader = res.headers["content-type"];
-              const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
-              resolve({
-                headerMime,
-                sniffBuffer,
-                size: total,
-              });
-            })
-            .catch(async (err: unknown) => {
-              await fs.rm(dest, { force: true }).catch(() => {});
-              reject(toErrorObject(err, "Non-Error rejection"));
-            });
-        });
-        req.on("error", reject);
-        req.end();
-      })
-      .catch(reject);
-  });
+  return hasHttpUrlPrefix(src);
 }
 
 /** Media-store file metadata returned after bytes are persisted under a safe media ID. */
@@ -349,7 +248,7 @@ function safeOriginalFilenameExtension(originalFilename?: string): string | unde
 }
 
 function extensionForAuthoritativeHeaderMime(contentType?: string): string | undefined {
-  const mime = normalizeOptionalString(contentType?.split(";")[0]);
+  const mime = normalizeMimeType(contentType);
   if (!mime || mime === "application/octet-stream" || mime === "binary/octet-stream") {
     return undefined;
   }
@@ -364,7 +263,7 @@ function isGenericContainerMime(mime?: string): boolean {
 }
 
 function isImageHeaderMime(contentType?: string): boolean {
-  return normalizeOptionalString(contentType?.split(";")[0])?.startsWith("image/") === true;
+  return normalizeMimeType(contentType)?.startsWith("image/") === true;
 }
 
 function resolveSavedMediaExtension(params: {
@@ -483,7 +382,7 @@ async function writeMediaStreamToFile(params: {
 }
 
 /** Stable error categories for unsafe or failed source-file ingestion. */
-export type SaveMediaSourceErrorCode =
+type SaveMediaSourceErrorCode =
   | "invalid-path"
   | "not-found"
   | "not-file"
@@ -491,7 +390,7 @@ export type SaveMediaSourceErrorCode =
   | "too-large";
 
 /** Error raised when saveMediaSource cannot safely read or persist a source path. */
-export class SaveMediaSourceError extends Error {
+class SaveMediaSourceError extends Error {
   code: SaveMediaSourceErrorCode;
 
   constructor(code: SaveMediaSourceErrorCode, message: string, options?: ErrorOptions) {
@@ -547,13 +446,12 @@ export async function saveMediaSource(
       dir,
       tempPrefix: `.${baseId}`,
       writeTemp: async (tempPath) => {
-        const { headerMime, sniffBuffer, size } = await downloadToFile(
-          source,
-          tempPath,
+        const { headerMime, sniffBuffer, size } = await downloadMediaToFile({
+          url: source,
+          dest: tempPath,
           headers,
-          5,
           maxBytes,
-        );
+        });
         const mime = await detectMime({
           buffer: sniffBuffer,
           headerMime,
@@ -693,7 +591,7 @@ export async function resolveMediaBufferPath(id: string, subdir = "inbound"): Pr
 }
 
 /** Read result for callers that need media bytes plus the resolved file path. */
-export type ReadMediaBufferResult = {
+type ReadMediaBufferResult = {
   id: string;
   path: string;
   buffer: Buffer;

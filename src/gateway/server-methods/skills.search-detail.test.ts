@@ -1,5 +1,7 @@
 // Skill search/detail tests cover ClawHub search and detail gateway responses,
 // including validation and external error mapping.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const searchSkillsFromClawHubMock = vi.fn();
@@ -39,7 +41,10 @@ function callHandler(method: string, params: Record<string, unknown>) {
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
-  const result = skillsHandlers[method]({
+  const result = expectDefined(
+    skillsHandlers[method],
+    "skillsHandlers[method] test invariant",
+  )({
     params,
     req: {} as never,
     client: null as never,

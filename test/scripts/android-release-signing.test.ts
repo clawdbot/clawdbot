@@ -9,6 +9,7 @@ const SCRIPT = path.join(process.cwd(), "scripts", "android-release-signing.mjs"
 const MATCH_PASSWORD = "test-match-password";
 const STORE_PASSWORD = "store_secret_value";
 const KEY_PASSWORD = "key_secret_value";
+const APK_CERTIFICATE_SHA256 = "80dbc62315ea216dd6e8a7060735a866ddc464a48ed50fef29ff0550468b9a63";
 
 const tempRoots: string[] = [];
 
@@ -93,6 +94,7 @@ function writeManifest(tempRoot: string, signingRepo: string): string {
         assetPath: "android/openclaw",
         uploadKeystoreEncryptedFile: "upload-keystore.jks.enc",
         gradlePropertiesEncryptedFile: "gradle.properties.enc",
+        apkCertificateSha256: APK_CERTIFICATE_SHA256,
         materializedRoot: "unused-by-test",
         gradlePropertyNames: [
           "OPENCLAW_ANDROID_STORE_FILE",
@@ -160,6 +162,7 @@ describe("scripts/android-release-signing.mjs", () => {
     expect(result.ok).toBe(true);
     expect(result.stdout).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
     expect(result.stdout).toContain("Signing assets: android/openclaw");
+    expect(result.stdout).toContain(`Pinned APK certificate SHA-256: ${APK_CERTIFICATE_SHA256}`);
     expect(result.stdout).toContain("Materialized output: apps/android/build/release-signing");
     expect(result.stdout).toContain("ORG_GRADLE_PROJECT_*");
   });
@@ -270,6 +273,26 @@ describe("scripts/android-release-signing.mjs", () => {
       ]);
 
       expect(check.ok).toBe(true);
+
+      fs.rmSync(path.join(materializedDir, "upload-keystore.jks"));
+      fs.rmSync(path.join(materializedDir, "gradle.properties"));
+      const materialize = runNode(
+        [
+          "--mode",
+          "materialize",
+          "--manifest",
+          manifestPath,
+          "--workspace",
+          path.join(materializedDir, "pull-workspace"),
+          "--materialized-dir",
+          materializedDir,
+        ],
+        env,
+      );
+      expect(materialize.ok).toBe(true);
+      expect(fs.readFileSync(path.join(materializedDir, "upload-keystore.jks"), "utf8")).toBe(
+        "fake keystore bytes\n",
+      );
     },
   );
 

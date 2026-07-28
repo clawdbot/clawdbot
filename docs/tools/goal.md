@@ -16,60 +16,42 @@ It gives the agent and the operator a shared target for long-running work,
 without turning that target into a background task, reminder, cron job, or
 standing order.
 
-Goals are session state. They move with the session key, survive process
-restarts, show up in `/goal`, are available to the model through the goal
-tools, and appear in the TUI footer when the active session has one.
+Goals are session state: they move with the session key, survive process
+restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
+footer.
+
+Detached command completions return to the originating user-facing thread, so
+the next turn continues to see the same goal even when command execution used
+a separate sandbox policy session.
 
 ## Quick start
 
-Set a goal:
-
 ```text
 /goal start get CI green for PR 87469 and push the fix
-```
-
-Check it:
-
-```text
 /goal
-```
-
-Pause it when work is intentionally waiting:
-
-```text
+/goal edit get CI green for PR 87469, push the fix, and update docs
 /goal pause waiting for CI
-```
-
-Resume it:
-
-```text
 /goal resume
-```
-
-Mark it complete:
-
-```text
 /goal complete pushed and verified
-```
-
-Clear it:
-
-```text
 /goal clear
 ```
 
+`start` is optional: `/goal get CI green for PR 87469` also creates a goal,
+since any text after `/goal` that is not a known action word is treated as a
+new objective.
+
 ## What goals are for
 
-Use a goal when a session has a concrete outcome that should remain visible
+Use a goal when a session has a concrete outcome that should stay visible
 across many turns:
 
 - A PR closeout: fix, verify, autoreview, push, and open or update the PR.
-- A debug run: reproduce the bug, identify the owning surface, patch, and prove
-  the fix.
+- A debug run: reproduce the bug, identify the owning surface, patch, and
+  prove the fix.
 - A docs pass: read the relevant docs, write the new page, cross-link it, and
   verify the docs build.
-- A maintenance task: inspect current state, make bounded changes, run the right
-  checks, and report what changed.
+- A maintenance task: inspect current state, make bounded changes, run the
+  right checks, and report what changed.
 
 A goal is not a task queue. Use [Task Flow](/automation/taskflow),
 [tasks](/automation/tasks), [cron jobs](/automation/cron-jobs), or
@@ -78,7 +60,7 @@ repeat on a schedule, fan out into managed sub-work, or persist as a policy.
 
 ## Command reference
 
-`/goal` without arguments prints the current goal summary:
+`/goal` with no arguments prints the current goal summary:
 
 ```text
 Goal
@@ -87,87 +69,121 @@ Objective: get CI green for PR 87469 and push the fix
 Tokens used: 12k
 Token budget: 12k/50k
 
-Commands: /goal pause, /goal complete, /goal clear
+Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 ```
 
-Commands:
-
-- `/goal` or `/goal status` shows the current goal.
-- `/goal start <objective>` creates a new goal for the current session.
-- `/goal set <objective>` and `/goal create <objective>` are aliases for
-  `start`.
-- `/goal pause [note]` pauses an active goal.
-- `/goal resume [note]` resumes a paused, blocked, usage-limited, or
-  budget-limited goal.
-- `/goal complete [note]` marks the goal achieved.
-- `/goal done [note]` is an alias for `complete`.
-- `/goal block [note]` marks the goal blocked.
-- `/goal blocked [note]` is an alias for `block`.
-- `/goal clear` removes the goal from the session.
+| Command                                             | Effect                                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| `/goal` or `/goal status`                           | Show the current goal.                                                   |
+| `/goal start <objective>`                           | Create a new goal for the current session.                               |
+| `/goal set <objective>`, `/goal create <objective>` | Aliases for `start`.                                                     |
+| `/goal <objective>`                                 | Also creates a new goal (any text that is not a recognized action word). |
+| `/goal edit <objective>`                            | Reword the current objective; status and token accounting stay put.      |
+| `/goal pause [note]`                                | Pause an active goal.                                                    |
+| `/goal resume [note]`                               | Resume a paused, blocked, usage-limited, or budget-limited goal.         |
+| `/goal complete [note]`                             | Mark the goal achieved.                                                  |
+| `/goal done [note]`                                 | Alias for `complete`.                                                    |
+| `/goal block [note]`                                | Mark the goal blocked.                                                   |
+| `/goal blocked [note]`                              | Alias for `block`.                                                       |
+| `/goal clear`                                       | Remove the goal from the session.                                        |
 
 Only one goal can exist on a session at a time. Starting a second goal fails
-until the current one is cleared.
+with `Goal error: goal already exists` until the current one is cleared.
+
+`/goal start` does not take a token-budget flag; a budget can only be set
+through the model-facing `create_goal` tool.
 
 ## Statuses
 
-Goals use a small status set:
-
 - `active`: the session is pursuing the goal.
-- `paused`: the operator paused the goal; `/goal resume` makes it active again.
+- `paused`: the operator paused the goal; `/goal resume` makes it active
+  again.
 - `blocked`: the agent or operator reported a real blocker; `/goal resume`
   makes it active again when new information or state is available.
 - `budget_limited`: the configured token budget was reached; `/goal resume`
-  restarts pursuit from the same objective.
-- `usage_limited`: reserved for usage-limit stop states; `/goal resume`
-  restarts pursuit when allowed.
-- `complete`: the goal was achieved. Complete goals are terminal; use
-  `/goal clear` before starting another goal.
+  restarts pursuit from the same objective with a fresh budget window.
+- `usage_limited`: reserved for a future usage-limit stop state; `/goal
+resume` restarts pursuit the same way.
+- `complete`: the goal was achieved. Complete goals are terminal; use `/goal
+clear` before starting another goal.
 
-`/new` and `/reset` clear the current session goal because they intentionally
+`/new` and `/reset` clear the current session goal, since they intentionally
 start fresh session context.
 
 ## Token budgets
 
-Goals can have an optional positive token budget. The budget is stored with the
-goal and measured from the session's fresh token count at creation time. If the
-current session only has stale or unknown token usage when the goal starts,
-OpenClaw waits for the next fresh session token snapshot and uses that as the
-baseline, so tokens spent before the goal existed are not charged to the goal.
+Goals can have an optional positive token budget, set through the
+`create_goal` tool's `token_budget` parameter. The budget is measured from the
+session's fresh token count at goal-creation time. If the session only has a
+stale or unknown token snapshot when the goal starts, OpenClaw waits for the
+next fresh snapshot and uses that as the baseline, so tokens spent before the
+goal existed are not charged to it.
 
-When token usage reaches the budget, the goal changes to `budget_limited`. This
-does not delete the goal or erase the objective. It tells the operator and the
+When usage reaches the budget, the goal moves to `budget_limited`. This does
+not delete the goal or erase the objective; it tells the operator and the
 agent that the goal is no longer actively being pursued until it is resumed or
-cleared.
+cleared. Resuming starts a new budget window at the current fresh token
+count.
 
-Token budgets are a session-goal guardrail, not a billing cap. Provider quota,
-cost reporting, and context-window behavior still use the normal OpenClaw
-usage and model controls.
+Token budgets are a session-goal guardrail, not a billing cap. Provider
+quota, cost reporting, and context-window behavior still use the normal
+OpenClaw usage and model controls.
 
 ## Model tools
 
-OpenClaw exposes three core goal tools to agent harnesses:
+OpenClaw exposes three goal tools to agent harnesses:
 
-- `get_goal`: read the current session goal, including status, objective, token
-  usage, and token budget.
-- `create_goal`: create a goal only when the user, system, or developer
-  instructions explicitly request one. It fails if the session already has a
-  goal.
-- `update_goal`: mark the goal `complete` or `blocked`.
+| Tool          | Purpose                                                                                                                  |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `get_goal`    | Read the current session goal: status, objective, token usage, and token budget.                                         |
+| `create_goal` | Create a goal only when the user or system instructions explicitly request one. Fails if the session already has a goal. |
+| `update_goal` | Mark the goal `complete` or `blocked`.                                                                                   |
 
-The model cannot silently pause, resume, clear, or replace a goal. Those are
-operator/session controls through `/goal` and reset commands. This keeps the
-agent from quietly moving the target while preserving a clean path for the
-agent to report achievement or a genuine blocker.
+The model cannot silently pause, resume, clear, or replace a goal. Those stay
+operator/session controls through `/goal` and reset commands, so the agent
+can report achievement or a genuine blocker without quietly moving the
+target.
 
-The `update_goal` tool should mark a goal `complete` only when the objective is
-actually achieved. It should mark a goal `blocked` only when the same blocking
-condition has repeated and the agent cannot make meaningful progress without
-new user input or an external-state change.
+`update_goal` should mark a goal `complete` only when the objective is
+actually achieved. It should mark a goal `blocked` only after the same
+blocking condition recurs for at least three consecutive goal turns, not for
+ordinary difficulty or missing polish.
+
+## Goal context on every turn
+
+Every user/chat turn with an active goal includes this user-role context line:
+
+```text
+Active goal: <objective> — advance it or update its status (get_goal/update_goal).
+```
+
+OpenClaw keeps the line compact by truncating long objectives. Paused,
+blocked, budget-limited, usage-limited, and complete goals are not injected,
+so an operator stop remains in effect until the goal is resumed.
+
+## Control UI
+
+The web Control UI shows the goal as a compact pill above the chat composer:
+a status icon, the status label (for example `Pursuing goal`), the truncated
+objective, and a live elapsed timer.
+
+The pill carries inline controls:
+
+- **Pencil** prefills the composer with `/goal edit <objective>` so the
+  objective can be reworded and submitted.
+- **Pause / resume** toggles between `/goal pause` and `/goal resume` based
+  on the current status.
+- **Trash** sends `/goal clear`.
+- **Chevron** expands the pill to show the full objective, the latest status
+  note, token usage, and elapsed time.
+
+The action buttons are hidden while the composer cannot send (for example
+when the gateway connection is down); the expand chevron keeps working.
 
 ## TUI
 
-The TUI keeps the active session's goal visible in the footer next to the
-agent, session, model, run controls, and token counts.
+The TUI footer keeps the active session's goal visible next to the agent,
+session, and model fields, before token/mode indicators.
 
 Footer examples:
 
@@ -178,34 +194,30 @@ Footer examples:
 - `Goal unmet (50k/50k)` for a budget-limited goal.
 - `Goal achieved (42k)` for a completed goal.
 
-The footer is intentionally compact. Use `/goal` for the full objective, note,
-token budget, and available commands.
+The footer is intentionally compact. Use `/goal` for the full objective,
+note, token budget, and available commands.
 
 ## Channel behavior
 
-The `/goal` command works in command-capable OpenClaw sessions, including the
-TUI and chat surfaces that permit text commands. Goal state is attached to the
-session key, not the transport. If two surfaces use the same session, they see
-the same goal.
+`/goal` works in command-capable OpenClaw sessions, including the TUI and
+chat surfaces that permit text commands. Goal state is attached to the
+session key, not the transport, so two surfaces sharing a session key see the
+same goal.
 
-Goal state is not a delivery directive. It does not force replies through a
+Goal state is not a delivery directive: it does not force replies through a
 channel, change queue behavior, approve tools, or schedule work.
 
 ## Troubleshooting
 
-`Goal error: goal already exists` means the session already has a goal. Use
-`/goal` to inspect it, `/goal complete` if it is done, or `/goal clear` before
-starting a different objective.
+| Message                                | Meaning                                                                                                                                      |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Goal error: goal already exists`      | The session already has a goal. Use `/goal` to inspect it, `/goal complete` if done, or `/goal clear` before starting a different objective. |
+| `Goal error: goal not found`           | The session has no goal yet. Start one with `/goal start <objective>`.                                                                       |
+| `Goal error: goal is already complete` | The goal is terminal. Clear it before starting or resuming another objective.                                                                |
 
-`Goal error: goal not found` means the session has no goal yet. Start one with
-`/goal start <objective>`.
-
-`Goal error: goal is already complete` means the goal is terminal. Clear it
-before starting or resuming another objective.
-
-If token usage looks like `0` or stale, the active session may not have a fresh
-token snapshot yet. Usage refreshes as OpenClaw records session usage and
-transcript-derived totals.
+If token usage shows `0` or looks stale, the active session may not have a
+fresh token snapshot yet. Usage refreshes as OpenClaw records session usage
+and transcript-derived totals.
 
 ## Related
 

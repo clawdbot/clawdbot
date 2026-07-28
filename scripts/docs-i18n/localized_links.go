@@ -30,7 +30,7 @@ type docsRedirect struct {
 var (
 	localeDirRe             = regexp.MustCompile(`^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})?$`)
 	fencedBacktickCodeBlock = regexp.MustCompile("(?ms)(^|\\n)[ \\t]*```[^\\n]*\\n.*?\\n[ \\t]*```[ \\t]*(?:\\n|$)")
-	fencedTildeCodeBlock    = regexp.MustCompile("(?ms)(^|\\n)[ \\t]*~~~[^\\n]*\\n.*?\\n[ \\t]*~~~[ \\t]*(?:\\n|$)")
+	fencedTildeCodeBlock    = regexp.MustCompile(`(?ms)(^|\n)[ \t]*~~~[^\n]*\n.*?\n[ \t]*~~~[ \t]*(?:\n|$)`)
 	markdownLinkTargetRe    = regexp.MustCompile(`!?\[[^\]]*\]\(([^)]+)\)`)
 	hrefDoubleQuotedValueRe = regexp.MustCompile(`\bhref\s*=\s*"([^"]*)"`)
 	hrefSingleQuotedValueRe = regexp.MustCompile(`\bhref\s*=\s*'([^']*)'`)

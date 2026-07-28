@@ -1,0 +1,23 @@
+title: Matrix streaming keeps tool-progress mentions inert
+scenario:
+  id: matrix-room-tool-progress-mention-safety
+  surface: channels
+  coverage:
+    primary:
+      - matrix.message-presentation-metadata
+  execution:
+    profiles: { "matrix:all": 13, "matrix:transport": 12 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming: partial
+        toolProfile: coding
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runToolProgressMentionSafetyScenario
+  args:
+    - expr: "scenarioContext"

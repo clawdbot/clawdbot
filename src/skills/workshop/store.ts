@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
 import { root } from "../../infra/fs-safe.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
   assertInsideWorkspace,
@@ -13,6 +15,7 @@ import {
   MAX_WORKSPACE_SKILL_SUPPORT_FILE_BYTES,
   normalizeWorkspaceSkillSupportPath,
 } from "../lifecycle/workspace-skill-write.js";
+import { hasValidProposalOriginProvenance } from "./proposal-origin-validation.js";
 import {
   SKILL_WORKSHOP_MANIFEST_SCHEMA,
   SKILL_WORKSHOP_ROLLBACK_SCHEMA,
@@ -48,7 +51,7 @@ const SKILL_WORKSHOP_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: 60_000,
 };
-const skillWorkshopProcessLocks = new Map<string, Promise<void>>();
+const skillWorkshopProcessLocks = new KeyedAsyncQueue();
 
 type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -69,7 +72,7 @@ export function createSkillProposalId(name: string, now = new Date()): string {
 }
 
 export function hashSkillProposalContent(content: string): string {
-  return crypto.createHash("sha256").update(content).digest("hex");
+  return sha256Hex(content);
 }
 
 function contentSizeBytes(content: string): number {
@@ -362,24 +365,10 @@ async function withSkillProposalManifestLock<T>(
 
 async function withSkillWorkshopLock<T>(lockFile: string, fn: () => Promise<T>): Promise<T> {
   const lockKey = path.resolve(lockFile);
-  const previous = skillWorkshopProcessLocks.get(lockKey) ?? Promise.resolve();
-  let releaseQueued!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseQueued = resolve;
-  });
-  const previousDone = previous.catch(() => undefined);
-  const queued = previousDone.then(() => current);
-  skillWorkshopProcessLocks.set(lockKey, queued);
-  await previousDone;
-  await fs.mkdir(path.dirname(lockFile), { recursive: true });
-  try {
+  return await skillWorkshopProcessLocks.enqueue(lockKey, async () => {
+    await fs.mkdir(path.dirname(lockFile), { recursive: true });
     return await withFileLock(lockFile, SKILL_WORKSHOP_LOCK_OPTIONS, fn);
-  } finally {
-    releaseQueued();
-    if (skillWorkshopProcessLocks.get(lockKey) === queued) {
-      skillWorkshopProcessLocks.delete(lockKey);
-    }
-  }
+  });
 }
 
 export async function readProposalSupportFiles(
@@ -469,7 +458,7 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     typeof record.updatedAt !== "string" ||
     typeof record.draftHash !== "string" ||
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
-    !isValidProposalOrigin(record.origin) ||
+    !hasValidProposalOriginProvenance(record) ||
     !isValidSupportFileList(record.supportFiles) ||
     !record.target ||
     typeof record.target !== "object" ||
@@ -483,23 +472,6 @@ function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | null {
     return null;
   }
   return record;
-}
-
-function isValidProposalOrigin(value: unknown): boolean {
-  if (value === undefined) {
-    return true;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const origin = value as Record<string, unknown>;
-  for (const key of ["agentId", "sessionKey", "runId", "messageId"]) {
-    const item = origin[key];
-    if (item !== undefined && typeof item !== "string") {
-      return false;
-    }
-  }
-  return true;
 }
 
 function isValidSupportFileList(value: unknown): boolean {

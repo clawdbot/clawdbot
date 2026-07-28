@@ -4,11 +4,11 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
-import { tryReadJson, writeJson } from "../infra/json-files.js";
 import { assertLocalMediaAllowed, resolveLocalMediaRoots } from "../media/local-media-access.js";
 import { resolveLocalMediaPath } from "../media/local-media-path.js";
 import {
@@ -16,7 +16,7 @@ import {
   getImageMetadata,
   readImageProbeFromHeader,
 } from "../media/media-services.js";
-import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
+import { getMediaDir, MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { sendJson, sendMethodNotAllowed, sendMissingScopeForbidden } from "./http-common.js";
@@ -25,9 +25,22 @@ import {
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import {
+  attachManagedImageRecordToMessage,
+  claimManagedImageRecordCleanupIfCurrent,
+  deleteClaimedManagedImageRecord,
+  insertManagedImageRecord,
+  listManagedImageRecordEntries,
+  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
+  readManagedImageRecord,
+  type ManagedImageRecord,
+} from "./managed-image-record-store.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { readSessionMessagesWithSourceAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry, resolveSessionHistoryTranscriptPathAsync } from "./session-utils.js";
+import {
+  loadSessionEntryReadOnly,
+  resolveSessionHistoryTranscriptPathAsync,
+} from "./session-utils.js";
 
 const OUTGOING_IMAGE_ROUTE_PREFIX = "/api/chat/media/outgoing";
 const DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS = 15 * 60 * 1000;
@@ -51,29 +64,6 @@ export type ManagedImageAttachmentLimits = {
 type ManagedImageAttachmentLimitsConfig = Partial<
   Pick<ManagedImageAttachmentLimits, "maxBytes" | "maxWidth" | "maxHeight" | "maxPixels">
 >;
-
-type ManagedImageRecordVariant = {
-  path: string;
-  contentType: string;
-  width: number | null;
-  height: number | null;
-  sizeBytes: number | null;
-  filename: string | null;
-};
-
-type ManagedImageRetentionClass = "transient" | "history";
-
-type ManagedImageRecord = {
-  attachmentId: string;
-  sessionKey: string;
-  agentId?: string;
-  messageId: string | null;
-  createdAt: string;
-  updatedAt?: string;
-  retentionClass?: ManagedImageRetentionClass;
-  alt: string;
-  original: ManagedImageRecordVariant;
-};
 
 type ParsedImageDataUrl =
   | { kind: "not-data-url" }
@@ -239,16 +229,81 @@ async function resizeManagedImageBufferToLimits(params: {
   };
 }
 
-function resolveOutgoingRecordsDir(stateDir = resolveStateDir()) {
-  return path.join(stateDir, "media", "outgoing", "records");
+function resolveManagedImageOriginalPath(record: ManagedImageRecord) {
+  if (
+    !path.isAbsolute(record.original.mediaRoot) ||
+    record.original.mediaSubdir !== MANAGED_OUTGOING_ORIGINALS_SUBDIR ||
+    !record.original.mediaId ||
+    record.original.mediaId.includes("/") ||
+    record.original.mediaId.includes("\\") ||
+    record.original.mediaId.includes("\0")
+  ) {
+    throw new Error("Managed image record has an unsafe media identity");
+  }
+  return path.join(record.original.mediaRoot, record.original.mediaSubdir, record.original.mediaId);
 }
 
-function resolveOutgoingOriginalsDir(stateDir = resolveStateDir()) {
-  return path.join(stateDir, "media", "outgoing", "originals");
+function resolveManagedImageOriginalsDir(stateDir: string): string {
+  const runtimeMediaRoot =
+    path.resolve(stateDir) === path.resolve(resolveStateDir())
+      ? getMediaDir()
+      : path.join(stateDir, "media");
+  return path.join(runtimeMediaRoot, MANAGED_OUTGOING_ORIGINALS_SUBDIR);
 }
 
-function resolveOutgoingRecordPath(attachmentId: string, stateDir = resolveStateDir()) {
-  return path.join(resolveOutgoingRecordsDir(stateDir), `${attachmentId}.json`);
+async function hasUnmigratedManagedImageMetadata(stateDir: string): Promise<boolean> {
+  try {
+    const names = await fs.readdir(path.join(stateDir, "media", "outgoing", "records"));
+    return names.some((name) => name.endsWith(".json") || name.includes(".json.doctor-importing-"));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
+  }
+}
+
+async function deleteAgedOrphanManagedImageFiles(params: {
+  stateDir: string;
+  nowMs: number;
+  minAgeMs: number;
+}): Promise<number> {
+  // Destructive migration barrier only: runtime never parses or serves legacy metadata.
+  // Any legacy source may own an old file, so Doctor must retire all JSON before orphan reaping.
+  if (await hasUnmigratedManagedImageMetadata(params.stateDir)) {
+    return 0;
+  }
+  const referencedMediaIds = new Set(
+    listManagedImageRecordEntries({ stateDir: params.stateDir }).map(
+      ({ record }) => record.original.mediaId,
+    ),
+  );
+  const originalsDir = resolveManagedImageOriginalsDir(params.stateDir);
+  let names: string[];
+  try {
+    names = await fs.readdir(originalsDir);
+  } catch {
+    return 0;
+  }
+  let deletedCount = 0;
+  for (const name of names) {
+    if (referencedMediaIds.has(name)) {
+      continue;
+    }
+    const filePath = path.join(originalsDir, name);
+    try {
+      const stat = await fs.lstat(filePath);
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        params.nowMs - stat.mtimeMs < params.minAgeMs
+      ) {
+        continue;
+      }
+      await fs.rm(filePath, { force: true });
+      deletedCount += 1;
+    } catch {
+      // A later maintenance pass retries transient filesystem failures and races.
+    }
+  }
+  return deletedCount;
 }
 
 function buildOutgoingVariantUrl(sessionKey: string, attachmentId: string, variant: "full") {
@@ -279,22 +334,40 @@ function parseImageDataUrl(
   if (!trimmed.startsWith("data:")) {
     return { kind: "not-data-url" };
   }
-  const match = /^data:([^;,]+)(?:;[^,]*)*;base64,([A-Za-z0-9+/=\s]+)$/i.exec(trimmed);
-  if (!match) {
+
+  const afterPrefix = trimmed.slice("data:".length);
+  const commaIdx = afterPrefix.indexOf(",");
+  const mimeAndParams = commaIdx < 0 ? "" : afterPrefix.slice(0, commaIdx);
+  const base64Marker = ";base64";
+  if (mimeAndParams.slice(-base64Marker.length).toLowerCase() !== base64Marker) {
     throw new Error("Invalid image data URL");
   }
-  const contentType = match[1]?.trim().toLowerCase() ?? "";
+  const semicolonIdx = mimeAndParams.indexOf(";");
+  const contentType = (semicolonIdx < 0 ? mimeAndParams : mimeAndParams.slice(0, semicolonIdx))
+    .trim()
+    .toLowerCase();
+  if (!contentType) {
+    throw new Error("Invalid image data URL");
+  }
+
+  const base64Part = afterPrefix.slice(commaIdx + 1);
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(base64Part)) {
+    throw new Error("Invalid image data URL");
+  }
+
   if (!contentType.startsWith("image/")) {
     return { kind: "non-image-data-url" };
   }
-  if (estimateBase64DecodedByteLength(match[2]) > limits.maxBytes) {
+
+  if (estimateBase64DecodedByteLength(base64Part) > limits.maxBytes) {
     throw createManagedImageAttachmentError(
       `Managed image attachment ${JSON.stringify(alt)} exceeds the ${formatLimitMiB(limits.maxBytes)} byte limit`,
     );
   }
+
   return {
     kind: "image-data-url",
-    buffer: Buffer.from(match[2].replace(/\s+/g, ""), "base64"),
+    buffer: Buffer.from(base64Part.replace(/\s+/g, ""), "base64"),
     contentType,
   };
 }
@@ -318,70 +391,24 @@ async function getVariantStats(params: { filePath: string; buffer?: Buffer; size
   };
 }
 
-async function writeManagedImageRecord(record: ManagedImageRecord, stateDir = resolveStateDir()) {
-  const recordPath = resolveOutgoingRecordPath(record.attachmentId, stateDir);
-  await writeJson(recordPath, record, { trailingNewline: true });
-}
-
 async function deleteManagedImageRecordArtifacts(
   record: ManagedImageRecord,
   stateDir = resolveStateDir(),
+  alreadyClaimed = false,
 ) {
-  const files = new Set<string>();
-  if (record.original?.path) {
-    files.add(record.original.path);
-  }
-  let deletedFileCount = 0;
-  for (const filePath of files) {
-    try {
-      await fs.rm(filePath, { force: true });
-      deletedFileCount += 1;
-    } catch {
-      // Ignore cleanup races or already-missing files.
-    }
+  if (!alreadyClaimed && !claimManagedImageRecordCleanupIfCurrent(record, stateDir)) {
+    return { deletedRecord: false, deletedFileCount: 0 };
   }
   try {
-    await fs.rm(resolveOutgoingRecordPath(record.attachmentId, stateDir), { force: true });
+    await fs.rm(resolveManagedImageOriginalPath(record), { force: true });
   } catch {
-    // Ignore cleanup races or already-missing records.
+    // Keep the durable cleanup claim so the next sweep retries this exact file.
+    return { deletedRecord: false, deletedFileCount: 0 };
   }
-  return deletedFileCount;
-}
-
-async function deleteOrphanManagedImageFiles(params: {
-  stateDir: string;
-  referencedPaths: ReadonlySet<string>;
-}) {
-  let deletedFileCount = 0;
-  for (const dir of [resolveOutgoingOriginalsDir(params.stateDir)]) {
-    let names: string[];
-    try {
-      names = await fs.readdir(dir);
-    } catch {
-      continue;
-    }
-    for (const name of names) {
-      const filePath = path.join(dir, name);
-      if (params.referencedPaths.has(filePath)) {
-        continue;
-      }
-      try {
-        const stats = await fs.stat(filePath);
-        if (!stats.isFile()) {
-          continue;
-        }
-      } catch {
-        continue;
-      }
-      try {
-        await fs.rm(filePath, { force: true });
-        deletedFileCount += 1;
-      } catch {
-        // Ignore cleanup races or already-missing files.
-      }
-    }
-  }
-  return deletedFileCount;
+  return {
+    deletedRecord: deleteClaimedManagedImageRecord(record, stateDir),
+    deletedFileCount: 1,
+  };
 }
 
 export async function cleanupManagedOutgoingImageRecords(params?: {
@@ -400,41 +427,18 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
   const defaultAgentId =
     sessionKeyFilter === "global" ? resolveDefaultAgentId(getRuntimeConfig()) : undefined;
   const forceDeleteSessionRecords = params?.forceDeleteSessionRecords === true;
-  const recordsDir = resolveOutgoingRecordsDir(stateDir);
-  let names: string[];
-  try {
-    names = await fs.readdir(recordsDir);
-  } catch {
-    names = [];
-  }
+  const entries = listManagedImageRecordEntries({ stateDir });
 
   let deletedRecordCount = 0;
   let deletedFileCount = 0;
   let retainedCount = 0;
-  const retainedReferencedPaths = new Set<string>();
   const transcriptAttachmentIndexCache = new Map<
     string,
     SessionManagedOutgoingAttachmentIndex | null
   >();
-  for (const name of names) {
-    if (!name.endsWith(".json")) {
-      continue;
-    }
-    const recordPath = path.join(recordsDir, name);
-    const record = await tryReadJson<ManagedImageRecord>(recordPath);
-    if (!record) {
-      try {
-        await fs.rm(recordPath, { force: true });
-      } catch {
-        // Ignore cleanup races or already-missing records.
-      }
-      deletedRecordCount += 1;
-      continue;
-    }
+  for (const entry of entries) {
+    const { record } = entry;
     if (sessionKeyFilter && record.sessionKey !== sessionKeyFilter) {
-      if (record.original?.path) {
-        retainedReferencedPaths.add(record.original.path);
-      }
       retainedCount += 1;
       continue;
     }
@@ -445,43 +449,48 @@ export async function cleanupManagedOutgoingImageRecords(params?: {
         resolveManagedImageRecordAgentId(record, defaultAgentId) !== agentIdFilter) ||
         (!agentIdFilter && typeof record.agentId === "string" && record.agentId.trim()))
     ) {
-      if (record.original?.path) {
-        retainedReferencedPaths.add(record.original.path);
-      }
       retainedCount += 1;
       continue;
     }
 
-    let shouldDelete;
+    let shouldDelete = entry.cleanupPending;
     if (
+      !entry.cleanupPending &&
       forceDeleteSessionRecords &&
       (!sessionKeyFilter || record.sessionKey === sessionKeyFilter)
     ) {
       shouldDelete = true;
-    } else if (record.messageId) {
+    } else if (!entry.cleanupPending && record.messageId) {
       shouldDelete = !(await recordMatchesTranscriptMessage(
         record,
         transcriptAttachmentIndexCache,
       ));
-    } else {
+    } else if (!entry.cleanupPending) {
       const createdAtMs = Date.parse(record.createdAt);
       shouldDelete = Number.isFinite(createdAtMs) && nowMs - createdAtMs >= transientMaxAgeMs;
     }
 
     if (shouldDelete) {
-      deletedRecordCount += 1;
-      deletedFileCount += await deleteManagedImageRecordArtifacts(record, stateDir);
-    } else {
-      if (record.original?.path) {
-        retainedReferencedPaths.add(record.original.path);
+      const deleted = await deleteManagedImageRecordArtifacts(
+        record,
+        stateDir,
+        entry.cleanupPending,
+      );
+      if (deleted.deletedRecord) {
+        deletedRecordCount += 1;
+        deletedFileCount += deleted.deletedFileCount;
+      } else {
+        retainedCount += 1;
       }
+    } else {
       retainedCount += 1;
     }
   }
 
-  deletedFileCount += await deleteOrphanManagedImageFiles({
+  deletedFileCount += await deleteAgedOrphanManagedImageFiles({
     stateDir,
-    referencedPaths: retainedReferencedPaths,
+    nowMs,
+    minAgeMs: Math.max(transientMaxAgeMs, DEFAULT_TRANSIENT_OUTGOING_IMAGE_TTL_MS),
   });
 
   return { deletedRecordCount, deletedFileCount, retainedCount };
@@ -493,18 +502,6 @@ function resolveManagedImageRecordAgentId(
 ): string | undefined {
   const explicitAgentId = record.agentId?.trim();
   return explicitAgentId || defaultAgentId;
-}
-
-async function readManagedImageRecord(
-  attachmentId: string,
-  stateDir = resolveStateDir(),
-): Promise<ManagedImageRecord | null> {
-  try {
-    const raw = await fs.readFile(resolveOutgoingRecordPath(attachmentId, stateDir), "utf-8");
-    return JSON.parse(raw) as ManagedImageRecord;
-  } catch {
-    return null;
-  }
 }
 
 function buildManagedImageBlock(record: ManagedImageRecord): ManagedImageBlock {
@@ -557,11 +554,17 @@ function parseManagedOutgoingRoute(value: string) {
     if (!match) {
       return null;
     }
-    if (!MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(match[2])) {
+    if (
+      !MANAGED_OUTGOING_ATTACHMENT_ID_RE.test(
+        expectDefined(match[2], "managed image attachments regex capture 2"),
+      )
+    ) {
       return null;
     }
     return {
-      sessionKey: decodeURIComponent(match[1]),
+      sessionKey: decodeURIComponent(
+        expectDefined(match[1], "managed image attachments regex capture 1"),
+      ),
       attachmentId: match[2],
     };
   } catch {
@@ -589,8 +592,9 @@ function collectManagedOutgoingAttachmentRefs(
       if (expectedSessionKey && parsed.sessionKey !== expectedSessionKey) {
         continue;
       }
-      refs.set(parsed.attachmentId, {
-        attachmentId: parsed.attachmentId,
+      const attachmentId = expectDefined(parsed.attachmentId, "managed image attachment id");
+      refs.set(attachmentId, {
+        attachmentId,
         sessionKey: parsed.sessionKey,
       });
     }
@@ -668,7 +672,7 @@ async function getSessionManagedOutgoingAttachmentIndex(
   if (cache?.has(cacheKey)) {
     return cache.get(cacheKey) ?? null;
   }
-  const { storePath, entry } = loadSessionEntry(
+  const { storePath, entry } = loadSessionEntryReadOnly(
     sessionKey,
     sessionKey === "global" && agentId ? { agentId } : undefined,
   );
@@ -801,22 +805,13 @@ export async function attachManagedOutgoingImagesToMessage(params: {
   }
   await Promise.all(
     refs.map(async ({ attachmentId, sessionKey }) => {
-      const record = await readManagedImageRecord(attachmentId, params.stateDir);
-      if (!record || record.sessionKey !== sessionKey) {
-        return;
-      }
-      if (record.messageId === messageId && record.retentionClass === "history") {
-        return;
-      }
-      await writeManagedImageRecord(
-        {
-          ...record,
-          messageId,
-          retentionClass: "history",
-          updatedAt: new Date().toISOString(),
-        },
-        params.stateDir,
-      );
+      attachManagedImageRecordToMessage({
+        attachmentId,
+        sessionKey,
+        messageId,
+        updatedAt: new Date().toISOString(),
+        stateDir: params.stateDir,
+      });
     }),
   );
 }
@@ -987,7 +982,9 @@ export async function createManagedOutgoingImageBlocks(params: {
         retentionClass: params.messageId ? "history" : "transient",
         alt,
         original: {
-          path: savedOriginal.path,
+          mediaRoot: path.dirname(path.dirname(path.dirname(path.resolve(savedOriginal.path)))),
+          mediaId: savedOriginal.id,
+          mediaSubdir: MANAGED_OUTGOING_ORIGINALS_SUBDIR,
           contentType: savedOriginalContentType,
           width: originalStats.width,
           height: originalStats.height,
@@ -995,7 +992,7 @@ export async function createManagedOutgoingImageBlocks(params: {
           filename: toRecordFilename(savedOriginal.path),
         },
       };
-      await writeManagedImageRecord(record, stateDir);
+      insertManagedImageRecord(record, stateDir);
       blocks.push(buildManagedImageBlock(record));
       if (resizeWarning) {
         blocks.push(resizeWarning);
@@ -1087,7 +1084,7 @@ export async function handleManagedOutgoingImageHttpRequest(
     sendStatus(res, 404, "not found");
     return true;
   }
-  const record = await readManagedImageRecord(attachmentId, opts.stateDir);
+  const record = readManagedImageRecord(attachmentId, opts.stateDir);
   if (!record || record.sessionKey !== sessionKey) {
     sendStatus(res, 404, "not found");
     return true;
@@ -1111,7 +1108,11 @@ export async function handleManagedOutgoingImageHttpRequest(
 
   let body: Buffer;
   try {
-    body = (await readLocalFileSafely({ filePath: record.original.path })).buffer;
+    body = (
+      await readLocalFileSafely({
+        filePath: resolveManagedImageOriginalPath(record),
+      })
+    ).buffer;
   } catch {
     sendStatus(res, 404, "not found");
     return true;
@@ -1128,3 +1129,4 @@ export async function handleManagedOutgoingImageHttpRequest(
   res.end(body);
   return true;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

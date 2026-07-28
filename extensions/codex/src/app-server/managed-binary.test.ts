@@ -5,18 +5,19 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
-  testing,
-  resolveManagedCodexAppServerPaths,
   resolveManagedCodexAppServerStartOptions,
+  resolveManagedCodexNativeCommand,
 } from "./managed-binary.js";
 
 function startOptions(
   commandSource: CodexAppServerStartOptions["commandSource"],
+  managedCommandOrder?: CodexAppServerStartOptions["managedCommandOrder"],
 ): CodexAppServerStartOptions {
   return {
     transport: "stdio",
     command: "codex",
     commandSource,
+    ...(managedCommandOrder ? { managedCommandOrder } : {}),
     args: ["app-server", "--listen", "stdio://"],
     headers: {},
   };
@@ -28,8 +29,39 @@ function managedCommandPath(root: string, platform: NodeJS.Platform): string {
 }
 
 const MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND = "/Applications/Codex.app/Contents/Resources/codex";
+const MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND =
+  "/Applications/ChatGPT.app/Contents/Resources/codex";
 
 describe("managed Codex app-server binary", () => {
+  it("resolves the platform-native artifact behind the managed npm launcher", () => {
+    const packageJsonPath =
+      "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/package.json";
+    const expected =
+      "/repo/extensions/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/bin/codex";
+
+    expect(
+      resolveManagedCodexNativeCommand("/repo/extensions/codex/node_modules/.bin/codex", {
+        platform: "darwin",
+        arch: "arm64",
+        resolvePackageJson: (packageName, root) =>
+          packageName === "@openai/codex-darwin-arm64" &&
+          root === "/repo/extensions/codex/node_modules/@openai/codex"
+            ? packageJsonPath
+            : undefined,
+        pathExists: (candidate) => candidate === expected,
+      }),
+    ).toBe(expected);
+  });
+
+  it("reports the desktop bundle binary as its native artifact", () => {
+    expect(
+      resolveManagedCodexNativeCommand(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, {
+        platform: "darwin",
+        arch: "arm64",
+      }),
+    ).toBe(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND);
+  });
+
   it("leaves explicit command overrides unchanged", async () => {
     const explicitOptions = startOptions("config");
     const pathExists = vi.fn(async () => false);
@@ -43,35 +75,15 @@ describe("managed Codex app-server binary", () => {
     expect(pathExists).not.toHaveBeenCalled();
   });
 
-  it("prefers the macOS desktop app bundle when it exists", async () => {
+  it("keeps the pinned package ahead of stale desktop bundles for ordinary turns", async () => {
     const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
-    const paths = resolveManagedCodexAppServerPaths({ platform: "darwin", pluginRoot });
     const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
     const pathExists = vi.fn(
       async (filePath: string) =>
-        filePath === MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND || filePath === pluginLocalCommand,
+        filePath === MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND ||
+        filePath === MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND ||
+        filePath === pluginLocalCommand,
     );
-
-    await expect(
-      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
-        platform: "darwin",
-        pluginRoot,
-        pathExists,
-      }),
-    ).resolves.toEqual({
-      ...startOptions("managed"),
-      command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
-      commandSource: "resolved-managed",
-      managedFallbackCommandPaths: [pluginLocalCommand],
-    });
-    expect(paths.commandPath).toBe(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND);
-    expect(paths.candidateCommandPaths).toContain(pluginLocalCommand);
-  });
-
-  it("falls back to the plugin-local bundled Codex binary on macOS", async () => {
-    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
-    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
-    const pathExists = vi.fn(async (filePath: string) => filePath === pluginLocalCommand);
 
     await expect(
       resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
@@ -83,27 +95,75 @@ describe("managed Codex app-server binary", () => {
       ...startOptions("managed"),
       command: pluginLocalCommand,
       commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [
+        MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+        MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      ],
     });
+  });
+
+  it("prefers the ChatGPT.app desktop bundle for Computer Use", async () => {
+    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
+    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
+    const pathExists = vi.fn(
+      async (filePath: string) =>
+        filePath === MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND || filePath === pluginLocalCommand,
+    );
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
+        platform: "darwin",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed", "desktop-first"),
+      command: MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [pluginLocalCommand],
+    });
+  });
+
+  it("falls back to the legacy Codex.app desktop bundle when ChatGPT.app is absent", async () => {
+    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
+    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
+    const pathExists = vi.fn(
+      async (filePath: string) =>
+        filePath === MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND || filePath === pluginLocalCommand,
+    );
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
+        platform: "darwin",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed", "desktop-first"),
+      command: MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND,
+      commandSource: "resolved-managed",
+      managedFallbackCommandPaths: [pluginLocalCommand],
+    });
+  });
+
+  it("falls back to the plugin-local binary when neither desktop bundle exists", async () => {
+    const pluginRoot = path.join("/tmp", "openclaw", "extensions", "codex");
+    const pluginLocalCommand = managedCommandPath(pluginRoot, "darwin");
+    const pathExists = vi.fn(async (filePath: string) => filePath === pluginLocalCommand);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed", "desktop-first"), {
+        platform: "darwin",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed", "desktop-first"),
+      command: pluginLocalCommand,
+      commandSource: "resolved-managed",
+    });
+    expect(pathExists).toHaveBeenCalledWith(MACOS_DESKTOP_CHATGPT_APP_SERVER_COMMAND, "darwin");
     expect(pathExists).toHaveBeenCalledWith(MACOS_DESKTOP_CODEX_APP_SERVER_COMMAND, "darwin");
-  });
-
-  it("resolves Windows Codex command shims", () => {
-    const pluginRoot = path.win32.join("C:\\", "OpenClaw", "dist", "extensions", "codex");
-    const paths = resolveManagedCodexAppServerPaths({ platform: "win32", pluginRoot });
-
-    expect(paths.commandPath.endsWith(path.win32.join("node_modules", ".bin", "codex.cmd"))).toBe(
-      true,
-    );
-  });
-
-  it("uses the package root when the resolver is bundled into a dist chunk", () => {
-    expect(testing.resolveDefaultCodexPluginRoot("/repo/openclaw/dist")).toBe("/repo/openclaw");
-    expect(testing.resolveDefaultCodexPluginRoot("/repo/openclaw/dist-runtime")).toBe(
-      "/repo/openclaw",
-    );
-    expect(
-      testing.resolveDefaultCodexPluginRoot("/repo/openclaw/extensions/codex/src/app-server"),
-    ).toBe("/repo/openclaw/extensions/codex");
   });
 
   it("finds Codex in the package install root used by packaged plugins", async () => {

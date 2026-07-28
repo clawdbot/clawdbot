@@ -24,7 +24,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 });
 
 import { mattermostPlugin } from "./channel.js";
-import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
@@ -56,6 +55,14 @@ function requireMattermostNormalizeTarget() {
     throw new Error("mattermost messaging.normalizeTarget missing");
   }
   return normalize;
+}
+
+function requireMattermostTargetResolver() {
+  const resolveTarget = mattermostPlugin.messaging?.targetResolver?.resolveTarget;
+  if (!resolveTarget) {
+    throw new Error("mattermost messaging.targetResolver.resolveTarget missing");
+  }
+  return resolveTarget;
 }
 
 function requireMattermostPairingNormalizer() {
@@ -156,6 +163,64 @@ describe("mattermostPlugin", () => {
       messageId: "post-1",
       channelId: "channel-1",
     });
+  });
+
+  it("opts into account-scoped config restarts", () => {
+    expect(mattermostPlugin.reload).toMatchObject({ accountScopedRestart: true });
+  });
+
+  it("keeps sibling resolution stable across named-account additions and edits", () => {
+    const before: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+    const afterAdd: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            alpha: {
+              baseUrl: "https://alpha.example.com",
+              chatmode: "oncall",
+            },
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+    const afterEdit: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          replyToMode: "first",
+          accounts: {
+            alpha: {
+              baseUrl: "https://alpha-new.example.com",
+              chatmode: "onchar",
+            },
+            beta: {
+              baseUrl: "https://beta.example.com",
+              chatmode: "onmessage",
+            },
+          },
+        },
+      },
+    };
+
+    const expectedBeta = mattermostPlugin.config.resolveAccount(before, "beta");
+    expect(mattermostPlugin.config.resolveAccount(afterAdd, "beta")).toEqual(expectedBeta);
+    expect(mattermostPlugin.config.resolveAccount(afterEdit, "beta")).toEqual(expectedBeta);
   });
 
   describe("messaging", () => {
@@ -349,13 +414,28 @@ describe("mattermostPlugin", () => {
         replyToId: "other-root",
         threadId: "other-root",
       });
+      for (const replyToMode of ["first", "all", "batched"] as const) {
+        expect(
+          resolveReplyTransport({
+            cfg: {},
+            replyToId: "dm-post",
+            replyDelivery: {
+              chatType: "direct",
+              replyToMode,
+            },
+          }),
+        ).toEqual({
+          replyToId: "dm-post",
+          threadId: "dm-post",
+        });
+      }
       expect(
         resolveReplyTransport({
           cfg: {},
           replyToId: "dm-post",
           replyDelivery: {
             chatType: "direct",
-            replyToMode: "all",
+            replyToMode: "off",
           },
         }),
       ).toEqual({
@@ -560,12 +640,10 @@ describe("mattermostPlugin", () => {
   });
 
   describe("messageActions", () => {
-    beforeEach(() => {
-      resetMattermostReactionBotUserCacheForTests();
-    });
+    let reactionActionSequence = 0;
 
     const runReactAction = async (params: Record<string, unknown>, fetchMode: "add" | "remove") => {
-      const cfg = createMattermostTestConfig();
+      const cfg = createMattermostTestConfig(`message-action-${++reactionActionSequence}`);
       const fetchImpl = createMattermostReactionFetchMock({
         mode: fetchMode,
         postId: "POST1",
@@ -579,6 +657,7 @@ describe("mattermostPlugin", () => {
             params,
             cfg,
             accountId: "default",
+            conversationReadOrigin: "direct-operator",
           }),
         );
       });
@@ -727,11 +806,136 @@ describe("mattermostPlugin", () => {
       ).rejects.toThrow("Mattermost reactions are disabled in config");
     });
 
+    it("rejects a disabled account before provider access", async () => {
+      const cfg = createMattermostTestConfig(`disabled-reaction-${++reactionActionSequence}`);
+      const mattermostConfig = cfg.channels?.mattermost;
+      if (!mattermostConfig) {
+        throw new Error("expected Mattermost config fixture");
+      }
+      mattermostConfig.accounts = { default: { enabled: false } };
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl, async () =>
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "react",
+              params: {
+                target: "channel:CHAN1",
+                to: "channel:CHAN1",
+                messageId: "POST1",
+                emoji: "thumbsup",
+              },
+              cfg,
+              accountId: "default",
+              conversationReadOrigin: "direct-operator",
+            }),
+          ),
+        ),
+      ).rejects.toThrow('Mattermost account "default" is disabled');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it("rejects disabled accounts before opaque target resolution provider access", async () => {
+      const cfg = createMattermostTestConfig(`disabled-target-${++reactionActionSequence}`);
+      const mattermostConfig = cfg.channels?.mattermost;
+      if (!mattermostConfig) {
+        throw new Error("expected Mattermost config fixture");
+      }
+      mattermostConfig.accounts = { default: { enabled: false } };
+      const fetchImpl = vi.fn<typeof fetch>();
+
+      await expect(
+        withMockedGlobalFetch(fetchImpl, async () =>
+          requireMattermostTargetResolver()({
+            cfg,
+            accountId: "default",
+            input: "disabled12abcd1234abcd1234",
+            normalized: "disabled12abcd1234abcd1234",
+          }),
+        ),
+      ).rejects.toThrow('Mattermost account "default" is disabled');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
     it("handles react by calling Mattermost reactions API", async () => {
       const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
 
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
       expect(result?.details).toStrictEqual({});
+    });
+
+    it.each([
+      {
+        label: "named channel add",
+        rawTarget: "#town-square",
+        resolvedTarget: "channel:CHAN1",
+        mode: "add" as const,
+        remove: false,
+        postChannelId: "CHAN1",
+        expectedText: "Reacted with :thumbsup: on POST1",
+      },
+      {
+        label: "named channel remove",
+        rawTarget: "#town-square",
+        resolvedTarget: "channel:CHAN1",
+        mode: "remove" as const,
+        remove: true,
+        postChannelId: "CHAN1",
+        expectedText: "Removed reaction :thumbsup: from POST1",
+      },
+      {
+        label: "named user add",
+        rawTarget: "@alice",
+        resolvedTarget: "user:PEER1",
+        mode: "add" as const,
+        remove: false,
+        postChannelId: "DMCHAN1",
+        channelType: "D",
+        channelName: "BOT123__PEER1",
+        expectedText: "Reacted with :thumbsup: on POST1",
+      },
+      {
+        label: "named user remove",
+        rawTarget: "@alice",
+        resolvedTarget: "user:PEER1",
+        mode: "remove" as const,
+        remove: true,
+        postChannelId: "DMCHAN1",
+        channelType: "D",
+        channelName: "BOT123__PEER1",
+        expectedText: "Removed reaction :thumbsup: from POST1",
+      },
+    ])("uses the resolved target for $label", async (fixture) => {
+      const cfg = createMattermostTestConfig(`delegated-reaction-${++reactionActionSequence}`);
+      const fetchImpl = createMattermostReactionFetchMock({
+        mode: fixture.mode,
+        postId: "POST1",
+        postChannelId: fixture.postChannelId,
+        channelType: fixture.channelType,
+        channelName: fixture.channelName,
+        emojiName: "thumbsup",
+      });
+
+      const result = await withMockedGlobalFetch(fetchImpl, async () =>
+        mattermostPlugin.actions?.handleAction?.(
+          createMattermostActionContext({
+            action: "react",
+            params: {
+              target: fixture.rawTarget,
+              to: fixture.resolvedTarget,
+              messageId: "POST1",
+              emoji: "thumbsup",
+              remove: fixture.remove,
+            },
+            cfg,
+            accountId: "default",
+            conversationReadOrigin: "delegated",
+          }),
+        ),
+      );
+
+      expect(result?.content).toEqual([{ type: "text", text: fixture.expectedText }]);
     });
 
     it("only treats boolean remove flag as removal", async () => {
@@ -963,25 +1167,54 @@ describe("mattermostPlugin", () => {
       expect(sendMessageMattermostMock).not.toHaveBeenCalled();
     });
 
-    it("rejects unsupported buffer-only Mattermost send attachments", async () => {
+    it.each(["buffer", "base64"] as const)(
+      "rejects unsupported %s-only Mattermost send attachments",
+      async (field) => {
+        const cfg = createMattermostTestConfig();
+
+        await expect(
+          mattermostPlugin.actions?.handleAction?.(
+            createMattermostActionContext({
+              action: "send",
+              params: {
+                to: "channel:CHAN1",
+                message: "report",
+                [field]: "cmVwb3J0",
+                filename: "report.md",
+              },
+              cfg,
+              accountId: "default",
+            }),
+          ),
+        ).rejects.toThrow("buffer/base64 payloads are not supported");
+        expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      { location: "top-level", params: { buffer: "", base64: "  " } },
+      {
+        location: "nested",
+        params: { attachments: [{ buffer: "", base64: "  " }] },
+      },
+    ])("ignores blank $location attachment payload fields", async ({ params }) => {
       const cfg = createMattermostTestConfig();
 
-      await expect(
-        mattermostPlugin.actions?.handleAction?.(
-          createMattermostActionContext({
-            action: "send",
-            params: {
-              to: "channel:CHAN1",
-              message: "report",
-              buffer: "cmVwb3J0",
-              filename: "report.md",
-            },
-            cfg,
-            accountId: "default",
-          }),
-        ),
-      ).rejects.toThrow("buffer/base64 payloads are not supported");
-      expect(sendMessageMattermostMock).not.toHaveBeenCalled();
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "plain text",
+            ...params,
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend("channel:CHAN1", "plain text");
+      expect(options.mediaUrl).toBeUndefined();
     });
 
     it("rejects mixed supported and unsupported Mattermost send attachments", async () => {
@@ -1105,7 +1338,7 @@ describe("mattermostPlugin", () => {
         }),
       );
 
-      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Plugins");
+      const options = expectSingleMattermostSend("channel:CHAN1", "Pick\n\n- Plugins: `/codex`");
       expect(options.buttons).toBeUndefined();
     });
 
@@ -1191,6 +1424,110 @@ describe("mattermostPlugin", () => {
           },
         ],
       ]);
+    });
+
+    it("keeps typed URL actions on the normal Mattermost text delivery path", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const sendPayload = requireMattermostSendPayload();
+      const cfg = createMattermostTestConfig();
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Review",
+                action: {
+                  type: "url" as const,
+                  url: "https://example.com/review",
+                },
+              },
+              {
+                label: "Open app",
+                action: {
+                  type: "web-app" as const,
+                  url: "https://example.com/app",
+                },
+              },
+              {
+                label: "Allow",
+                action: {
+                  type: "approval" as const,
+                  approvalId: "approval-1",
+                  approvalKind: "exec" as const,
+                  decision: "allow-once" as const,
+                },
+                value: "/approve approval-1 allow-once",
+              },
+            ],
+          },
+        ],
+      };
+      const payload = { presentation };
+      const rendered = await renderPresentation({
+        payload,
+        presentation,
+        ctx: {
+          cfg,
+          to: "channel:CHAN1",
+          text: "",
+          payload,
+        },
+      });
+
+      expect(rendered).toMatchObject({
+        text: "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow",
+      });
+      expect(rendered?.channelData?.mattermost).toBeUndefined();
+
+      await sendPayload({
+        cfg,
+        to: "channel:CHAN1",
+        text: rendered?.text ?? "",
+        payload: rendered!,
+      });
+
+      const options = expectSingleMattermostSend(
+        "channel:CHAN1",
+        "- Review: https://example.com/review\n- Open app: https://example.com/app\n- Allow",
+      );
+      expect(options.buttons).toBeUndefined();
+      expect(JSON.stringify(options)).not.toContain("approval-1");
+      expect(JSON.stringify(options)).not.toContain("/approve");
+    });
+
+    it("skips hosted widget actions without a Mattermost URL", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const cfg = createMattermostTestConfig();
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              {
+                label: "Hosted widget",
+                action: {
+                  type: "web-app" as const,
+                  widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      expect(
+        await renderPresentation({
+          payload: { presentation },
+          presentation,
+          ctx: {
+            cfg,
+            to: "channel:CHAN1",
+            text: "",
+            payload: { presentation },
+          },
+        }),
+      ).toBeNull();
     });
 
     it("requires upload success for local media on presentation button payloads", async () => {
@@ -1421,3 +1758,4 @@ describe("mattermostPlugin", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -7,7 +7,7 @@ read_when:
 title: "Raspberry Pi"
 ---
 
-Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is just the gateway (models run in the cloud via API), even a modest Pi handles the workload well — typical hardware cost is **$35–80 one-time**, no monthly fees.
+Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is just the gateway (models run in the cloud via API), even a modest Pi handles the workload well -- typical hardware cost is **$35-80 one-time**, no monthly fees.
 
 ## Hardware compatibility
 
@@ -132,9 +132,9 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 
 ## Performance tips
 
-**Use a USB SSD** -- SD cards are slow and wear out. A USB SSD dramatically improves performance. See the [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#usb-mass-storage-boot).
+**Use a USB SSD** -- SD cards are slow and wear out. A USB SSD dramatically improves performance and survives more write cycles; use it for `OPENCLAW_STATE_DIR` if you keep the OS on SD. See the [Pi USB boot guide](https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#usb-mass-storage-boot).
 
-**Enable module compile cache** -- Speeds up repeated CLI invocations on lower-power Pi hosts:
+**Enable module compile cache** -- Speeds up repeated CLI invocations on lower-power Pi hosts. `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, avoiding extra process handoffs and keeping PID tracking simple on small hosts:
 
 ```bash
 grep -q 'NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache' ~/.bashrc || cat >> ~/.bashrc <<'EOF' # pragma: allowlist secret
@@ -145,7 +145,7 @@ EOF
 source ~/.bashrc
 ```
 
-`OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, which avoids extra process handoffs and keeps PID tracking simple on small hosts.
+Use `/var/tmp`, not `/tmp` -- some distros clear `/tmp` on boot, which drops the warmed cache.
 
 **Reduce memory usage** -- For headless setups, free GPU memory and disable unused services:
 
@@ -173,7 +173,7 @@ Then `systemctl --user daemon-reload && systemctl --user restart openclaw-gatewa
 
 ## Recommended model setup
 
-Since the Pi only runs the gateway, use cloud-hosted API models:
+Since the Pi only runs the gateway, use cloud-hosted API models -- do not run local LLMs on a Pi, even small models are too slow to be useful:
 
 ```json
 {
@@ -188,26 +188,22 @@ Since the Pi only runs the gateway, use cloud-hosted API models:
 }
 ```
 
-Do not run local LLMs on a Pi — even small models are too slow to be useful. Let Claude or GPT do the model work.
-
 ## ARM binary notes
 
-Most OpenClaw features work on ARM64 without changes (Node.js, Telegram, WhatsApp/Baileys, Chromium). The binaries that occasionally lack ARM builds are typically optional Go/Rust CLI tools shipped by skills. Verify a missing binary's release page for `linux-arm64` / `aarch64` artifacts before falling back to building from source.
+Most OpenClaw features work on ARM64 without changes (Node.js, Telegram, WhatsApp/Baileys, Chromium). The binaries that occasionally lack ARM builds are typically optional Go/Rust CLI tools shipped by skills. Verify architecture with `uname -m` (should show `aarch64`), then check a missing binary's release page for `linux-arm64` / `aarch64` artifacts before falling back to building from source.
 
 ## Persistence and backups
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` — `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions.
-- `~/.openclaw/workspace/` — agent workspace (SOUL.md, memory, artifacts).
+- `~/.openclaw/` -- `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions.
+- `~/.openclaw/workspace/` -- agent workspace (SOUL.md, memory, artifacts).
 
-These survive reboots. Take a portable snapshot with:
+These survive reboots and benefit from SSD over SD card for both performance and longevity. Take a portable snapshot with:
 
 ```bash
 openclaw backup create
 ```
-
-If you keep these on an SSD, both performance and longevity improve over the SD card.
 
 ## Troubleshooting
 

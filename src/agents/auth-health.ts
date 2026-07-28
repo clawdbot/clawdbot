@@ -232,6 +232,7 @@ function buildProfileHealth(params: {
   }
 
   const effectiveCredential = resolveEffectiveOAuthCredential({
+    store,
     profileId,
     credential: healthCredential,
     allowKeychainPrompt,

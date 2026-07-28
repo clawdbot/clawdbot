@@ -37,7 +37,7 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
   ["thread/inject_items", "allowed-control-plane"],
   ["thread/list", "allowed-control-plane"],
   ["thread/metadata/update", "allowed-control-plane"],
-  ["thread/name/update", "allowed-control-plane"],
+  ["thread/name/set", "allowed-control-plane"],
   ["thread/read", "allowed-control-plane"],
   ["thread/rollback", "allowed-control-plane"],
   ["thread/start", "requires-openclaw-environment"],

@@ -4,21 +4,20 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
   providerContextTokenCacheKey,
 } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
-import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
 import {
-  buildCommandsMessage,
-  buildCommandsMessagePaginated,
-  buildHelpMessage,
   buildStatusMessage as buildStatusMessageRaw,
-} from "./status.js";
-import type { buildStatusMessage as BuildStatusMessage } from "./status.js";
+  type buildStatusMessage as BuildStatusMessage,
+} from "../status/status-message.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
+import { buildCommandsMessage, buildCommandsMessagePaginated, buildHelpMessage } from "./status.js";
 
 const buildStatusMessage: typeof BuildStatusMessage = (args) =>
   buildStatusMessageRaw({
@@ -392,17 +391,15 @@ describe("buildStatusMessage", () => {
     await withTempHome(async () => {
       const text = buildStatusMessage({
         config: {
-          messages: {
-            tts: {
-              auto: "always",
-              provider: "openai",
-              providers: {
-                openai: {
-                  displayName: "NeuTTS local",
-                  baseUrl: "http://user:secret@127.0.0.1:18801/v1?token=hidden#fragment",
-                  model: "neutts-nano",
-                  voice: "clara",
-                },
+          tts: {
+            auto: "always",
+            provider: "openai",
+            providers: {
+              openai: {
+                displayName: "NeuTTS local",
+                baseUrl: "http://username@127.0.0.1:18801/v1?token=hidden#fragment",
+                model: "neutts-nano",
+                voice: "clara",
               },
             },
           },
@@ -415,7 +412,7 @@ describe("buildStatusMessage", () => {
       expect(normalized).toContain(
         "Voice: always · provider=openai · name=NeuTTS local · model=neutts-nano · voice=clara · endpoint=custom(http://127.0.0.1:18801/v1)",
       );
-      expect(normalized).not.toContain("secret");
+      expect(normalized).not.toContain("username");
       expect(normalized).not.toContain("token=hidden");
       expect(normalized).not.toContain("fragment");
     });
@@ -425,11 +422,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -452,11 +445,7 @@ describe("buildStatusMessage", () => {
     const text = buildStatusMessage({
       config: {
         agents: {
-          defaults: {
-            cliBackends: {
-              "claude-cli": {},
-            },
-          },
+          defaults: {},
         },
       } as unknown as OpenClawConfig,
       agent: {
@@ -846,7 +835,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "abc",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
       },
       sessionKey: "agent:main:main",
@@ -887,7 +876,7 @@ describe("buildStatusMessage", () => {
       sessionEntry: {
         sessionId: "channel-context-window",
         updatedAt: 0,
-        channel: "discord",
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
         groupId: "123",
         totalTokens: 49_000,
         totalTokensFresh: true,
@@ -936,7 +925,7 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Context: 200k/1.0m");
   });
 
-  it("shows 1M context window for claude opus 4.7 variants", () => {
+  it("keeps bare Claude CLI opus 4.7 variants at the plan-safe context window", () => {
     const text = buildStatusMessage({
       agent: {
         model: "claude-cli/claude-opus-4.7-20260219",
@@ -953,8 +942,8 @@ describe("buildStatusMessage", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Context: 200k/1.0m");
-    expect(normalized).not.toContain("Context: 200k/200k");
+    expect(normalized).toContain("Context: 200k/200k");
+    expect(normalized).not.toContain("Context: 200k/1.0m");
   });
 
   it("recomputes context window from the active model after switching away from a smaller session override", () => {
@@ -1139,7 +1128,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("oauth (anthropic:claude-cli)");
     expect(normalized).not.toContain("Fallback: claude-cli/claude-opus-4-7");
     expect(normalized).not.toContain("unknown");
-    expect(normalized).toContain("Context: 36k/1.0m (4%)");
+    expect(normalized).toContain("Context: 36k/200k (18%)");
   });
 
   it("prefers active CLI OAuth over selected env API-key labels for runtime aliases", () => {
@@ -1527,6 +1516,37 @@ describe("buildStatusMessage", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Media: image ok (openai/gpt-5.4) · audio skipped (maxBytes)");
+  });
+
+  it("distinguishes observed local STT backends from requested backends", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-6" },
+      sessionEntry: { sessionId: "media-local-stt", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      queue: { mode: "none" },
+      mediaDecisions: [
+        {
+          capability: "audio",
+          outcome: "success",
+          attachments: [
+            {
+              attachmentIndex: 0,
+              attempts: [],
+              chosen: {
+                type: "cli",
+                provider: "whisper-cli",
+                model: "whisper-cli",
+                requestedBackend: "device:0",
+                observedBackend: "metal",
+                outcome: "success",
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(normalizeTestText(text)).toContain("Media: audio ok (whisper-cli observed=metal)");
   });
 
   it("includes failed media understanding decisions with the surfaced reason", () => {
@@ -2756,3 +2776,4 @@ describe("buildCommandsMessagePaginated", () => {
     expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

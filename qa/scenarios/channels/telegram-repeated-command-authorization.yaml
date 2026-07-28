@@ -1,0 +1,99 @@
+title: Telegram repeated command authorization
+
+scenario:
+  id: telegram-repeated-command-authorization
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.channel-native-commands
+  objective: Verify an allowlisted Telegram bot operator remains authorized across repeated native commands.
+  successCriteria:
+    - The same operator is blocked while removed from the group allowlist.
+    - Restoring the original allowlist authorizes status, help, and commands without another gate.
+  codeRefs:
+    - extensions/telegram/src/bot-message-context.ts
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+  execution:
+    profiles:
+      {
+        "telegram:adapter": 8,
+        "telegram:all": 7,
+        "telegram:mock-release": 7,
+        "telegram:release": 7,
+      }
+    kind: flow
+    channel: telegram
+    suiteIsolation: isolated
+    isolationReason: Mutates the live Telegram group allowlist and restarts the QA gateway.
+    summary: Remove and restore the Telegram operator allowlist, then run repeated commands.
+
+flow:
+  steps:
+    - name: repeated commands reuse restored authorization
+      actions:
+        - assert:
+            expr: "transport.id === 'telegram'"
+            message: repeated authorization requires the live Telegram adapter
+        - set: authorizationState
+          value:
+            expr: "({ allowFrom: [] })"
+        - try:
+            actions:
+              - call: env.gateway.restartAfterStateMutation
+                args:
+                  - lambda:
+                      async: true
+                      params: [ctx]
+                      expr: "fs.readFile(ctx.configPath, 'utf8').then((raw) => { const cfg = JSON.parse(raw); const account = cfg.channels.telegram.accounts[transport.accountId]; const group = account.groups[Object.keys(account.groups)[0]]; authorizationState.allowFrom = [...(group.allowFrom ?? [])]; group.allowFrom = []; return fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8'); })"
+              - call: waitForTransportReady
+                args: [{ ref: env }, 60000]
+              - resetTransport: true
+              - sendInbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  senderId: qa-command-operator
+                  senderName: QA Command Operator
+                  text: /status@openclaw
+              - waitForOutbound:
+                  conversation: { id: telegram-command-room, kind: channel }
+                  textIncludes: You are not authorized to use this command.
+                  timeoutMs: 60000
+            finally:
+              - call: env.gateway.restartAfterStateMutation
+                args:
+                  - lambda:
+                      async: true
+                      params: [ctx]
+                      expr: "fs.readFile(ctx.configPath, 'utf8').then((raw) => { const cfg = JSON.parse(raw); const account = cfg.channels.telegram.accounts[transport.accountId]; const group = account.groups[Object.keys(account.groups)[0]]; group.allowFrom = authorizationState.allowFrom; return fs.writeFile(ctx.configPath, `${JSON.stringify(cfg, null, 2)}\n`, 'utf8'); })"
+              - call: waitForTransportReady
+                args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /status@openclaw
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            textIncludes: "Session:"
+            timeoutMs: 60000
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /help@openclaw
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            textIncludes: /commands for full list
+            timeoutMs: 60000
+        - sendInbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            senderId: qa-command-operator
+            senderName: QA Command Operator
+            text: /commands@openclaw
+        - waitForOutbound:
+            conversation: { id: telegram-command-room, kind: channel }
+            textIncludes: /stop
+            timeoutMs: 60000
+          saveAs: reply
+      detailsExpr: reply.text

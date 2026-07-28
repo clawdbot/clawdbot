@@ -9,6 +9,7 @@ import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
 type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
@@ -146,15 +147,6 @@ function stopActiveProxyRegistration(registration: ActiveManagedProxyRegistratio
   restoreInactiveProxyRuntime(restoreSnapshot);
 }
 
-function isSupportedProxyUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 function resolveProxyUrl(config: ProxyConfig | undefined): string {
   const candidate = config?.proxyUrl?.trim() || process.env["OPENCLAW_PROXY_URL"]?.trim();
   if (!candidate) {
@@ -163,7 +155,7 @@ function resolveProxyUrl(config: ProxyConfig | undefined): string {
         "or OPENCLAW_PROXY_URL to an http:// or https:// forward proxy.",
     );
   }
-  if (!isSupportedProxyUrl(candidate)) {
+  if (!isHttpUrl(candidate)) {
     throw new Error(
       "proxy: enabled but proxy URL is invalid; set proxy.proxyUrl " +
         "or OPENCLAW_PROXY_URL to an http:// or https:// forward proxy.",
@@ -187,7 +179,7 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
     return;
   }
   const proxyUrl = process.env["HTTP_PROXY"];
-  if (!proxyUrl || !isSupportedProxyUrl(proxyUrl)) {
+  if (!proxyUrl || !isHttpUrl(proxyUrl)) {
     return;
   }
   const proxyCaFile = resolveManagedProxyCaFileForUrl({
@@ -207,12 +199,15 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
 
 /** Starts process-wide managed proxy routing and returns the owner stop handle. */
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
-  if (config?.enabled !== true) {
+  if (
+    config?.enabled === false ||
+    (!config?.proxyUrl?.trim() && !process.env["OPENCLAW_PROXY_URL"]?.trim())
+  ) {
     return null;
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  const loopbackMode = config.loopbackMode ?? "gateway-only";
+  const loopbackMode = config?.loopbackMode ?? "gateway-only";
   const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
   const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
   const activeProxyUrl = getActiveManagedProxyUrl();
@@ -299,15 +294,11 @@ function parseGatewayControlPlaneUrl(value: string): URL | null {
   }
 }
 
-function isGatewayControlPlaneProtocol(protocol: string): boolean {
-  return protocol === "ws:" || protocol === "wss:" || protocol === "http:" || protocol === "https:";
-}
-
 function getGatewayControlPlaneBypassAuthority(value: string): string | null {
   const url = parseGatewayControlPlaneUrl(value);
   if (
     url === null ||
-    !isGatewayControlPlaneProtocol(url.protocol) ||
+    (!isHttpUrl(url) && !isWebSocketUrl(url)) ||
     !isGatewayControlPlaneLoopbackHost(url.hostname)
   ) {
     return null;

@@ -4,8 +4,34 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("image ops Rastermill adapter", () => {
   afterEach(() => {
     vi.doUnmock("rastermill");
+    vi.doUnmock("@silvia-odwyer/photon-node");
     vi.doUnmock("../infra/resolve-system-bin.js");
     vi.resetModules();
+  });
+
+  it("does not load Photon for Rastermill-backed operations", async () => {
+    const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+    const photonModuleFactory = vi.fn(() => {
+      throw new Error("Photon loaded eagerly");
+    });
+
+    vi.doMock("@silvia-odwyer/photon-node", photonModuleFactory);
+    vi.doMock("rastermill", () => ({
+      RastermillUnavailableError: class RastermillUnavailableError extends Error {
+        causes = [];
+      },
+      createRastermill: vi.fn(() => ({ encode })),
+      isRastermillUnavailableError: () => false,
+      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
+    }));
+
+    const { resizeToJpeg } = await import("./image-ops.js");
+
+    await expect(
+      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }),
+    ).resolves.toEqual(Buffer.from("jpeg"));
+    expect(photonModuleFactory).not.toHaveBeenCalled();
   });
 
   it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
@@ -70,57 +96,13 @@ describe("image ops Rastermill adapter", () => {
       readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
     }));
 
-    const { ImageProcessorUnavailableError, resizeToJpeg } = await import("./image-ops.js");
+    const { isImageProcessorUnavailableError, resizeToJpeg } = await import("./image-ops.js");
 
     await expect(
-      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }),
-    ).rejects.toBeInstanceOf(ImageProcessorUnavailableError);
-  });
-
-  it("returns oriented bytes when EXIF metadata probe is unavailable but encode succeeds", async () => {
-    const encoded = Buffer.from("oriented");
-    const encode = vi.fn(async () => ({ data: encoded }));
-    const probe = vi.fn(async () => null);
-
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError: class RastermillUnavailableError extends Error {
-        causes = [];
-      },
-      createRastermill: vi.fn(() => ({ encode, probe })),
-      isRastermillUnavailableError: () => false,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
-    }));
-
-    const { normalizeExifOrientation } = await import("./image-ops.js");
-
-    await expect(normalizeExifOrientation(Buffer.from("input"))).resolves.toEqual(encoded);
-    expect(encode).toHaveBeenCalledWith(Buffer.from("input"), {
-      format: "jpeg",
-      autoOrient: true,
-    });
-  });
-
-  it("leaves EXIF normalization best-effort when Rastermill is unavailable", async () => {
-    class RastermillUnavailableError extends Error {
-      readonly causes = [new Error("missing backend")];
-    }
-    const source = Buffer.from("input");
-    const encode = vi.fn(async () => {
-      throw new RastermillUnavailableError("Image processor unavailable");
-    });
-    const probe = vi.fn(async () => ({ width: 1, height: 1, orientation: 6 }));
-
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError,
-      createRastermill: vi.fn(() => ({ encode, probe })),
-      isRastermillUnavailableError: (error: unknown) => error instanceof RastermillUnavailableError,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
-    }));
-
-    const { normalizeExifOrientation } = await import("./image-ops.js");
-
-    await expect(normalizeExifOrientation(source)).resolves.toBe(source);
+      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }).then(
+        () => false,
+        (error: unknown) => isImageProcessorUnavailableError(error),
+      ),
+    ).resolves.toBe(true);
   });
 });

@@ -11,7 +11,13 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock } = getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
+} = getProviderHttpMocks();
 
 let buildAlibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").buildAlibabaVideoGenerationProvider;
 
@@ -72,6 +78,85 @@ describe("alibaba video generation provider", () => {
     expect(parameters.watermark).toBe(false);
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
+  });
+
+  it("applies configured request policy to DashScope video requests", async () => {
+    const requestPolicy = {
+      allowPrivateNetwork: true,
+      headers: { "X-DashScope-Route": "alibaba-policy" },
+    };
+    const dispatcherPolicy = { mode: "env-proxy" as const };
+    resolveProviderHttpRequestConfigMock.mockImplementationOnce((params) => {
+      const headers = new Headers(params.defaultHeaders);
+      for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
+        headers.set(key, value);
+      }
+      return {
+        baseUrl: params.baseUrl ?? params.defaultBaseUrl,
+        allowPrivateNetwork: params.request?.allowPrivateNetwork === true,
+        headers,
+        dispatcherPolicy,
+      };
+    });
+    mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
+
+    const provider = buildAlibabaVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "alibaba",
+      model: "wan2.6-t2v",
+      prompt: "animate this shot",
+      cfg: {
+        models: {
+          providers: {
+            alibaba: {
+              baseUrl: "https://dashscope-intl.aliyuncs.com",
+              models: [],
+              request: requestPolicy,
+            },
+          },
+        },
+      },
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith(requestPolicy);
+    expect(resolveProviderHttpRequestConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "alibaba",
+        capability: "video",
+        transport: "http",
+        request: requestPolicy,
+      }),
+    );
+    const request = requireFirstPostJsonRequest("DashScope request with request policy");
+    expect(request.allowPrivateNetwork).toBe(true);
+    expect(request.dispatcherPolicy).toBe(dispatcherPolicy);
+    expect(request.headers).toBeInstanceOf(Headers);
+    expect((request.headers as Headers).get("x-dashscope-route")).toBe("alibaba-policy");
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      1,
+      "https://dashscope-intl.aliyuncs.com/api/v1/tasks/task-1",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.any(Headers),
+      }),
+      120_000,
+      fetch,
+      {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy,
+      },
+    );
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenNthCalledWith(
+      2,
+      "https://example.com/out.mp4",
+      { method: "GET" },
+      120_000,
+      fetch,
+      {
+        ssrfPolicy: { allowPrivateNetwork: true },
+        dispatcherPolicy,
+      },
+    );
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {

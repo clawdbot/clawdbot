@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createCodexWebSearchProvider as createContractCodexWebSearchProvider } from "../web-search-contract-api.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
@@ -180,6 +180,12 @@ function createConfig(): OpenClawConfig {
   };
 }
 
+beforeAll(async () => {
+  // Execution cases share this lazy runtime. Import it once so the first case
+  // does not absorb module initialization that every later case reuses.
+  await import("./web-search-provider.runtime.js");
+});
+
 describe("codex web search provider", () => {
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
@@ -241,8 +247,8 @@ describe("codex web search provider", () => {
           clearEnv: ["CODEX_HOME", "KEEP_CLEARED"],
         },
       }),
-      clientFactory: async (startOptions) => {
-        isolatedStartOptions = startOptions;
+      clientFactory: async (options) => {
+        isolatedStartOptions = options?.startOptions;
         return client;
       },
     });

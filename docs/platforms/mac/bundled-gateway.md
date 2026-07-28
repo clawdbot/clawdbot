@@ -7,60 +7,76 @@ read_when:
 title: "Gateway on macOS"
 ---
 
-OpenClaw.app no longer bundles Node/Bun or the Gateway runtime. The macOS app
-expects an **external** `openclaw` CLI install, does not spawn the Gateway as a
-child process, and manages a per-user launchd service to keep the Gateway
-running (or attaches to an existing local Gateway if one is already running).
+OpenClaw.app does not bundle Node or the Gateway runtime. The macOS app
+expects an **external** `openclaw` CLI install, does not spawn the Gateway as
+a child process, and manages a per-user launchd service to keep the Gateway
+running (or attaches to an already-running local Gateway).
 
-## Install the CLI (required for local mode)
+## Automatic setup
 
-Node 24 is the default runtime on the Mac. Node 22 LTS, currently `22.19+`, still works for compatibility. Then install `openclaw` globally:
+On a fresh Mac, choose **This Mac** during onboarding. The app runs its
+signed, bundled installer script before the Gateway wizard: it installs a
+user-space Node runtime and the matching `openclaw` CLI under `~/.openclaw`,
+then installs and starts the per-user launchd service. This path needs no
+Terminal, Homebrew, or administrator access.
+
+The app bundles the installer script only, not the Node or Gateway payload;
+setup needs an internet connection to download the runtime and matching
+OpenClaw package.
+
+## Manual recovery
+
+Node 24.15+ is recommended for a manual install; Node 22.22.3+ also works. Install
+`openclaw` globally:
 
 ```bash
 npm install -g openclaw@<version>
 ```
 
-The macOS app's **Install CLI** button runs the same global install flow the app
-uses internally: it prefers npm first, then pnpm, then bun if that is the only
-detected package manager. Node remains the recommended Gateway runtime.
+Use **Retry setup** after a failed automatic setup. If that still fails,
+install the CLI manually with the command above, then choose **Check again**
+in onboarding.
 
 ## Launchd (Gateway as LaunchAgent)
 
-Label:
+Label: `ai.openclaw.gateway` (default profile), or `ai.openclaw.<profile>`
+for a named profile.
 
-- `ai.openclaw.gateway` (or `ai.openclaw.<profile>`; legacy `com.openclaw.*` may remain)
+Plist location (per-user): `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
+(or `ai.openclaw.<profile>.plist`).
 
-Plist location (per-user):
-
-- `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
-  (or `~/Library/LaunchAgents/ai.openclaw.<profile>.plist`)
-
-Manager:
-
-- The macOS app owns LaunchAgent install/update in Local mode.
-- The CLI can also install it: `openclaw gateway install`.
+The macOS app owns LaunchAgent install/update for the default profile in
+Local mode. The CLI can also install it directly: `openclaw gateway install`
+(named profiles are selected via the `OPENCLAW_PROFILE` env var).
 
 Behavior:
 
 - "OpenClaw Active" enables/disables the LaunchAgent.
-- App quit does **not** stop the gateway (launchd keeps it alive).
+- Quitting the app does **not** stop the Gateway (launchd keeps it alive).
 - If a Gateway is already running on the configured port, the app attaches to
   it instead of starting a new one.
 
 Logging:
 
-- launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`)
+- launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use
+  `gateway-<profile>.log`)
 - launchd stderr: suppressed
+- If the host loops with repeated `EADDRINUSE` or fast restarts, check for
+  duplicate `ai.openclaw.gateway` / `ai.openclaw.node` LaunchAgents and the
+  launchd-marker workaround in
+  [Gateway troubleshooting](/gateway/troubleshooting#macos-launchd-supervisor-loop-with-duplicate-gatewaynode-launchagents).
 
 ## Version compatibility
 
-The macOS app checks the gateway version against its own version. If they're
-incompatible, update the global CLI to match the app version.
+The macOS app checks the Gateway version against its own version. Onboarding
+automatically runs managed setup when an existing CLI is missing or
+incompatible. Use **Retry setup** to repeat installation, or **Check again**
+after repairing an external CLI.
 
 ## State directory on macOS
 
 Keep OpenClaw state on a local, non-synced disk. Avoid iCloud Drive and other
-cloud-synced folders because sync latency and file locks can affect sessions,
+cloud-synced folders; sync latency and file locks can affect sessions,
 credentials, and Gateway state.
 
 Set `OPENCLAW_STATE_DIR` to a local path only when you need an override.
@@ -80,10 +96,11 @@ swift run openclaw-mac connect --json
 swift run openclaw-mac discover --timeout 3000 --json
 ```
 
-`connect` accepts `--url`, `--token`, `--timeout`, and `--json`. `discover`
-accepts `--timeout`, `--json`, and `--include-local`. Compare discovery output
-with `openclaw gateway discover --json` when you need to separate CLI discovery
-from app-side connection issues.
+`connect` accepts `--url`, `--token`, `--timeout`, `--probe`, and `--json`
+(plus client-identity overrides; run with `--help` for the full list).
+`discover` accepts `--timeout`, `--json`, and `--include-local`. Compare
+discovery output with `openclaw gateway discover --json` when you need to
+separate CLI discovery from app-side connection issues.
 
 ## Smoke check
 

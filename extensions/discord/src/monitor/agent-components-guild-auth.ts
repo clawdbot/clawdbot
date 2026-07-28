@@ -307,7 +307,7 @@ export async function resolveComponentCommandAuthorized(params: {
     },
     allowNameMatching: params.allowNameMatching,
   });
-  const useAccessGroups = ctx.cfg.commands?.useAccessGroups !== false;
+  const useAccessGroups = true;
   const authorizers = useAccessGroups
     ? [
         { configured: ownerAllowList != null, allowed: ownerOk },

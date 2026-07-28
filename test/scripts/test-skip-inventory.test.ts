@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectTestSkipInventoryReport,
+  main as runTestSkipInventory,
   renderTestSkipInventoryReport,
   type TestSkipInventoryReport,
 } from "../../scripts/test-skip-inventory.js";
@@ -70,7 +71,7 @@ describeLive("provider live", () => {});
   );
   writeRepoFile(
     repoRoot,
-    "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+    "ui/src/e2e/chat-flow.e2e.test.ts",
     `
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 describeControlUiE2e("control UI", () => {});
@@ -184,7 +185,7 @@ describe("collectTestSkipInventoryReport", () => {
         target: "it",
       },
       {
-        file: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+        file: "ui/src/e2e/chat-flow.e2e.test.ts",
         kind: "alias",
         method: "skip",
         reason: "optional-dependency",
@@ -260,29 +261,32 @@ describe("collectTestSkipInventoryReport", () => {
   });
 
   it("rejects missing CLI repo roots and loose limits before scanning", () => {
-    for (const args of [
-      ["--repo-root", "--json"],
-      ["--limit", "1e3", "--repo-root", createTempDir("openclaw-skip-limit-")],
-    ]) {
-      const result = spawnSync(
-        process.execPath,
-        [
-          "--import",
-          "tsx",
-          path.join(process.cwd(), "scripts/test-skip-inventory.ts"),
-          "--",
-          ...args,
-        ],
-        {
-          encoding: "utf8",
-        },
-      );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        path.join(process.cwd(), "scripts/test-skip-inventory.ts"),
+        "--",
+        "--repo-root",
+        "--json",
+      ],
+      {
+        encoding: "utf8",
+      },
+    );
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toMatch(
-        /--repo-root expects a path|--limit expects a non-negative integer/u,
-      );
-      expect(result.stdout).not.toContain("Scanned files:");
-    }
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("--repo-root expects a path");
+    expect(result.stdout).not.toContain("Scanned files:");
+    expect(() =>
+      runTestSkipInventory([
+        "--",
+        "--limit",
+        "1e3",
+        "--repo-root",
+        createTempDir("openclaw-skip-limit-"),
+      ]),
+    ).toThrow("--limit expects a non-negative integer");
   });
 });

@@ -1,5 +1,4 @@
 // Mattermost tests cover monitor plugin behavior.
-import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { resolveMattermostAccount } from "./accounts.js";
@@ -8,45 +7,27 @@ import type { MattermostClient } from "./client.js";
 import {
   buildMattermostModelPickerSelectMessageSid,
   canFinalizeMattermostPreviewInPlace,
-  deliverMattermostReplyWithDraftPreview,
-  evaluateMattermostMentionGate,
   formatMattermostFinalDeliveryOutcomeLog,
-  MattermostRetryableInboundError,
-  processMattermostReplayGuardedPost,
+  resolveMattermostPendingHistoryKey,
   resolveMattermostReactionChannelId,
-  resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
   resolveMattermostThreadSessionContext,
   shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
-  type MattermostMentionGateInput,
-  type MattermostRequireMentionResolverInput,
-} from "./monitor.js";
+} from "./monitor-context.js";
+import { deliverMattermostReplyWithDraftPreview } from "./monitor-draft-delivery.js";
+import { buildMattermostInboundMediaPayload } from "./monitor-resources.js";
 
-function resolveRequireMentionForTest(params: MattermostRequireMentionResolverInput): boolean {
-  const root = params.cfg.channels?.mattermost;
-  const accountGroups = (
-    root?.accounts?.[params.accountId] as
-      | { groups?: Record<string, { requireMention?: boolean }> }
-      | undefined
-  )?.groups;
-  const groups = accountGroups ?? root?.groups;
-  const typedGroups = groups as Record<string, { requireMention?: boolean }> | undefined;
-  const groupConfig = params.groupId ? typedGroups?.[params.groupId] : undefined;
-  const defaultGroupConfig = typedGroups?.["*"];
-  const configMention =
-    typeof groupConfig?.requireMention === "boolean"
-      ? groupConfig.requireMention
-      : typeof defaultGroupConfig?.requireMention === "boolean"
-        ? defaultGroupConfig.requireMention
-        : undefined;
-  if (typeof configMention === "boolean") {
-    return configMention;
-  }
-  if (typeof params.requireMentionOverride === "boolean") {
-    return params.requireMentionOverride;
-  }
-  return true;
+function resolveMattermostEffectiveReplyToId(params: {
+  kind: "direct" | "group" | "channel";
+  postId?: string | null;
+  replyToMode: "off" | "first" | "all" | "batched";
+  threadRootId?: string | null;
+}): string | undefined {
+  return resolveMattermostThreadSessionContext({
+    baseSessionKey: "agent:main:mattermost:test",
+    ...params,
+  }).effectiveReplyToId;
 }
 
 const updateMattermostPostSpy = vi.spyOn(clientModule, "updateMattermostPost");
@@ -78,27 +59,41 @@ beforeEach(() => {
   updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
 });
 
-function evaluateMentionGateForMessage(params: { cfg: OpenClawConfig; threadRootId?: string }) {
-  const account = resolveMattermostAccount({ cfg: params.cfg, accountId: "default" });
-  const resolver = vi.fn(resolveRequireMentionForTest);
-  const input: MattermostMentionGateInput = {
-    kind: "channel",
-    cfg: params.cfg,
-    accountId: account.accountId,
-    channelId: "chan-1",
-    threadRootId: params.threadRootId,
-    requireMentionOverride: account.requireMention,
-    resolveRequireMention: resolver,
-    wasMentioned: false,
-    isControlCommand: false,
-    commandAuthorized: false,
-    oncharEnabled: false,
-    oncharTriggered: false,
-    canDetectMention: true,
-  };
-  const decision = evaluateMattermostMentionGate(input);
-  return { account, resolver, decision };
-}
+describe("buildMattermostInboundMediaPayload", () => {
+  it("keeps a failed attachment kind aligned with a successful path", () => {
+    expect(
+      buildMattermostInboundMediaPayload([
+        { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
+        { kind: "audio" },
+      ]),
+    ).toEqual({
+      MediaPath: "/tmp/image.png",
+      MediaUrl: "/tmp/image.png",
+      MediaType: "image/png",
+      MediaPaths: ["/tmp/image.png", ""],
+      MediaUrls: ["/tmp/image.png", ""],
+      MediaTypes: ["image/png", "audio"],
+      MediaTranscribedIndexes: undefined,
+    });
+  });
+
+  it("keeps total failures as type-only media facts", () => {
+    expect(
+      buildMattermostInboundMediaPayload([
+        { kind: "video" },
+        { contentType: "application/pdf", kind: "document" },
+      ]),
+    ).toEqual({
+      MediaPath: undefined,
+      MediaUrl: undefined,
+      MediaType: "video",
+      MediaPaths: undefined,
+      MediaUrls: undefined,
+      MediaTypes: ["video", "application/pdf"],
+      MediaTranscribedIndexes: undefined,
+    });
+  });
+});
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: string): unknown[] {
   const resolvedIndex = index < 0 ? mock.mock.calls.length + index : index;
@@ -108,76 +103,6 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index: number, label: 
   }
   return call;
 }
-
-function mockCallArg(
-  mock: { mock: { calls: unknown[][] } },
-  index: number,
-  label: string,
-): unknown {
-  return mockCall(mock, index, label)[0];
-}
-
-describe("mattermost mention gating", () => {
-  it("accepts unmentioned root channel posts in onmessage mode", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          chatmode: "onmessage",
-          groupPolicy: "open",
-        },
-      },
-    };
-    const { resolver, decision } = evaluateMentionGateForMessage({ cfg });
-    expect(decision.dropReason).toBeNull();
-    expect(decision.shouldRequireMention).toBe(false);
-    expect(resolver).toHaveBeenCalledTimes(1);
-    const resolverCall = mockCallArg(resolver, 0, "resolveRequireMention");
-    expect(resolverCall).toStrictEqual({
-      cfg,
-      channel: "mattermost",
-      accountId: "default",
-      groupId: "chan-1",
-      requireMentionOverride: false,
-    });
-  });
-
-  it("accepts unmentioned thread replies in onmessage mode", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          chatmode: "onmessage",
-          groupPolicy: "open",
-        },
-      },
-    };
-    const { resolver, decision } = evaluateMentionGateForMessage({
-      cfg,
-      threadRootId: "thread-root-1",
-    });
-    expect(decision.dropReason).toBeNull();
-    expect(decision.shouldRequireMention).toBe(false);
-    const resolverCall = mockCallArg(resolver, -1, "resolveRequireMention") as {
-      groupId?: string;
-    };
-    expect(resolverCall.groupId).toBe("chan-1");
-    expect(resolverCall.groupId).not.toBe("thread-root-1");
-  });
-
-  it("rejects unmentioned channel posts in oncall mode", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        mattermost: {
-          chatmode: "oncall",
-          groupPolicy: "open",
-        },
-      },
-    };
-    const { decision, account } = evaluateMentionGateForMessage({ cfg });
-    expect(account.requireMention).toBe(true);
-    expect(decision.shouldRequireMention).toBe(true);
-    expect(decision.dropReason).toBe("missing-mention");
-  });
-});
 
 describe("resolveMattermostReplyRootId with block streaming payloads", () => {
   it("uses threadRootId for block-streamed payloads with replyToId", () => {
@@ -228,17 +153,18 @@ describe("resolveMattermostReplyRootId", () => {
     expect(resolveMattermostReplyRootId({ kind: "channel" })).toBeUndefined();
   });
 
-  it("keeps direct-message replies top-level even when a payload reply target exists", () => {
+  it("threads direct-message replies once a DM thread root exists", () => {
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
         threadRootId: "dm-root-456",
         replyToId: "dm-post-123",
       }),
-    ).toBeUndefined();
+    ).toBe("dm-root-456");
   });
 
-  it("keeps direct-message replies top-level when only the payload reply target exists", () => {
+  it("keeps flat direct-message replies top-level when there is no DM thread root", () => {
+    // A flat DM has no effective thread root, so a payload reply target stays flat.
     expect(
       resolveMattermostReplyRootId({
         kind: "direct",
@@ -786,17 +712,28 @@ describe("resolveMattermostEffectiveReplyToId", () => {
     ).toBe("post-123");
   });
 
-  it("keeps direct messages non-threaded", () => {
+  it("starts a direct-message thread under the post when its effective mode is all", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
         postId: "post-123",
         replyToMode: "all",
       }),
+    ).toBe("post-123");
+  });
+
+  it("keeps direct messages flat when their effective mode is off", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "off",
+        threadRootId: "dm-root-456",
+      }),
     ).toBeUndefined();
   });
 
-  it("suppresses existing direct-message thread roots", () => {
+  it("uses an existing direct-message thread root when threading is enabled", () => {
     expect(
       resolveMattermostEffectiveReplyToId({
         kind: "direct",
@@ -804,7 +741,17 @@ describe("resolveMattermostEffectiveReplyToId", () => {
         replyToMode: "all",
         threadRootId: "dm-root-456",
       }),
-    ).toBeUndefined();
+    ).toBe("dm-root-456");
+  });
+
+  it("starts a new direct-message thread under the post when threading is enabled", () => {
+    expect(
+      resolveMattermostEffectiveReplyToId({
+        kind: "direct",
+        postId: "post-123",
+        replyToMode: "first",
+      }),
+    ).toBe("post-123");
   });
 });
 
@@ -822,6 +769,19 @@ describe("resolveMattermostThreadSessionContext", () => {
       sessionKey: "agent:main:mattermost:default:chan-1:thread:post-123",
       parentSessionKey: "agent:main:mattermost:default:chan-1",
     });
+  });
+
+  it("keeps DM threads as fresh independent sessions", () => {
+    const ctx = resolveMattermostThreadSessionContext({
+      baseSessionKey: "agent:main:mattermost:direct:user-1",
+      kind: "direct",
+      postId: "post-123",
+      replyToMode: "first",
+    });
+    expect(ctx.effectiveReplyToId).toBe("post-123");
+    expect(ctx.sessionKey).toBe("agent:main:mattermost:direct:user-1:thread:post-123");
+    // No parent-session inheritance: each DM topic is its own session.
+    expect(ctx.parentSessionKey).toBeUndefined();
   });
 
   it("keeps existing thread roots for threaded follow-ups", () => {
@@ -871,13 +831,13 @@ describe("resolveMattermostThreadSessionContext", () => {
     });
   });
 
-  it("keeps direct-message sessions linear", () => {
+  it("keeps direct-message sessions linear when their effective mode is off", () => {
     expect(
       resolveMattermostThreadSessionContext({
         baseSessionKey: "agent:main:mattermost:default:user-1",
         kind: "direct",
         postId: "post-123",
-        replyToMode: "all",
+        replyToMode: "off",
         threadRootId: "dm-root-456",
       }),
     ).toEqual({
@@ -888,97 +848,23 @@ describe("resolveMattermostThreadSessionContext", () => {
   });
 });
 
-describe("processMattermostReplayGuardedPost", () => {
-  it("skips duplicate message batches after a successful commit", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    const handlePost = vi.fn(async () => undefined);
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-1"],
-        handlePost,
+describe("resolveMattermostPendingHistoryKey", () => {
+  it("does not retain pending history buckets for thread-scoped direct messages", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "direct",
+        sessionKey: "agent:main:mattermost:direct:user-1:thread:post-123",
       }),
-    ).resolves.toBe("processed");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-1"],
-        handlePost,
-      }),
-    ).resolves.toBe("duplicate");
-
-    expect(handlePost).toHaveBeenCalledTimes(1);
+    ).toBeNull();
   });
 
-  it("releases claims for explicit retryable failures", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    let attempts = 0;
-    const handlePost = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new MattermostRetryableInboundError("retry me");
-      }
-    });
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-2"],
-        handlePost,
+  it("keeps pending room history scoped to the active session", () => {
+    expect(
+      resolveMattermostPendingHistoryKey({
+        kind: "channel",
+        sessionKey: "agent:main:mattermost:channel:chan-1:thread:post-123",
       }),
-    ).rejects.toThrow("retry me");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-2"],
-        handlePost,
-      }),
-    ).resolves.toBe("processed");
-
-    expect(handlePost).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps replay committed after a non-retryable failure", async () => {
-    const replayGuard = createClaimableDedupe({
-      ttlMs: 10_000,
-      memoryMaxSize: 100,
-    });
-    const visibleSideEffect = vi.fn();
-    const handlePost = vi.fn(async () => {
-      visibleSideEffect();
-      throw new Error("post-send failure");
-    });
-
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-3"],
-        handlePost,
-      }),
-    ).rejects.toThrow("post-send failure");
-    await expect(
-      processMattermostReplayGuardedPost({
-        replayGuard,
-        accountId: "acct",
-        messageIds: ["post-3"],
-        handlePost,
-      }),
-    ).resolves.toBe("duplicate");
-
-    expect(handlePost).toHaveBeenCalledTimes(1);
-    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
+    ).toBe("agent:main:mattermost:channel:chan-1:thread:post-123");
   });
 });
 

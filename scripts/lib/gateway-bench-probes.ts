@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { request } from "node:http";
 import { createServer } from "node:net";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 
 export async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -37,7 +38,7 @@ export async function requestProbeStatus(
   }
 }
 
-export function classifyProbeErrorKind(error: unknown): string {
+function classifyProbeErrorKind(error: unknown): string {
   if (typeof error === "object" && error !== null) {
     const code = (error as { code?: unknown }).code;
     if (typeof code === "string" && code.trim()) {
@@ -98,9 +99,9 @@ export function readProcessTreeCpuMs(rootPid: number | undefined): number | null
     if (!match) {
       continue;
     }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
+    const pid = Number(expectDefined(match[1], "process id from ps output"));
+    const ppid = Number(expectDefined(match[2], "parent process id from ps output"));
+    const cpuMs = parsePsCpuTimeMs(expectDefined(match[3], "CPU time from ps output"));
     if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
       continue;
     }
@@ -153,10 +154,21 @@ function parsePsCpuTimeMs(raw: string): number | null {
     return null;
   }
   if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+    const [minutes, seconds] = parts;
+    return Math.round(
+      (expectDefined(minutes, "process CPU minutes") * 60 +
+        expectDefined(seconds, "process CPU seconds")) *
+        1000,
+    );
   }
   if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+    const [hours, minutes, seconds] = parts;
+    return Math.round(
+      (expectDefined(hours, "process CPU hours") * 60 * 60 +
+        expectDefined(minutes, "process CPU minutes") * 60 +
+        expectDefined(seconds, "process CPU seconds")) *
+        1000,
+    );
   }
   return null;
 }

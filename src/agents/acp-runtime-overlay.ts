@@ -9,7 +9,7 @@ import { isAcpSessionKey } from "../routing/session-key.js";
  */
 export type AgentRuntimeMetadata = {
   id: string;
-  source: "implicit" | "model" | "provider" | "session-key";
+  source: "implicit" | "model" | "provider" | "session" | "session-key";
 };
 
 /**

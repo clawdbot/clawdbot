@@ -8,11 +8,14 @@
  * validation, fetch, and structured response formatting.
  */
 
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   readProviderTextResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { jsonResult as json } from "openclaw/plugin-sdk/tool-results";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugLog, debugError } from "../utils/log.js";
 
@@ -151,6 +154,70 @@ function decodePathSegments(path: string): string[] | null {
   }
 }
 
+type ChannelApiPathTarget =
+  | { kind: "guild-list" }
+  | { kind: "guild"; id: string }
+  | { kind: "channel"; id: string }
+  | { kind: "unverified" };
+
+function resolvePathTarget(path: string): ChannelApiPathTarget {
+  const segments = decodePathSegments(path);
+  if (!segments || segments.length === 0) {
+    return { kind: "unverified" };
+  }
+
+  const [scope, firstId, second] = segments;
+  if (
+    scope?.toLowerCase() === "users" &&
+    firstId?.toLowerCase() === "@me" &&
+    second?.toLowerCase() === "guilds"
+  ) {
+    return { kind: "guild-list" };
+  }
+  if (scope?.toLowerCase() === "guilds" && firstId) {
+    return { kind: "guild", id: firstId };
+  }
+  if (scope?.toLowerCase() === "channels" && firstId) {
+    return { kind: "channel", id: firstId };
+  }
+  return { kind: "unverified" };
+}
+
+function validateConfiguredTargetScope(
+  path: string,
+  options: ChannelApiExecuteOptions,
+): string | null {
+  if (!options.cfg) {
+    return null;
+  }
+
+  const basePolicy = resolveChannelGroupPolicy({
+    cfg: options.cfg,
+    channel: "qqbot",
+    accountId: options.accountId,
+    groupIdCaseInsensitive: true,
+  });
+  if (!basePolicy.allowlistEnabled && basePolicy.allowed) {
+    return null;
+  }
+
+  const target = resolvePathTarget(path);
+  if (target.kind === "guild-list") {
+    return basePolicy.allowed
+      ? null
+      : "QQ channel API guild listing is unavailable while qqbot groups are scoped.";
+  }
+  if (target.kind === "unverified") {
+    return basePolicy.allowed
+      ? null
+      : "QQ channel API path target cannot be verified against configured qqbot groups.";
+  }
+
+  return basePolicy.allowed
+    ? null
+    : `QQ channel API ${target.kind} paths are unavailable while qqbot groups are scoped.`;
+}
+
 function isBulkAnnouncementDeletePath(path: string): boolean {
   const segments = decodePathSegments(path);
   return Boolean(
@@ -175,19 +242,14 @@ function validateDeleteConfirmation(params: ChannelApiParams): string | null {
   return null;
 }
 
-function json(data: unknown) {
-  return {
-    content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
-    details: data,
-  };
-}
-
 /**
  * Options provided by the caller when executing a channel API request.
  * 执行频道 API 请求时由调用方提供的选项。
  */
 interface ChannelApiExecuteOptions {
   accessToken: string;
+  cfg?: OpenClawConfig;
+  accountId?: string | null;
 }
 
 /**
@@ -219,6 +281,11 @@ export async function executeChannelApi(
   const pathError = validatePath(params.path);
   if (pathError) {
     return json({ error: pathError });
+  }
+
+  const scopeError = validateConfiguredTargetScope(params.path, options);
+  if (scopeError) {
+    return json({ error: scopeError, path: params.path });
   }
 
   const confirmationError = validateDeleteConfirmation({ ...params, method });
@@ -256,8 +323,8 @@ export async function executeChannelApi(
 
     debugLog(`[qqbot-channel-api] >>> ${method} ${url} (timeout: ${DEFAULT_TIMEOUT_MS}ms)`);
 
-    let res: Response;
     let release: (() => Promise<void>) | undefined;
+    let receivedResponse = false;
     try {
       const guarded = await fetchWithSsrFGuard({
         url,
@@ -265,27 +332,10 @@ export async function executeChannelApi(
         auditContext: "qqbot-channel-api",
         policy: resolveChannelApiSsrfPolicy(url),
       });
-      res = guarded.response;
       release = guarded.release;
-    } catch (err) {
-      clearTimeout(timeoutId);
-      if (err instanceof Error && err.name === "AbortError") {
-        debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
-        return json({
-          error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
-          path: params.path,
-        });
-      }
-      debugError("[qqbot-channel-api] <<< Network error:", err);
-      return json({
-        error: `Network error: ${formatErrorMessage(err)}`,
-        path: params.path,
-      });
-    } finally {
-      clearTimeout(timeoutId);
-    }
+      receivedResponse = true;
+      const res = guarded.response;
 
-    try {
       debugLog(`[qqbot-channel-api] <<< Status: ${res.status} ${res.statusText}`);
 
       const rawBody = res.ok
@@ -329,7 +379,27 @@ export async function executeChannelApi(
         path: params.path,
         data: parsed,
       });
+    } catch (err) {
+      if (controller.signal.aborted && err instanceof Error && err.name === "AbortError") {
+        debugError(`[qqbot-channel-api] <<< Request timeout after ${DEFAULT_TIMEOUT_MS}ms`);
+        return json({
+          error: `Request timed out after ${DEFAULT_TIMEOUT_MS}ms`,
+          path: params.path,
+        });
+      }
+      if (!receivedResponse) {
+        debugError("[qqbot-channel-api] <<< Network error:", err);
+        return json({
+          error: `Network error: ${formatErrorMessage(err)}`,
+          path: params.path,
+        });
+      }
+      return json({
+        error: formatErrorMessage(err),
+        path: params.path,
+      });
     } finally {
+      clearTimeout(timeoutId);
       await release?.();
     }
   } catch (err) {

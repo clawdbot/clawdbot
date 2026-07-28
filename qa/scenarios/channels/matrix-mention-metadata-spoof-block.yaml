@@ -1,0 +1,19 @@
+title: Matrix metadata-only mention spoof does not trigger
+scenario:
+  id: matrix-mention-metadata-spoof-block
+  surface: channels
+  coverage:
+    primary:
+      - matrix.mention-gates
+  execution:
+    profiles: { "matrix:all": 45, "matrix:transport": 44 }
+    kind: flow
+    channel: matrix
+    timeoutMs: 8000
+    retryCount: 0
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-policy.js
+  call: runMentionMetadataSpoofBlockScenario
+  args:
+    - expr: "scenarioContext"

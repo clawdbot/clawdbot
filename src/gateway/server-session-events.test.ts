@@ -7,12 +7,18 @@ const sessionRow = vi.hoisted(() => ({
   sessionId: "sess-main",
   status: "done",
   updatedAt: 1,
+  thinkingLevel: "ultra" as string | undefined,
+  thinkingLevels: [{ id: "ultra", label: "ultra" }],
+  thinkingOptions: ["ultra"],
+  thinkingDefault: "medium",
+  agentRuntime: { id: "openclaw", source: "model" },
 }));
-const isEmbeddedAgentRunActiveMock = vi.hoisted(() => vi.fn());
+const isEmbeddedAgentRunInProgressMock = vi.hoisted(() => vi.fn());
+const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("./chat-display-projection.js", () => ({
-  projectChatDisplayMessage: (message: unknown) => message,
+  projectChatDisplayMessage: projectChatDisplayMessageMock,
 }));
 vi.mock("./session-utils.js", () => ({
   attachOpenClawTranscriptMeta: (message: unknown) => message,
@@ -26,11 +32,14 @@ vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
   );
   return {
     ...actual,
-    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+    isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
   };
 });
 
-const { createTranscriptUpdateBroadcastHandler } = await import("./server-session-events.js");
+const { createLifecycleEventBroadcastHandler, createTranscriptUpdateBroadcastHandler } =
+  await import("./server-session-events.js");
+const { createGatewayBroadcaster } = await import("./server-broadcast.js");
+const { subscribePluginSessionsChanged } = await import("../plugins/gateway-events.js");
 
 function createActiveRun(projectSessionActive: boolean): ChatAbortControllerEntry {
   return {
@@ -73,7 +82,8 @@ async function emitAssistantTranscriptUpdate(
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
+    sessionRow.thinkingLevel = "ultra";
   });
 
   it("keeps transcript snapshots active while plugin finalization delays the terminal event", async () => {
@@ -87,6 +97,31 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
   });
 
+  it("keeps stable thinking state without catalog-derived picker metadata", async () => {
+    const payload = await emitAssistantTranscriptUpdate(false);
+
+    expect(payload).toMatchObject({
+      session: {
+        thinkingLevel: "ultra",
+        agentRuntime: { id: "openclaw" },
+      },
+    });
+    expect(payload).not.toHaveProperty("thinkingLevels");
+    expect(payload).not.toHaveProperty("thinkingOptions");
+    expect(payload).not.toHaveProperty("thinkingDefault");
+    expect(payload).not.toHaveProperty("session.thinkingLevels");
+    expect(payload).not.toHaveProperty("session.thinkingOptions");
+    expect(payload).not.toHaveProperty("session.thinkingDefault");
+  });
+
+  it("emits an explicit null when the thinking override is cleared", async () => {
+    sessionRow.thinkingLevel = undefined;
+
+    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
+      session: { thinkingLevel: null },
+    });
+  });
+
   it("keeps stale-run recovery when terminal lifecycle has cleared active projection", async () => {
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
@@ -96,14 +131,14 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
   });
 
   it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    isEmbeddedAgentRunActiveMock.mockImplementation((sessionId) => sessionId === "sess-main");
+    isEmbeddedAgentRunInProgressMock.mockImplementation((sessionId) => sessionId === "sess-main");
 
     await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       hasActiveRun: true,
       session: { key: "agent:main:main", sessionId: "sess-main", hasActiveRun: true },
     });
-    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-main");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-main");
   });
 
   it("broadcasts user idempotency keys in session.message metadata", async () => {
@@ -134,5 +169,92 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     ).resolves.toMatchObject({
       senderIsOwner: true,
     });
+  });
+
+  it("publishes message-phase changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createTranscriptUpdateBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      sessionMessageSubscribers: { get: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+    projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
+
+    try {
+      handler({
+        sessionFile: "/tmp/sess-main.jsonl",
+        sessionKey: "agent:main:main",
+        message: { role: "toolResult", content: [] },
+        messageId: "message-1",
+        messageSeq: 1,
+      });
+      await vi.waitFor(() => expect(received).toHaveBeenCalledOnce());
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        phase: "message",
+      });
+    } finally {
+      unsubscribe();
+    }
+  });
+});
+
+describe("createLifecycleEventBroadcastHandler", () => {
+  it("projects swarm phase and log payload fields", () => {
+    const broadcastToConnIds = vi.fn();
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
+      chatAbortControllers: new Map(),
+    });
+
+    handler({
+      sessionKey: "agent:main:main",
+      reason: "swarm-note",
+      swarmGroupId: "swarm:agent:main:main:run-1",
+      kind: "phase",
+      text: "Research",
+    } as never);
+
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        swarmGroupId: "swarm:agent:main:main:run-1",
+        kind: "phase",
+        text: "Research",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("publishes lifecycle changes to plugins without websocket subscribers", async () => {
+    const received = vi.fn();
+    const unsubscribe = subscribePluginSessionsChanged(received);
+    const { broadcastToConnIds } = createGatewayBroadcaster({ clients: new Set() });
+    const handler = createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set() },
+      chatAbortControllers: new Map(),
+    });
+
+    try {
+      handler({
+        sessionKey: "agent:main:main",
+        reason: "rename",
+        label: "Renamed session",
+      });
+      await Promise.resolve();
+      expect(received).toHaveBeenCalledWith({
+        sessionKey: "agent:main:main",
+        label: "Renamed session",
+        reason: "rename",
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 });

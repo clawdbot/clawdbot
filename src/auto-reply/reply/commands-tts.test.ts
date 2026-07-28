@@ -241,12 +241,28 @@ describe("handleTtsCommands status fallback reporting", () => {
   it("treats bare /tts as status", async () => {
     const result = await handleTtsCommands(
       buildTtsParams("/tts", {
-        messages: { tts: { prefsPath: "/tmp/tts.json" } },
+        tts: { prefsPath: "/tmp/tts.json" },
       } as OpenClawConfig),
       true,
     );
     const reply = expectReply(result);
     expect(reply.text).toContain("TTS status");
+  });
+
+  it("keeps base status fields in display order", async () => {
+    const reply = expectReply(await handleTtsCommands(buildTtsParams("/tts status"), true));
+
+    expect(reply.text).toBe(
+      [
+        "📊 TTS status",
+        "State: ✅ enabled",
+        "Chat override: default",
+        `Provider: ${PRIMARY_TTS_PROVIDER} (✅ configured)`,
+        "Persona: none",
+        "Text limit: 1500 chars",
+        "Auto-summary: on",
+      ].join("\n"),
+    );
   });
 
   it("resolves status config for the active agent", async () => {
@@ -364,7 +380,7 @@ describe("handleTtsCommands status fallback reporting", () => {
 
     const beforeTtsRead = Date.now();
     const result = await handleTtsCommands(
-      buildTtsParams("/tts latest", {}, undefined, { sessionEntry, sessionStore }),
+      buildTtsParams("/tts read latest", {}, undefined, { sessionEntry, sessionStore }),
       true,
     );
 

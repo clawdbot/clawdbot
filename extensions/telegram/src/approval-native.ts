@@ -82,16 +82,19 @@ const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
   mapApprover: (approver) => ({ to: approver }),
 });
 
+function describeTelegramExecApprovalSetup({ accountId }: { accountId?: string | null }) {
+  const prefix =
+    accountId && accountId !== "default"
+      ? `channels.telegram.accounts.${accountId}`
+      : "channels.telegram";
+  return `Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+}
+
 const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "telegram",
   channelLabel: "Telegram",
-  describeExecApprovalSetup: ({ accountId }: { accountId?: string | null }) => {
-    const prefix =
-      accountId && accountId !== "default"
-        ? `channels.telegram.accounts.${accountId}`
-        : "channels.telegram";
-    return `Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
-  },
+  describeExecApprovalSetup: describeTelegramExecApprovalSetup,
+  describePluginApprovalSetup: describeTelegramExecApprovalSetup,
   listAccountIds: listTelegramAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,

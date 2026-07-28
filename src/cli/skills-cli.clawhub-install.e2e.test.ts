@@ -108,20 +108,23 @@ describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
     const registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-cli-e2e-"));
     try {
-      const result = await spawnOpenClaw(["skills", "install", "aiq-deploy", "--global"], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-          OPENCLAW_CLAWHUB_URL: registry,
-          OPENCLAW_CLAWHUB_TOKEN: "test-token",
-          OPENCLAW_CLAWHUB_GITHUB_CODELOAD_BASE_URL: registry,
-          CLAWHUB_DISABLE_TELEMETRY: "",
-          CLAWDHUB_DISABLE_TELEMETRY: "",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      const result = await spawnOpenClaw(
+        ["skills", "install", "@demo-owner/aiq-deploy", "--global"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+            OPENCLAW_CLAWHUB_URL: registry,
+            CLAWHUB_TOKEN: "test-token",
+            CLAWHUB_GITHUB_CODELOAD_BASE_URL: registry,
+            CLAWHUB_DISABLE_TELEMETRY: "",
+            CLAWDHUB_DISABLE_TELEMETRY: "",
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
         },
-      });
+      );
 
       expect(result.status, result.stderr || result.stdout).toBe(0);
       await expect(
@@ -137,11 +140,10 @@ describe("openclaw skills install ClawHub GitHub-backed E2E", () => {
         throw new Error(`Expected one install telemetry request, saw: ${requestLog.join(", ")}`);
       }
       expect(telemetryBodies[0]).toMatchObject({
-        roots: [
-          {
-            skills: [{ slug: "aiq-deploy", version: commit }],
-          },
-        ],
+        event: "install",
+        slug: "aiq-deploy",
+        ownerHandle: "demo-owner",
+        version: commit,
       });
     } finally {
       await new Promise<void>((resolve) => {

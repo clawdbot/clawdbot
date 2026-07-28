@@ -1,9 +1,9 @@
 // Control UI config module wires control ui chunking behavior.
-export function normalizeModuleId(id: string): string {
+function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
 }
 
-export function moduleIdIncludesPackage(id: string, packageName: string): boolean {
+function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   const normalized = normalizeModuleId(id);
   return (
     normalized.includes(`/node_modules/${packageName}/`) ||
@@ -11,7 +11,24 @@ export function moduleIdIncludesPackage(id: string, packageName: string): boolea
   );
 }
 
-export function controlUiManualChunk(id: string): string | undefined {
+export function controlUiStableChunkName(id: string): string | undefined {
+  const normalized = normalizeModuleId(id);
+
+  // These entry-and-route helpers must stay together; separate shared chunks
+  // turn small route-graph changes into extra startup preload requests.
+  if (
+    normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
+    normalized.endsWith("/ui/src/lib/clipboard.ts") ||
+    normalized.endsWith("/ui/src/build-info-normalizers.ts") ||
+    normalized.endsWith("/ui/src/build-info.ts")
+  ) {
+    return "control-ui-shared";
+  }
+
+  if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
+    return "gateway-runtime";
+  }
+
   if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
@@ -34,7 +51,11 @@ export function controlUiManualChunk(id: string): string | undefined {
     return "markdown-runtime";
   }
 
-  if (moduleIdIncludesPackage(id, "zod") || moduleIdIncludesPackage(id, "json5")) {
+  if (
+    moduleIdIncludesPackage(id, "zod") ||
+    moduleIdIncludesPackage(id, "json5") ||
+    moduleIdIncludesPackage(id, "libphonenumber-js")
+  ) {
     return "config-runtime";
   }
 
@@ -48,3 +69,24 @@ export function controlUiManualChunk(id: string): string | undefined {
 
   return undefined;
 }
+
+export const controlUiCodeSplitting = {
+  includeDependenciesRecursively: false,
+  groups: [
+    {
+      name: (id: string) => controlUiStableChunkName(id) ?? null,
+      test: (id: string) => controlUiStableChunkName(id) !== undefined,
+      priority: 20,
+    },
+    {
+      name: (id: string) =>
+        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+      tags: ["$initial"] as ["$initial"],
+      priority: 10,
+      // 512 KiB packs the grown core graph into fewer chunks; the previous
+      // 448 KiB boundary split one core chunk in two, costing ~1.9 KiB startup
+      // gzip (same tradeoff as the earlier 400->448 bump).
+      maxSize: 512 * 1024,
+    },
+  ],
+};

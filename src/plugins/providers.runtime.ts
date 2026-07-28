@@ -32,10 +32,6 @@ import {
 } from "./runtime/load-context.js";
 import type { ProviderPlugin } from "./types.js";
 
-function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return sortUniqueStrings(values);
-}
-
 function resolveExplicitProviderOwnerPluginIds(
   params: {
     providerRefs: readonly string[];
@@ -45,7 +41,7 @@ function resolveExplicitProviderOwnerPluginIds(
   },
   snapshot: PluginMetadataRegistryView,
 ): string[] {
-  return dedupeSortedPluginIds(
+  return sortUniqueStrings(
     params.providerRefs.flatMap((provider) => {
       const plannedPluginIds = resolveManifestActivationPluginIds({
         trigger: {
@@ -99,7 +95,7 @@ function mergeExplicitOwnerPluginIds(
   if (explicitOwnerPluginIds.length === 0) {
     return [...providerPluginIds];
   }
-  return dedupeSortedPluginIds([...providerPluginIds, ...explicitOwnerPluginIds]);
+  return sortUniqueStrings([...providerPluginIds, ...explicitOwnerPluginIds]);
 }
 
 function resolvePluginProviderLoadBase(
@@ -141,13 +137,13 @@ function resolvePluginProviderLoadBase(
     params.modelRefs?.length ||
     providerOwnedPluginIds.length > 0 ||
     modelOwnedPluginIds.length > 0
-      ? dedupeSortedPluginIds([
+      ? sortUniqueStrings([
           ...(params.onlyPluginIds ?? []),
           ...providerOwnedPluginIds,
           ...modelOwnedPluginIds,
         ])
       : undefined;
-  const explicitOwnerPluginIds = dedupeSortedPluginIds([
+  const explicitOwnerPluginIds = sortUniqueStrings([
     ...providerOwnedPluginIds,
     ...modelOwnedPluginIds,
   ]);
@@ -246,7 +242,7 @@ function resolveRuntimeProviderPluginLoadState(
   });
   const runtimeRequestedPluginIds =
     base.requestedPluginIds !== undefined
-      ? dedupeSortedPluginIds([...(params.onlyPluginIds ?? []), ...explicitOwnerPluginIds])
+      ? sortUniqueStrings([...(params.onlyPluginIds ?? []), ...explicitOwnerPluginIds])
       : undefined;
   const requestConfig = withActivatedPluginIds({
     config: base.rawConfig,

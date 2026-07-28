@@ -1,0 +1,4 @@
+{"seq":1,"at":0,"dir":"in","kind":"reply-start"}
+{"seq":2,"at":0,"dir":"in","kind":"final","data":{"text":"All checks passed."}}
+{"seq":3,"at":0,"dir":"out","kind":"POST /posts","data":{"payload":{"channel_id":"channel-trace","message":"All checks passed.","root_id":"root-trace"},"result":{"id":"post-1"},"target":"channel-trace"}}
+{"seq":4,"at":0,"dir":"in","kind":"idle"}

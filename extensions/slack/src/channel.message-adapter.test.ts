@@ -1,11 +1,13 @@
 // Slack tests cover channel.message adapter plugin behavior.
 import {
+  createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackPlugin } from "./channel.js";
+import { SLACK_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const cfg = {
@@ -79,26 +81,33 @@ describe("slack channel message adapter", () => {
     const sendText = requireTextSender(adapter);
     const sendMedia = requireMediaSender(adapter);
     const sendPayload = requirePayloadSender(adapter);
+    expect(adapter.durableFinal?.reconcileUnknownSendKinds).toEqual({ text: true });
 
     const proveText = async () => {
       sendSlack.mockClear();
+      const onPlatformSendDispatch = vi.fn();
       const result = await sendText({
         cfg,
         to: "C123",
         text: "hello",
         accountId: "default",
+        deliveryQueueId: "queue-1",
+        onPlatformSendDispatch,
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
       expect(to).toBe("C123");
       expect(text).toBe("hello");
       expect(options.accountId).toBe("default");
+      expect(options.deliveryQueueId).toBe("queue-1");
+      expect(options.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
       expect(result.receipt.parts[0]?.kind).toBe("text");
     };
 
     const proveMedia = async () => {
       sendSlack.mockClear();
+      const onPlatformSendDispatch = vi.fn();
       const result = await sendMedia({
         cfg,
         to: "C123",
@@ -106,6 +115,8 @@ describe("slack channel message adapter", () => {
         mediaUrl: "https://example.com/a.png",
         mediaLocalRoots: ["/tmp/media"],
         accountId: "default",
+        deliveryQueueId: "queue-1",
+        onPlatformSendDispatch,
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
@@ -114,6 +125,8 @@ describe("slack channel message adapter", () => {
       expect(options.accountId).toBe("default");
       expect(options.mediaUrl).toBe("https://example.com/a.png");
       expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
+      expect(options.deliveryQueueId).toBeUndefined();
+      expect(options.onPlatformSendDispatch).toBe(onPlatformSendDispatch);
       expect(result.receipt.parts[0]?.kind).toBe("media");
     };
 
@@ -125,12 +138,14 @@ describe("slack channel message adapter", () => {
         text: "payload",
         payload: { text: "payload" },
         accountId: "default",
+        deliveryQueueId: "queue-1",
         deps: { sendSlack },
       });
       const [to, text, options] = expectLastSendSlackCall();
       expect(to).toBe("C123");
       expect(text).toBe("payload");
       expect(options.accountId).toBe("default");
+      expect(options.deliveryQueueId).toBeUndefined();
       expect(result.receipt.platformMessageIds).toEqual(["msg-1"]);
     };
 
@@ -183,8 +198,69 @@ describe("slack channel message adapter", () => {
         messageSendingHooks: () => {
           expect(sendText).toBeTypeOf("function");
         },
+        reconcileUnknownSend: () => {
+          expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
+        },
       },
     });
+  });
+
+  it("renders portable presentations through the facade as card receipts (#95440)", async () => {
+    sendSlack.mockResolvedValueOnce({
+      messageId: "msg-1",
+      channelId: "C123",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "slack", messageId: "msg-1", channelId: "C123" }],
+        kind: "card",
+      }),
+    });
+    const outbound = slackPlugin.outbound;
+    const renderPresentation = outbound?.renderPresentation;
+    if (!renderPresentation) {
+      throw new Error("Expected Slack presentation renderer");
+    }
+    expect(outbound.presentationCapabilities).toBe(SLACK_PRESENTATION_CAPABILITIES);
+
+    const presentation = {
+      title: "Status",
+      blocks: [{ type: "divider" as const }],
+    };
+    const payload = { text: "Fallback", presentation };
+    const rendered = await renderPresentation({
+      payload,
+      presentation,
+      ctx: { cfg, to: "C123", text: payload.text, payload },
+    });
+    if (!rendered) {
+      throw new Error("Expected rendered Slack presentation payload");
+    }
+    // Core consumes the portable presentation before handing the native payload to the adapter.
+    const { presentation: _presentation, ...deliveryPayload } = rendered;
+
+    const result = await requirePayloadSender(requireSlackMessageAdapter())({
+      cfg,
+      to: "C123",
+      text: deliveryPayload.text ?? "",
+      payload: deliveryPayload,
+      accountId: "default",
+      deps: { sendSlack },
+    });
+
+    const [to, text, options] = expectLastSendSlackCall();
+    expect(to).toBe("C123");
+    expect(text).toBe("Fallback\n\nStatus");
+    expect(options.blocks).toEqual([
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Fallback", verbatim: true },
+      },
+      {
+        type: "header",
+        text: { type: "plain_text", text: "Status", emoji: true },
+      },
+      { type: "divider" },
+    ]);
+    expect(result.receipt.parts[0]?.kind).toBe("card");
   });
 
   it("backs declared live preview finalizer capabilities with adapter proofs", async () => {

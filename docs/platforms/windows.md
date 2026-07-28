@@ -8,47 +8,53 @@ title: "Windows"
 ---
 
 OpenClaw ships a native **Windows Hub** companion app plus Windows CLI support.
-Use Windows Hub when you want a desktop app with setup, tray status, chat,
-Command Center diagnostics, and Windows node capabilities. Use the PowerShell
-installer when you want the CLI/Gateway directly. Use WSL2 when you want the
-most Linux-compatible Gateway runtime.
+Use Windows Hub for a desktop app with setup, tray status, chat, Command
+Center diagnostics, and Windows node capabilities. Use the PowerShell
+installer for the CLI/Gateway directly. Use WSL2 for the most
+Linux-compatible Gateway runtime.
 
 ## Recommended: Windows Hub
 
-Windows Hub is the native WinUI companion app for Windows 10 20H2+ and Windows 11. It installs without administrator privileges and is published with signed
-x64 and ARM64 installers on OpenClaw releases.
+Windows Hub is the native WinUI companion app for Windows 10 20H2+ and
+Windows 11. It installs without administrator privileges and ships signed x64
+and ARM64 installers from its own release page.
 
-Download the latest stable installer from the [OpenClaw releases page](https://github.com/openclaw/openclaw/releases):
+Windows Hub publishes independently from the OpenClaw CLI and Gateway. Download
+the latest stable Hub installer from the
+[Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases/latest)
+or directly via `releases/latest/download`:
 
-- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-x64.exe)
-- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-Setup-arm64.exe)
-- [Checksums](https://github.com/openclaw/openclaw/releases/download/v2026.6.5/OpenClawCompanion-SHA256SUMS.txt)
+- [OpenClawCompanion-Setup-x64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-x64.exe)
+- [OpenClawCompanion-Setup-arm64.exe](https://github.com/openclaw/openclaw-windows-node/releases/latest/download/OpenClawCompanion-Setup-arm64.exe)
 
-If a download link above returns a 404, visit the [releases page](https://github.com/openclaw/openclaw/releases) and look for the `OpenClawCompanion-Setup-*` assets on the latest release.
+If a link above 404s, visit the [Windows Hub releases page](https://github.com/openclaw/openclaw-windows-node/releases)
+and open the newest stable Windows Hub release. Regular OpenClaw stable releases
+also mirror a pinned, release-validated Windows Hub build; that mirror can lag a
+newer standalone Hub release.
 
-After install, launch **OpenClaw Companion** from the Start menu or the system
+After install, launch **OpenClaw Companion** from the Start menu or system
 tray. The installer also adds shortcuts for Gateway Setup, Chat, Settings,
 Check for Updates, and uninstall.
 
 ### What Windows Hub includes
 
-- system tray status and launch-at-login
-- first-run setup for a local app-owned WSL Gateway
-- connection settings for local, remote, and SSH-tunneled Gateways
-- native chat window plus access to the browser Control UI
-- Command Center diagnostics for sessions, usage, channels, nodes, pairing, and
-  repair commands
-- Windows node mode for agent-controlled canvas, screen, camera, notifications,
-  device status, text-to-speech, speech-to-text, and controlled `system.run`
-- local MCP server mode for MCP clients such as Claude Desktop, Claude Code, and
-  Cursor
+- System tray status and launch-at-login.
+- First-run setup for a local app-owned WSL Gateway.
+- Connection settings for local, remote, and SSH-tunneled Gateways.
+- Native chat window plus access to the browser Control UI.
+- Command Center diagnostics for sessions, usage, channels, nodes, pairing,
+  and repair commands.
+- Windows node mode for agent-controlled canvas, screen, camera,
+  notifications, device status, talk, and controlled `system.run`.
+- Local MCP server mode for MCP clients such as Claude Desktop, Claude Code,
+  and Cursor.
 
 ### First launch
 
-On first launch, Windows Hub opens setup when there is no usable saved Gateway.
-The fastest path is **Set up locally**, which provisions an app-owned
-`OpenClawGateway` WSL distro, installs the Gateway inside it, and pairs the app.
-This does not export or mutate your existing Ubuntu distro.
+On first launch, Windows Hub opens setup when there is no usable saved
+Gateway. The fastest path is **Set up locally**, which provisions an
+app-owned `OpenClawGateway` WSL distro, installs the Gateway inside it, and
+pairs the app. This does not export or mutate your existing Ubuntu distro.
 
 Choose **Advanced setup** or open the Connections tab when you already have a
 Gateway. You can connect to:
@@ -58,45 +64,48 @@ Gateway. You can connect to:
 - a remote Gateway by URL and token or setup code
 - a Gateway reached through an SSH tunnel
 
-When setup finishes, the tray icon turns green. Open **Command Center** from the
-tray to confirm connection, pairing, node status, and channel health.
+When setup finishes, the tray icon turns green. Open **Command Center** from
+the tray to confirm connection, pairing, node status, and channel health.
 
 ## Windows node mode
 
-Windows Hub can register as a first-class OpenClaw node. The agent can then use
-declared Windows-native capabilities through the Gateway.
+Windows Hub can register as an OpenClaw node so the agent can use declared
+Windows-native capabilities through the Gateway. Node commands must be
+declared by the node and allowed by Gateway policy before they run; see
+[Nodes](/nodes#command-policy) for the full allow/deny model.
 
-Common commands include:
+Common commands:
 
-- `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`,
-  `canvas.snapshot`
-- `screen.snapshot` and, with explicit opt-in, `screen.record`
-- `camera.list` and, with explicit opt-in, `camera.snap`, `camera.clip`
-- `system.notify`, `system.run`, `system.run.prepare`, `system.which`
-- `location.get`, `device.info`, `device.status`
-- `stt.transcribe`, `tts.speak`
+| Family | Commands                                                                             |
+| ------ | ------------------------------------------------------------------------------------ |
+| Canvas | `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot` |
+| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                          |
+| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                  |
+| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                  |
+| Device | `location.get`, `device.info`, `device.status`                                       |
+| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak`  |
 
-Node mode requires Gateway pairing. If the app shows a pairing request, approve
-it from the Gateway host:
+Node mode requires Gateway pairing. If the app shows a pairing request,
+approve it from the Gateway host:
 
 ```powershell
 openclaw devices list
-openclaw devices approve <request-id>
+openclaw devices approve <requestId>
 openclaw nodes status
 ```
 
-The Gateway only forwards commands that the node declares and server policy
-allows. Privacy-sensitive commands such as `screen.record`, `camera.snap`, and
-`camera.clip` require explicit `gateway.nodes.allowCommands` opt-in.
+The Gateway only forwards commands the node declares and server policy
+allows. Privacy-sensitive commands such as `screen.record`, `camera.snap`,
+and `camera.clip` need explicit `gateway.nodes.commands.allow` opt-in.
 
 ## Local MCP mode
 
 Windows Hub can expose the same Windows-native capability registry as a local
-MCP server on loopback. This is useful when you want local MCP clients to drive
-Windows capabilities without a running OpenClaw Gateway.
+MCP server on loopback, so local MCP clients can drive Windows capabilities
+without a running OpenClaw Gateway.
 
-Enable it in Windows Hub Settings under the developer/advanced section. The app
-shows the loopback endpoint and bearer token after the server is enabled.
+Enable it in Windows Hub Settings under the developer/advanced section. The
+app shows the loopback endpoint and bearer token once the server is enabled.
 
 Mode matrix:
 
@@ -123,21 +132,20 @@ openclaw doctor
 openclaw gateway status --json
 ```
 
-Native Windows CLI and Gateway flows are supported and continue to improve.
-Managed startup uses Windows Scheduled Tasks when available. The task keeps the
-readable `gateway.cmd` script in the OpenClaw state dir, but launches it through
-a generated `gateway.vbs` WScript wrapper so the background Gateway does not open
-a visible console window. If task creation is denied, OpenClaw falls back to a
-per-user Startup-folder login item.
+Managed startup uses Windows Scheduled Tasks when available. The task keeps
+the readable `gateway.cmd` script in the OpenClaw state dir but launches it
+through a generated `gateway.vbs` WScript wrapper, so the background Gateway
+does not open a visible console window. If task creation is denied, OpenClaw
+falls back to a per-user Startup-folder login item.
 
-To install the Gateway service:
+Install the Gateway service:
 
 ```powershell
 openclaw gateway install
 openclaw gateway status --json
 ```
 
-If you only want CLI use without a managed Gateway service:
+For CLI-only use without a managed Gateway service:
 
 ```powershell
 openclaw onboard --non-interactive --skip-health
@@ -146,8 +154,8 @@ openclaw gateway run
 
 ## WSL2 Gateway
 
-WSL2 remains the most Linux-compatible Gateway runtime on Windows. Windows Hub
-can set up an app-owned WSL Gateway for you, or you can install manually inside
+WSL2 remains the most Linux-compatible Gateway runtime on Windows. Windows
+Hub can set up an app-owned WSL Gateway for you, or install manually inside
 your own distro.
 
 Manual setup:
@@ -183,8 +191,8 @@ openclaw gateway status
 
 ## Gateway auto-start before Windows login
 
-For headless WSL setups, ensure the full boot chain runs even when no one logs
-into Windows.
+For headless WSL setups, make sure the full boot chain runs even when no one
+logs into Windows.
 
 Inside WSL:
 
@@ -206,10 +214,20 @@ Replace `Ubuntu` with your distro name from:
 wsl --list --verbose
 ```
 
-> **Note:** Two changes from older recipes:
->
-> - **`dbus-launch true` instead of `/bin/true`** — On WSL ≥ 2.6.1.0 a regression ([microsoft/WSL #13416](https://github.com/microsoft/WSL/issues/13416)) causes the distro to idle-terminate 15–20 seconds after the last client exits, even with linger enabled. `dbus-launch true` keeps a child-of-init process alive as a workaround ([community discussion, microsoft/WSL #9245](https://github.com/microsoft/WSL/discussions/9245)).
-> - **`/ru "$env:USERNAME"` instead of `/ru SYSTEM`** — Per-user WSL distros (the default setup) are not visible to the SYSTEM account; the task appears to run but the distro is never started. Running as your own account avoids this. Windows will prompt for your password when the task is created.
+<Note>
+Two changes from older recipes:
+
+- **`dbus-launch true` instead of `/bin/true`**: on WSL >= 2.6.1.0 a
+  regression ([microsoft/WSL #13416](https://github.com/microsoft/WSL/issues/13416))
+  idle-terminates the distro 15-20 seconds after the last client exits, even
+  with linger enabled. `dbus-launch true` keeps a child-of-init process alive
+  as a workaround (community discussion, [microsoft/WSL #9245](https://github.com/microsoft/WSL/discussions/9245)).
+- **`/ru "$env:USERNAME"` instead of `/ru SYSTEM`**: per-user WSL distros (the
+  default setup) are not visible to the SYSTEM account, so the task appears
+  to run but the distro never starts. Running as your own account avoids
+  this; Windows prompts for your password when the task is created.
+
+</Note>
 
 After reboot, verify from WSL:
 
@@ -220,9 +238,9 @@ systemctl --user status openclaw-gateway.service --no-pager
 
 ## Expose WSL services over LAN
 
-WSL has its own virtual network. If another machine must reach a service inside
-WSL, forward a Windows port to the current WSL IP. The WSL IP can change after
-restarts, so refresh the forwarding rule when needed.
+WSL has its own virtual network. If another machine must reach a service
+inside WSL, forward a Windows port to the current WSL IP. The WSL IP can
+change after restarts, so refresh the forwarding rule when needed.
 
 Example in PowerShell as Administrator:
 
@@ -243,19 +261,17 @@ New-NetFirewallRule -DisplayName "WSL SSH $ListenPort" -Direction Inbound `
 
 Notes:
 
-- SSH from another machine targets the Windows host IP, for example
-  `ssh user@windows-host -p 2222`.
+- SSH from another machine targets the Windows host IP, e.g. `ssh user@windows-host -p 2222`.
 - Remote nodes must point at a reachable Gateway URL, not `127.0.0.1`.
-- Use `listenaddress=0.0.0.0` for LAN access. Use `127.0.0.1` for local-only
-  access.
+- Use `listenaddress=0.0.0.0` for LAN access, `127.0.0.1` for local-only access.
 
 ## Troubleshooting
 
 ### The tray icon does not appear
 
 Check Task Manager for `OpenClaw.Tray.WinUI.exe`. If it is running, open the
-hidden tray-icons area and pin it. If it is not running, launch **OpenClaw
-Companion** from the Start menu.
+hidden tray-icons area and pin it. If not, launch **OpenClaw Companion** from
+the Start menu.
 
 ### Local setup fails
 
@@ -265,7 +281,7 @@ Open the setup log from Windows Hub or inspect:
 notepad "$env:LOCALAPPDATA\OpenClawTray\Logs\Setup\easy-setup-latest.txt"
 ```
 
-Common causes are disabled WSL, blocked virtualization, stale app-owned WSL
+Common causes: disabled WSL, blocked virtualization, stale app-owned WSL
 state, or a network failure while installing the Gateway package.
 
 ### The app says pairing is required
@@ -274,7 +290,7 @@ Approve the operator or node request from the Gateway:
 
 ```powershell
 openclaw devices list
-openclaw devices approve <request-id>
+openclaw devices approve <requestId>
 ```
 
 If the device already had a token, reconnect from the Connections tab after
@@ -288,13 +304,13 @@ the certificate in Windows, or use an SSH tunnel to a localhost URL.
 ### `screen.snapshot`, camera, or audio commands fail
 
 Confirm Windows permissions for camera, microphone, screen capture, and
-notifications. Packaged installs declare the protected capabilities, but Windows
-may still prompt the first time a command uses them.
+notifications. Packaged installs declare the protected capabilities, but
+Windows may still prompt the first time a command uses them.
 
 ### Git or GitHub connectivity fails
 
-Some networks block or throttle HTTPS to GitHub. If `git clone` or `gh auth
-login` fails, try another network, a VPN, or an HTTP/HTTPS proxy.
+Some networks block or throttle HTTPS to GitHub. If `git clone` or
+`gh auth login` fails, try another network, a VPN, or an HTTP/HTTPS proxy.
 
 For token-based `gh` auth in the current session:
 

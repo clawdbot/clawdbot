@@ -19,19 +19,12 @@ const EXEC_SECRET_REF_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$/;
 
 /** Canonical id for file secret providers that expose exactly one value. */
 export const SINGLE_VALUE_FILE_REF_ID = "value";
-/** JSON-schema fragment that rejects absolute file secret ref ids. */
-export const FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN = "^/";
-/** JSON-schema fragment that rejects invalid JSON-pointer escape sequences. */
-export const FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN = "~(?:[^01]|$)";
-/** JSON-schema pattern for exec secret ref ids, excluding dot-path traversal. */
-export const EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN =
-  "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}$";
 
 /** Failure class returned when an exec secret ref id is syntactically invalid. */
-export type ExecSecretRefIdValidationReason = "pattern" | "traversal-segment";
+type ExecSecretRefIdValidationReason = "pattern" | "traversal-segment";
 
 /** Result for callers that need to distinguish grammar failures from traversal attempts. */
-export type ExecSecretRefIdValidationResult =
+type ExecSecretRefIdValidationResult =
   | { ok: true }
   | {
       ok: false;
@@ -39,7 +32,7 @@ export type ExecSecretRefIdValidationResult =
     };
 
 /** Minimal config shape needed to resolve default provider aliases for a secret source. */
-export type SecretRefDefaultsCarrier = {
+type SecretRefDefaultsCarrier = {
   /** Secrets config subset; callers pass full config objects or narrow test doubles. */
   secrets?: {
     /** Explicit per-source provider aliases selected by the operator. */

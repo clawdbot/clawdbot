@@ -13,8 +13,8 @@ final class GatewayDiscoveryModel {
     }
 
     struct DiscoveredGateway: Identifiable, Equatable {
-        var id: String {
-            self.stableID
+        var id: GatewayStableIdentifier.Key {
+            GatewayStableIdentifier.Key(self.stableID)
         }
 
         var name: String
@@ -28,6 +28,20 @@ final class GatewayDiscoveryModel {
         var tlsEnabled: Bool
         var tlsFingerprintSha256: String?
         var cliPath: String?
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.name == rhs.name &&
+                lhs.endpoint == rhs.endpoint &&
+                GatewayStableIdentifier.matches(lhs.stableID, rhs.stableID) &&
+                lhs.debugID == rhs.debugID &&
+                lhs.lanHost == rhs.lanHost &&
+                lhs.tailnetDns == rhs.tailnetDns &&
+                lhs.gatewayPort == rhs.gatewayPort &&
+                lhs.canvasPort == rhs.canvasPort &&
+                lhs.tlsEnabled == rhs.tlsEnabled &&
+                lhs.tlsFingerprintSha256 == rhs.tlsFingerprintSha256 &&
+                lhs.cliPath == rhs.cliPath
+        }
     }
 
     var gateways: [DiscoveredGateway] = []
@@ -38,7 +52,7 @@ final class GatewayDiscoveryModel {
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
     private var debugLoggingEnabled = false
-    private var lastStableIDs = Set<String>()
+    private var lastStableIDs = Set<GatewayStableIdentifier.Key>()
 
     func setDebugLoggingEnabled(_ enabled: Bool) {
         let wasEnabled = self.debugLoggingEnabled
@@ -119,7 +133,7 @@ final class GatewayDiscoveryModel {
             .flatMap(\.self)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-        let nextIDs = Set(next.map(\.stableID))
+        let nextIDs = Set(next.map { GatewayStableIdentifier.Key($0.stableID) })
         let added = nextIDs.subtracting(self.lastStableIDs)
         let removed = self.lastStableIDs.subtracting(nextIDs)
         if !added.isEmpty || !removed.isEmpty {

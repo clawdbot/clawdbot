@@ -2,14 +2,15 @@ title: Heartbeat active-hours scheduling evidence
 
 scenario:
   id: heartbeat-active-hours
-  surface: automation-cron-hooks-tasks-polling
-  category: automation-cron-hooks-tasks-polling.heartbeat
+  surface: automation
+  category: automation.heartbeat
   coverage:
-    primary:
+    secondary:
       - automation.active-hours
       - automation.heartbeat-scheduling
   objective: Link active-hours heartbeat scheduler e2e coverage to automation maturity accounting.
   successCriteria:
+    - A bounded real-timer scheduler fires with an explicit all-day UTC active-hours window.
     - Heartbeat timers skip quiet-hours phase slots.
     - In-window phase slots fire without duplicate scheduling loops.
     - Hot reload recomputes active-hours and timezone schedule changes.
@@ -20,4 +21,4 @@ scenario:
   execution:
     kind: vitest
     path: src/infra/heartbeat-runner.active-hours-schedule.e2e.test.ts
-    summary: Vitest e2e coverage for active-hours-aware heartbeat scheduling.
+    summary: Vitest e2e coverage for bounded real and fake-time active-hours-aware heartbeat scheduling.

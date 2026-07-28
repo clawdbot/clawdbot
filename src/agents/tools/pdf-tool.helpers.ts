@@ -47,6 +47,14 @@ export function providerSupportsNativePdf(provider: string): boolean {
 }
 
 /** Parses a page range string into sorted, unique, 1-based page numbers within `maxPages`. */
+function readPageNumber(value: string, errorLabel: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${errorLabel}: "${value}"`);
+  }
+  return parsed;
+}
+
 export function parsePageRange(range: string, maxPages: number): number[] {
   const pages = new Set<number>();
   const parts = range.split(",").map((p) => p.trim());
@@ -56,19 +64,19 @@ export function parsePageRange(range: string, maxPages: number): number[] {
     }
     const dashMatch = /^(\d+)\s*-\s*(\d+)$/.exec(part);
     if (dashMatch) {
-      const start = Number(dashMatch[1]);
-      const end = Number(dashMatch[2]);
-      if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < start) {
+      const start = readPageNumber(dashMatch[1] ?? "", "Invalid page range");
+      const end = readPageNumber(dashMatch[2] ?? "", "Invalid page range");
+      if (end < start) {
         throw new Error(`Invalid page range: "${part}"`);
       }
       for (let i = start; i <= Math.min(end, maxPages); i++) {
         pages.add(i);
       }
     } else {
-      const num = Number(part);
-      if (!Number.isFinite(num) || num < 1) {
+      if (!/^\d+$/.test(part)) {
         throw new Error(`Invalid page number: "${part}"`);
       }
+      const num = readPageNumber(part, "Invalid page number");
       if (num <= maxPages) {
         pages.add(num);
       }

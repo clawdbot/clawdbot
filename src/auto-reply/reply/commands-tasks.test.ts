@@ -7,8 +7,8 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
-import { buildTasksReply, handleTasksCommand } from "./commands-tasks.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -27,15 +27,23 @@ vi.mock("../../agents/agent-scope.js", async () => {
 
 const baseCfg = baseCommandTestConfig;
 
-async function buildTasksReplyForTest(params: { sessionKey?: string } = {}) {
+async function buildTasksReplyForTest(params: { agentId?: string; sessionKey?: string } = {}) {
   const commandParams = buildCommandTestParams("/tasks", baseCfg);
-  return await buildTasksReply({
-    ...commandParams,
-    sessionKey: params.sessionKey ?? commandParams.sessionKey,
-  });
+  const result = await handleTasksCommand(
+    {
+      ...commandParams,
+      agentId: params.agentId ?? commandParams.agentId,
+      sessionKey: params.sessionKey ?? commandParams.sessionKey,
+    },
+    true,
+  );
+  if (!result?.reply) {
+    throw new Error("expected /tasks reply");
+  }
+  return result.reply;
 }
 
-describe("buildTasksReply", () => {
+describe("handleTasksCommand task board", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetTaskRegistryForTests({ persist: false });
@@ -268,9 +276,7 @@ describe("buildTasksReply", () => {
     });
     vi.mocked(resolveSessionAgentId).mockReturnValue("target");
 
-    const commandParams = buildCommandTestParams("/tasks", baseCfg);
-    const reply = await buildTasksReply({
-      ...commandParams,
+    const reply = await buildTasksReplyForTest({
       agentId: "main",
       sessionKey: "agent:target:empty-session",
     });

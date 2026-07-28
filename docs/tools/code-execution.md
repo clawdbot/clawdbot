@@ -7,55 +7,52 @@ read_when:
 title: "Code execution"
 ---
 
-`code_execution` runs sandboxed remote Python analysis on xAI's Responses API. It is registered by the bundled `xai` plugin (under the `tools` contract) and dispatches to the same `https://api.x.ai/v1/responses` endpoint used by `x_search`.
+`code_execution` runs sandboxed remote Python analysis on xAI's Responses API
+(`https://api.x.ai/v1/responses`, same endpoint `x_search` uses). It is
+registered by the bundled `xai` plugin under the `tools` contract.
+
+<Warning>
+  `code_execution` runs on xAI's servers. xAI bills $5 per 1,000 tool calls,
+  plus the model's input and output tokens.
+</Warning>
 
 | Property           | Value                                                                             |
 | ------------------ | --------------------------------------------------------------------------------- |
 | Tool name          | `code_execution`                                                                  |
 | Provider plugin    | `xai` (bundled, `enabledByDefault: true`)                                         |
 | Auth               | xAI auth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey` |
-| Default model      | `grok-4-1-fast`                                                                   |
+| Default model      | `grok-4.3`                                                                        |
 | Default timeout    | 30 seconds                                                                        |
 | Default `maxTurns` | unset (xAI applies its own internal limit)                                        |
 
-This is different from local [`exec`](/tools/exec):
+Use it for calculations, tabulation, quick statistics, and chart-style
+analysis, including data returned by `x_search` or `web_search`. It has no
+access to local files, your shell, your repo, or paired devices, and it does
+not persist state between calls, so treat each call as ephemeral analysis, not
+a notebook session. For fresh X data, run [`x_search`](/tools/web#x_search)
+first and pipe the result in.
 
-- `exec` runs shell commands on your machine or paired node.
-- `code_execution` runs Python in xAI's remote sandbox.
-
-Use `code_execution` for:
-
-- Calculations.
-- Tabulation.
-- Quick statistics.
-- Chart-style analysis.
-- Analyzing data returned by `x_search` or `web_search`.
-
-Do **not** use it when you need local files, your shell, your repo, or paired devices. Use [`exec`](/tools/exec) for that.
+For local execution, use [`exec`](/tools/exec) instead.
 
 ## Setup
 
 <Steps>
   <Step title="Provide xAI credentials">
-    Sign in with Grok OAuth using an eligible SuperGrok or X Premium subscription,
-    or store an API key. xAI OAuth uses device-code verification, so it works
-    from remote hosts without a localhost callback. OAuth works for
-    `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search config
-    can also power Grok `web_search`.
+    OAuth requires an eligible SuperGrok or X Premium subscription
+    (device-code verification, so it works from remote hosts without a
+    localhost callback):
 
     ```bash
     openclaw models auth login --provider xai --method oauth
     ```
 
-    During a fresh install, the same auth choices are available inside
-    onboarding:
+    During a fresh install, the same choice is available in onboarding:
 
     ```bash
-    openclaw onboard --install-daemon
     openclaw onboard --install-daemon --auth-choice xai-oauth
     ```
 
-    Or use an API key:
+    Or an API key:
 
     ```bash
     openclaw models auth login --provider xai --method api-key
@@ -80,12 +77,20 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
     }
     ```
 
+    Any of these three also power `x_search` and Grok `web_search`.
+
   </Step>
 
   <Step title="Enable and tune code_execution">
-    `code_execution` is available when xAI credentials are available. Set
-    `plugins.entries.xai.config.codeExecution.enabled` to `false` to disable it,
-    or use the same block to tune the model and timeout.
+    With `enabled` omitted, `code_execution` is exposed only when the active
+    model's provider is `xai` and xAI credentials resolve. For an active model
+    with a known non-xAI provider, set
+    `plugins.entries.xai.config.codeExecution.enabled` to `true` to opt in to
+    cross-provider use. If the active model provider is missing or unresolved,
+    the tool stays hidden. Set `enabled` to `false` to disable it for every
+    provider. xAI credentials are always required.
+
+    Use the same block to override the model, turn cap, or timeout:
 
     ```json5
     {
@@ -94,8 +99,8 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
           xai: {
             config: {
               codeExecution: {
-                enabled: true,
-                model: "grok-4-1-fast", // override the default xAI code-execution model
+                enabled: true, // required for a known non-xAI model provider
+                model: "grok-4.3", // override the default xAI code-execution model
                 maxTurns: 2,            // optional cap on internal tool turns
                 timeoutSeconds: 30,     // request timeout (default: 30)
               },
@@ -113,14 +118,16 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
     openclaw gateway restart
     ```
 
-    `code_execution` shows up in the agent's tool list once the xAI plugin re-registers with `enabled: true`.
+    `code_execution` appears in the agent's tool list once the xAI plugin
+    re-registers and the provider, enablement, and auth checks above pass.
 
   </Step>
 </Steps>
 
 ## How to use it
 
-Ask naturally and make the analysis intent explicit:
+Make the analysis intent explicit; the tool takes a single `task` parameter,
+so send the full request and any inline data in one prompt:
 
 ```text
 Use code_execution to calculate the 7-day moving average for these numbers: ...
@@ -134,11 +141,10 @@ Use x_search to find posts mentioning OpenClaw this week, then use code_executio
 Use web_search to gather the latest AI benchmark numbers, then use code_execution to compare percent changes.
 ```
 
-The tool takes a single `task` parameter internally, so the agent should send the full analysis request and any inline data in one prompt.
-
 ## Errors
 
-When the tool runs without auth, it returns a structured `missing_xai_api_key` error pointing at the auth-profile, env var, and config options. The error is JSON, not a thrown exception, so the agent can self-correct:
+Without auth, the tool returns a structured JSON error (not a thrown
+exception), so the agent can self-correct:
 
 ```json
 {
@@ -147,13 +153,6 @@ When the tool runs without auth, it returns a structured `missing_xai_api_key` e
   "docs": "https://docs.openclaw.ai/tools/code-execution"
 }
 ```
-
-## Limits
-
-- This is remote xAI execution, not local process execution.
-- Treat results as ephemeral analysis, not a persistent notebook session.
-- Do not assume access to local files or your workspace.
-- For fresh X data, use [`x_search`](/tools/web#x_search) first and pipe the result into `code_execution`.
 
 ## Related
 

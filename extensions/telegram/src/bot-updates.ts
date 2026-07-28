@@ -1,6 +1,7 @@
 // Telegram plugin module implements bot updates behavior.
 import type { Message } from "grammy/types";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
+import type { TelegramAmbientTranscriptWatermark } from "./bot-message-context.types.js";
 import type { TelegramContext } from "./bot/types.js";
 
 const MEDIA_GROUP_TIMEOUT_MS = 500;
@@ -13,6 +14,7 @@ export type MediaGroupEntry = {
     ctx: TelegramContext;
   }>;
   promptContextMinTimestampMs?: number;
+  promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   timer: ReturnType<typeof setTimeout>;
 };
 

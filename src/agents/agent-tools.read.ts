@@ -1,12 +1,12 @@
-/**
- * Read/write/edit tool wrappers for host and sandbox workspaces.
- * Adds workspace-root guards, adaptive read paging, image validation, memory
- * append-only writes, and parameter cleanup around the session file tools.
- */
+// Read/write/edit tool wrappers for host and sandbox workspaces.
+// Adds workspace-root guards, adaptive read paging, image validation, memory
+// append-only writes, and parameter cleanup around the session file tools.
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import { detectMime } from "@openclaw/media-core/mime";
+import { formatByteSize } from "@openclaw/normalization-core";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -23,6 +23,7 @@ import {
   resolveMediaReferenceSandboxPath,
 } from "../media/media-reference.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
+import { clampNumber } from "../utils.js";
 import {
   REQUIRED_PARAM_GROUPS,
   assertRequiredParams,
@@ -37,15 +38,14 @@ import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  type ReadToolDetails,
+  type ReadToolTruncationDetails,
+} from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
-
-export {
-  REQUIRED_PARAM_GROUPS,
-  assertRequiredParams,
-  getToolParamsRecord,
-  wrapToolParamValidation,
-} from "./agent-tools.params.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to sanitize oversized images before they hit providers.
@@ -64,6 +64,11 @@ type OpenClawReadToolOptions = {
   imageSanitization?: ImageSanitizationLimits;
 };
 
+type SkillReadContent = {
+  filePath: string;
+  readContent?: string;
+};
+
 type ReadTruncationDetails = {
   truncated: boolean;
   outputLines: number;
@@ -74,10 +79,6 @@ const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines tota
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
 
 function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number {
   const contextWindowTokens = options?.modelContextWindowTokens;
@@ -91,7 +92,7 @@ function resolveAdaptiveReadMaxBytes(options?: OpenClawReadToolOptions): number 
   const fromContext = Math.floor(
     contextWindowTokens * CHARS_PER_TOKEN_ESTIMATE * ADAPTIVE_READ_CONTEXT_SHARE,
   );
-  return clamp(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
+  return clampNumber(fromContext, DEFAULT_READ_PAGE_MAX_BYTES, MAX_ADAPTIVE_READ_MAX_BYTES);
 }
 
 function malformedXmlArgValuePathError(key: string): Error {
@@ -99,13 +100,12 @@ function malformedXmlArgValuePathError(key: string): Error {
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024) {
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  }
-  if (bytes >= 1024) {
-    return `${Math.round(bytes / 1024)}KB`;
-  }
-  return `${bytes}B`;
+  return formatByteSize(bytes, {
+    style: "legacy-binary",
+    maxUnit: "mega",
+    separator: "",
+    fractionDigits: (_value, unit) => (unit === "byte" ? null : unit === "kilo" ? 0 : 1),
+  });
 }
 
 function getToolResultText(result: AgentToolResult<unknown>): string | undefined {
@@ -443,6 +443,56 @@ async function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
+function normalizeReadResultDetails(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<ReadToolDetails> {
+  const currentDetails =
+    result.details && typeof result.details === "object"
+      ? (result.details as Record<string, unknown>)
+      : undefined;
+  if (
+    currentDetails?.status === "not_found" &&
+    typeof currentDetails.path === "string" &&
+    currentDetails.optional === true
+  ) {
+    return {
+      ...result,
+      details: {
+        kind: "not_found",
+        status: "not_found",
+        path: currentDetails.path,
+        optional: true,
+      },
+    };
+  }
+
+  const content = Array.isArray(result.content) ? result.content : [];
+  const text = getToolResultText(result) ?? "";
+  const image = content.find(
+    (block): block is ImageContentBlock =>
+      Boolean(block) &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "image" &&
+      typeof (block as { mimeType?: unknown }).mimeType === "string",
+  );
+  if (image) {
+    return { ...result, details: { kind: "image", content: text, mimeType: image.mimeType } };
+  }
+
+  const truncation = currentDetails?.truncation;
+  if (truncation && typeof truncation === "object") {
+    return {
+      ...result,
+      details: {
+        kind: "truncated",
+        content: text,
+        truncation: truncation as ReadToolTruncationDetails,
+      },
+    };
+  }
+  return { ...result, details: { kind: "text", content: text } };
+}
+
 /** Wrap a file tool so path params stay inside the workspace root. */
 export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return wrapToolWorkspaceRootGuardWithOptions(tool, root);
@@ -535,7 +585,7 @@ function mapContainerPathToRoot(params: {
 }
 
 /** Resolve a model-supplied file path against the host workspace root. */
-export function resolveToolPathAgainstWorkspaceRoot(params: {
+function resolveToolPathAgainstWorkspaceRoot(params: {
   filePath: string;
   root: string;
   containerWorkdir?: string;
@@ -901,11 +951,62 @@ export function createOpenClawReadTool(
         typeof normalizedRecord?.path === "string" ? normalizedRecord.path : "<unknown>";
       const strippedDetailsResult = stripReadTruncationContentDetails(result);
       const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
-      return sanitizeToolResultImages(
+      const sanitizedResult = await sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
         options?.imageSanitization,
       );
+      return normalizeReadResultDetails(sanitizedResult);
+    },
+  };
+}
+
+/** Serve exact non-filesystem skill locators before workspace path guards run. */
+export function wrapReadToolWithSkillContent(
+  tool: AnyAgentTool,
+  skills: readonly SkillReadContent[] | undefined,
+  options?: OpenClawReadToolOptions,
+): AnyAgentTool {
+  const contentByPath = new Map(
+    (skills ?? []).flatMap((skill) =>
+      skill.filePath.startsWith("node://") && typeof skill.readContent === "string"
+        ? [[skill.filePath, skill.readContent] as const]
+        : [],
+    ),
+  );
+  if (contentByPath.size === 0) {
+    return tool;
+  }
+  const readContent = (filePath: string): string => {
+    const content = contentByPath.get(filePath);
+    if (content === undefined) {
+      throw Object.assign(new Error(`Virtual skill file not found: ${filePath}`), {
+        code: "ENOENT",
+      });
+    }
+    return content;
+  };
+  const virtualBase = createReadTool("/", {
+    operations: {
+      resolvePath: (filePath) => filePath,
+      access: async (filePath) => void readContent(filePath),
+      readFile: async (filePath) => Buffer.from(readContent(filePath), "utf8"),
+    },
+  }) as unknown as AnyAgentTool;
+  const virtualRead = createOpenClawReadTool(virtualBase, options);
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record = getToolParamsRecord(args);
+      const rawPath = record?.path;
+      const normalizedPath =
+        typeof rawPath === "string" ? normalizeFileToolPathParam(rawPath) : undefined;
+      if (normalizedPath && contentByPath.has(normalizedPath)) {
+        const virtualArgs =
+          normalizedPath === rawPath || !record ? args : { ...record, path: normalizedPath };
+        return virtualRead.execute(toolCallId, virtualArgs, signal, onUpdate);
+      }
+      return tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
 }
@@ -1140,3 +1241,4 @@ function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoExcept
   error.code = code;
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,17 +23,17 @@ The rule:
 - **plugin** = ownership boundary
 - **capability** = shared core contract
 
-Do not start by wiring a vendor directly into a channel or a tool. Start by defining the capability.
+Do not wire a vendor directly into a channel or a tool. Define the capability first.
 
 ## When to create a capability
 
-Create a new capability when **all** of these are true:
+Create a new capability only when **all** of these are true:
 
 1. More than one vendor could plausibly implement it.
 2. Channels, tools, or feature plugins should consume it without caring about the vendor.
 3. Core needs to own fallback, policy, config, or delivery behavior.
 
-If the work is vendor-only and no shared contract exists yet, stop and define the contract first.
+If the work is vendor-only and no shared contract exists yet, define the contract first.
 
 ## The standard sequence
 
@@ -47,25 +47,11 @@ If the work is vendor-only and no shared contract exists yet, stop and define th
 
 ## What goes where
 
-**Core:**
-
-- Request/response types.
-- Provider registry + resolution.
-- Fallback behavior.
-- Config schema with propagated `title` / `description` docs metadata on nested object, wildcard, array-item, and composition nodes.
-- Runtime helper surface.
-
-**Vendor plugin:**
-
-- Vendor API calls.
-- Vendor auth handling.
-- Vendor-specific request normalization.
-- Registration of the capability implementation.
-
-**Feature/channel plugin:**
-
-- Calls `api.runtime.*` or the matching `plugin-sdk/*-runtime` helper.
-- Never calls a vendor implementation directly.
+| Layer                      | Owns                                                                                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Core**                   | Request/response types; provider registry and resolution; fallback behavior; config schema with propagated `title`/`description` docs metadata on nested object, wildcard, array-item, and composition nodes; runtime helper surface. |
+| **Vendor plugin**          | Vendor API calls, vendor auth handling, vendor-specific request normalization, and registration of the capability implementation.                                                                                                     |
+| **Feature/channel plugin** | Calls `api.runtime.*` or the matching `plugin-sdk/*-runtime` helper. Never calls a vendor implementation directly.                                                                                                                    |
 
 ## Provider and harness seams
 
@@ -103,28 +89,28 @@ Image generation follows the standard shape:
 
 1. Core defines `ImageGenerationProvider`.
 2. Core exposes `registerImageGenerationProvider(...)`.
-3. Core exposes `runtime.imageGeneration.generate(...)`.
-4. The `openai`, `google`, `fal`, and `minimax` plugins register vendor-backed implementations.
+3. Core exposes `api.runtime.imageGeneration.generate(...)` and `.listProviders(...)`.
+4. Vendor plugins (`comfy`, `deepinfra`, `fal`, `google`, `litellm`, `microsoft-foundry`, `minimax`, `openai`, `openrouter`, `vydra`, `xai`) register vendor-backed implementations.
 5. Future vendors register the same contract without changing channels/tools.
 
 The config key is intentionally separate from vision-analysis routing:
 
 - `agents.defaults.imageModel` analyzes images.
-- `agents.defaults.imageGenerationModel` generates images.
+- `agents.defaults.mediaModels.image` generates images.
 
 Keep those separate so fallback and policy remain explicit.
 
 ## Embedding providers
 
-Use `embeddingProviders` for reusable vector embedding providers. This contract
-is intentionally broader than memory: tools, search, retrieval, importers, or
-future feature plugins can consume embeddings without depending on the memory
-engine.
+Use `registerEmbeddingProvider(...)` / contract `embeddingProviders` for
+reusable vector embedding providers. This contract is intentionally broader
+than memory: tools, search, retrieval, importers, or future feature plugins
+can consume embeddings without depending on the memory engine. Memory search
+also consumes generic `embeddingProviders`.
 
-Memory search can consume generic `embeddingProviders`. The older
-`memoryEmbeddingProviders` contract is deprecated compatibility while existing
-memory-specific providers migrate; new reusable embedding providers should use
-`embeddingProviders`.
+The older memory-specific registration API and `memoryEmbeddingProviders`
+contract are deprecated. Use `registerEmbeddingProvider` and
+`embeddingProviders` for all new embedding providers.
 
 ## Review checklist
 

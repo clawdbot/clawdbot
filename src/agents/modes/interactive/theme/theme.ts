@@ -4,14 +4,11 @@
  * Validates theme JSON, resolves color variables, watches custom theme files, and exposes terminal styling helpers.
  */
 import * as fs from "node:fs";
-import * as path from "node:path";
 import { getCapabilities } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
-import { getCustomThemesDir, getThemesDir } from "../../../config.js";
 import type { SourceInfo } from "../../../sessions/source-info.js";
-import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
 import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.js";
 
 // ============================================================================
@@ -102,7 +99,7 @@ type ThemeJson = Static<typeof ThemeJsonSchema>;
 
 const validateThemeJson = Compile(ThemeJsonSchema);
 
-export type ThemeColor =
+type ThemeColor =
   | "accent"
   | "border"
   | "borderAccent"
@@ -149,7 +146,7 @@ export type ThemeColor =
   | "thinkingXhigh"
   | "bashMode";
 
-export type ThemeBg =
+type ThemeBg =
   | "selectedBg"
   | "userMessageBg"
   | "customMessageBg"
@@ -186,8 +183,8 @@ const GRAY_VALUES = Array.from({ length: 24 }, (_, i) => 8 + i * 10);
 function findClosestCubeIndex(value: number): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (let i = 0; i < CUBE_VALUES.length; i++) {
-    const dist = Math.abs(value - CUBE_VALUES[i]);
+  for (const [i, cubeValue] of CUBE_VALUES.entries()) {
+    const dist = Math.abs(value - cubeValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -199,8 +196,8 @@ function findClosestCubeIndex(value: number): number {
 function findClosestGrayIndex(gray: number): number {
   let minDist = Infinity;
   let minIdx = 0;
-  for (let i = 0; i < GRAY_VALUES.length; i++) {
-    const dist = Math.abs(gray - GRAY_VALUES[i]);
+  for (const [i, grayValue] of GRAY_VALUES.entries()) {
+    const dist = Math.abs(gray - grayValue);
     if (dist < minDist) {
       minDist = dist;
       minIdx = i;
@@ -232,6 +229,9 @@ function rgbTo256(r: number, g: number, b: number): number {
   const cubeR = CUBE_VALUES[rIdx];
   const cubeG = CUBE_VALUES[gIdx];
   const cubeB = CUBE_VALUES[bIdx];
+  if (cubeR === undefined || cubeG === undefined || cubeB === undefined) {
+    throw new Error("Invalid 256-color cube index");
+  }
   const cubeIndex = 16 + 36 * rIdx + 6 * gIdx + bIdx;
   const cubeDist = colorDistance(r, g, b, cubeR, cubeG, cubeB);
 
@@ -239,6 +239,9 @@ function rgbTo256(r: number, g: number, b: number): number {
   const gray = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
   const grayIdx = findClosestGrayIndex(gray);
   const grayValue = GRAY_VALUES[grayIdx];
+  if (grayValue === undefined) {
+    throw new Error("Invalid 256-color grayscale index");
+  }
   const grayIndex = 232 + grayIdx;
   const grayDist = colorDistance(r, g, b, grayValue, grayValue, grayValue);
 
@@ -313,7 +316,11 @@ function resolveVarRefs(
     throw new Error(`Variable reference not found: ${value}`);
   }
   visited.add(value);
-  return resolveVarRefs(vars[value], vars, visited);
+  const resolved = vars[value];
+  if (resolved === undefined) {
+    throw new Error(`Variable reference not found: ${value}`);
+  }
+  return resolveVarRefs(resolved, vars, visited);
 }
 
 function resolveThemeColors<T extends Record<string, ColorValue>>(
@@ -446,21 +453,6 @@ export class Theme {
 // Theme Loading
 // ============================================================================
 
-let BUILTIN_THEMES: Record<string, ThemeJson> | undefined;
-
-function getBuiltinThemes(): Record<string, ThemeJson> {
-  if (!BUILTIN_THEMES) {
-    const themesDir = getThemesDir();
-    const darkPath = path.join(themesDir, "dark.json");
-    const lightPath = path.join(themesDir, "light.json");
-    BUILTIN_THEMES = {
-      dark: JSON.parse(fs.readFileSync(darkPath, "utf-8")) as ThemeJson,
-      light: JSON.parse(fs.readFileSync(lightPath, "utf-8")) as ThemeJson,
-    };
-  }
-  return BUILTIN_THEMES;
-}
-
 function parseThemeJson(label: string, json: unknown): ThemeJson {
   if (!validateThemeJson.Check(json)) {
     const errors = Array.from(validateThemeJson.Errors(json));
@@ -512,28 +504,6 @@ function parseThemeJsonContent(label: string, content: string): ThemeJson {
   return parseThemeJson(label, json);
 }
 
-function loadThemeJson(name: string): ThemeJson {
-  const builtinThemes = getBuiltinThemes();
-  if (name in builtinThemes) {
-    return builtinThemes[name];
-  }
-  const registeredTheme = registeredThemes.get(name);
-  if (registeredTheme?.sourcePath) {
-    const content = fs.readFileSync(registeredTheme.sourcePath, "utf-8");
-    return parseThemeJsonContent(registeredTheme.sourcePath, content);
-  }
-  if (registeredTheme) {
-    throw new Error(`Theme "${name}" does not have a source path for export`);
-  }
-  const customThemesDir = getCustomThemesDir();
-  const themePath = path.join(customThemesDir, `${name}.json`);
-  if (!fs.existsSync(themePath)) {
-    throw new Error(`Theme not found: ${name}`);
-  }
-  const content = fs.readFileSync(themePath, "utf-8");
-  return parseThemeJsonContent(name, content);
-}
-
 function createTheme(themeJson: ThemeJson, mode?: ColorMode, sourcePath?: string): Theme {
   const colorMode = mode ?? (getCapabilities().trueColor ? "truecolor" : "256color");
   const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
@@ -566,15 +536,6 @@ export function loadThemeFromPath(themePath: string, mode?: ColorMode): Theme {
   return createTheme(themeJson, mode, themePath);
 }
 
-function loadTheme(name: string, mode?: ColorMode): Theme {
-  const registeredTheme = registeredThemes.get(name);
-  if (registeredTheme) {
-    return registeredTheme;
-  }
-  const themeJson = loadThemeJson(name);
-  return createTheme(themeJson, mode);
-}
-
 // ============================================================================
 // Global Theme Instance
 // ============================================================================
@@ -593,116 +554,6 @@ export const theme: Theme = new Proxy({} as Theme, {
     return (t as unknown as Record<string | symbol, unknown>)[prop];
   },
 });
-
-function setGlobalTheme(t: Theme): void {
-  (globalThis as Record<symbol, Theme>)[THEME_KEY] = t;
-}
-
-let currentThemeName: string | undefined;
-let themeWatcher: fs.FSWatcher | undefined;
-let themeReloadTimer: NodeJS.Timeout | undefined;
-const registeredThemes = new Map<string, Theme>();
-
-export function setTheme(
-  name: string,
-  enableWatcher = false,
-): { success: boolean; error?: string } {
-  currentThemeName = name;
-  try {
-    setGlobalTheme(loadTheme(name));
-    if (enableWatcher) {
-      startThemeWatcher();
-    }
-    return { success: true };
-  } catch (error) {
-    // Theme is invalid - fall back to dark theme
-    currentThemeName = "dark";
-    setGlobalTheme(loadTheme("dark"));
-    // Don't start watcher for fallback theme
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
-function startThemeWatcher(): void {
-  stopThemeWatcher();
-
-  // Only watch if it's a custom theme (not built-in)
-  if (!currentThemeName || currentThemeName === "dark" || currentThemeName === "light") {
-    return;
-  }
-
-  const customThemesDir = getCustomThemesDir();
-  const watchedThemeName = currentThemeName;
-  const watchedFileName = `${watchedThemeName}.json`;
-  const themeFile = path.join(customThemesDir, watchedFileName);
-
-  // Only watch if the file exists
-  if (!fs.existsSync(themeFile)) {
-    return;
-  }
-
-  const scheduleReload = () => {
-    if (themeReloadTimer) {
-      clearTimeout(themeReloadTimer);
-    }
-    themeReloadTimer = setTimeout(() => {
-      themeReloadTimer = undefined;
-
-      // Ignore stale timers after switching themes or stopping the watcher
-      if (currentThemeName !== watchedThemeName) {
-        return;
-      }
-
-      // Keep the last successfully loaded theme active if the file is temporarily missing
-      if (!fs.existsSync(themeFile)) {
-        return;
-      }
-
-      try {
-        // Reload the theme from disk and refresh the registry cache
-        const reloadedTheme = loadThemeFromPath(themeFile);
-        registeredThemes.set(watchedThemeName, reloadedTheme);
-        setGlobalTheme(reloadedTheme);
-      } catch {
-        // Ignore errors (file might be in invalid state while being edited)
-      }
-    }, 100);
-  };
-
-  themeWatcher =
-    watchWithErrorHandler(
-      customThemesDir,
-      (_eventType, filename) => {
-        if (currentThemeName !== watchedThemeName) {
-          return;
-        }
-        if (!filename) {
-          scheduleReload();
-          return;
-        }
-        if (filename !== watchedFileName) {
-          return;
-        }
-        scheduleReload();
-      },
-      () => {
-        closeWatcher(themeWatcher);
-        themeWatcher = undefined;
-      },
-    ) ?? undefined;
-}
-
-export function stopThemeWatcher(): void {
-  if (themeReloadTimer) {
-    clearTimeout(themeReloadTimer);
-    themeReloadTimer = undefined;
-  }
-  closeWatcher(themeWatcher);
-  themeWatcher = undefined;
-}
 
 // ============================================================================
 // HTML Export Helpers

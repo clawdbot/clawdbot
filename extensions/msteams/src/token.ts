@@ -1,9 +1,7 @@
 // Msteams plugin module implements token behavior.
-import { readFileSync } from "node:fs";
-import { basename, dirname } from "node:path";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
+import { loadMSTeamsDelegatedTokens, saveMSTeamsDelegatedTokens } from "./delegated-state.js";
 import type { MSTeamsDelegatedTokens } from "./oauth.shared.js";
 import { refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 import {
@@ -11,11 +9,10 @@ import {
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
 } from "./secret-input.js";
-import { resolveMSTeamsStorePath } from "./storage.js";
 
 // ── Credential types ───────────────────────────────────────────────────────
 
-export type MSTeamsSecretCredentials = {
+type MSTeamsSecretCredentials = {
   type: "secret";
   appId: string;
   appPassword: string;
@@ -144,24 +141,12 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-const DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
-
-function resolveDelegatedTokenPath(): string {
-  return resolveMSTeamsStorePath({ filename: DELEGATED_TOKEN_FILENAME });
-}
-
 export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
-  try {
-    const content = readFileSync(resolveDelegatedTokenPath(), "utf8");
-    return JSON.parse(content) as MSTeamsDelegatedTokens;
-  } catch {
-    return undefined;
-  }
+  return loadMSTeamsDelegatedTokens();
 }
 
 export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  const tokenPath = resolveDelegatedTokenPath();
-  privateFileStoreSync(dirname(tokenPath)).writeJson(basename(tokenPath), tokens);
+  saveMSTeamsDelegatedTokens(tokens);
 }
 
 export async function resolveDelegatedAccessToken(params: {

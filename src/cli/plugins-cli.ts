@@ -7,7 +7,7 @@ import type { PluginsListOptions } from "./plugins-list-command.js";
 import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
-export type PluginUpdateOptions = {
+type PluginUpdateOptions = {
   all?: boolean;
   acknowledgeClawhubRisk?: boolean;
   dryRun?: boolean;
@@ -15,6 +15,7 @@ export type PluginUpdateOptions = {
 };
 
 type CommanderClawHubRiskOptions = Record<string, unknown> & {
+  acknowledgeClawHubRisk?: boolean;
   acknowledgeClawhubRisk?: boolean;
 };
 
@@ -40,12 +41,12 @@ export type PluginMarketplaceRefreshOptions = {
   json?: boolean;
 };
 
-export type PluginSearchOptions = {
+type PluginSearchOptions = {
   json?: boolean;
   limit?: number;
 };
 
-export type PluginUninstallOptions = {
+type PluginUninstallOptions = {
   keepFiles?: boolean;
   /** @deprecated Use keepFiles. */
   keepConfig?: boolean;
@@ -58,18 +59,18 @@ export type PluginRegistryOptions = {
   refresh?: boolean;
 };
 
-export type PluginAuthoringBuildOptions = {
+type PluginAuthoringBuildOptions = {
   root?: string;
   entry?: string;
   check?: boolean;
 };
 
-export type PluginAuthoringValidateOptions = {
+type PluginAuthoringValidateOptions = {
   root?: string;
   entry?: string;
 };
 
-export type PluginAuthoringInitOptions = {
+type PluginAuthoringInitOptions = {
   directory?: string;
   force?: boolean;
   type?: string;
@@ -172,7 +173,11 @@ export function registerPluginsCli(program: Command) {
       "Path (.ts/.js/.zip/.tgz/.tar.gz), npm package spec, or marketplace plugin name",
     )
     .option("-l, --link", "Link a local path instead of copying", false)
-    .option("--force", "Overwrite an existing installed plugin or hook pack", false)
+    .option(
+      "--force",
+      "Confirm non-ClawHub sources and overwrite an existing plugin or hook pack",
+      false,
+    )
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",

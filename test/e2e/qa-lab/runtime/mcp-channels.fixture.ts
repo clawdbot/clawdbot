@@ -1,20 +1,27 @@
 // Shared MCP-channel QA/Docker E2E fixture helpers.
 // The mounted test harness imports packaged dist modules so bridge assertions run
 // against the OpenClaw npm tarball installed in the functional image.
+import crypto from "node:crypto";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { z } from "zod";
-import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
-import { formatErrorMessage } from "../../../../dist/infra/errors.js";
-import { readStringValue } from "../../../../dist/normalization-core/string-coerce.js";
+const protocolModulePath = "../../../../dist/gateway/protocol/index.js" as string;
+const errorsModulePath = "../../../../dist/infra/errors.js" as string;
+const stringCoerceModulePath = "../../../../dist/normalization-core/string-coerce.js" as string;
+const [{ PROTOCOL_VERSION }, { formatErrorMessage }, { readStringValue }] = await Promise.all([
+  import(protocolModulePath) as Promise<
+    typeof import("../../../../packages/gateway-protocol/src/index.js")
+  >,
+  import(errorsModulePath) as Promise<typeof import("../../../../src/infra/errors.js")>,
+  import(stringCoerceModulePath) as Promise<
+    typeof import("../../../../packages/normalization-core/src/string-coerce.js")
+  >,
+]);
 import { resolveGatewaySuccessPayload } from "../../../../scripts/e2e/lib/gateway-frame-payload.mjs";
 import { readMcpChannelLimits } from "../../../../scripts/e2e/mcp-channel-limits.ts";
-import {
-  createGatewayWsClient,
-  type GatewayEventFrame,
-} from "../../../../scripts/lib/gateway-ws-client.ts";
+import { createGatewayWsClient } from "../../../../scripts/lib/gateway-ws-client.ts";
 import {
   connectMcpWithTimeout,
   createMcpClientTempState,
@@ -40,10 +47,29 @@ export const ClaudePermissionNotificationSchema = z.object({
 export type ClaudeChannelNotification = z.infer<typeof ClaudeChannelNotificationSchema>["params"];
 
 export type GatewayRpcClient = {
+  auth: GatewayConnectAuth;
   request<T>(method: string, params?: unknown, opts?: { timeoutMs?: number }): Promise<T>;
   events: Array<{ event: string; payload: Record<string, unknown> }>;
   close(): Promise<void>;
 };
+
+export type GatewayConnectAuth = {
+  role: string;
+  scopes: string[];
+  deviceToken?: string;
+};
+
+type GatewayClientInfo = {
+  id: string;
+  displayName: string;
+  version: string;
+  platform: string;
+  mode: string;
+};
+
+type GatewayEventFrame = Parameters<
+  NonNullable<Parameters<typeof createGatewayWsClient>[0]["onEvent"]>
+>[0];
 
 export type McpClientHandle = {
   client: Client;
@@ -60,6 +86,14 @@ const MCP_CHANNEL_LIMITS = readMcpChannelLimits();
 const MCP_CONNECT_TIMEOUT_MS = MCP_CHANNEL_LIMITS.connectTimeoutMs;
 const GATEWAY_EVENT_RETAIN_LIMIT = MCP_CHANNEL_LIMITS.gatewayEventRetainLimit;
 const MCP_RAW_MESSAGE_RETAIN_LIMIT = MCP_CHANNEL_LIMITS.rawMessageRetainLimit;
+const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
+const DEFAULT_GATEWAY_CLIENT: GatewayClientInfo = {
+  id: "openclaw-tui",
+  displayName: "docker-mcp-channels",
+  version: "1.0.0",
+  platform: process.platform,
+  mode: "ui",
+};
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -115,6 +149,8 @@ export async function connectGateway(params: {
   url: string;
   token: string;
   scopes?: readonly string[];
+  client?: GatewayClientInfo;
+  bindFreshDevice?: boolean;
 }): Promise<GatewayRpcClient> {
   const startedAt = Date.now();
   let attempt = 0;
@@ -140,6 +176,8 @@ async function connectGatewayOnce(params: {
   url: string;
   token: string;
   scopes?: readonly string[];
+  client?: GatewayClientInfo;
+  bindFreshDevice?: boolean;
 }): Promise<GatewayRpcClient> {
   const requestedScopes = params.scopes ?? [
     "operator.read",
@@ -147,6 +185,7 @@ async function connectGatewayOnce(params: {
     "operator.pairing",
     "operator.admin",
   ];
+  const client = params.client ?? DEFAULT_GATEWAY_CLIENT;
   const events: Array<{ event: string; payload: Record<string, unknown> }> = [];
   const gatewayClient = createGatewayWsClient({
     handshakeTimeoutMs: GATEWAY_WS_OPEN_TIMEOUT_MS,
@@ -186,29 +225,35 @@ async function connectGatewayOnce(params: {
     });
   };
 
-  await sendGatewayRequest(
+  const device = params.bindFreshDevice
+    ? await createSignedOperatorDevice({
+        events,
+        token: params.token,
+        scopes: requestedScopes,
+        client,
+      })
+    : undefined;
+
+  const connectPayload = await sendGatewayRequest(
     "connect",
     {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "openclaw-tui",
-        displayName: "docker-mcp-channels",
-        version: "1.0.0",
-        platform: process.platform,
-        mode: "ui",
-      },
+      client,
       role: "operator",
       scopes: requestedScopes,
       caps: [],
       auth: { token: params.token },
+      ...(device ? { device } : {}),
     },
     GATEWAY_RPC_TIMEOUT_MS,
   );
+  const auth = readGatewayConnectAuth(connectPayload);
 
   await sendGatewayRequest("sessions.subscribe", {}, GATEWAY_RPC_TIMEOUT_MS);
 
   return {
+    auth,
     request(method, requestParams, opts) {
       return sendGatewayRequest(
         method,
@@ -220,6 +265,143 @@ async function connectGatewayOnce(params: {
     async close() {
       gatewayClient.close();
     },
+  };
+}
+
+function readGatewayConnectAuth(payload: unknown): GatewayConnectAuth {
+  const auth = payload && typeof payload === "object" ? (payload as { auth?: unknown }).auth : null;
+  if (!auth || typeof auth !== "object") {
+    throw new Error(`gateway hello-ok missing auth metadata: ${JSON.stringify(payload)}`);
+  }
+  const record = auth as { role?: unknown; scopes?: unknown; deviceToken?: unknown };
+  if (typeof record.role !== "string" || !Array.isArray(record.scopes)) {
+    throw new Error(`gateway hello-ok auth metadata has invalid shape: ${JSON.stringify(auth)}`);
+  }
+  return {
+    role: record.role,
+    scopes: record.scopes.filter((scope): scope is string => typeof scope === "string"),
+    ...(typeof record.deviceToken === "string" ? { deviceToken: record.deviceToken } : {}),
+  };
+}
+
+export function assertGatewayScopes(
+  gateway: GatewayRpcClient,
+  expected: { include?: readonly string[]; exclude?: readonly string[]; label: string },
+) {
+  const scopes = new Set(gateway.auth.scopes);
+  const missing = (expected.include ?? []).filter((scope) => !scopes.has(scope));
+  const forbidden = (expected.exclude ?? []).filter((scope) => scopes.has(scope));
+  assert(
+    missing.length === 0 && forbidden.length === 0,
+    `${expected.label} granted unexpected gateway scopes: ${JSON.stringify({
+      granted: gateway.auth.scopes,
+      missing,
+      forbidden,
+    })}`,
+  );
+}
+
+function base64UrlEncode(buf: Buffer): string {
+  return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
+}
+
+function normalizeDeviceMetadataForAuth(value?: string | null): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replace(/[A-Z]/g, (char) => String.fromCharCode(char.charCodeAt(0) + 32));
+}
+
+function derivePublicKeyRaw(publicKey: crypto.KeyObject): Buffer {
+  const spki = publicKey.export({ type: "spki", format: "der" }) as Buffer;
+  if (
+    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
+    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
+  ) {
+    return spki.subarray(ED25519_SPKI_PREFIX.length);
+  }
+  return spki;
+}
+
+function createEphemeralDeviceIdentity() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyRaw = derivePublicKeyRaw(publicKey);
+  return {
+    deviceId: crypto.createHash("sha256").update(publicKeyRaw).digest("hex"),
+    privateKey,
+    publicKey: base64UrlEncode(publicKeyRaw),
+  };
+}
+
+// The Docker functional image mounts test files beside the packaged app, not
+// source packages. Keep the client-side v3 signing payload local so the bridge
+// runtime under test still comes from the package tarball.
+function buildDeviceAuthPayloadV3(params: {
+  deviceId: string;
+  clientId: string;
+  clientMode: string;
+  role: string;
+  scopes: string[];
+  signedAtMs: number;
+  token?: string | null;
+  nonce: string;
+  platform?: string | null;
+  deviceFamily?: string | null;
+}): string {
+  return [
+    "v3",
+    params.deviceId,
+    params.clientId,
+    params.clientMode,
+    params.role,
+    params.scopes.join(","),
+    String(params.signedAtMs),
+    params.token ?? "",
+    params.nonce,
+    normalizeDeviceMetadataForAuth(params.platform),
+    normalizeDeviceMetadataForAuth(params.deviceFamily),
+  ].join("|");
+}
+
+function signDevicePayload(privateKey: crypto.KeyObject, payload: string): string {
+  return base64UrlEncode(crypto.sign(null, Buffer.from(payload, "utf8"), privateKey));
+}
+
+async function createSignedOperatorDevice(params: {
+  events: Array<{ event: string; payload: Record<string, unknown> }>;
+  token: string;
+  scopes: readonly string[];
+  client: GatewayClientInfo;
+}) {
+  const nonce = await waitFor(
+    "gateway connect challenge nonce",
+    () => {
+      const challenge = params.events.find((entry) => entry.event === "connect.challenge");
+      const value = challenge?.payload.nonce;
+      return typeof value === "string" && value.length > 0 ? value : undefined;
+    },
+    GATEWAY_WS_OPEN_TIMEOUT_MS,
+  );
+  const identity = createEphemeralDeviceIdentity();
+  const signedAtMs = Date.now();
+  const payload = buildDeviceAuthPayloadV3({
+    deviceId: identity.deviceId,
+    clientId: params.client.id,
+    clientMode: params.client.mode,
+    role: "operator",
+    scopes: [...params.scopes],
+    signedAtMs,
+    token: params.token,
+    nonce,
+    platform: params.client.platform,
+  });
+  return {
+    id: identity.deviceId,
+    publicKey: identity.publicKey,
+    signature: signDevicePayload(identity.privateKey, payload),
+    signedAt: signedAtMs,
+    nonce,
   };
 }
 

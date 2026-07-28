@@ -1,17 +1,12 @@
 // Shared session cost and usage accounting type contracts.
 import type { NormalizedUsage } from "../agents/usage.js";
+import type { Usage } from "../llm/types.js";
 import type {
   SessionUsageTimePoint as SharedSessionUsageTimePoint,
   SessionUsageTimeSeries as SharedSessionUsageTimeSeries,
 } from "../shared/session-usage-timeseries-types.js";
 
-export type CostBreakdown = {
-  total?: number;
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
+export type CostBreakdown = Partial<Usage["cost"]>;
 
 export type ParsedUsageEntry = {
   usage: NormalizedUsage;
@@ -50,6 +45,8 @@ export type CostUsageTotals = {
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
+  missingCostByModel?: Record<string, number>;
 };
 
 type CostUsageDailyEntry = CostUsageTotals & {
@@ -72,7 +69,11 @@ export type CostUsageSummary = {
 
 export type UsageCacheStatus = NonNullable<CostUsageSummary["cacheStatus"]>;
 
-export type SessionDailyUsage = {
+export type UsageDailyBucket =
+  | { mode: "utc-offset"; utcOffsetMinutes: number }
+  | { mode: "time-zone"; timeZone: string };
+
+type SessionDailyUsage = {
   date: string; // YYYY-MM-DD
   tokens: number;
   cost: number;

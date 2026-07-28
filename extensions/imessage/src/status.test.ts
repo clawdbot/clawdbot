@@ -1,14 +1,19 @@
 // Imessage tests cover status plugin behavior.
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createPluginSetupWizardStatus,
+  createTestWizardPrompter,
+  runSetupWizardPrepare,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
-import { clearIMessagePrivateApiCache, probeIMessage, probeIMessagePrivateApi } from "./probe.js";
+import { probeIMessage, probeIMessagePrivateApi } from "./probe.js";
+import { createIMessageSetupWizardProxy } from "./setup-core.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
 
@@ -21,6 +26,20 @@ const getIMessageSetupStatus = createPluginSetupWizardStatus({
 } as never);
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const setupToolsMocks = vi.hoisted(() => ({
+  detectBinary: vi.fn(async () => false),
+  formatDocsLink: vi.fn((path: string) => path),
+}));
+const installIMessageCliMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/setup-tools")>()),
+  ...setupToolsMocks,
+}));
+
+vi.mock("./install-imsg.js", () => ({
+  installIMessageCli: installIMessageCliMock,
+}));
 
 function createMockChildProcess() {
   const child = new EventEmitter() as EventEmitter & {
@@ -40,6 +59,16 @@ function createMockChildProcess() {
     return true;
   };
   return child;
+}
+
+async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  }
 }
 
 vi.mock("node:child_process", async () => {
@@ -75,8 +104,7 @@ describe("createIMessageRpcClient", () => {
   });
 
   it("promotes Full Disk Access rpc banners to the public probe error", async () => {
-    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
-      await import("./client.js");
+    const { IMessageRpcClient } = await import("./client.js");
     const client = new IMessageRpcClient();
     const internals = client as unknown as {
       handleLine: (line: string) => void;
@@ -87,7 +115,9 @@ describe("createIMessageRpcClient", () => {
       "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
     );
 
-    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
+    expect(internals.buildCloseError(1, null).message).toBe(
+      "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
   });
 
   it.each([
@@ -182,6 +212,11 @@ describe("createIMessageRpcClient", () => {
 });
 
 describe("imessage setup status", () => {
+  beforeEach(() => {
+    setupToolsMocks.detectBinary.mockClear();
+    installIMessageCliMock.mockReset();
+  });
+
   it("does not inherit configured state from a sibling account", async () => {
     const result = await getIMessageSetupStatus({
       cfg: {
@@ -267,12 +302,222 @@ describe("imessage setup status", () => {
 
     expect(status.statusLines).toContain("imsg: missing (/tmp/work-imsg)");
   });
+
+  it("setup status explains how to install imsg when the binary is missing", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {},
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain(
+      "Install imsg on the Messages Mac: brew install steipete/tap/imsg",
+    );
+  });
+
+  it("prepare offers to install imsg and returns the installed cliPath", async () => {
+    setupToolsMocks.detectBinary.mockResolvedValueOnce(false);
+    installIMessageCliMock.mockResolvedValueOnce({
+      ok: true,
+      cliPath: "/opt/homebrew/bin/imsg",
+      version: "0.13.0",
+    });
+    const confirm = vi.fn(async () => true);
+    const note = vi.fn(async () => {});
+
+    const result = await withPlatform("darwin", () =>
+      runSetupWizardPrepare({
+        prepare: imessageSetupWizard.prepare,
+        cfg: { channels: { imessage: {} } },
+        options: { allowIMessageInstall: true },
+        prompter: createTestWizardPrompter({ confirm, note }),
+      }),
+    );
+
+    expect(confirm).toHaveBeenCalledWith({
+      message: "imsg not found. Install now?",
+      initialValue: true,
+    });
+    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), { upgrade: false });
+    expect(note).toHaveBeenCalledWith("Installed imsg at /opt/homebrew/bin/imsg", "iMessage");
+    expect(result).toEqual({
+      credentialValues: {
+        cliPath: "/opt/homebrew/bin/imsg",
+      },
+    });
+  });
+
+  it("setup status preserves an explicit PATH-based imsg wrapper", async () => {
+    const status = await getIMessageSetupStatus({
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "imsg",
+          },
+        },
+      } as never,
+      accountOverrides: {},
+    });
+
+    expect(status.statusLines).toContain(
+      "imsg command not found (imsg). Check the configured cliPath or wrapper.",
+    );
+  });
+
+  it("prepare offers to update Homebrew-managed imsg paths", async () => {
+    setupToolsMocks.detectBinary.mockResolvedValueOnce(true);
+    installIMessageCliMock.mockResolvedValueOnce({
+      ok: true,
+      cliPath: "/opt/homebrew/bin/imsg",
+      version: "0.13.1",
+    });
+    const confirm = vi.fn(async () => true);
+    const note = vi.fn(async () => {});
+
+    const result = await withPlatform("darwin", () =>
+      runSetupWizardPrepare({
+        prepare: imessageSetupWizard.prepare,
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: "/opt/homebrew/bin/imsg",
+            },
+          },
+        } as never,
+        options: { allowIMessageInstall: true },
+        prompter: createTestWizardPrompter({ confirm, note }),
+      }),
+    );
+
+    expect(confirm).toHaveBeenCalledWith({
+      message: "imsg detected. Reinstall/update now?",
+      initialValue: false,
+    });
+    expect(installIMessageCliMock).toHaveBeenCalledWith(expect.anything(), { upgrade: true });
+    expect(result).toEqual({
+      credentialValues: {
+        cliPath: "/opt/homebrew/bin/imsg",
+      },
+    });
+  });
+
+  it("setup wizard proxy delegates imsg install preparation", async () => {
+    setupToolsMocks.detectBinary.mockResolvedValueOnce(false);
+    installIMessageCliMock.mockResolvedValueOnce({
+      ok: true,
+      cliPath: "/opt/homebrew/bin/imsg",
+      version: "0.13.0",
+    });
+    const proxy = createIMessageSetupWizardProxy(async () => imessageSetupWizard);
+    const confirm = vi.fn(async () => true);
+
+    const result = await withPlatform("darwin", () =>
+      runSetupWizardPrepare({
+        prepare: proxy.prepare,
+        cfg: { channels: { imessage: {} } },
+        options: { allowIMessageInstall: true },
+        prompter: createTestWizardPrompter({ confirm }),
+      }),
+    );
+
+    expect(confirm).toHaveBeenCalledWith({
+      message: "imsg not found. Install now?",
+      initialValue: true,
+    });
+    expect(result).toEqual({
+      credentialValues: {
+        cliPath: "/opt/homebrew/bin/imsg",
+      },
+    });
+  });
+
+  it("prepare preserves custom imsg cliPath values", async () => {
+    const confirm = vi.fn(async () => true);
+
+    const result = await withPlatform("darwin", () =>
+      runSetupWizardPrepare({
+        prepare: imessageSetupWizard.prepare,
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: "ssh imessage-host imsg",
+            },
+          },
+        } as never,
+        options: { allowIMessageInstall: true },
+        prompter: createTestWizardPrompter({ confirm }),
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(setupToolsMocks.detectBinary).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installIMessageCliMock).not.toHaveBeenCalled();
+  });
+
+  it("prepare preserves explicit PATH-based imsg wrappers", async () => {
+    const confirm = vi.fn(async () => true);
+
+    const result = await withPlatform("darwin", () =>
+      runSetupWizardPrepare({
+        prepare: imessageSetupWizard.prepare,
+        cfg: {
+          channels: {
+            imessage: {
+              cliPath: "imsg",
+            },
+          },
+        } as never,
+        options: { allowIMessageInstall: true },
+        prompter: createTestWizardPrompter({ confirm }),
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(setupToolsMocks.detectBinary).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installIMessageCliMock).not.toHaveBeenCalled();
+  });
+
+  it("prepare skips automatic imsg install on non-macOS hosts", async () => {
+    const confirm = vi.fn(async () => true);
+
+    const result = await withPlatform("linux", () =>
+      runSetupWizardPrepare({
+        prepare: imessageSetupWizard.prepare,
+        cfg: { channels: { imessage: {} } },
+        options: { allowIMessageInstall: true },
+        prompter: createTestWizardPrompter({ confirm }),
+      }),
+    );
+
+    expect(result).toBeUndefined();
+    expect(setupToolsMocks.detectBinary).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installIMessageCliMock).not.toHaveBeenCalled();
+  });
+
+  it("prepare skips imsg install prompts unless explicitly allowed", async () => {
+    const confirm = vi.fn(async () => true);
+
+    const result = await runSetupWizardPrepare({
+      prepare: imessageSetupWizard.prepare,
+      cfg: { channels: { imessage: {} } },
+      prompter: createTestWizardPrompter({ confirm }),
+    });
+
+    expect(result).toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(installIMessageCliMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("probeIMessage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    clearIMessagePrivateApiCache();
     spawnMock.mockClear();
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
@@ -296,6 +541,64 @@ describe("probeIMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
+    expect(result.error).toContain("brew update && brew upgrade imsg");
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("explains how to install imsg when the default binary is missing", async () => {
+    vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(false);
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { platform: "darwin" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(
+      "imsg not found (imsg). Install imsg on the Messages Mac: brew install steipete/tap/imsg",
+    );
+    expect(processRuntime.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("explains how to fix an explicit PATH-based imsg wrapper", async () => {
+    vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(false);
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg", platform: "darwin" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(
+      "imsg command not found (imsg). Check the configured iMessage cliPath or wrapper.",
+    );
+    expect(processRuntime.runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("explains how to fix a missing custom imsg wrapper", async () => {
+    vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(false);
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "/usr/local/bin/imsg-wrapper" });
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe(
+      "imsg command not found (/usr/local/bin/imsg-wrapper). Check the configured iMessage cliPath or wrapper.",
+    );
+    expect(processRuntime.runCommandWithTimeout).not.toHaveBeenCalled();
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 

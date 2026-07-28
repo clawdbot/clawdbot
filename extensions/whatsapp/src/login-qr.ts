@@ -24,7 +24,7 @@ import {
 import { resolveWhatsAppSocketTiming, type WhatsAppSocketTimingOptions } from "./socket-timing.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
-export type StartWebLoginWithQrResult = {
+type StartWebLoginWithQrResult = {
   qrDataUrl?: string;
   message: string;
   connected?: boolean;
@@ -322,7 +322,7 @@ export async function startWebLoginWithQr(
   const runtime = opts.runtime ?? defaultRuntime;
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
-  const socketTiming = resolveWhatsAppSocketTiming(cfg);
+  const socketTiming = resolveWhatsAppSocketTiming();
   const authState = await readWebAuthExistsForDecision(account.authDir);
   if (authState.outcome === "unstable") {
     return {
