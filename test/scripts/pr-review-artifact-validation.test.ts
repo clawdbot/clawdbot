@@ -13,6 +13,16 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 const REVIEWED_PR = 42;
 const REVIEWED_HEAD = "b".repeat(40);
 const REVIEWED_IDENTITY_LINE = `Review artifact for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`;
+const REVIEW_SHELL_COMMAND_SURFACE = [
+  "rg() {",
+  '  if [ "${1-}" = "-F" ]; then',
+  "    shift",
+  '    command grep -F "$@"',
+  "  else",
+  '    command grep -E "$@"',
+  "  fi",
+  "}",
+].join("\n");
 
 function validReview() {
   return {
@@ -111,9 +121,11 @@ function runValidation(
       [
         "set -euo pipefail",
         'source "$1"',
+        REVIEW_SHELL_COMMAND_SURFACE,
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
+        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         options.guardFailure
           ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
           : `review_guard() { REVIEW_MODE=${options.mode ?? "pr"}; }`,
@@ -136,9 +148,11 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
       [
         "set -euo pipefail",
         'source "$1"',
+        REVIEW_SHELL_COMMAND_SURFACE,
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
+        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         "mark_pr_operation_side_effects_started() { :; }",
         invocation,
       ].join("\n"),
@@ -212,6 +226,23 @@ function runMergeVerification(checks: "api-error" | "invalid-json" | "no-require
 }
 
 describePosix("scripts/pr review artifact validation", () => {
+  it("supplies direct review.sh consumers with the ripgrep command surface", () => {
+    const fixtureRoot = tempDirs.make("openclaw-pr-review-rg-surface-");
+    const target = join(fixtureRoot, "target.txt");
+    writeFileSync(target, `prefix ${REVIEWED_HEAD} suffix\n`);
+
+    const result = runReviewShellFunction(
+      fixtureRoot,
+      [
+        'test "$(type -t rg)" = "function"',
+        `printf '%s\\n' '${REVIEWED_HEAD}' | rg -q '^[0-9a-f]{40}$'`,
+        `rg -F -q '${REVIEWED_HEAD}' '${target}'`,
+      ].join("\n"),
+    );
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   it("accepts a valid review artifact", () => {
     const result = runValidation(validReview());
 

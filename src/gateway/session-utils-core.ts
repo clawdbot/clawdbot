@@ -280,7 +280,7 @@ export function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): 
 }
 
 type SingleRowChildSessionCandidateCacheEntry = {
-  store: Record<string, SessionEntry>;
+  entriesByKey: Map<string, SessionEntry>;
   childSessionCandidatesByParentKey: Map<string, string[]>;
 };
 
@@ -328,6 +328,17 @@ function buildStoreChildSessionCandidateIndex(
   return childSessionsByKey;
 }
 
+function singleRowChildSessionCacheMatches(
+  cached: SingleRowChildSessionCandidateCacheEntry,
+  store: Record<string, SessionEntry>,
+): boolean {
+  const entries = Object.entries(store);
+  return (
+    entries.length === cached.entriesByKey.size &&
+    entries.every(([key, entry]) => cached.entriesByKey.get(key) === entry)
+  );
+}
+
 export function getSingleRowChildSessionCandidates(params: {
   storePath: string;
   store: Record<string, SessionEntry> | null | undefined;
@@ -336,12 +347,14 @@ export function getSingleRowChildSessionCandidates(params: {
     return new Map();
   }
   const cached = singleRowChildSessionCandidateCache.get(params.storePath);
-  if (cached?.store === params.store) {
+  if (cached && singleRowChildSessionCacheMatches(cached, params.store)) {
     return cached.childSessionCandidatesByParentKey;
   }
   const childSessionCandidatesByParentKey = buildStoreChildSessionCandidateIndex(params.store);
   rememberSingleRowChildSessionCandidateCacheEntry(params.storePath, {
-    store: params.store,
+    // Exact read-only lookups rebuild a sparse record but borrow stable entry objects
+    // from the SQLite snapshot. Compare those identities so the derived index survives.
+    entriesByKey: new Map(Object.entries(params.store)),
     childSessionCandidatesByParentKey,
   });
   return childSessionCandidatesByParentKey;

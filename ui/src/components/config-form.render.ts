@@ -73,34 +73,38 @@ export function renderConfigTierGroups(params: {
   // An advanced-only schema needs no separator, but a surface whose only
   // collapse control lives on the divider would otherwise strand the tier open.
   const showDivider = Boolean(split.common) || Boolean(params.onHideAdvanced);
+  // The wrapper owns tier spacing so embedders without a settings-section
+  // parent (the channel forms) do not render the tiers flush against each other.
   return html`
-    ${split.common
-      ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
-      : nothing}
-    ${split.advanced && split.advancedLeafCount > 0
-      ? params.revealAdvanced
-        ? html`
-            ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
-            <div class="settings-group">${params.renderTier(split.advanced)}</div>
-          `
-        : html`
-            <button
-              type="button"
-              class="config-advanced-ghost"
-              @click=${() => params.onShowAdvanced()}
-            >
-              <span class="config-advanced-ghost__count">
-                ${t(
-                  split.advancedLeafCount === 1
-                    ? "configForm.advancedHidden"
-                    : "configForm.advancedHiddenPlural",
-                  { count: String(split.advancedLeafCount) },
-                )}
-              </span>
-              <span class="config-advanced-ghost__action">${t("configForm.showAdvanced")}</span>
-            </button>
-          `
-      : nothing}
+    <div class="config-tier-groups">
+      ${split.common
+        ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
+        : nothing}
+      ${split.advanced && split.advancedLeafCount > 0
+        ? params.revealAdvanced
+          ? html`
+              ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
+              <div class="settings-group">${params.renderTier(split.advanced)}</div>
+            `
+          : html`
+              <button
+                type="button"
+                class="config-advanced-ghost"
+                @click=${() => params.onShowAdvanced()}
+              >
+                <span class="config-advanced-ghost__count">
+                  ${t(
+                    split.advancedLeafCount === 1
+                      ? "configForm.advancedHidden"
+                      : "configForm.advancedHiddenPlural",
+                    { count: String(split.advancedLeafCount) },
+                  )}
+                </span>
+                <span class="config-advanced-ghost__action">${t("configForm.showAdvanced")}</span>
+              </button>
+            `
+        : nothing}
+    </div>
   `;
 }
 

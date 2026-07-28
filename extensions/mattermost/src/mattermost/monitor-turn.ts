@@ -6,6 +6,7 @@ import {
   buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftCompositor,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import type { MattermostPost } from "./client.js";
@@ -96,10 +97,18 @@ export async function dispatchMattermostInboundTurn(
       accountId: account.accountId,
       typing: baseReplyPipeline.typing,
     });
-  const draftPreviewEnabled = account.streamingMode !== "off";
-  const draftToolProgressEnabled = shouldUpdateMattermostDraftToolProgress(account);
+  // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
+  // can rewrite or cancel so the original payload cannot escape the durable delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
+  const draftPreviewEnabled = allowProviderPreview && account.streamingMode !== "off";
+  const draftToolProgressEnabled =
+    draftPreviewEnabled && shouldUpdateMattermostDraftToolProgress(account);
   const suppressDefaultToolProgressMessages =
-    shouldSuppressMattermostDefaultToolProgressMessages(account);
+    draftPreviewEnabled && shouldSuppressMattermostDefaultToolProgressMessages(account);
   const draftStream = draftPreviewEnabled
     ? createMattermostDraftStream({
         client,

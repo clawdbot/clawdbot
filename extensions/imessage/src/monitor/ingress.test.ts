@@ -174,6 +174,107 @@ describe("iMessage durable ingress", () => {
     });
   });
 
+  it("lets an approval poll vote overtake the conversation turn awaiting it", async () => {
+    await withQueue(async (queue) => {
+      const firstStarted = deferred();
+      const releaseFirst = deferred();
+      const voteStarted = deferred();
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
+        if (message.id === 101) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        } else if (message.id === 102) {
+          voteStarted.resolve();
+        }
+        return { kind: "completed" } as const;
+      });
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch,
+        dispatchPriority: async (message) => {
+          if (message.id !== 102) {
+            return undefined;
+          }
+          voteStarted.resolve();
+          return { kind: "completed" } as const;
+        },
+        runtime: runtime(),
+      });
+      ingress.start();
+      try {
+        await ingress.receive(rawRow());
+        await firstStarted.promise;
+        await ingress.receive(
+          rawRow({
+            id: 102,
+            guid: "GUID-102",
+            poll: { kind: "vote", original_guid: "POLL-1", vote: { option_id: "deny" } },
+          }),
+        );
+        await expect(
+          Promise.race([
+            voteStarted.promise.then(() => true),
+            new Promise<boolean>((resolve) => {
+              setTimeout(() => resolve(false), 1_000);
+            }),
+          ]),
+        ).resolves.toBe(true);
+      } finally {
+        releaseFirst.resolve();
+        await ingress.stop();
+      }
+    });
+  });
+
+  it("keeps an unowned poll vote behind the earlier conversation turn", async () => {
+    await withQueue(async (queue) => {
+      const firstStarted = deferred();
+      const releaseFirst = deferred();
+      const unrelatedChecked = deferred();
+      const dispatch = vi.fn(async (message: { id?: number | null }) => {
+        if (message.id === 101) {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+        }
+        return { kind: "completed" } as const;
+      });
+      const ingress = createIMessageDurableIngress({
+        accountId: "default",
+        queue,
+        dispatch,
+        dispatchPriority: async (message) => {
+          if (message.id === 102) {
+            unrelatedChecked.resolve();
+          }
+          return undefined;
+        },
+        runtime: runtime(),
+      });
+      ingress.start();
+      try {
+        await ingress.receive(rawRow());
+        await firstStarted.promise;
+        await ingress.receive(
+          rawRow({
+            id: 102,
+            guid: "GUID-102",
+            poll: { kind: "vote", original_guid: "OTHER-POLL", vote: { option_id: "alpha" } },
+          }),
+        );
+        await unrelatedChecked.promise;
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(false);
+
+        releaseFirst.resolve();
+        await ingress.waitForIdle();
+        expect(dispatch.mock.calls.some(([message]) => message.id === 102)).toBe(true);
+      } finally {
+        releaseFirst.resolve();
+        await ingress.stop();
+      }
+    });
+  });
+
   it("recovers a durable row with a fresh drain and dispatches exactly once", async () => {
     await withQueue(async (queue, stateDir) => {
       const event = rawRow();

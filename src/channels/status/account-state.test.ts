@@ -55,6 +55,11 @@ describe("resolveChannelAccountState", () => {
       { kind: "running", linked: true, connected: true, failure: "not linked" },
     ],
     [
+      "running keeps connectivity absent when the transport publishes none",
+      { runtime: { running: true } },
+      { kind: "running", linked: true, connected: undefined, failure: null },
+    ],
+    [
       "stopped owns linkage, connectivity, and failure",
       {},
       { kind: "stopped", linked: true, connected: undefined, failure: null },
@@ -119,6 +124,13 @@ describe("projectChannelAccountState", () => {
     [
       { kind: "running", linked: true, connected: false, failure: null },
       { configured: true, linked: true, running: true, connected: false, lastError: null },
+    ],
+    [
+      // Socketless channels never publish connectivity; a manufactured
+      // `connected: false` here reads as a transport disconnect and makes the
+      // gateway health monitor restart them every cooldown window.
+      { kind: "running", linked: true, failure: null },
+      { configured: true, linked: true, running: true, lastError: null },
     ],
     [
       { kind: "stopped", connected: true, failure: "transport failed" },

@@ -11,10 +11,14 @@ import {
 } from "../channels/status/account-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalMethod } from "../infra/approval-gateway-runtime-methods.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
 import { type BackoffPolicy, sleepWithAbort } from "../infra/backoff.js";
-import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
+import {
+  createTaskScopedChannelRuntime,
+  registerChannelRuntimeContext,
+} from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatGatewayCrashLoopManualChannelStartHint } from "../infra/gateway-boot-lifecycle.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -55,6 +59,9 @@ const MAX_RESTARTS = 10;
 const CHANNEL_STABLE_RUN_MS = RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
+// Private context key carried through the generic Plugin SDK registry. This is
+// not a new public capability surface; only the host installs its authority.
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
 function waitForChannelStartupHandoff(): Promise<void> {
   return new Promise((resolve) => {
     const handle = setImmediate(resolve);
@@ -254,6 +261,7 @@ export type ChannelManager = {
   isAmbientAutostartSuppressed: (channelId: string) => boolean;
   markChannelLoggedOut: (channelId: ChannelId, cleared: boolean, accountId?: string) => void;
   isManuallyStopped: (channelId: ChannelId, accountId: string) => boolean;
+  isAutoRestartScheduled: (channelId: ChannelId, accountId: string) => boolean;
   resetRestartAttempts: (channelId: ChannelId, accountId: string) => void;
   isHealthMonitorEnabled: (channelId: ChannelId, accountId: string) => boolean;
 };
@@ -276,6 +284,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const manuallyStopped = new Set<string>();
   const recoveryStopTimedOut = new Set<string>();
   const recoveryStartRequested = new Set<string>();
+  // Accounts whose crash recovery is already owned by the retry supervisor below
+  // (backoff sleep plus its replacement start). `restartPending` cannot answer
+  // this: the timed-out-stop recovery sets it too, and that one needs the health
+  // monitor to keep driving it.
+  const pendingAutoRestarts = new Set<string>();
   let autostartSuppression: ChannelAutostartSuppression | null = null;
   let ambientAutostartSuppressedChannelIds = new Set(
     opts.ambientAutostartSuppressedChannelIds ?? [],
@@ -707,6 +720,33 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             if (abort.signal.aborted || manuallyStopped.has(rKey)) {
               return;
             }
+            const gatewayApprovalRuntime = opts.getNativeApprovalRuntime?.();
+            if (channelRuntimeForTask && gatewayApprovalRuntime) {
+              const approvalRuntime: Pick<GatewayNativeApprovalRuntime, "request"> = {
+                request: async <T>(
+                  method: GatewayNativeApprovalMethod,
+                  requestParams: Record<string, unknown>,
+                  requestOptions?: { clientDisplayName?: string },
+                ): Promise<T> => {
+                  if (method !== "approval.resolve") {
+                    throw new Error(`channel approval runtime cannot dispatch ${method}`);
+                  }
+                  return await gatewayApprovalRuntime.request<T>(
+                    "approval.resolve",
+                    requestParams,
+                    requestOptions,
+                  );
+                },
+              };
+              registerChannelRuntimeContext({
+                channelRuntime: channelRuntimeForTask,
+                channelId,
+                accountId: id,
+                capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+                context: approvalRuntime,
+                abortSignal: abort.signal,
+              });
+            }
             let startAccountTask: ReturnType<typeof startAccount> | undefined;
             await measureStartup(`channels.${channelId}.start-account-handoff`, () => {
               if (abort.signal.aborted || manuallyStopped.has(rKey)) {
@@ -873,6 +913,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 restartPending: true,
                 reconnectAttempts: restart.attempts,
               });
+              pendingAutoRestarts.add(rKey);
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
                 if (manuallyStopped.has(rKey)) {
@@ -893,6 +934,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 });
               } catch {
                 // abort or startup failure — next crash will retry
+              } finally {
+                pendingAutoRestarts.delete(rKey);
               }
             })
             .finally(() => {
@@ -1216,7 +1259,11 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return manuallyStopped.has(restartKey(channelId, accountId));
   };
 
-  const resetRestartAttemptsForTest = (channelId: ChannelId, accountId: string): void => {
+  const isAutoRestartScheduled = (channelId: ChannelId, accountId: string): boolean => {
+    return pendingAutoRestarts.has(restartKey(channelId, accountId));
+  };
+
+  const resetRestartAttempts = (channelId: ChannelId, accountId: string): void => {
     restarts.delete(restartKey(channelId, accountId));
   };
 
@@ -1236,7 +1283,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       ambientAutostartSuppressedChannelIds.has(channelId),
     markChannelLoggedOut,
     isManuallyStopped: isManuallyStoppedFlag,
-    resetRestartAttempts: resetRestartAttemptsForTest,
+    isAutoRestartScheduled,
+    resetRestartAttempts,
     isHealthMonitorEnabled,
   };
 }

@@ -7900,6 +7900,41 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
     }
 
+    @Test @MainActor func `watch message outbox tombstone rejects stale persisted queue`() throws {
+        let suiteName = "watch-message-stale-queue-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.removePersistentDomain(forName: suiteName)
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let event = WatchAppCommandEvent(
+            commandId: "delivered-before-crash",
+            command: .sendChat,
+            sessionKey: "main",
+            gatewayStableID: "gateway-a",
+            text: "Delivered reply",
+            sentAtMs: 1,
+            transport: "sendMessage",
+            messageKind: .quickReply)
+        let firstOutbox = WatchMessageOutbox(defaults: defaults)
+        _ = firstOutbox.ingest(event, isAvailable: true, gatewayStableID: "gateway-a")
+        let staleQueue = try #require(defaults.data(forKey: "watch.chat.command.queue.v1"))
+        firstOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
+
+        // Simulate termination after the delivery tombstone persisted but before
+        // the older queue snapshot was removed.
+        defaults.set(staleQueue, forKey: "watch.chat.command.queue.v1")
+        let restoredOutbox = WatchMessageOutbox(defaults: defaults)
+
+        #expect(restoredOutbox.queuedCount() == 0)
+        if case .deduped = restoredOutbox.ingest(
+            event,
+            isAvailable: true,
+            gatewayStableID: "gateway-a")
+        {
+        } else {
+            Issue.record("expected the delivery tombstone to reject the stale queue row")
+        }
+    }
+
     @Test @MainActor func `watch reply drops stale gateway target`() async {
         NodeAppModel._test_resetPersistedWatchReplyQueueState()
         defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }

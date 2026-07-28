@@ -5,13 +5,16 @@ import {
   normalizeChatSendShortcut,
 } from "../../app/settings.ts";
 import { icons } from "../../components/icons.ts";
-import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { getLobsterdexEntries } from "../../components/lobster-dex.ts";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
+import { LOBSTER_PALETTE_LORE } from "../../components/lobster-pet-lore.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
+  lobsterPaletteName,
   renderLobsterSvg,
 } from "../../components/lobster-pet.ts";
+import "../../components/tooltip.ts";
 import { renderSettingsRow, renderSettingsToggleRow } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { renderSessionObserverSettings } from "./session-observer-settings.ts";
@@ -243,6 +246,8 @@ export function renderLobsterPetSection(props: ConfigProps) {
   }
   const lobsterPetVisits = props.lobsterPetVisits === true;
   const lobsterPetSounds = props.lobsterPetSounds === true;
+  const dexEntries = getLobsterdexEntries();
+  const seenCount = LOBSTER_PET_PALETTES.filter((palette) => dexEntries.has(palette.id)).length;
   return html`
     <section class="settings-section">
       <div class="settings-section__header">
@@ -273,37 +278,76 @@ export function renderLobsterPetSection(props: ConfigProps) {
         ${renderSettingsRow({
           title: t("quickSettings.appearance.lobsterdex"),
           description: t("quickSettings.appearance.lobsterdexSeen", {
-            seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+            seen: String(seenCount),
             total: String(LOBSTER_PET_PALETTES.length),
           }),
           stacked: true,
-          control: html`<div class="lobsterdex">
-            ${LOBSTER_PET_PALETTES.map((palette) => {
-              const entry = getLobsterdexEntries().get(palette.id);
-              const seen = entry !== undefined;
-              const shinySeen = entry?.shinySeenAt != null;
-              const title = !seen
-                ? "?"
-                : entry.firstSeenAt !== null
-                  ? t("quickSettings.appearance.lobsterdexFirstVisited", {
-                      name: entry.name ?? palette.id,
-                      date: new Date(entry.firstSeenAt).toLocaleDateString(),
-                    })
-                  : (entry.name ?? palette.id);
-              return html`<span
-                class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
-                  ? ""
-                  : "lobsterdex__mini--unseen"}"
-                style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                title=${shinySeen ? `${title} ✦` : title}
-              >
-                ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
-                ${shinySeen
-                  ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
-                  : nothing}
-              </span>`;
-            })}
-          </div>`,
+          control: html`
+            <div class="lobsterdex__gallery">
+              <div class="lobsterdex">
+                ${LOBSTER_PET_PALETTES.map((palette) => {
+                  const entry = dexEntries.get(palette.id);
+                  const seen = entry !== undefined;
+                  const shinySeen = entry?.shinySeenAt != null;
+                  const baseName = seen ? (entry.name ?? lobsterPaletteName(palette.id)) : "?";
+                  const displayName = shinySeen ? `${baseName} ✦` : baseName;
+                  const lore = LOBSTER_PALETTE_LORE[palette.id];
+                  const loreLine = seen ? lore.flavor : lore.hint;
+                  const visitedLine =
+                    seen && entry.firstSeenAt !== null
+                      ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                          name: baseName,
+                          date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                        })
+                      : null;
+                  const ariaLabel = [displayName, loreLine, visitedLine]
+                    .filter((line): line is string => line !== null)
+                    .join("\n");
+                  return html`
+                    <openclaw-tooltip>
+                      <span
+                        class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                          ? ""
+                          : "lobsterdex__mini--unseen"}"
+                        style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                        tabindex="0"
+                        aria-label=${ariaLabel}
+                      >
+                        ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                        ${shinySeen
+                          ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                          : nothing}
+                      </span>
+                      <span slot="content" class="lobsterdex__tooltip">
+                        <strong>${displayName}</strong>
+                        <span>${loreLine}</span>
+                        ${visitedLine ? html`<span>${visitedLine}</span>` : nothing}
+                      </span>
+                    </openclaw-tooltip>
+                  `;
+                })}
+              </div>
+              ${props.lobsterdexHref
+                ? html`<a
+                    class="btn btn--sm lobsterdex__open"
+                    href=${props.lobsterdexHref}
+                    @click=${(event: MouseEvent) => {
+                      if (
+                        event.button === 0 &&
+                        !event.metaKey &&
+                        !event.ctrlKey &&
+                        !event.shiftKey &&
+                        !event.altKey
+                      ) {
+                        event.preventDefault();
+                        props.onOpenLobsterdex?.();
+                      }
+                    }}
+                    >${t("quickSettings.appearance.lobsterdexOpen")}</a
+                  >`
+                : nothing}
+            </div>
+          `,
         })}
       </div>
     </section>

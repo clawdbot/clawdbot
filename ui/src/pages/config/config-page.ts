@@ -973,6 +973,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetSounds: this.settings.lobsterPetSounds === true,
       setLobsterPetSounds: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
+      lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
+      onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
       chatFollowUpMode: this.settings.chatFollowUpMode,

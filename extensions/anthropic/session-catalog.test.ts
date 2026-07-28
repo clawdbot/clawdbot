@@ -1614,6 +1614,39 @@ describe("Claude session catalog", () => {
     expect(readFileSpy.mock.calls.filter(([filePath]) => isCatalogFile(filePath))).toEqual([]);
   });
 
+  it("bounds append-only snapshot staleness to 15 seconds", async () => {
+    const home = await createHome();
+    const projectDir = path.join(home, ".claude", "projects", "-workspace");
+    const sessionId = "append-staleness";
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+    await writeProject({
+      home,
+      entries: [],
+      transcripts: { [sessionId]: [sdkCliMessage(sessionId, "Initial")] },
+    });
+    const baseNow = Date.now();
+    const fixedDirectoryTime = new Date(baseNow - 10_000);
+    await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseNow);
+    const initial = await listLocalClaudeSessionPage({}, home);
+    const initialUpdatedAt = initial.sessions[0]?.updatedAt;
+
+    await fs.appendFile(transcriptPath, `${JSON.stringify({ type: "progress" })}\n`);
+    const appendedAt = new Date(baseNow + 2_000);
+    await fs.utimes(transcriptPath, appendedAt, appendedAt);
+    // Content writes do not portably change the parent directory mtime. Pin it so this test owns
+    // only the documented TTL path on every filesystem used by CI.
+    await fs.utimes(projectDir, fixedDirectoryTime, fixedDirectoryTime);
+
+    nowSpy.mockReturnValue(baseNow + 14_999);
+    const staleWithinBound = await listLocalClaudeSessionPage({}, home);
+    expect(staleWithinBound.sessions[0]?.updatedAt).toBe(initialUpdatedAt);
+
+    nowSpy.mockReturnValue(baseNow + 15_000);
+    const refreshedAtBound = await listLocalClaudeSessionPage({}, home);
+    expect(refreshedAtBound.sessions[0]?.updatedAt).toBe(appendedAt.getTime());
+  });
+
   it("invalidates the assembled scan on a project directory mtime change", async () => {
     const home = await createHome();
     const projectDir = path.join(home, ".claude", "projects", "-workspace");

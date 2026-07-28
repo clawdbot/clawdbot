@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { parse, tokenizer } from "acorn";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +11,7 @@ import {
   CODE_MODE_SHELL_SOURCE_ERROR,
   isShellLikeCodeModeSource,
 } from "./code-mode-shell-source.js";
+import type { CodeModeWorkerResult as WorkerThreadCodeModeResult } from "./code-mode-worker-types.js";
 import type { ToolSearchConfig, ToolSearchToolContext } from "./tool-search.js";
 import { asToolParamsRecord, ToolInputError } from "./tools/common.js";
 
@@ -50,27 +50,11 @@ export type CodeModeConfig = {
   maxSearchLimit: number;
 };
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "call"
-  | "callValue"
-  | "nodes"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "skillsList"
-  | "skillsRead"
-  | "swarmNote";
-
-export type PendingBridgeRequest = {
-  id: string;
-  method: CodeModeBridgeMethod;
-  args: unknown[];
-};
-
-export type SettledBridgeRequest = { id: string } & Result<unknown, string>;
+export type {
+  CodeModeSettlementMode,
+  PendingBridgeRequest,
+  SettledBridgeRequest,
+} from "./code-mode-worker-types.js";
 
 export type CodeModeFailureCode =
   | "aborted"
@@ -96,23 +80,8 @@ export type CodeModeHeadlessResult =
       toolCallCount: number;
     };
 
-export type CodeModeSettlementMode =
-  | { kind: "awaiting" }
-  | { kind: "draining"; requiredRequestIds: string[] };
-
 export type CodeModeWorkerResult =
-  | {
-      status: "completed";
-      value: unknown;
-      output: unknown[];
-    }
-  | {
-      status: "waiting";
-      snapshotBytes: Uint8Array;
-      pendingRequests: PendingBridgeRequest[];
-      settlementMode: CodeModeSettlementMode;
-      output: unknown[];
-    }
+  | Extract<WorkerThreadCodeModeResult, { status: "completed" | "waiting" }>
   | {
       status: "failed";
       error: string;
@@ -150,7 +119,9 @@ function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Recor
 }
 
 function readEnabled(value: unknown): boolean | "auto" {
-  return typeof value === "boolean" || value === "auto" ? value : false;
+  // Shipped default is "auto": code mode engages only for catalog-preferred
+  // models, so unevaluated models keep normal tool exposure by construction.
+  return typeof value === "boolean" || value === "auto" ? value : "auto";
 }
 
 export function readPositiveInteger(value: unknown, fallback: number): number {
@@ -333,7 +304,11 @@ export function enforceResultLimit(params: {
   config: CodeModeConfig;
 }): void {
   enforceOutputLimit(params.output, params.config);
-  if (params.value !== undefined && jsonByteLength(params.value) > params.config.maxOutputBytes) {
+  const outputBytes = params.output.length > 0 ? jsonByteLength(params.output) : 0;
+  if (
+    params.value !== undefined &&
+    outputBytes + jsonByteLength(params.value) > params.config.maxOutputBytes
+  ) {
     throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }

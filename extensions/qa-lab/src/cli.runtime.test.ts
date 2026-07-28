@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isCrablineServerChannel, OPENCLAW_CRABLINE_DEFAULT_CHANNEL } from "@openclaw/crabline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QaScenarioPack } from "./scenario-catalog.js";
 
@@ -573,6 +574,18 @@ describe("qa cli runtime", () => {
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.channelDriver).toBe("crabline");
     expect(suiteArgs.scenarioIds).toContain("channel-top-level-reply-shape");
+    const scenarioById = new Map(
+      readQaScenarioPack().scenarios.map((scenario) => [scenario.id, scenario]),
+    );
+    expect(
+      (suiteArgs.scenarioIds as string[]).every((scenarioId) => {
+        const scenario = scenarioById.get(scenarioId);
+        return (
+          scenario?.execution.kind !== "flow" ||
+          isCrablineServerChannel(scenario.execution.channel ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL)
+        );
+      }),
+    ).toBe(true);
     expect(suiteArgs.scenarioIds).not.toEqual(
       expect.arrayContaining([
         "instruction-followthrough-repo-contract",

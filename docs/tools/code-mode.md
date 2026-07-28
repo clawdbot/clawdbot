@@ -9,8 +9,10 @@ read_when:
   - You are reviewing the MCP namespace bridge or virtual API declarations
 ---
 
-Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
-enabled, the model no longer sees every enabled tool schema; instead, it sees
+Code mode is an experimental OpenClaw agent-runtime feature. It defaults to the
+`"auto"` tier, which engages only models whose catalog marks them as preferred
+code-mode performers; every other model keeps normal tool exposure. When
+engaged, the model no longer sees every enabled tool schema; instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
 program that searches, describes, and calls the hidden tool catalog.
@@ -23,8 +25,8 @@ separate implementations:
   freeform-grammar tool: the model writes raw JavaScript source (optionally
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
-- OpenClaw code mode runs in the generic OpenClaw agent runtime and is
-  disabled unless `tools.codeMode.enabled` is `true` or `"auto"`. Its `exec`
+- OpenClaw code mode runs in the generic OpenClaw agent runtime, gated by
+  `tools.codeMode.enabled` (default `"auto"`, per-model activation). Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
@@ -89,19 +91,25 @@ the QuickJS-WASI guest.
 
 ## Quickstart
 
-### Enable Code Mode
+### Defaults and overrides
+
+Code mode ships enabled in the `"auto"` tier: it engages only when the run's
+model is flagged as a preferred code-mode performer in its provider catalog,
+and every other model keeps normal tool exposure. No configuration is needed.
+See [Automatic per-model activation](#automatic-per-model-activation) for the
+exact semantics and the shipped model list.
+
+To opt out for every run:
 
 ```json5
 {
   tools: {
-    codeMode: {
-      enabled: true,
-    },
+    codeMode: false,
   },
 }
 ```
 
-Shorthand:
+To force code mode on for every tool-capable run, regardless of model:
 
 ```json5
 {
@@ -111,22 +119,9 @@ Shorthand:
 }
 ```
 
-Code mode stays off when `tools.codeMode` is omitted, `false`, or an object
-without `enabled: true` or `enabled: "auto"`.
-
-To engage code mode only for models whose catalog marks them as strong code-mode
-performers, use the `"auto"` tier instead of `true`:
-
-```json5
-{
-  tools: {
-    codeMode: "auto",
-  },
-}
-```
-
-See [Automatic per-model activation](#automatic-per-model-activation) for the
-exact semantics and the shipped model list.
+Object form works too: `tools.codeMode.enabled` accepts the same `false`,
+`true`, and `"auto"` values. An object without `enabled` keeps the `"auto"`
+default.
 
 If you use sandboxed agents with configured MCP servers, also allow the
 bundled MCP plugin in the sandbox tool policy, for example
@@ -205,7 +200,7 @@ validating high-risk deployments.
 |                     |                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | Runtime             | [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi)                               |
-| Default state       | disabled                                                                                    |
+| Default state       | `"auto"` (engages only catalog-preferred models)                                            |
 | Stability           | experimental OpenClaw surface (Codex Code Mode is a separate, stable Codex harness surface) |
 | Target surface      | generic OpenClaw agent runs                                                                 |
 | Security posture    | model code is hostile                                                                       |
@@ -252,7 +247,7 @@ enable the feature on its own.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
+| `enabled`             | `"auto"`                       | `false`, `true`, or `"auto"` (per-model)        |
 | `runtime`             | `"quickjs-wasi"`               | only supported value                            |
 | `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
 | `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
@@ -274,13 +269,13 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default): code mode is off for every run.
+- `"auto"` (default): code mode engages only when the run's model is flagged
+  as a preferred code-mode performer in its provider catalog.
+- `false`: code mode is off for every run.
 - `true`: code mode engages for every tool-capable run, regardless of model.
-- `"auto"`: code mode engages only when the run's model is flagged as a
-  preferred code-mode performer in its provider catalog.
 
-`false` and `true` behave exactly as before the `"auto"` tier existed; `"auto"`
-is purely additive.
+`false` and `true` are absolute overrides and behave exactly as before the
+`"auto"` tier existed.
 
 ### The `compat.codeMode` catalog flag
 
@@ -327,8 +322,9 @@ replacing many full tool schemas and per-tool round trips with one compact
 program surface. Models below the preferred tier showed no consistent win and
 sometimes regressed, which is why `"auto"` leaves them on direct tools.
 
-Use `"auto"` when agents switch between models: strong models get the compact
-surface, weaker or local ones keep the exposure they handle best. Use `true`
+The default `"auto"` fits agents that switch between models: strong models get
+the compact surface, weaker or local ones keep the exposure they handle best.
+Use `true`
 when you have verified a specific unflagged model performs well with code
 mode; global force-on is most predictable for single-model deployments. For
 open-weight or uncached serving where every prompt token is billed or

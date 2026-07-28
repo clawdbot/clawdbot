@@ -25891,7 +25891,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6413,
+      "line": 6416,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "No chat messages yet",
       "surface": "apple",
@@ -25899,7 +25899,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6475,
+      "line": 6478,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Connecting…",
       "surface": "apple",
@@ -25907,7 +25907,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 6475,
+      "line": 6478,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Reconnecting…",
       "surface": "apple",
@@ -25915,7 +25915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8822,
+      "line": 8825,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval",
       "surface": "apple",
@@ -25923,7 +25923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8822,
+      "line": 8825,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already",
       "surface": "apple",
@@ -25931,7 +25931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8828,
+      "line": 8831,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "This approval was already set to Always Allow.",
       "surface": "apple",
@@ -25939,7 +25939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 8829,
+      "line": 8832,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "Approval set to Always Allow.",
       "surface": "apple",
@@ -25947,7 +25947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 10164,
+      "line": 10202,
       "path": "apps/ios/Sources/Model/NodeAppModel.swift",
       "source": "\\(urlText.prefix(500))…",
       "surface": "apple",
@@ -29907,7 +29907,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 217,
+      "line": 283,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.",
       "surface": "apple",
@@ -29915,7 +29915,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 907,
+      "line": 990,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Replace the older OpenClaw in Applications?",
       "surface": "apple",
@@ -29923,7 +29923,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 908,
+      "line": 991,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Install OpenClaw in Applications?",
       "surface": "apple",
@@ -29931,7 +29931,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 910,
+      "line": 993,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "This copy is newer than the installed app. OpenClaw will replace it and reopen from Applications.",
       "surface": "apple",
@@ -29939,7 +29939,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 911,
+      "line": 994,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw will copy itself to Applications and reopen there so updates and launch at login stay reliable.",
       "surface": "apple",
@@ -29947,7 +29947,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 913,
+      "line": 996,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Install and Relaunch",
       "surface": "apple",
@@ -29955,7 +29955,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 913,
+      "line": 996,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "Replace and Relaunch",
       "surface": "apple",
@@ -29963,7 +29963,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 938,
+      "line": 1021,
       "path": "apps/macos/Sources/OpenClaw/ApplicationRelocator.swift",
       "source": "OpenClaw is installed in Applications, but couldn’t reopen automatically. Open it there manually.",
       "surface": "apple",

@@ -1178,6 +1178,8 @@ export const en: TranslationMap = {
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} visited",
       lobsterdexFirstVisited: "{name} · first visited {date}",
+      lobsterdexCardFirstVisited: "First visited {date}",
+      lobsterdexOpen: "Open Lobsterdex",
     },
     security: {
       title: "Security",
@@ -1420,7 +1422,6 @@ export const en: TranslationMap = {
     open: "Open",
     applying: "Applying…",
     autoSaveSaving: "Saving…",
-    autoSaveSaved: "Saved",
     autoSaveFailed: "Save failed",
     autoSaveConflict: "Settings changed elsewhere",
     retry: "Retry",
@@ -1806,6 +1807,7 @@ export const en: TranslationMap = {
     profile: "Profile",
     communications: "Communications",
     appearance: "Appearance",
+    lobsterdex: "Lobsterdex",
     automation: "Automation",
     mcp: "MCP",
     memory: "Memory",
@@ -1844,6 +1846,7 @@ export const en: TranslationMap = {
     profile: "Your agent's stats, streaks, and life in the reef.",
     communications: "Channels, messages, and audio settings.",
     appearance: "Theme, UI, and setup wizard settings.",
+    lobsterdex: "Every lobster palette that has visited this browser.",
     automation: "Commands, hooks, cron, and plugins.",
     mcp: "MCP servers, auth, tools, and diagnostics.",
     memory: "Memory engine, backend, search, and dreaming.",
@@ -2403,7 +2406,8 @@ export const en: TranslationMap = {
     saveFailed: "The feature setting could not be saved.",
     codeMode: {
       title: "Code Mode",
-      description: "Let agents combine tools in compact, sandboxed JavaScript workflows.",
+      description:
+        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
     },
     swarm: {
       title: "Swarm",
