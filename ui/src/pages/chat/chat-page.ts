@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { mobileNavLayoutMediaQuery, shouldMergeChatChrome } from "../../app/mobile-nav-layout.ts";
+import { mergeChatPageChrome, mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import "../../components/resizable-divider.ts";
@@ -40,6 +40,7 @@ import {
   resizePanes,
   setActivePane,
   setPaneSession,
+  singlePaneLayout,
   splitRatio,
   splitWeight,
   type ChatSplitLayout,
@@ -176,11 +177,7 @@ export class ChatPage extends OpenClawLightDomElement {
   };
 
   private resolveMergedChrome(mobileNavLayout: boolean): boolean {
-    return shouldMergeChatChrome({
-      mobileNavLayout,
-      routeId: "chat",
-      onboarding: this.closest(".shell--onboarding") !== null,
-    });
+    return mergeChatPageChrome(mobileNavLayout, this.closest(".shell--onboarding") !== null);
   }
 
   private readonly handleMobileNavViewportChange = (event: MediaQueryListEvent) => {
@@ -602,17 +599,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   private classicLayout(sessionKey = this.data?.sessionKey?.trim() ?? ""): ChatSplitLayout {
-    return {
-      columns: [
-        {
-          id: this.classicColumnId,
-          panes: [{ id: this.classicPaneId, sessionKey }],
-          paneWeights: [1],
-        },
-      ],
-      columnWeights: [1],
-      activePaneId: this.classicPaneId,
-    };
+    return singlePaneLayout(this.classicColumnId, this.classicPaneId, sessionKey);
   }
 
   private renderSplitLayout(layout: ChatSplitLayout, splitMode: boolean) {
