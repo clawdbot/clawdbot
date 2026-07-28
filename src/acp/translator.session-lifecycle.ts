@@ -225,21 +225,29 @@ export class AcpTranslatorSessionLifecycle {
     }
 
     const meta = parseSessionMeta(params["_meta"]);
-    const ledgerReplay: AcpEventLedgerReplay =
-      !existingSession && !hasExplicitSessionRouting(meta, this.opts)
-        ? await this.sessionUpdates.readLedgerReplayBySessionId(params.sessionId)
-        : { complete: false, events: [] };
-    const fallbackKey = existingSession?.sessionKey ?? ledgerReplay.sessionKey ?? params.sessionId;
-    const sessionKey = await this.resolveSessionKeyFromMeta({
+    const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
+    let sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
-      fallbackKey,
+      fallbackKey: existingSession?.sessionKey ?? params.sessionId,
     });
-
-    const shouldRequireGatewaySession =
-      !existingSession || sessionKey !== existingSession.sessionKey;
-    const sessionSnapshot = shouldRequireGatewaySession
-      ? await this.sessionState.getExistingSnapshot(sessionKey)
-      : await this.sessionState.getSnapshot(sessionKey);
+    let sessionSnapshot: Awaited<ReturnType<AcpTranslatorSessionState["getSnapshot"]>>;
+    if (!existingSession && !hasExplicitRouting) {
+      const implicitBridgeKey = `acp-bridge:${params.sessionId}`;
+      const implicitBridgeSnapshot =
+        await this.sessionState.findExistingSnapshot(implicitBridgeKey);
+      if (implicitBridgeSnapshot) {
+        sessionKey = implicitBridgeKey;
+        sessionSnapshot = implicitBridgeSnapshot;
+      } else {
+        sessionSnapshot = await this.sessionState.getExistingSnapshot(sessionKey);
+      }
+    } else {
+      const shouldRequireGatewaySession =
+        !existingSession || sessionKey !== existingSession.sessionKey;
+      sessionSnapshot = shouldRequireGatewaySession
+        ? await this.sessionState.getExistingSnapshot(sessionKey)
+        : await this.sessionState.getSnapshot(sessionKey);
+    }
 
     const session = this.sessionStore.createSession({
       sessionId: params.sessionId,

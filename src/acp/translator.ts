@@ -205,3 +205,4 @@ export class AcpGatewayAgent implements Agent {
     await this.promptStream.cancel(params);
   }
 }
+

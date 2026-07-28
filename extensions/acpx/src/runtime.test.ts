@@ -4052,6 +4052,33 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(result.sessionResumeSupported).toBe(expected);
   });
 
+  it("keeps an ensured session usable when resume capability lookup fails", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => {
+        throw new Error("session store read failed");
+      }),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:claude:acp:test",
+        agent: "claude",
+        mode: "oneshot",
+      }),
+    ).resolves.toEqual({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+  });
+
   it("keeps resumed one-shot turns on the resumed backend session", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({

@@ -1553,7 +1553,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
                 ),
             }),
     });
-    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    // Capability metadata only enriches the handle; a read failure must not strand this session.
+    const record = await this.sessionStore
+      .load(handle.acpxRecordId ?? handle.sessionKey)
+      .catch(() => undefined);
     const resumableHandle = withSessionResumeCapability(handle, record);
     return appliedModel ? { ...resumableHandle, appliedModel } : resumableHandle;
   }

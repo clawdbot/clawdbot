@@ -101,7 +101,7 @@ async function waitForChatSend(requestMock: { mock: { calls: Array<readonly unkn
 
 describe("ACP translator event ledger replay", () => {
   it("restores bridge routing when resuming after a translator restart", async () => {
-    const eventLedger = createInMemoryAcpEventLedger();
+    const eventLedger = createInMemoryAcpEventLedger({ maxSessions: 1 });
     const firstSessionStore = createInMemorySessionStore();
     const firstAgent = new AcpGatewayAgent(
       createAcpConnection(),
@@ -116,6 +116,19 @@ describe("ACP translator event ledger replay", () => {
     if (!firstSession) {
       throw new Error("Expected new ACP session to be stored");
     }
+    await vi.waitFor(async () => {
+      const replay = await eventLedger.readReplayBySessionId({ sessionId: created.sessionId });
+      expect(replay.events).toHaveLength(2);
+    });
+    await eventLedger.startSession({
+      sessionId: "evicting-session",
+      sessionKey: "acp-bridge:evicting-session",
+      cwd: "/tmp",
+      complete: true,
+    });
+    await expect(
+      eventLedger.readReplayBySessionId({ sessionId: created.sessionId }),
+    ).resolves.toEqual({ complete: false, events: [] });
 
     const resumedSessionStore = createInMemorySessionStore();
     const resumedRequest = vi.fn(async (method: string) => {
