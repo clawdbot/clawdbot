@@ -52,7 +52,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 2" });
+    ).toEqual({ text: "Automations listed.\nCount: 2" });
     expect(
       terminalPresentation(
         { action: "list" },
@@ -64,7 +64,7 @@ describe("cron tool flat-params", () => {
           },
         },
       ),
-    ).toEqual({ text: "Cron jobs listed.\nCount: 250" });
+    ).toEqual({ text: "Automations listed.\nCount: 250" });
     expect(
       terminalPresentation(
         { action: "add" },
