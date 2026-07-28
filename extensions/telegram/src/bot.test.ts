@@ -634,16 +634,17 @@ describe("createTelegramBot", () => {
         telegram: { dmPolicy: "open", allowFrom: ["*"] },
       },
     });
-    const telegramDeps = {
-      ...telegramBotDepsForTest,
-      ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
-    };
-    createTelegramBot = (opts) =>
-      createTelegramBotBase({
+    createTelegramBot = (opts) => {
+      const telegramDeps = {
+        ...telegramBotDepsForTest,
+        ...createTelegramNativeCommandTestDeps(dispatchReplyWithBufferedBlockDispatcher),
+      };
+      return createTelegramBotBase({
         botInfo: telegramBotInfoForTest,
         ...opts,
         telegramDeps,
       });
+    };
   });
 
   it("starts with retired includeGroupHistoryContext still present in raw config", async () => {

@@ -1,7 +1,7 @@
 // Verifies canonical and provider-owned TUI session event routing.
 import { describe, expect, it } from "vitest";
-import { matchesSelectedTuiSession } from "./tui-session-events.js";
-import type { TuiStateAccess } from "./tui-types.js";
+import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
+import type { SessionMessageEvent, TuiStateAccess } from "./tui-types.js";
 
 function makeState(overrides?: Partial<TuiStateAccess>): TuiStateAccess {
   return {
@@ -106,5 +106,52 @@ describe("matchesSelectedTuiSession", () => {
     expect(matchesSelectedTuiSession(state, {})).toBe(false);
     expect(matchesSelectedTuiSession(state, { sessionKey: "  " })).toBe(false);
     expect(matchesSelectedTuiSession(state, { sessionKey: "agent:main:other" })).toBe(false);
+  });
+});
+
+describe("readTuiSessionUserMessage", () => {
+  it("recovers the durable prompt identity and owning chat run", () => {
+    expect(
+      readTuiSessionUserMessage({
+        sessionKey: "agent:main:main",
+        messageId: "user-1",
+        message: {
+          __openclaw: { id: "user-1", idempotencyKey: "run-1:user", seq: 1 },
+          content: [{ type: "text", text: "shared prompt" }],
+          role: "user",
+        },
+      } satisfies SessionMessageEvent),
+    ).toEqual({ messageId: "user-1", runId: "run-1", text: "shared prompt" });
+  });
+
+  it("uses the authoritative transcript sequence when no message id is available", () => {
+    expect(
+      readTuiSessionUserMessage({
+        messageSeq: 7,
+        message: { content: "shared prompt", idempotencyKey: "run-7:user", role: "user" },
+      }),
+    ).toEqual({ messageId: "seq:7", runId: "run-7", text: "shared prompt" });
+  });
+
+  it("recovers the owning chat run from a metadata-free gateway envelope", () => {
+    expect(
+      readTuiSessionUserMessage({
+        clientRunId: "run-envelope",
+        messageId: "user-envelope",
+        message: { content: "shared prompt", role: "user" },
+      } satisfies SessionMessageEvent),
+    ).toEqual({ messageId: "user-envelope", runId: "run-envelope", text: "shared prompt" });
+  });
+
+  it("rejects assistant and identity-free transcript messages", () => {
+    expect(
+      readTuiSessionUserMessage({
+        messageId: "assistant-1",
+        message: { content: "reply", role: "assistant" },
+      }),
+    ).toBeNull();
+    expect(
+      readTuiSessionUserMessage({ message: { content: "unidentified", role: "user" } }),
+    ).toBeNull();
   });
 });

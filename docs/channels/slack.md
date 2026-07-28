@@ -1440,6 +1440,7 @@ Slack native progress task cards are opt-in for progress mode. Set `channels.sla
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
+- Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview app-authored so partial/block previews can be removed before a separately customized final; progress mode may instead collapse the app-authored draft into a receipt. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
@@ -1789,6 +1790,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Agent View `app_context` entities are validated in Slack relevance order and exposed only as structured untrusted context; an omitted context clears the turn rather than reusing stale entities.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
+- Dedicated Web API reads used for probes, scope discovery, conversation classification, and delivery reconciliation have a 30-second deadline per request attempt. Transient failures can still retry, so the full operation may take longer. Shared Bolt and mutation-capable clients do not receive this default deadline because Slack may commit a mutation before a late response reaches OpenClaw.
 - Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - global shortcuts: callback and actor metadata, routed to the actor's direct session

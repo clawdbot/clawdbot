@@ -157,7 +157,6 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
       acquireSessionWriteLock({
         sessionFile,
         timeoutMs: 5,
-        allowReentrant: false,
       }),
     ).rejects.toThrow(/session file locked/);
     await lock.release();
@@ -191,15 +190,16 @@ describe("acquireSessionWriteLock", () => {
   it("reuses locks across symlinked session paths", async () => {
     await withSymlinkedSessionPaths(
       async ({ sessionReal, sessionLink, realLockPath, linkLockPath }) => {
+        const reentrantOwner = "session:symlink-alias-test";
         const lockA = await acquireSessionWriteLock({
           sessionFile: sessionReal,
           timeoutMs: 500,
-          allowReentrant: true,
+          reentrantOwner,
         });
         const lockB = await acquireSessionWriteLock({
           sessionFile: sessionLink,
           timeoutMs: 500,
-          allowReentrant: true,
+          reentrantOwner,
         });
 
         await expect(fs.access(realLockPath)).resolves.toBeUndefined();
@@ -220,15 +220,16 @@ describe("acquireSessionWriteLock", () => {
 
   it("keeps the lock file until the last release", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const reentrantOwner = "session:final-release-test";
       const lockA = await acquireSessionWriteLock({
         sessionFile,
         timeoutMs: 500,
-        allowReentrant: true,
+        reentrantOwner,
       });
       const lockB = await acquireSessionWriteLock({
         sessionFile,
         timeoutMs: 500,
-        allowReentrant: true,
+        reentrantOwner,
       });
 
       await expectLockRemovedOnlyAfterFinalRelease({
@@ -730,7 +731,6 @@ describe("acquireSessionWriteLock", () => {
           sessionFile,
           timeoutMs: 5,
           staleMs: 60_000,
-          allowReentrant: false,
         }),
       ).rejects.toThrow(/session file locked/);
       await expect(fs.access(lockPath)).resolves.toBeUndefined();
@@ -1200,6 +1200,66 @@ describe("acquireSessionWriteLock", () => {
       await expect(fs.access(staleAliveLock)).resolves.toBeUndefined();
       await expect(fs.access(freshAliveLock)).resolves.toBeUndefined();
     } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves a fresh session lock that replaces the stale sweep candidate", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-replacement-"));
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const nowMs = Date.now();
+    const lockPath = path.join(sessionsDir, "replaced.jsonl.lock");
+    const replacementOwner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    if (!replacementOwner.pid) {
+      throw new Error("missing replacement lock owner pid");
+    }
+    const replacement = {
+      pid: replacementOwner.pid,
+      createdAt: new Date(nowMs).toISOString(),
+    };
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(nowMs - 120_000).toISOString(),
+      }),
+      "utf8",
+    );
+    const originalReadFile = fs.readFile.bind(fs);
+    let lockReads = 0;
+    const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (filePath, options) => {
+      const resolvedPath = readFilePathToString(filePath);
+      const raw = await originalReadFile(filePath, options as never);
+      if (resolvedPath && path.resolve(resolvedPath) === lockPath) {
+        lockReads += 1;
+        if (lockReads === 3) {
+          fsSync.writeFileSync(lockPath, JSON.stringify(replacement), "utf8");
+        }
+      }
+      return raw;
+    }) as typeof fs.readFile);
+
+    try {
+      const result = await cleanStaleLockFiles({
+        sessionsDir,
+        staleMs: 30_000,
+        nowMs,
+        removeStale: true,
+        readOwnerProcessArgs: (pid) =>
+          pid === replacementOwner.pid
+            ? ["node", "/opt/openclaw/openclaw.mjs", "agent"]
+            : ["python", "worker.py"],
+      });
+
+      expect(result.cleaned).toEqual([]);
+      expect(result.locks).toMatchObject([{ removed: false, stale: true }]);
+      expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toEqual(replacement);
+    } finally {
+      readFileSpy.mockRestore();
+      replacementOwner.kill("SIGTERM");
       await fs.rm(root, { recursive: true, force: true });
     }
   });

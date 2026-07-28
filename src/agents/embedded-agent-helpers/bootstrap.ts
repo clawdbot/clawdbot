@@ -88,6 +88,9 @@ export function stripThoughtSignatures<T>(
 
 const DEFAULT_BOOTSTRAP_MAX_CHARS = 20_000;
 const DEFAULT_BOOTSTRAP_TOTAL_MAX_CHARS = 60_000;
+// USER.md stays directive-sized so profile guidance cannot crowd out project
+// rules or durable facts from the shared bootstrap budget.
+export const USER_BOOTSTRAP_MAX_CHARS = 4_000;
 const DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE = "always";
 const MIN_BOOTSTRAP_FILE_BUDGET_CHARS = 64;
 // Ratios split `contentBudget` (= maxChars − marker.length − join separators), not `maxChars`.
@@ -98,6 +101,7 @@ const BOOTSTRAP_HEAD_RATIO = 0.75;
 const BOOTSTRAP_TAIL_RATIO = 0.25;
 const MIN_BOOTSTRAP_TRIMMED_CONTENT_CHARS = 16;
 const AGENTS_BOOTSTRAP_FILENAME = "AGENTS.md";
+const USER_BOOTSTRAP_FILENAME = "USER.md";
 const AGENTS_POLICY_DIGEST_RATIO = 0.35;
 const AGENTS_POLICY_HEAD_RATIO = 0.45;
 const AGENTS_POLICY_TAIL_RATIO = 0.15;
@@ -150,6 +154,10 @@ export function resolveBootstrapPromptTruncationWarningMode(
 
 function isAgentsBootstrapFile(fileName: string | undefined): boolean {
   return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
+}
+
+function isUserBootstrapFile(fileName: string | undefined): boolean {
+  return fileName?.toLowerCase() === USER_BOOTSTRAP_FILENAME.toLowerCase();
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
@@ -418,7 +426,10 @@ export function buildBootstrapContextFiles(
       );
       break;
     }
-    const fileMaxChars = Math.max(1, Math.min(maxChars, remainingTotalChars));
+    const fileBudget = isUserBootstrapFile(file.name)
+      ? Math.min(maxChars, USER_BOOTSTRAP_MAX_CHARS)
+      : maxChars;
+    const fileMaxChars = Math.max(1, Math.min(fileBudget, remainingTotalChars));
     const trimmed = trimBootstrapContent(file.content ?? "", file.name, fileMaxChars);
     const contentWithinBudget = clampToBudget(trimmed.content, remainingTotalChars);
     if (!contentWithinBudget) {

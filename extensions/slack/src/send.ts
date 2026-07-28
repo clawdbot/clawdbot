@@ -39,7 +39,7 @@ import {
   uploadSlackFile,
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
-import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -886,7 +886,7 @@ export async function reconcileSlackUnknownSend(
       retryable: false,
     };
   }
-  const readClient = opts?.client ?? createSlackWebClient(readToken);
+  const readClient = opts?.client ?? createSlackReadClient(readToken);
   const writeClient = opts?.client ?? (writeToken ? getSlackWriteClient(writeToken) : undefined);
   const payloadReplyToId = ctx.payloads[0]?.replyToId;
   const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")

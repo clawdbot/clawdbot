@@ -728,7 +728,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
     // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
     // decoded poll (question/options/votes) so the agent sees the actual poll.
-    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll, message.sender) : null;
     const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;

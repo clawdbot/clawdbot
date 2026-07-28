@@ -444,6 +444,7 @@ describe("memory index", () => {
     messages: Array<{
       content: string;
       role: "assistant" | "user";
+      senderIsOwner?: boolean;
       timestamp: number | string;
     }>;
     sessionId: string;
@@ -480,6 +481,7 @@ describe("memory index", () => {
           role: message.role,
           timestamp: message.timestamp,
           content: [{ type: "text", text: message.content }],
+          ...(message.senderIsOwner ? { __openclaw: { senderIsOwner: true } } : {}),
         },
       });
     }
@@ -604,6 +606,10 @@ describe("memory index", () => {
       const results = await manager.search("alpha");
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.path).toContain("memory/2026-01-12.md");
+      expect(results[0]?.provenance).toMatchObject({
+        originClass: "agent",
+        sessionKind: "unknown",
+      });
       const status = manager.status();
       expect(status.sourceCounts).toStrictEqual([
         {
@@ -612,6 +618,64 @@ describe("memory index", () => {
           chunks: status.chunks,
         },
       ]);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
+  it("indexes trailing recall annotations only from curated memory files", async () => {
+    await fs.writeFile(
+      path.join(workspaceDir, "MEMORY.md"),
+      [
+        "- Keep the gateway local. <!-- trigger: gateway setup, local access --> <!-- importance: 4 -->",
+        "- Preserve loopback binding. <!-- trigger: local access; network safety --> <!-- importance: 9 -->",
+      ].join("\n"),
+    );
+    await fs.writeFile(
+      path.join(workspaceDir, "USER.md"),
+      "- Prefer concise replies. <!-- trigger: writing style --> <!-- importance: 7 -->\n",
+    );
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-12.md"),
+      "- Daily note. <!-- trigger: should not inject --> <!-- importance: 10 -->\n",
+    );
+
+    const manager = await getFreshManager(createCfg({ provider: "none" }));
+    try {
+      await manager.sync({ reason: "test", force: true });
+      const db = Reflect.get(manager, "db") as DatabaseSync;
+      const rows = db
+        .prepare(
+          `SELECT chunk.path, chunk.importance, chunk.triggers,
+                  provenance.origin_class AS originClass
+           FROM memory_index_chunks AS chunk
+           JOIN memory_index_chunk_provenance AS provenance
+             ON provenance.chunk_id = chunk.id
+           WHERE chunk.source = 'memory'
+           ORDER BY chunk.path`,
+        )
+        .all() as Array<{
+        path: string;
+        importance: number | null;
+        triggers: string | null;
+        originClass: string;
+      }>;
+
+      expect(rows.find((row) => row.path === "MEMORY.md")).toMatchObject({
+        importance: 9,
+        triggers: "gateway setup; local access; network safety",
+        originClass: "agent",
+      });
+      expect(rows.find((row) => row.path === "USER.md")).toMatchObject({
+        importance: 7,
+        triggers: "writing style",
+        originClass: "agent",
+      });
+      expect(rows.find((row) => row.path === "memory/2026-01-12.md")).toMatchObject({
+        importance: null,
+        triggers: null,
+        originClass: "agent",
+      });
     } finally {
       await manager.close?.();
     }
@@ -4090,6 +4154,48 @@ describe("memory index", () => {
 
       expect(results[0]?.source).toBe("sessions");
       expect(results[0]?.snippet).toContain("ORBIT-10");
+      expect(results[0]?.provenance).toMatchObject({
+        originClass: "untrusted",
+        sessionKind: "interactive",
+      });
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("preserves trusted per-line provenance through session indexing", async () => {
+    try {
+      const manager = await getFtsSessionManager({
+        stateDirName: ".state-session-provenance",
+      });
+      if (!manager) {
+        return;
+      }
+
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-provenance",
+        messages: [
+          {
+            role: "user",
+            senderIsOwner: true,
+            timestamp: "2026-07-01T10:00:00.000Z",
+            content: "The owner prefers green tea.",
+          },
+        ],
+      });
+
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("owner prefers green tea", {
+        minScore: 0,
+        maxResults: 3,
+      });
+
+      expect(results[0]?.source).toBe("sessions");
+      expect(results[0]?.provenance).toEqual({
+        originClass: "owner",
+        sessionKind: "interactive",
+        observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
+      });
     } finally {
       restoreMemoryIndexStateDir();
     }

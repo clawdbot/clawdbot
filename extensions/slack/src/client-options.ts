@@ -32,7 +32,7 @@ export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
 
-const SLACK_LOOKUP_TIMEOUT_MS = 30_000;
+const SLACK_READ_TIMEOUT_MS = 30_000;
 
 const SLACK_LOOKUP_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
@@ -95,6 +95,17 @@ export function resolveSlackWebClientOptions(
   return resolved;
 }
 
+export function resolveSlackReadClientOptions(
+  options: WebClientOptions = {},
+  dispatcher = resolveSlackProxyDispatcher(),
+): WebClientOptions {
+  // The Slack SDK applies timeout per retry attempt. Keep its established read retry
+  // policy, while ensuring any one stalled request eventually releases the caller.
+  const resolved = resolveSlackWebClientOptions(options, dispatcher);
+  resolved.timeout ??= SLACK_READ_TIMEOUT_MS;
+  return resolved;
+}
+
 export function resolveSlackWriteClientOptions(
   options: WebClientOptions = {},
   dispatcher = resolveSlackProxyDispatcher(),
@@ -115,6 +126,6 @@ export function resolveSlackLookupClientOptions(
   // outside the Axios request timeout.
   resolved.rejectRateLimitedCalls = true;
   resolved.retryConfig = SLACK_LOOKUP_RETRY_OPTIONS;
-  resolved.timeout ??= SLACK_LOOKUP_TIMEOUT_MS;
+  resolved.timeout ??= SLACK_READ_TIMEOUT_MS;
   return resolved;
 }
