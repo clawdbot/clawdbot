@@ -207,6 +207,39 @@ describe("qa-channel plugin", () => {
     }
   });
 
+  it("derives signed media metadata without leaking URL query parameters", async () => {
+    const harness = await startQaChannelTestHarness();
+    const sendMedia = qaChannelPlugin.outbound?.sendMedia;
+    if (!sendMedia) {
+      throw new Error("expected qa-channel media sender");
+    }
+    const mediaUrl = "https://cdn.example.test/generated/image.png?token=qa-secret";
+    try {
+      await sendMedia({
+        cfg: harness.cfg,
+        to: "dm:qa-operator",
+        text: "QA signed image ready",
+        mediaUrl,
+      } as never);
+
+      const outbound = await harness.state.waitFor({
+        kind: "message-text",
+        textIncludes: "QA signed image ready",
+        direction: "outbound",
+        timeoutMs: 2_000,
+      });
+      expect("attachments" in outbound ? outbound.attachments : undefined).toEqual([
+        expect.objectContaining({
+          kind: "image",
+          fileName: "image.png",
+          url: mediaUrl,
+        }),
+      ]);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it("derives thread-aware outbound session routes from explicit thread targets", async () => {
     const route = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
       cfg: {},

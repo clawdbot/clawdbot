@@ -313,7 +313,7 @@ function isSuccessfulCodeModeWriteOutput(item: ResponsesInputItem) {
     payload?.value && typeof payload.value === "object" && !Array.isArray(payload.value)
       ? (payload.value as Record<string, unknown>)
       : undefined;
-  return payload?.status === "completed" && value?.changed === true;
+  return payload?.status === "completed" && typeof value?.changed === "boolean";
 }
 
 export function hasSuccessfulWriteToolOutput(input: ResponsesInputItem[], expectedPath: string) {

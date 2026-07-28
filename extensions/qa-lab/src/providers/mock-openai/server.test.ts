@@ -5446,6 +5446,19 @@ describe("qa mock openai server", () => {
     expect(errorBody.stop_reason).toBe("tool_use");
     expect(errorBody.content.some((block) => block.type === "tool_use")).toBe(true);
     expect(errorBody.content.some((block) => block.text === "Status: complete")).toBe(false);
+    const unchangedBody = await sendCodeModeResult(
+      writeToolUse,
+      JSON.stringify({
+        status: "completed",
+        value: { changed: false, created: false },
+        output: [],
+        toolCallCount: 1,
+      }),
+    );
+    expect(unchangedBody.stop_reason).toBe("end_turn");
+    expect(
+      unchangedBody.content.some((block) => String(block.text ?? "").includes("Status: complete")),
+    ).toBe(true);
 
     messages.push(
       {
