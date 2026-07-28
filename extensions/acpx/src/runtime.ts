@@ -37,6 +37,7 @@ import {
   readAcpxProcessLeaseIdentity,
   withAcpxLeaseEnvironment,
   type AcpxProcessLease,
+  type AcpxProcessLeaseIdentity,
   type AcpxProcessLeaseStore,
 } from "./process-lease.js";
 import {
@@ -800,6 +801,7 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
   private readonly ensureSessionTails = new Map<string, Promise<void>>();
+  private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
   private readonly processLeaseOperationCounts = new Map<string, number>();
   private readonly cwd: string;
 
@@ -1018,24 +1020,9 @@ export class AcpxRuntime implements AcpRuntime {
     ) {
       return await params.run();
     }
+    const processLeaseStore = this.processLeaseStore;
     const reusableIdentity = readAcpxProcessLeaseIdentity(params.reusableCommand);
-    const reusableLease =
-      reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId
-        ? await this.processLeaseStore.load(reusableIdentity.leaseId)
-        : undefined;
-    const reusableLeaseMatches =
-      !reusableLease ||
-      (reusableLease.gatewayInstanceId === this.gatewayInstanceId &&
-        reusableLease.sessionKey === params.sessionKey &&
-        reusableLease.wrapperRoot === this.wrapperRoot);
-    if (reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId && !reusableLeaseMatches) {
-      throw new AcpRuntimeError(
-        "ACP_SESSION_INIT_FAILED",
-        `ACPX process lease ${reusableIdentity.leaseId} belongs to another session`,
-      );
-    }
-    const canReuseLeaseIdentity =
-      reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId && reusableLeaseMatches;
+    const canReuseLeaseIdentity = reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId;
     const leaseId = canReuseLeaseIdentity ? reusableIdentity.leaseId : createAcpxProcessLeaseId();
     const leasedCommand = withAcpxLeaseEnvironment({
       command: params.command,
@@ -1054,12 +1041,29 @@ export class AcpxRuntime implements AcpRuntime {
     // Reuse-only adoption cannot spawn: readReusablePersistentSessionCommand
     // mirrors upstream's exact reuse policy. Persist the new command first and
     // let the next reconnect create its matching pending lease.
-    const ownsPendingLease =
-      !reusableLease && (!params.reusableCommand || params.reusableCommand === leasedCommand);
-    if (ownsPendingLease) {
+    await this.retainProcessLeaseOperation(launch, async () => {
+      const reusableLease = canReuseLeaseIdentity
+        ? await processLeaseStore.load(launch.leaseId)
+        : undefined;
+      if (
+        reusableLease &&
+        (reusableLease.gatewayInstanceId !== launch.gatewayInstanceId ||
+          reusableLease.sessionKey !== launch.sessionKey ||
+          reusableLease.wrapperRoot !== launch.wrapperRoot)
+      ) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACPX process lease ${launch.leaseId} belongs to another session`,
+        );
+      }
+      const ownsPendingLease =
+        !reusableLease && (!params.reusableCommand || params.reusableCommand === leasedCommand);
+      if (!ownsPendingLease) {
+        return;
+      }
       // The pending lease is written before acpx can spawn. The session-store
-      // save fills in the PID, or this owner deletes the row on launch failure.
-      await this.processLeaseStore.save({
+      // save fills in the PID, or the last owner deletes it on launch failure.
+      await processLeaseStore.save({
         leaseId: launch.leaseId,
         gatewayInstanceId: launch.gatewayInstanceId,
         sessionKey: launch.sessionKey,
@@ -1070,131 +1074,191 @@ export class AcpxRuntime implements AcpRuntime {
         startedAt: Date.now(),
         state: "open",
       });
-    }
+    });
     try {
       const result = await this.launchLeaseScope.run(launch, params.run);
-      const record = await this.sessionStore.load(params.sessionKey);
-      if (!readRecordAgentPid(record)) {
-        await this.processLeaseStore.markState(launch.leaseId, "lost");
-      }
+      await this.finalizeProcessLeaseForSession(params.sessionKey, launch);
       return result;
     } catch (error) {
-      if (ownsPendingLease) {
-        await this.retirePendingProcessLease(launch);
-      }
+      await this.retirePendingProcessLease(launch);
       throw error;
     }
   }
 
   private async prepareProcessLeaseForOperation(
     handle: AcpRuntimeHandle,
-  ): Promise<OpenClawLeaseSessionMetadata | undefined> {
+  ): Promise<AcpxProcessLeaseIdentity | undefined> {
     if (!this.processLeaseStore || !this.gatewayInstanceId || !this.wrapperRoot) {
       return undefined;
     }
+    const processLeaseStore = this.processLeaseStore;
+    const wrapperRoot = this.wrapperRoot;
     const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    const recordPid = readRecordAgentPid(record);
     const command = readAgentCommandFromRecord(record);
     const identity = readAcpxProcessLeaseIdentity(command);
     if (
       !command ||
-      identity?.gatewayInstanceId !== this.gatewayInstanceId ||
       !isOpenClawLeaseAwareAcpxProcessCommand({
         command,
-        wrapperRoot: this.wrapperRoot,
+        wrapperRoot,
       })
     ) {
       return undefined;
     }
-    const existing = await this.processLeaseStore.load(identity.leaseId);
-    if (existing) {
+    if (!identity) {
+      return undefined;
+    }
+    if (identity.gatewayInstanceId !== this.gatewayInstanceId) {
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        `ACPX process lease ${identity.leaseId} belongs to another gateway`,
+      );
+    }
+    await this.retainProcessLeaseOperation(identity, async () => {
+      const existing = await processLeaseStore.load(identity.leaseId);
+      if (!existing) {
+        // Preserve a PID already persisted with this lease identity. Otherwise
+        // reconnect starts from a pending row until upstream saves its new PID.
+        await processLeaseStore.save({
+          leaseId: identity.leaseId,
+          gatewayInstanceId: identity.gatewayInstanceId,
+          sessionKey: handle.sessionKey,
+          wrapperRoot,
+          wrapperPath: extractGeneratedWrapperPath(command),
+          rootPid: recordPid ?? 0,
+          commandHash: hashAcpxProcessCommand(command),
+          startedAt: Date.now(),
+          state: "open",
+        });
+        return;
+      }
       if (
         existing.gatewayInstanceId !== identity.gatewayInstanceId ||
         existing.sessionKey !== handle.sessionKey ||
-        existing.wrapperRoot !== this.wrapperRoot
+        existing.wrapperRoot !== wrapperRoot
       ) {
         throw new AcpRuntimeError(
           "ACP_TURN_FAILED",
           `ACPX process lease ${identity.leaseId} belongs to another session`,
         );
       }
-      this.retainProcessLeaseOperation(identity);
-      return identity;
-    }
-    // Reconnect can spawn before upstream persists its replacement PID. A
-    // pending row makes startup cleanup scan the owned wrapper root if we exit.
-    await this.processLeaseStore.save({
-      leaseId: identity.leaseId,
-      gatewayInstanceId: identity.gatewayInstanceId,
-      sessionKey: handle.sessionKey,
-      wrapperRoot: this.wrapperRoot,
-      wrapperPath: extractGeneratedWrapperPath(command),
-      rootPid: 0,
-      commandHash: hashAcpxProcessCommand(command),
-      startedAt: Date.now(),
-      state: "open",
     });
-    this.retainProcessLeaseOperation(identity);
     return identity;
   }
 
-  private retainProcessLeaseOperation(identity: OpenClawLeaseSessionMetadata): void {
-    this.processLeaseOperationCounts.set(
-      identity.leaseId,
-      (this.processLeaseOperationCounts.get(identity.leaseId) ?? 0) + 1,
-    );
+  private async runSerializedProcessLeaseTransition<T>(
+    leaseId: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.processLeaseTransitionTails.get(leaseId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => current);
+    this.processLeaseTransitionTails.set(leaseId, tail);
+    await previous;
+    try {
+      return await run();
+    } finally {
+      release();
+      if (this.processLeaseTransitionTails.get(leaseId) === tail) {
+        this.processLeaseTransitionTails.delete(leaseId);
+      }
+    }
   }
 
-  private releaseProcessLeaseOperation(
-    identity: OpenClawLeaseSessionMetadata | undefined,
-  ): boolean {
+  private async retainProcessLeaseOperation(
+    identity: AcpxProcessLeaseIdentity,
+    prepare: () => Promise<void>,
+  ): Promise<void> {
+    await this.runSerializedProcessLeaseTransition(identity.leaseId, async () => {
+      await prepare();
+      this.processLeaseOperationCounts.set(
+        identity.leaseId,
+        (this.processLeaseOperationCounts.get(identity.leaseId) ?? 0) + 1,
+      );
+    });
+  }
+
+  private async releaseProcessLeaseOperation(
+    identity: AcpxProcessLeaseIdentity | undefined,
+    finalize: () => Promise<void>,
+  ): Promise<void> {
     if (!identity) {
-      return false;
+      return;
     }
-    const count = this.processLeaseOperationCounts.get(identity.leaseId) ?? 0;
-    if (count > 1) {
-      this.processLeaseOperationCounts.set(identity.leaseId, count - 1);
-      return false;
-    }
-    this.processLeaseOperationCounts.delete(identity.leaseId);
-    return true;
+    await this.runSerializedProcessLeaseTransition(identity.leaseId, async () => {
+      const count = this.processLeaseOperationCounts.get(identity.leaseId) ?? 0;
+      if (count > 1) {
+        this.processLeaseOperationCounts.set(identity.leaseId, count - 1);
+        return;
+      }
+      if (count === 0) {
+        return;
+      }
+      // Keep the zero-owner check and retirement in one lease-local transition.
+      // Otherwise a reconnect can retain a row while an older owner deletes it.
+      this.processLeaseOperationCounts.delete(identity.leaseId);
+      await finalize();
+    });
   }
 
   private async finalizeProcessLeaseForOperation(
     handle: AcpRuntimeHandle,
-    identity: OpenClawLeaseSessionMetadata | undefined,
+    identity: AcpxProcessLeaseIdentity | undefined,
   ): Promise<void> {
-    if (!identity || !this.processLeaseStore || !this.releaseProcessLeaseOperation(identity)) {
+    await this.finalizeProcessLeaseForSession(handle.acpxRecordId ?? handle.sessionKey, identity);
+  }
+
+  private async finalizeProcessLeaseForSession(
+    sessionId: string,
+    identity: AcpxProcessLeaseIdentity | undefined,
+  ): Promise<void> {
+    if (!identity || !this.processLeaseStore) {
       return;
     }
-    const lease = await this.processLeaseStore.load(identity.leaseId);
-    if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
-      return;
-    }
-    if (lease.rootPid <= 0) {
-      await this.processLeaseStore.markState(identity.leaseId, "lost");
-      return;
-    }
-    try {
-      const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
-      if (!readRecordAgentPid(record)) {
-        await this.processLeaseStore.markState(identity.leaseId, "lost");
+    const processLeaseStore = this.processLeaseStore;
+    await this.releaseProcessLeaseOperation(identity, async () => {
+      const lease = await processLeaseStore.load(identity.leaseId);
+      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
+        return;
       }
-    } catch {
-      // Preserve a PID-bearing lease for startup verification when record reload
-      // fails; deleting it here could lose the only cleanup identity.
-    }
+      if (lease.rootPid <= 0) {
+        await processLeaseStore.markState(identity.leaseId, "lost");
+        return;
+      }
+      try {
+        const record = await this.sessionStore.load(sessionId);
+        const recordIdentity = readAcpxProcessLeaseIdentity(readAgentCommandFromRecord(record));
+        if (
+          recordIdentity?.leaseId !== identity.leaseId ||
+          recordIdentity.gatewayInstanceId !== identity.gatewayInstanceId ||
+          readRecordAgentPid(record) !== lease.rootPid
+        ) {
+          await processLeaseStore.markState(identity.leaseId, "lost");
+        }
+      } catch {
+        // Preserve a PID-bearing lease for startup verification when record reload
+        // fails; deleting it here could lose the only cleanup identity.
+      }
+    });
   }
 
   private async retirePendingProcessLease(
-    identity: OpenClawLeaseSessionMetadata | undefined,
+    identity: AcpxProcessLeaseIdentity | undefined,
   ): Promise<void> {
-    if (!identity || !this.processLeaseStore || !this.releaseProcessLeaseOperation(identity)) {
+    if (!identity || !this.processLeaseStore) {
       return;
     }
-    const lease = await this.processLeaseStore.load(identity.leaseId);
-    if (lease?.gatewayInstanceId === identity.gatewayInstanceId && lease.rootPid <= 0) {
-      await this.processLeaseStore.markState(identity.leaseId, "lost");
-    }
+    const processLeaseStore = this.processLeaseStore;
+    await this.releaseProcessLeaseOperation(identity, async () => {
+      const lease = await processLeaseStore.load(identity.leaseId);
+      if (lease?.gatewayInstanceId === identity.gatewayInstanceId && lease.rootPid <= 0) {
+        await processLeaseStore.markState(identity.leaseId, "lost");
+      }
+    });
   }
 
   private async runWithProcessLeaseForHandle<T>(
@@ -1211,7 +1275,7 @@ export class AcpxRuntime implements AcpRuntime {
 
   private async finalizeProcessLeaseAfter<T>(
     handle: AcpRuntimeHandle,
-    identityPromise: Promise<OpenClawLeaseSessionMetadata | undefined>,
+    identityPromise: Promise<AcpxProcessLeaseIdentity | undefined>,
     resultPromise: Promise<T>,
   ): Promise<T> {
     try {
