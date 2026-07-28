@@ -1450,6 +1450,9 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Verify Control UI i18n source
+        run: pnpm ui:i18n:verify
+
       - name: Check Control UI locale parity
         # Source-only drift stays advisory because the post-merge bot owns
         # repair. Generated locale changes and full release CI remain strict.

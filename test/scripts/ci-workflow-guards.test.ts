@@ -4355,6 +4355,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const workflowSource = readFileSync(".github/workflows/ci.yml", "utf8");
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
     const localeJob = workflow.jobs["control-ui-i18n"];
+    const sourceStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify Control UI i18n source",
+    );
     const localeStep = localeJob.steps.find(
       (step: WorkflowStep) => step.name === "Check Control UI locale parity",
     );
@@ -4365,6 +4368,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:ui"]).not.toContain(
       "ui:i18n:check",
     );
+    expect(workflowSource.match(/pnpm ui:i18n:verify/gu)).toHaveLength(1);
     expect(workflowSource.match(/pnpm ui:i18n:check/gu)).toHaveLength(1);
     expect(readFileSync("ui/src/i18n/test/translate.test.ts", "utf8")).not.toContain(
       "keeps shipped locales structurally aligned with English",
@@ -4372,6 +4376,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(localeJob.needs).toEqual(["preflight"]);
     expect(localeJob.if).toBe("needs.preflight.outputs.run_control_ui_i18n == 'true'");
     expect(localeJob["continue-on-error"]).toBeUndefined();
+    expect(sourceStep["continue-on-error"]).toBeUndefined();
+    expect(sourceStep.run).toBe("pnpm ui:i18n:verify");
     expect(localeStep["continue-on-error"]).toBe(
       "${{ needs.preflight.outputs.strict_control_ui_i18n != 'true' }}",
     );

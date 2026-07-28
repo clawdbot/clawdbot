@@ -837,7 +837,7 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("runs control-ui locale check only for control-ui i18n surfaces", () => {
+  it("runs control-ui localization checks for i18n tooling and production UI source", () => {
     expect(detectChangedScope(["ui/src/i18n/locales/en.ts"])).toEqual({
       runNode: true,
       runMacos: false,
@@ -867,6 +867,19 @@ describe("detectChangedScope", () => {
         runUiTests: false,
       });
     }
+
+    expect(detectChangedScope(["ui/src/pages/example.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runIosBuild: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: true,
+      runUiTests: true,
+    });
+    expect(detectChangedScope(["ui/src/pages/example.test.ts"]).runControlUiI18n).toBe(false);
   });
 
   it.each([
