@@ -99,6 +99,9 @@ export const DEFAULT_SESSION_LIST_QUERY = {
   limit: 50,
 } as const satisfies SessionListOptions;
 
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
+
 type SessionRefreshOptions = SessionListOptions & {
   force?: boolean;
   // Sidebar startup hydration must not block session creation or drop the open session.
@@ -839,6 +842,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
   };
   let inFlight: Promise<void> | null = null;
   let queuedRefresh: SessionRefreshOptions | null = null;
+  let eventRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  let eventRefreshDeadline: number | null = null;
   let canonicalListRevision = 0;
   let disposed = false;
   let connectionEpoch = 0;
@@ -1097,11 +1102,21 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     }
   };
 
+  const clearEventRefreshTimer = () => {
+    if (eventRefreshTimer !== null) {
+      globalThis.clearTimeout(eventRefreshTimer);
+      eventRefreshTimer = null;
+    }
+    eventRefreshDeadline = null;
+  };
+
   const refresh = (options: SessionRefreshOptions = {}) => {
     if (gateway.snapshot.phase !== "connected" || !gateway.snapshot.client || disposed) {
       return Promise.resolve();
     }
     if (inFlight) {
+      // An explicit queued refresh subsumes any older event invalidation.
+      clearEventRefreshTimer();
       queuedRefresh = options;
       return inFlight;
     }
@@ -1111,6 +1126,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (state.result && !options.force && !hasListOverrides) {
       return Promise.resolve();
     }
+    // An explicit refresh that will issue a request must run now.
+    clearEventRefreshTimer();
     const request = drainRefreshQueue(options).finally(() => {
       if (inFlight === request) {
         inFlight = null;
@@ -1119,6 +1136,43 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     inFlight = request;
     return request;
   };
+
+  const flushEventRefresh = () => {
+    if (eventRefreshTimer === null) {
+      return;
+    }
+    clearEventRefreshTimer();
+    void refresh({ ...lastListOptions, force: true });
+  };
+
+  const scheduleEventRefresh = () => {
+    const now = Date.now();
+    eventRefreshDeadline ??= now + SESSION_EVENT_REFRESH_MAX_WAIT_MS;
+    if (eventRefreshTimer !== null) {
+      globalThis.clearTimeout(eventRefreshTimer);
+    }
+    const delay = Math.min(
+      SESSION_EVENT_REFRESH_DEBOUNCE_MS,
+      Math.max(0, eventRefreshDeadline - now),
+    );
+    eventRefreshTimer = globalThis.setTimeout(() => {
+      eventRefreshTimer = null;
+      eventRefreshDeadline = null;
+      void refresh({ ...lastListOptions, force: true });
+    }, delay);
+  };
+
+  const handleVisibilityChange = () => {
+    if (document.visibilityState === "hidden") {
+      flushEventRefresh();
+    }
+  };
+  const observesPageLifecycle =
+    typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
+  if (observesPageLifecycle) {
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    globalThis.addEventListener("pagehide", flushEventRefresh);
+  }
 
   const refreshReplacement = (agentId?: string | null) => {
     // Mutation refreshes replace the visible sidebar rows. A foreground probe
@@ -1861,6 +1915,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionConnected = connected;
     if (connectionChanged) {
       const hadPullRequestSummaries = pullRequestSummaries.size > 0;
+      clearEventRefreshTimer();
       connectionEpoch += 1;
       if (previousClient) {
         resetSessionMessageSubscriptionRegistry(previousClient);
@@ -1967,8 +2022,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         });
       }
       // Gateway lists are filtered and windowed. Events cannot preserve server
-      // membership or ordering, so the coalesced refresh remains canonical.
-      void refresh({ ...lastListOptions, force: true });
+      // membership or ordering, so the coalesced refresh remains canonical. Only
+      // events debounce, with a max wait; explicit refreshes and page exit flush it.
+      scheduleEventRefresh();
     }
   });
 
@@ -2027,6 +2083,13 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return () => listeners.delete(listener);
     },
     dispose() {
+      // Page teardown must start the trailing refresh synchronously before the
+      // disposed guard makes the capability inert.
+      flushEventRefresh();
+      if (observesPageLifecycle) {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        globalThis.removeEventListener("pagehide", flushEventRefresh);
+      }
       for (const subscription of ownedMessageSubscriptions) {
         void releaseSessionMessageSubscription(subscription).catch(() => undefined);
       }
