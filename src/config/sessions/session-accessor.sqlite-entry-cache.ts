@@ -13,7 +13,7 @@ type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | 
 export type SqliteSessionEntryCacheSnapshot = {
   entries: Map<string, SessionEntry>;
   keys: string[];
-  listEntries: Map<string, SessionEntry>;
+  listEntries: Pick<ReadonlyMap<string, SessionEntry>, "get">;
 };
 
 type SqliteSessionEntryCache = SqliteSessionEntryCacheSnapshot & {
@@ -68,6 +68,29 @@ function createListProjection(entry: SessionEntry): SessionEntry {
   return projected;
 }
 
+function createLazyListProjections(
+  entries: ReadonlyMap<string, SessionEntry>,
+): Pick<ReadonlyMap<string, SessionEntry>, "get"> {
+  const projectedByKey = new Map<string, SessionEntry>();
+  return {
+    get: (sessionKey) => {
+      const cached = projectedByKey.get(sessionKey);
+      if (cached) {
+        return cached;
+      }
+      const entry = entries.get(sessionKey);
+      if (!entry) {
+        return undefined;
+      }
+      // A snapshot projects each key once. clone:false readers share this immutable
+      // value, so replacing it would break identity and reintroduce store-wide cloning.
+      const projected = createListProjection(entry);
+      projectedByKey.set(sessionKey, projected);
+      return projected;
+    },
+  };
+}
+
 function loadSessionEntrySnapshot(
   database: SessionEntryCacheDatabase,
 ): SqliteSessionEntryCacheSnapshot {
@@ -77,19 +100,17 @@ function loadSessionEntrySnapshot(
     db.selectFrom("session_nodes").select(["session_key", "entry_json"]).orderBy("session_key"),
   ).rows;
   const entries = new Map<string, SessionEntry>();
-  const listEntries = new Map<string, SessionEntry>();
   for (const row of rows) {
     const entry = parseSqliteSessionEntryJson(row);
     if (!entry) {
       continue;
     }
     entries.set(row.session_key, entry);
-    listEntries.set(row.session_key, createListProjection(entry));
   }
   return {
     entries,
     keys: rows.map((row) => row.session_key),
-    listEntries,
+    listEntries: createLazyListProjections(entries),
   };
 }
 
