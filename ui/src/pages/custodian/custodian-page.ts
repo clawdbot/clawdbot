@@ -25,10 +25,10 @@ import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
+  custodianChatParams,
   isCustodianSessionInvalidatedError,
   sessionVariant,
   type CustodianSessionVariant,
-  welcomeVariant,
 } from "./session-lifecycle.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 import {
@@ -41,7 +41,6 @@ import {
   retireCustodianQuestions,
   type CustodianMessage,
 } from "./transcript.ts";
-import { currentCustodianUiContext } from "./ui-context.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SYSTEM_CHANGE_PAGE_SIZE = 50;
@@ -153,7 +152,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionStarted = true;
     void this.initializeSession(
       client,
-      { sessionId: this.sessionId, ...welcomeVariant(variant) },
+      { sessionId: this.sessionId, ...custodianChatParams(variant) },
       loadTranscript,
     );
   }
@@ -522,12 +521,9 @@ export class CustodianPage extends OpenClawLightDomElement {
       },
     ];
     this.input = "";
-    const uiContext = currentCustodianUiContext();
     const reply = this.requestReply(client, {
       sessionId: this.sessionId,
-      ...welcomeVariant(sessionVariant(this.onboarding, this.newAgentIntent)),
-      message,
-      ...(uiContext ? { context: uiContext } : {}),
+      ...custodianChatParams(sessionVariant(this.onboarding, this.newAgentIntent), message),
     });
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;
