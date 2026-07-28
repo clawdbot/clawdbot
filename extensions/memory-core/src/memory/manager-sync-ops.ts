@@ -157,6 +157,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     // indexes can safely sync without an embedding provider.
     this.assertFtsOnlySyncAllowed();
 
+    const syncProvider = this.syncProviderGeneration
+      ? this.syncProviderGeneration.provider
+      : this.provider;
+
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
@@ -165,7 +169,9 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         label: "Loading vector extension…",
       });
     }
-    const vectorReady = await this.ensureVectorReady();
+    // Keyword-only generations never write vectors, so they must not wait for
+    // the vector extension before text and FTS indexing can proceed.
+    const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
     const meta = this.readMeta();
     const targetArchiveFiles = await this.combineTargetArchiveFiles({
       sessions: params?.sessions,
@@ -178,9 +184,6 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
-    const syncProvider = this.syncProviderGeneration
-      ? this.syncProviderGeneration.provider
-      : this.provider;
     const syncProviderKey = this.syncProviderGeneration
       ? this.syncProviderGeneration.providerKey
       : this.providerKey;

@@ -2,7 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, readErrorName } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
@@ -33,6 +33,7 @@ import {
   type MemorySyncParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveMemoryCoreLocalServiceHostIdentity,
@@ -118,6 +119,7 @@ type MemoryEmbeddingProviderRequirement = {
   provider: string;
   configuredProvider?: string;
 };
+type MemoryEmbeddingBootstrapDebug = NonNullable<MemorySearchRuntimeDebug["embeddingBootstrap"]>;
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
@@ -422,6 +424,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
+  private embeddingBootstrapFailure?: MemoryEmbeddingBootstrapDebug;
   private providerRetirementPromise: Promise<void> = Promise.resolve();
   private providersPendingRetirement = new Set<EmbeddingProvider>();
   private closePromise: Promise<void> | null = null;
@@ -707,10 +710,127 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerInitialized = true;
   }
 
+  private markEmbeddingBootstrapFailure(
+    err: unknown,
+    options?: { retainProvider?: boolean },
+  ): MemoryEmbeddingBootstrapDebug {
+    const rawErrorName = readErrorName(err).trim();
+    const errorName = /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(rawErrorName) ? rawErrorName : "";
+    const message =
+      redactSensitiveText(formatErrorMessage(err), { mode: "tools" }).trim() ||
+      "embedding provider initialization failed";
+    const reason = redactSensitiveText(
+      errorName && errorName !== "Error" ? `${errorName}: ${message}` : message,
+      { mode: "tools" },
+    );
+    const errorProvider =
+      err && typeof err === "object" && typeof Reflect.get(err, "provider") === "string"
+        ? String(Reflect.get(err, "provider")).trim()
+        : "";
+    const provider = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(errorProvider)
+      ? errorProvider
+      : (this.provider?.id ?? this.settings.provider);
+    const debug: MemoryEmbeddingBootstrapDebug = {
+      ok: false,
+      provider,
+      reason,
+      degradedTo: "keyword-only",
+    };
+    if (!options?.retainProvider) {
+      this.provider = null;
+      this.providerRuntime = undefined;
+    }
+    this.providerInitialized = true;
+    this.providerUnavailableReason = reason;
+    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+      providerId: provider,
+      reason,
+    });
+    this.embeddingBootstrapFailure = debug;
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+    this.vector.semanticAvailable = false;
+    this.cacheProbeResult({ ok: false, error: reason });
+    return debug;
+  }
+
+  private async ensureEmbeddingProviderForSearch(
+    onDebug?: (debug: MemorySearchRuntimeDebug) => void,
+  ): Promise<boolean> {
+    const failure = this.embeddingBootstrapFailure;
+    if (failure) {
+      const cached = this.getCachedEmbeddingAvailability();
+      if (cached?.ok === false) {
+        onDebug?.({ backend: "builtin", embeddingBootstrap: failure });
+        return true;
+      }
+    }
+    try {
+      await this.ensureProviderInitialized();
+    } catch (err) {
+      if (this.providerRequirement.mode !== "optional") {
+        throw err;
+      }
+      const nextFailure = this.markEmbeddingBootstrapFailure(err);
+      onDebug?.({ backend: "builtin", embeddingBootstrap: nextFailure });
+      return true;
+    }
+    if (!failure) {
+      return false;
+    }
+    if (!this.provider) {
+      const nextFailure: MemoryEmbeddingBootstrapDebug = {
+        ...failure,
+        reason: this.providerUnavailableReason ?? failure.reason,
+      };
+      this.embeddingBootstrapFailure = nextFailure;
+      this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+      onDebug?.({ backend: "builtin", embeddingBootstrap: nextFailure });
+      return true;
+    }
+
+    const currentIdentity = this.refreshIndexIdentityDirty({ providerKeyKnown: true });
+    let activeFailure = failure;
+    if (currentIdentity.status !== "valid") {
+      try {
+        await this.syncAdmitted({ reason: "search", force: true });
+      } catch (err) {
+        const message = redactSensitiveText(formatErrorMessage(err), { mode: "tools" });
+        log.warn(`memory sync failed (embedding-bootstrap-recovery): ${message}`);
+        activeFailure = this.markEmbeddingBootstrapFailure(err, { retainProvider: true });
+      }
+    }
+    if (this.refreshIndexIdentityDirty({ providerKeyKnown: true }).status === "valid") {
+      this.embeddingBootstrapFailure = undefined;
+      this.providerUnavailableReason = undefined;
+      if (this.provider) {
+        this.providerLifecycle = this.fallbackFrom
+          ? {
+              mode: "fallback-active",
+              providerId: this.provider.id,
+              fallbackFrom: this.fallbackFrom,
+              reason: this.fallbackReason ?? "fallback activated",
+            }
+          : { mode: "active", providerId: this.provider.id };
+      }
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      return false;
+    }
+    onDebug?.({ backend: "builtin", embeddingBootstrap: activeFailure });
+    return true;
+  }
+
   private async ensureProviderInitialized(): Promise<void> {
     if (this.providerInitialized) {
-      await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
-      return;
+      const bootstrapRetryDue =
+        this.embeddingBootstrapFailure !== undefined &&
+        !this.provider &&
+        this.getCachedEmbeddingAvailability() === null;
+      if (!bootstrapRetryDue) {
+        await this.getPendingFallbackProviderInitialization()?.catch(() => undefined);
+        return;
+      }
+      this.resetProviderInitializationForRetry();
     }
     if (this.settings.provider === "none") {
       this.applyProviderResult({
@@ -916,6 +1036,21 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return state;
   }
 
+  private refreshKeywordFallbackIndexIdentity() {
+    const meta = this.readMeta();
+    const state = this.resolveCurrentIndexIdentityState({
+      meta,
+      provider: meta && meta.provider !== "none" ? { id: meta.provider, model: meta.model } : null,
+      providerKeyKnown: false,
+      vectorReady: false,
+    });
+    this.indexIdentityState = state;
+    this.indexIdentityDirty =
+      state.status === "mismatched" ||
+      (state.status === "missing" && (this.sources.has("memory") || this.hasIndexedChunks()));
+    return state;
+  }
+
   private async withManagerOperation<T>(run: () => Promise<T>): Promise<T> {
     if (this.closing || this.closed) {
       throw new Error("Memory index manager is closed");
@@ -976,7 +1111,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           // A fresh process can receive its first search before background watch/session
           // syncs have built the index. Force one synchronous bootstrap so the first
           // lookup after restart does not fail closed with empty results.
-          await this.syncAdmitted({ reason: "search", force: true });
+          await this.syncAdmitted(
+            { reason: "search", force: true },
+            { allowEmbeddingBootstrapFallback: true },
+          );
         } catch (err) {
           log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
         }
@@ -987,9 +1125,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         hasIndexedContent,
       });
       if (!preflight.shouldSearch) {
+        if (this.embeddingBootstrapFailure) {
+          opts?.onDebug?.({
+            backend: "builtin",
+            embeddingBootstrap: this.embeddingBootstrapFailure,
+          });
+        }
         return [];
       }
       const cleaned = preflight.normalizedQuery;
+      const embeddingBootstrapKeywordOnly = await this.ensureEmbeddingProviderForSearch(
+        opts?.onDebug,
+      );
       void this.warmSession(opts?.sessionKey);
       await startAsyncSearchSync({
         enabled: this.settings.sync.onSearch,
@@ -1001,6 +1148,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         },
       });
       if (
+        !embeddingBootstrapKeywordOnly &&
         preflight.shouldInitializeProvider &&
         !this.provider &&
         this.providerLifecycle.mode === "degraded" &&
@@ -1010,11 +1158,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         // Retrying the degraded fallback here can strand a valid existing index.
         this.resetProviderInitializationForRetry();
       }
-      if (preflight.shouldInitializeProvider) {
-        await this.ensureProviderInitialized();
-        this.assertRequiredProviderAvailable("search");
-      }
-      if (!this.provider && this.providerLifecycle.mode === "degraded") {
+      this.assertRequiredProviderAvailable("search");
+      if (
+        !embeddingBootstrapKeywordOnly &&
+        !this.provider &&
+        this.providerLifecycle.mode === "degraded"
+      ) {
         const activatedFallback = await this.activateFallbackProvider(
           this.providerLifecycle.reason,
         ).catch((fallbackErr: unknown) => {
@@ -1029,9 +1178,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           });
         }
       }
-      const indexIdentity = this.refreshIndexIdentityDirty({
-        providerKeyKnown: this.providerInitialized,
-      });
+      const indexIdentity = embeddingBootstrapKeywordOnly
+        ? this.refreshKeywordFallbackIndexIdentity()
+        : this.refreshIndexIdentityDirty({
+            providerKeyKnown: this.providerInitialized,
+          });
       if (indexIdentity.status !== "valid") {
         return [];
       }
@@ -1059,7 +1210,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       );
 
       // FTS-only mode: no embedding provider available
-      if (!this.provider) {
+      if (embeddingBootstrapKeywordOnly || !this.provider) {
         this.assertRequiredProviderAvailable("search");
         if (!this.fts.enabled || !this.fts.available) {
           log.warn("memory search: no provider and FTS unavailable");
@@ -1657,15 +1808,48 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return await this.syncAdmitted(params);
   }
 
-  private async syncAdmitted(params?: MemorySyncParams): Promise<void> {
+  private async syncAdmitted(
+    params?: MemorySyncParams,
+    options?: { allowEmbeddingBootstrapFallback?: boolean },
+  ): Promise<void> {
     if (this.syncing) {
       if (hasTargetedSessionSyncParams(params)) {
         return this.enqueueTargetedSessionSync(params);
       }
-      return this.syncing;
+      try {
+        return await this.syncing;
+      } catch (err) {
+        if (
+          options?.allowEmbeddingBootstrapFallback &&
+          this.providerRequirement.mode === "optional" &&
+          (!this.providerInitialized || this.embeddingBootstrapFailure !== undefined)
+        ) {
+          if (!this.embeddingBootstrapFailure) {
+            this.markEmbeddingBootstrapFailure(err);
+          }
+          return await this.syncAdmitted(params, options);
+        }
+        throw err;
+      }
     }
     this.syncing = (async () => {
-      await this.ensureProviderInitialized();
+      const useCachedBootstrapFallback =
+        params?.reason === "search" &&
+        this.embeddingBootstrapFailure !== undefined &&
+        this.getCachedEmbeddingAvailability()?.ok === false;
+      if (!useCachedBootstrapFallback) {
+        try {
+          await this.ensureProviderInitialized();
+        } catch (err) {
+          if (
+            !options?.allowEmbeddingBootstrapFallback ||
+            this.providerRequirement.mode !== "optional"
+          ) {
+            throw err;
+          }
+          this.markEmbeddingBootstrapFailure(err);
+        }
+      }
       this.beginSyncProviderGeneration();
       try {
         await this.runSyncWithReadonlyRecovery(params);
@@ -1779,9 +1963,13 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
-    this.refreshIndexIdentityDirty({
-      providerKeyKnown: this.providerInitialized,
-    });
+    if (this.embeddingBootstrapFailure) {
+      this.refreshKeywordFallbackIndexIdentity();
+    } else {
+      this.refreshIndexIdentityDirty({
+        providerKeyKnown: this.providerInitialized,
+      });
+    }
     const sourceFilter = this.buildSourceFilter();
     const aggregateState = collectMemoryStatusAggregate({
       db: {
@@ -1800,8 +1988,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     });
 
     const providerInfo = resolveStatusProviderInfo({
-      provider: this.provider,
-      providerInitialized: this.providerInitialized,
+      provider: this.embeddingBootstrapFailure ? null : this.provider,
+      providerInitialized: this.embeddingBootstrapFailure ? true : this.providerInitialized,
       requestedProvider: this.requestedProvider,
       configuredModel: this.settings.model || undefined,
     });
