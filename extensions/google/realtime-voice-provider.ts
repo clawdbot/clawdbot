@@ -261,6 +261,8 @@ function resolveEnvApiKey(): string | undefined {
   return trimToUndefined(process.env.GEMINI_API_KEY) ?? trimToUndefined(process.env.GOOGLE_API_KEY);
 }
 
+// Gemini 3.1 Live replaces client-content text and async tools with realtime text
+// and sequential function responses; explicit older models keep their prior contract.
 function isGemini31LiveModel(model: string): boolean {
   const modelId = model.startsWith("models/") ? model.slice("models/".length) : model;
   return modelId.startsWith("gemini-3.1-") && modelId.includes("-live");
@@ -335,6 +337,8 @@ function buildFunctionDeclarations(
         omitted += 1;
         continue;
       }
+      // Live preview models honor the OpenAPI `parameters` field; the SDK normalizes
+      // our lowercase JSON Schema types before sending the mutually exclusive field.
       const declaration: FunctionDeclaration = {
         name,
         description: tool.description,
@@ -485,6 +489,8 @@ class GoogleRealtimeVoiceBridge implements RealtimeVoiceBridge {
     const canResumeSession =
       this.config.sessionResumption !== false && Boolean(this.resumptionHandle);
     if (this.hasConnectedSession && !canResumeSession) {
+      // An unfinished recognition hypothesis cannot cross into a fresh server session.
+      // Dropping it avoids treating a transport break as a completed user utterance.
       this.resetPendingTranscripts();
     }
     this.intentionallyClosed = false;
