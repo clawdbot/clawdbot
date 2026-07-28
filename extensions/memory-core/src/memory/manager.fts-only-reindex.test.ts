@@ -511,9 +511,19 @@ describe("memory manager FTS-only reindex", () => {
       await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
       expect(providerQueryCalls).toBe(0);
 
-      providerEmbeddingError = null;
       nowSpy.mockReturnValue(now + 62_000);
-      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+      await fs.writeFile(
+        path.join(workspaceDir, "MEMORY.md"),
+        "Delta fallback refresh\n\nRetry remains keyword-only while embeddings still fail.",
+      );
+      await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
+      await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBe(0);
+
+      providerEmbeddingError = null;
+      nowSpy.mockReturnValue(now + 93_000);
+      await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
+      await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
       expect(providerQueryCalls).toBeGreaterThan(0);
       const recoveredStatus = memoryManager.status();
       expect(recoveredStatus.custom?.providerState).toEqual({

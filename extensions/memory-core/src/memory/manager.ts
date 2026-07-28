@@ -796,24 +796,53 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         activeFailure = this.markEmbeddingBootstrapFailure(err, { retainProvider: true });
       }
     }
-    if (this.refreshIndexIdentityDirty({ providerKeyKnown: true }).status === "valid") {
-      this.embeddingBootstrapFailure = undefined;
-      this.providerUnavailableReason = undefined;
-      if (this.provider) {
-        this.providerLifecycle = this.fallbackFrom
-          ? {
-              mode: "fallback-active",
-              providerId: this.provider.id,
-              fallbackFrom: this.fallbackFrom,
-              reason: this.fallbackReason ?? "fallback activated",
-            }
-          : { mode: "active", providerId: this.provider.id };
-      }
-      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+    if (
+      this.refreshIndexIdentityDirty({ providerKeyKnown: true }).status === "valid" &&
+      (await this.confirmEmbeddingBootstrapRecovery())
+    ) {
+      this.clearEmbeddingBootstrapFailureAfterRecovery();
       return false;
     }
+    activeFailure = this.embeddingBootstrapFailure ?? activeFailure;
     onDebug?.({ backend: "builtin", embeddingBootstrap: activeFailure });
     return true;
+  }
+
+  private clearEmbeddingBootstrapFailureAfterRecovery(): void {
+    this.embeddingBootstrapFailure = undefined;
+    this.providerUnavailableReason = undefined;
+    if (this.provider) {
+      this.providerLifecycle = this.fallbackFrom
+        ? {
+            mode: "fallback-active",
+            providerId: this.provider.id,
+            fallbackFrom: this.fallbackFrom,
+            reason: this.fallbackReason ?? "fallback activated",
+          }
+        : { mode: "active", providerId: this.provider.id };
+    }
+    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+  }
+
+  private async confirmEmbeddingBootstrapRecovery(): Promise<boolean> {
+    const cached = this.getCachedEmbeddingAvailability();
+    if (cached) {
+      return cached.ok;
+    }
+    if (!this.provider) {
+      return false;
+    }
+    try {
+      await this.embedBatchWithRetry(["ping"]);
+      this.cacheProbeResult({ ok: true });
+      return true;
+    } catch (err) {
+      this.markEmbeddingBootstrapFailure(err, {
+        retainProvider: true,
+        provider: this.provider.id,
+      });
+      return false;
+    }
   }
 
   private async ensureProviderInitialized(): Promise<void> {
@@ -1848,27 +1877,70 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       }
     }
     this.syncing = (async () => {
-      const useCachedBootstrapFallback =
+      const hadBootstrapFailure = this.embeddingBootstrapFailure !== undefined;
+      let forceFtsOnly =
         this.embeddingBootstrapFailure !== undefined &&
         this.getCachedEmbeddingAvailability()?.ok === false;
-      if (!useCachedBootstrapFallback) {
+      if (!forceFtsOnly) {
         try {
           await this.ensureProviderInitialized();
         } catch (err) {
           if (
-            !options?.allowEmbeddingBootstrapFallback ||
-            this.providerRequirement.mode !== "optional"
+            this.providerRequirement.mode !== "optional" ||
+            (!options?.allowEmbeddingBootstrapFallback && !hadBootstrapFailure)
           ) {
             throw err;
           }
           this.markEmbeddingBootstrapFailure(err);
+          forceFtsOnly = true;
+        }
+        if (hadBootstrapFailure && !this.provider) {
+          const failure = this.embeddingBootstrapFailure!;
+          const nextFailure: MemoryEmbeddingBootstrapDebug = {
+            ...failure,
+            reason: this.providerUnavailableReason ?? failure.reason,
+          };
+          this.embeddingBootstrapFailure = nextFailure;
+          this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+          forceFtsOnly = true;
         }
       }
-      this.beginSyncProviderGeneration({ forceFtsOnly: useCachedBootstrapFallback });
+
+      const runGeneration = async (keywordOnly: boolean) => {
+        this.beginSyncProviderGeneration({ forceFtsOnly: keywordOnly });
+        try {
+          await this.runSyncWithReadonlyRecovery(params);
+        } finally {
+          this.endSyncProviderGeneration();
+        }
+      };
       try {
-        await this.runSyncWithReadonlyRecovery(params);
-      } finally {
-        this.endSyncProviderGeneration();
+        await runGeneration(forceFtsOnly);
+      } catch (err) {
+        const canDegrade =
+          this.providerRequirement.mode === "optional" &&
+          (options?.allowEmbeddingBootstrapFallback || hadBootstrapFailure) &&
+          this.shouldFallbackOnError(err);
+        if (!canDegrade) {
+          throw err;
+        }
+        const failedProvider = this.provider?.id ?? this.settings.provider;
+        this.markEmbeddingBootstrapFailure(err, {
+          retainProvider: this.provider !== null,
+          provider: failedProvider,
+        });
+        forceFtsOnly = true;
+        await runGeneration(true);
+      }
+
+      if (
+        hadBootstrapFailure &&
+        !forceFtsOnly &&
+        this.provider &&
+        this.refreshIndexIdentityDirty({ providerKeyKnown: true }).status === "valid" &&
+        (await this.confirmEmbeddingBootstrapRecovery())
+      ) {
+        this.clearEmbeddingBootstrapFailureAfterRecovery();
       }
     })().finally(() => {
       this.syncing = null;
