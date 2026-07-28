@@ -1106,13 +1106,18 @@ type HostWriteTargetState = {
   uid: number;
 };
 
-function hostWriteCompatibilityError(code: string, message: string) {
+type HostWritePlan =
+  | { kind: "create" }
+  | { kind: "replace"; target: HostWriteTargetState }
+  | { kind: "in-place" };
+
+class HostOwnershipRestoreError extends Error {}
+
+function hostWriteRaceError(code: string, message: string) {
   return Object.assign(new Error(message), { code });
 }
 
-async function inspectHostWriteTarget(
-  targetPath: string,
-): Promise<HostWriteTargetState | undefined> {
+async function planHostWrite(targetPath: string): Promise<HostWritePlan> {
   const stat = await fs.stat(targetPath).catch((error: unknown) => {
     if (isNotFoundError(error)) {
       return undefined;
@@ -1120,35 +1125,29 @@ async function inspectHostWriteTarget(
     throw error;
   });
   if (!stat) {
-    return undefined;
+    return { kind: "create" };
   }
-  if (!stat.isFile()) {
-    throw hostWriteCompatibilityError(
-      "EINVAL",
-      `Refusing to replace non-regular host path atomically: ${targetPath}`,
-    );
-  }
-  if (stat.nlink > 1) {
-    throw hostWriteCompatibilityError(
-      "EMLINK",
-      `Refusing to replace hard-linked host file atomically: ${targetPath}`,
-    );
+  if (!stat.isFile() || stat.nlink > 1) {
+    return { kind: "in-place" };
   }
   await fs.access(targetPath, fs.constants.W_OK);
   return {
-    dev: stat.dev,
-    gid: stat.gid,
-    ino: stat.ino,
-    mode: stat.mode & 0o7777,
-    uid: stat.uid,
+    kind: "replace",
+    target: {
+      dev: stat.dev,
+      gid: stat.gid,
+      ino: stat.ino,
+      mode: stat.mode & 0o7777,
+      uid: stat.uid,
+    },
   };
 }
 
 async function assertHostWriteTargetUnchanged(
   targetPath: string,
-  expected: HostWriteTargetState | undefined,
+  plan: Exclude<HostWritePlan, { kind: "in-place" }>,
 ) {
-  if (!expected) {
+  if (plan.kind === "create") {
     const appeared = await fs
       .lstat(targetPath)
       .then(() => true)
@@ -1159,7 +1158,7 @@ async function assertHostWriteTargetUnchanged(
         throw error;
       });
     if (appeared) {
-      throw hostWriteCompatibilityError(
+      throw hostWriteRaceError(
         "EEXIST",
         `Host write target appeared while staging replacement: ${targetPath}`,
       );
@@ -1167,16 +1166,16 @@ async function assertHostWriteTargetUnchanged(
     return;
   }
 
-  const current = await inspectHostWriteTarget(targetPath);
+  const current = await planHostWrite(targetPath);
   if (
-    !current ||
-    current.dev !== expected.dev ||
-    current.ino !== expected.ino ||
-    current.uid !== expected.uid ||
-    current.gid !== expected.gid ||
-    current.mode !== expected.mode
+    current.kind !== "replace" ||
+    current.target.dev !== plan.target.dev ||
+    current.target.ino !== plan.target.ino ||
+    current.target.uid !== plan.target.uid ||
+    current.target.gid !== plan.target.gid ||
+    current.target.mode !== plan.target.mode
   ) {
-    throw hostWriteCompatibilityError(
+    throw hostWriteRaceError(
       "EBUSY",
       `Host write target changed while staging replacement: ${targetPath}`,
     );
@@ -1187,24 +1186,41 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const targetPath = await resolveHostWriteTarget(resolved);
-  const target = await inspectHostWriteTarget(targetPath);
+  const plan = await planHostWrite(targetPath);
+  if (plan.kind === "in-place") {
+    await fs.writeFile(targetPath, content, "utf-8");
+    return;
+  }
+  const target = plan.kind === "replace" ? plan.target : undefined;
   const targetDir = path.dirname(targetPath);
   await fs.access(targetDir);
-  await writeSiblingTempFile({
-    dir: targetDir,
-    chmodDir: false,
-    writeTemp: async (tempPath) => {
-      await fs.writeFile(tempPath, content, { encoding: "utf-8", mode: target?.mode });
-      if (target && process.platform !== "win32") {
-        await fs.chown(tempPath, target.uid, target.gid);
-      }
-      if (target) {
-        await fs.chmod(tempPath, target.mode);
-      }
-      await assertHostWriteTargetUnchanged(targetPath, target);
-    },
-    resolveFinalPath: () => targetPath,
-  });
+  try {
+    await writeSiblingTempFile({
+      dir: targetDir,
+      chmodDir: false,
+      writeTemp: async (tempPath) => {
+        await fs.writeFile(tempPath, content, { encoding: "utf-8", mode: target?.mode });
+        if (target && process.platform !== "win32") {
+          await fs.chown(tempPath, target.uid, target.gid).catch((error: unknown) => {
+            throw new HostOwnershipRestoreError(
+              `Unable to restore host write target ownership: ${targetPath}`,
+              { cause: error },
+            );
+          });
+        }
+        if (target) {
+          await fs.chmod(tempPath, target.mode);
+        }
+        await assertHostWriteTargetUnchanged(targetPath, plan);
+      },
+      resolveFinalPath: () => targetPath,
+    });
+  } catch (error) {
+    if (!(error instanceof HostOwnershipRestoreError)) {
+      throw error;
+    }
+    await fs.writeFile(targetPath, content, "utf-8");
+  }
 }
 
 async function statHostFile(absolutePath: string) {

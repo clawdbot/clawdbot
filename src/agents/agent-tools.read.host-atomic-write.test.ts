@@ -83,7 +83,9 @@ describe("unrestricted host tool writes", () => {
     expect(after.gid).toBe(before.gid);
   });
 
-  it.runIf(process.platform !== "win32")("rejects a non-writable existing file", async () => {
+  const asUnprivilegedUser = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.runIf(asUnprivilegedUser)("rejects a non-writable existing file", async () => {
     const filePath = await createFile("original");
     await fs.chmod(filePath, 0o444);
 
@@ -95,17 +97,50 @@ describe("unrestricted host tool writes", () => {
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("original");
   });
 
-  it.runIf(process.platform !== "win32")("rejects a hard-linked existing file", async () => {
+  it.runIf(process.platform !== "win32")("updates a hard-linked existing file", async () => {
     const filePath = await createFile("original");
     const aliasPath = path.join(tempDir, "alias.txt");
     await fs.link(filePath, aliasPath);
+    const before = await fs.stat(filePath);
 
     const tool = createHostWorkspaceWriteTool(tempDir);
-    await expect(
-      tool.execute("call-1", { path: filePath, content: "replacement" }),
-    ).rejects.toThrow("Refusing to replace hard-linked host file atomically");
+    await tool.execute("call-1", { path: filePath, content: "replacement" });
 
-    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("original");
-    await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("original");
+    const after = await fs.stat(filePath);
+    expect(after.ino).toBe(before.ino);
+    expect(after.nlink).toBe(2);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+    await expect(fs.readFile(aliasPath, "utf8")).resolves.toBe("replacement");
   });
+
+  it.runIf(process.platform !== "win32")("writes through to a non-regular target", async () => {
+    await createFile("original");
+    const linkPath = path.join(tempDir, "null-link");
+    await fs.symlink("/dev/null", linkPath);
+
+    const tool = createHostWorkspaceWriteTool(tempDir);
+    await tool.execute("call-1", { path: linkPath, content: "replacement" });
+
+    expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
+    expect((await fs.stat("/dev/null")).isCharacterDevice()).toBe(true);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "updates the existing file when its ownership cannot be restored",
+    async () => {
+      const filePath = await createFile("original");
+      const before = await fs.stat(filePath);
+      vi.spyOn(fs, "chown").mockRejectedValue(
+        Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
+      );
+
+      const tool = createHostWorkspaceWriteTool(tempDir);
+      await tool.execute("call-1", { path: filePath, content: "replacement" });
+
+      const after = await fs.stat(filePath);
+      expect(after.ino).toBe(before.ino);
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+      await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
+    },
+  );
 });
