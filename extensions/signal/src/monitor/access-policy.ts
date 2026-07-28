@@ -31,6 +31,30 @@ function strippedSignalEntry(
   return { trimmed, signalStripped, lower };
 }
 
+// signal-cli always reports group ids as standard base64 (+, /, = padding)
+// of the raw 16-byte (GroupsV1) or 32-byte (GroupsV2) group id, but ids
+// copied from signal.group invite links or other tools are commonly
+// URL-safe base64 (-, _, no padding) for the same bytes. Same id, different
+// literal string, so an un-canonicalized entry silently never matches the
+// inbound group id. Re-encode only when the value decodes to a real Signal
+// group id length, so unrelated entries (phone numbers, uuids, access-group
+// names) that merely share the base64 charset are never rewritten.
+const SIGNAL_GROUP_ID_BYTE_LENGTHS = new Set([16, 32]);
+
+function canonicalizeSignalGroupId(groupId: string): string {
+  if (!/^[A-Za-z0-9+/_-]+=*$/.test(groupId)) {
+    return groupId;
+  }
+  const standard = groupId.replace(/-/g, "+").replace(/_/g, "/");
+  const padding = (4 - (standard.length % 4)) % 4;
+  const padded = standard + "=".repeat(padding);
+  const decoded = Buffer.from(padded, "base64");
+  if (!SIGNAL_GROUP_ID_BYTE_LENGTHS.has(decoded.length) || decoded.toString("base64") !== padded) {
+    return groupId;
+  }
+  return padded;
+}
+
 function normalizeSignalGroupEntry(entry: string): string | null {
   const parsed = strippedSignalEntry(entry);
   if (!parsed) {
@@ -39,9 +63,9 @@ function normalizeSignalGroupEntry(entry: string): string | null {
   const { trimmed, signalStripped, lower } = parsed;
   if (lower.startsWith("group:")) {
     const groupId = signalStripped.slice("group:".length).trim();
-    return groupId || null;
+    return groupId ? canonicalizeSignalGroupId(groupId) : null;
   }
-  return trimmed;
+  return canonicalizeSignalGroupId(trimmed);
 }
 
 function normalizeSignalUuidEntry(entry: string): string | null {
