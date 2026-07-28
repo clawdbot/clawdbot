@@ -112,10 +112,12 @@ export async function activateCodexAttemptTurn(
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
-      onToolCompleted: (completedAtMs) =>
-        requestRuntime.codexModelCallDiagnostics.recordToolCompleted(completedAtMs),
+      onToolStarted: (toolCallId, startedAtMs) =>
+        requestRuntime.codexModelCallDiagnostics.recordToolStarted(toolCallId, startedAtMs),
+      onToolCompleted: (toolCallId, completedAtMs) =>
+        requestRuntime.codexModelCallDiagnostics.recordToolCompleted(toolCallId, completedAtMs),
       onRawResponseCompleted: (response) =>
-        requestRuntime.codexModelCallDiagnostics.emitResponseCompleted(response),
+        requestRuntime.codexModelCallDiagnostics.recordResponseCompleted(response),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: () => {

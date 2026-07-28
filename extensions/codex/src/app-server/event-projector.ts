@@ -97,6 +97,7 @@ export class CodexAppServerEventProjector {
       turnId,
       {
         runAbortSignal: options.runAbortSignal,
+        onToolStarted: options.onToolStarted,
         onToolCompleted: options.onToolCompleted,
       },
     );
@@ -455,6 +456,7 @@ export class CodexAppServerEventProjector {
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
     this.toolTranscriptProjection.recordDynamicToolCall(params);
+    this.options.onToolStarted?.(params.callId, Date.now());
   }
 
   recordDynamicToolResult(params: {
@@ -471,7 +473,7 @@ export class CodexAppServerEventProjector {
     this.toolProgressProjection.recordDynamicToolResult(params);
     const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
-    this.options.onToolCompleted?.(Date.now());
+    this.options.onToolCompleted?.(params.callId, Date.now());
   }
 
   markTimedOut(): void {

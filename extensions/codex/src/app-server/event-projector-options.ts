@@ -6,7 +6,8 @@ import type { CodexTrajectoryRecorder } from "./trajectory.js";
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
-  onToolCompleted?: (completedAtMs: number) => void;
+  onToolStarted?: (toolCallId: string, startedAtMs: number) => void;
+  onToolCompleted?: (toolCallId: string, completedAtMs: number) => void;
   onRawResponseCompleted?: (
     response: CodexCompletedResponseUsage & { completedAtMs: number },
   ) => void;

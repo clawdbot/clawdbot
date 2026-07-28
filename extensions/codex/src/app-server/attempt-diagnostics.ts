@@ -122,6 +122,11 @@ type CodexResponseDiagnostic = {
   completedAtMs?: number;
 };
 
+type CodexModelCallInterval = {
+  startedAtMs: number;
+  completedAtMs: number;
+};
+
 function diagnosticUsage(usage: CodexModelCallUsage | undefined): CodexModelCallUsage | undefined {
   if (!usage) {
     return undefined;
@@ -161,8 +166,12 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
   let responseSequence = 0;
-  let nextResponseStartedAt = startedAt;
+  let currentResponseStartedAt: number | undefined = startedAt;
+  let responseDiagnosticsEmitted = false;
   const completedResponseIds = new Set<string>();
+  const completedResponses: CodexResponseDiagnostic[] = [];
+  const activeToolCallIds = new Set<string>();
+  const responseIntervals: CodexModelCallInterval[] = [];
 
   const privateData = (modelContent: DiagnosticModelCallContent | undefined) =>
     modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
@@ -176,6 +185,84 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   };
   const requestPayloadBytesField = () =>
     requestPayloadBytes !== undefined ? { requestPayloadBytes } : {};
+  const emitResponseDiagnostics = (terminalAtMs: number): void => {
+    if (responseDiagnosticsEmitted) {
+      return;
+    }
+    responseDiagnosticsEmitted = true;
+    if (completedResponses.length === 0) {
+      return;
+    }
+    const intervals = [...responseIntervals];
+    if (currentResponseStartedAt !== undefined) {
+      const lastCompletedAt = completedResponses.at(-1)?.completedAtMs ?? terminalAtMs;
+      intervals.push({
+        startedAtMs: currentResponseStartedAt,
+        completedAtMs: Math.max(currentResponseStartedAt, lastCompletedAt),
+      });
+    }
+    // One provider response may request several tools. If those tools execute
+    // sequentially, a tiny tool-to-tool gap looks like a model interval. Remove
+    // the shortest surplus gaps before pairing lifecycle intervals by order.
+    while (intervals.length > completedResponses.length) {
+      let shortestIndex = 0;
+      for (let index = 1; index < intervals.length; index += 1) {
+        const shortest = intervals[shortestIndex];
+        const candidate = intervals[index];
+        if (
+          shortest &&
+          candidate &&
+          candidate.completedAtMs - candidate.startedAtMs <
+            shortest.completedAtMs - shortest.startedAtMs
+        ) {
+          shortestIndex = index;
+        }
+      }
+      intervals.splice(shortestIndex, 1);
+    }
+    const projectedIntervals =
+      intervals.length === completedResponses.length
+        ? intervals
+        : completedResponses.map((response, index) => {
+            const previousCompletedAt =
+              index === 0 ? startedAt : (completedResponses[index - 1]?.completedAtMs ?? startedAt);
+            const responseCompletedAt = response.completedAtMs ?? terminalAtMs;
+            return {
+              startedAtMs: previousCompletedAt,
+              completedAtMs: Math.max(previousCompletedAt, responseCompletedAt),
+            };
+          });
+    for (const [index, response] of completedResponses.entries()) {
+      const interval = projectedIntervals[index];
+      if (!interval) {
+        continue;
+      }
+      const responseCompletedAt = response.completedAtMs ?? terminalAtMs;
+      const completedAtMs = Math.max(
+        interval.startedAtMs,
+        Math.min(interval.completedAtMs, responseCompletedAt),
+      );
+      const usage = diagnosticUsage(response.usage);
+      const responseTrace = turnTrace
+        ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(turnTrace))
+        : undefined;
+      responseSequence += 1;
+      emitTrustedDiagnosticEventWithPrivateData({
+        type: "model.call.completed",
+        ...params.baseFields,
+        callId: `${turnCallId}:response:${responseSequence}`,
+        observationUnit: "request",
+        ...(responseTrace ? { trace: responseTrace } : {}),
+        durationMs: Math.max(0, completedAtMs - interval.startedAtMs),
+        sourceTimestampMs: completedAtMs,
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      } as TrustedDiagnosticEventInput);
+    }
+  };
 
   return {
     setRequestPayloadBytes(bytes: number | undefined): void {
@@ -183,7 +270,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
     },
     emitStarted(): void {
       startedAt = now();
-      nextResponseStartedAt = startedAt;
+      currentResponseStartedAt = startedAt;
       started = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {
@@ -201,13 +288,15 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       if (!started || terminalEmitted) {
         return;
       }
+      const completedAtMs = now();
+      emitResponseDiagnostics(completedAtMs);
       terminalEmitted = true;
       const usage = diagnosticUsage(result.attemptUsage);
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.completed",
           ...params.baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, completedAtMs - startedAt),
           ...requestPayloadBytesField(),
           ...(usage ? { usage } : {}),
         } as TrustedDiagnosticEventInput,
@@ -223,13 +312,40 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         }),
       );
     },
-    recordToolCompleted(completedAtMs = now()): void {
-      if (!started || terminalEmitted || !Number.isFinite(completedAtMs)) {
+    recordToolStarted(toolCallId: string, startedAtMs = now()): void {
+      if (
+        !started ||
+        terminalEmitted ||
+        !toolCallId ||
+        activeToolCallIds.has(toolCallId) ||
+        !Number.isFinite(startedAtMs)
+      ) {
         return;
       }
-      nextResponseStartedAt = Math.max(nextResponseStartedAt, completedAtMs);
+      if (activeToolCallIds.size === 0 && currentResponseStartedAt !== undefined) {
+        responseIntervals.push({
+          startedAtMs: currentResponseStartedAt,
+          completedAtMs: Math.max(currentResponseStartedAt, startedAtMs),
+        });
+        currentResponseStartedAt = undefined;
+      }
+      activeToolCallIds.add(toolCallId);
     },
-    emitResponseCompleted(response: CodexResponseDiagnostic): void {
+    recordToolCompleted(toolCallId: string, completedAtMs = now()): void {
+      if (
+        !started ||
+        terminalEmitted ||
+        !toolCallId ||
+        !Number.isFinite(completedAtMs) ||
+        !activeToolCallIds.delete(toolCallId)
+      ) {
+        return;
+      }
+      if (activeToolCallIds.size === 0) {
+        currentResponseStartedAt = completedAtMs;
+      }
+    },
+    recordResponseCompleted(response: CodexResponseDiagnostic): void {
       if (
         !started ||
         terminalEmitted ||
@@ -238,45 +354,25 @@ export function createCodexModelCallDiagnosticEmitter(params: {
       ) {
         return;
       }
-      const usage = diagnosticUsage(response.usage);
       completedResponseIds.add(response.responseId);
-      responseSequence += 1;
       const completedAtMs =
         response.completedAtMs !== undefined && Number.isFinite(response.completedAtMs)
           ? response.completedAtMs
           : now();
-      const responseStartedAt = Math.min(nextResponseStartedAt, completedAtMs);
-      nextResponseStartedAt = completedAtMs;
-      const responseTrace = turnTrace
-        ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(turnTrace))
-        : undefined;
-      // App-server exposes response completion but no matching request-start event.
-      // A completed-only diagnostic lets the OTel recorder backdate the span from
-      // this duration instead of tracking a zero-length synthetic start.
-      emitTrustedDiagnosticEventWithPrivateData({
-        type: "model.call.completed",
-        ...params.baseFields,
-        callId: `${turnCallId}:response:${responseSequence}`,
-        observationUnit: "request",
-        ...(responseTrace ? { trace: responseTrace } : {}),
-        durationMs: Math.max(0, completedAtMs - responseStartedAt),
-        upstreamRequestIdHash: fingerprintCodexLogValue(
-          "openclaw:codex:response-id:v1",
-          response.responseId,
-        ),
-        ...(usage ? { usage } : {}),
-      } as TrustedDiagnosticEventInput);
+      completedResponses.push({ ...response, completedAtMs });
     },
     emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
       if (!started || terminalEmitted) {
         return;
       }
+      const completedAtMs = now();
+      emitResponseDiagnostics(completedAtMs);
       terminalEmitted = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.error",
           ...params.baseFields,
-          durationMs: Math.max(0, now() - startedAt),
+          durationMs: Math.max(0, completedAtMs - startedAt),
           errorCategory: fields.failureKind ?? "error",
           ...(fields.failureKind ? { failureKind: fields.failureKind } : {}),
           ...requestPayloadBytesField(),
