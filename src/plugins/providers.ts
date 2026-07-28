@@ -260,10 +260,9 @@ function resolveRegistryManifestContractPluginIds(params: {
       if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
         return false;
       }
-      return (
-        (plugin.contracts?.[params.contract as keyof NonNullable<typeof plugin.contracts>] ?? [])
-          .length > 0
-      );
+      const contractValue =
+        plugin.contracts?.[params.contract as keyof NonNullable<typeof plugin.contracts>];
+      return Array.isArray(contractValue) && contractValue.length > 0;
     })
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));

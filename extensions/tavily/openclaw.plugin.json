@@ -26,7 +26,10 @@
   },
   "contracts": {
     "webSearchProviders": ["tavily"],
-    "tools": ["tavily_search", "tavily_extract"]
+    "tools": ["tavily_search", "tavily_extract"],
+    "providerCredentialTools": {
+      "tavily": ["tavily_search", "tavily_extract"]
+    }
   },
   "configSchema": {
     "type": "object",

@@ -377,6 +377,10 @@ export function normalizeManifestContracts(value: unknown): PluginManifestContra
       contracts[key] = entries;
     }
   }
+  const providerCredentialTools = normalizeStringListRecord(value.providerCredentialTools);
+  if (providerCredentialTools) {
+    contracts.providerCredentialTools = providerCredentialTools;
+  }
   return Object.keys(contracts).length > 0 ? contracts : undefined;
 }
 

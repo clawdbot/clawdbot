@@ -453,6 +453,13 @@ export type PluginManifestContracts = {
   migrationProviders?: string[];
   gatewayMethodDispatch?: string[];
   tools?: string[];
+  /**
+   * Provider ids mapped to the standalone tool ids that require the same
+   * provider credential. Used to keep a non-selected web provider credential
+   * active when an enabled plugin exposes both a provider contract and
+   * standalone tools that share that credential. Must be a subset of tools.
+   */
+  providerCredentialTools?: Record<string, string[]>;
 };
 
 export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";

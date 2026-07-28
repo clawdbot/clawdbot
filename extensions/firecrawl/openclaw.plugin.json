@@ -36,7 +36,10 @@
   "contracts": {
     "webFetchProviders": ["firecrawl"],
     "webSearchProviders": ["firecrawl", "firecrawl-free"],
-    "tools": ["firecrawl_search", "firecrawl_scrape"]
+    "tools": ["firecrawl_search", "firecrawl_scrape"],
+    "providerCredentialTools": {
+      "firecrawl": ["firecrawl_search", "firecrawl_scrape"]
+    }
   },
   "configSchema": {
     "type": "object",

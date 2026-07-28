@@ -38,12 +38,19 @@ function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupI
 }
 
 function buildContributionInfo(record: PluginManifestRecord): InstalledPluginContributionInfo {
-  const contracts = Object.fromEntries(
-    Object.entries(record.contracts ?? {}).map(([key, values]) => [
-      key,
-      normalizeSortedUniqueStringEntries(values),
-    ]),
-  );
+  const contracts: Record<string, readonly string[]> = {};
+  for (const [key, values] of Object.entries(record.contracts ?? {})) {
+    // Some contract values are string lists; newer mapping-shaped values (e.g.
+    // providerCredentialTools) are kept out of the installed index because the
+    // index only stores sorted string lists.
+    if (!Array.isArray(values)) {
+      continue;
+    }
+    const normalized = normalizeSortedUniqueStringEntries(values);
+    if (normalized.length > 0) {
+      contracts[key] = normalized;
+    }
+  }
   return {
     channels: normalizeSortedUniqueStringEntries(record.channels),
     channelConfigs: normalizeSortedUniqueStringEntries(Object.keys(record.channelConfigs ?? {})),
