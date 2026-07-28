@@ -1,3 +1,4 @@
+import { isContextOverflowError } from "../agents/embedded-agent-helpers/context-overflow.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -38,21 +39,18 @@ function normalizeErrorSignal(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
+function isContextOverflowErrorSignal(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  return normalizeErrorSignal(value) === "context_overflow" || isContextOverflowError(value);
+}
+
 function isContextOverflowAssistantError(message: Record<string, unknown>): boolean {
-  const errorCode = normalizeErrorSignal(message.errorCode);
-  const errorType = normalizeErrorSignal(message.errorType);
-  const errorMessage = normalizeErrorSignal(message.errorMessage);
   return (
-    errorCode === "context_overflow" ||
-    errorType === "context_overflow" ||
-    errorMessage.includes("context_overflow") ||
-    errorMessage.includes("context overflow:") ||
-    errorMessage.includes("context length exceeded") ||
-    errorMessage.includes("maximum context length") ||
-    errorMessage.includes("prompt is too long") ||
-    errorMessage.includes("prompt too long") ||
-    errorMessage.includes("exceeds model context window") ||
-    errorMessage.includes("model token limit")
+    isContextOverflowErrorSignal(message.errorCode) ||
+    isContextOverflowErrorSignal(message.errorType) ||
+    isContextOverflowErrorSignal(message.errorMessage)
   );
 }
 
