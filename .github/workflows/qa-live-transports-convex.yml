@@ -404,16 +404,25 @@ jobs:
           mkdir -p "${output_dir}"
 
           matrix_help="$(pnpm openclaw qa matrix --help 2>&1)"
-          if ! grep -Fq -- "--shard <index/total>" <<<"${matrix_help}"; then
-            echo "Selected target predates profile-free Matrix catalog sharding; update the target revision." >&2
-            exit 1
+          if grep -Fq -- "--shard <index/total>" <<<"${matrix_help}"; then
+            matrix_selection=(--shard "${{ matrix.shard }}/5")
+          else
+            legacy_profiles=(transport media e2ee-smoke e2ee-deep e2ee-cli)
+            shard_index="${{ matrix.shard }}"
+            if (( shard_index < 1 || shard_index > ${#legacy_profiles[@]} )); then
+              echo "Invalid Matrix shard index for legacy profile fallback: ${shard_index}" >&2
+              exit 1
+            fi
+            legacy_profile="${legacy_profiles[shard_index - 1]}"
+            echo "Selected target predates profile-free Matrix catalog sharding; using legacy profile '${legacy_profile}'."
+            matrix_selection=(--profile "${legacy_profile}")
           fi
 
           pnpm openclaw qa matrix \
             --repo-root . \
             --output-dir "${output_dir}" \
             --provider-mode mock-openai \
-            --shard "${{ matrix.shard }}/5" \
+            "${matrix_selection[@]}" \
             --fast
 
       - name: Upload Matrix QA artifacts
