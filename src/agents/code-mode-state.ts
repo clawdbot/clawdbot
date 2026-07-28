@@ -107,6 +107,13 @@ export function disposeCodeModeRun(runId: string): void {
   scheduleActiveRunExpiry();
 }
 
+/** Advance the snapshot frontier before exposing output to a wait observer. */
+export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
+  const output = state.output.slice(state.deliveredOutputCount);
+  state.deliveredOutputCount = state.output.length;
+  return output;
+}
+
 /** Abort each bridge call whose result has not already reached its guest. */
 export function cancelPendingBridgeStates(pending: readonly PendingBridgeState[]): void {
   for (const entry of pending) {

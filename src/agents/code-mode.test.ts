@@ -2817,6 +2817,17 @@ describe("Code Mode", () => {
     expect(second.status).toBe("waiting");
     expect(second.output).toEqual([]);
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+
+    const third = resultDetails(
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-timeout-again",
+        { runId },
+      ),
+    );
+
+    expect(third.status).toBe("waiting");
+    expect(third.output).toEqual([]);
+    expect(third.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
   });
 
   it("does not load TypeScript for plain JavaScript code mode runs", async () => {

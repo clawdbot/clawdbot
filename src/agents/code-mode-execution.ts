@@ -36,6 +36,7 @@ import {
   settledBridgeRequestsInCompletionOrder,
   snapshotState,
   storeSnapshotState,
+  takeUndeliveredCodeModeRunOutput,
   telemetry,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
@@ -517,7 +518,7 @@ export async function runWait(params: {
           status: "failed" as const,
           error: "code mode execution aborted",
           code: "aborted" as const,
-          output: state.output.slice(state.deliveredOutputCount),
+          output: takeUndeliveredCodeModeRunOutput(state),
           replaySafe: state.replaySafe,
           telemetry: telemetry(state.runtime),
         };
@@ -532,7 +533,7 @@ export async function runWait(params: {
         reason: codeModeWaitingReason(pending.length > 0 ? pending : state.pending),
         pendingToolCalls: pendingToolCalls(pending.length > 0 ? pending : state.pending),
         replaySafe: state.replaySafe,
-        output: state.output.slice(state.deliveredOutputCount),
+        output: takeUndeliveredCodeModeRunOutput(state),
         telemetry: telemetry(state.runtime),
       };
     }
@@ -592,7 +593,7 @@ export async function runWait(params: {
       status: "failed" as const,
       error: codeModeFailureMessage(error),
       code: codeModeFailureCode(error),
-      output: state.output.slice(state.deliveredOutputCount),
+      output: takeUndeliveredCodeModeRunOutput(state),
       replaySafe: state.replaySafe,
       telemetry: telemetry(state.runtime),
     };
