@@ -161,7 +161,11 @@ async function finishPreparedManualRun(
         activeJobMarker: prepared.activeJobMarker,
       });
       const scheduleMode =
-        mode === "force" || scheduleOwnership === "stale" ? "preserve" : "advance";
+        scheduleOwnership === "stale"
+          ? "stale-preserve"
+          : mode === "force"
+            ? "force-preserve"
+            : "advance";
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -187,7 +191,9 @@ async function finishPreparedManualRun(
             endedAt,
           },
           {
-            scheduleMode,
+            // Stale edits are preserved by scheduleOwnership inside applyJobResult;
+            // only a real forced run may request a force-preserved cadence marker.
+            scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
             scheduleOwnership,
             scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
           },
