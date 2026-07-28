@@ -2475,6 +2475,57 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(leaseStore.leases.size).toBe(0);
   });
 
+  it("preserves a promoted PID when the session record save fails", async () => {
+    const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-partial-save ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
+    const savedRecord: Record<string, unknown> = {
+      name: "agent:codex:acp:binding:test",
+      agentCommand: leasedCommand,
+      pid: 777,
+    };
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => savedRecord),
+      save: vi.fn(async () => {
+        throw new Error("session save failed");
+      }),
+    };
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-partial-save", {
+      leaseId: "lease-partial-save",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 777,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+    });
+    vi.spyOn(delegate, "setMode").mockImplementation(async () => {
+      await wrappedStore.save({ ...savedRecord, pid: 888 });
+    });
+
+    await expect(
+      runtime.setMode({
+        handle: {
+          sessionKey: "agent:codex:acp:binding:test",
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:acp:binding:test",
+        },
+        mode: "plan",
+      }),
+    ).rejects.toThrow("session save failed");
+
+    expect(leaseStore.leases.get("lease-partial-save")).toMatchObject({
+      rootPid: 888,
+      state: "open",
+    });
+  });
+
   it("keeps a shared pending lease until the last concurrent operation finishes", async () => {
     const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-concurrent-operations ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
     const baseStore: TestSessionStore = {
@@ -2928,6 +2979,61 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     ).rejects.toThrow("cleanup failed");
 
     expect(leaseStore.leases.get("lease-close-live")).toMatchObject({
+      rootPid: 777,
+      state: "open",
+    });
+  });
+
+  it("keeps close leases retryable when process listing is unavailable", async () => {
+    const leasedCommand = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close-process-list ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:binding:test",
+        agentCommand: leasedCommand,
+        pid: 777,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-close-process-list", {
+      leaseId: "lease-close-process-list",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 777,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => {
+            throw new Error("process listing unavailable");
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(leaseStore.leases.get("lease-close-process-list")).toMatchObject({
       rootPid: 777,
       state: "open",
     });

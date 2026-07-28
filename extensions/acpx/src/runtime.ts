@@ -1234,8 +1234,7 @@ export class AcpxRuntime implements AcpRuntime {
         const recordIdentity = readAcpxProcessLeaseIdentity(readAgentCommandFromRecord(record));
         if (
           recordIdentity?.leaseId !== identity.leaseId ||
-          recordIdentity.gatewayInstanceId !== identity.gatewayInstanceId ||
-          readRecordAgentPid(record) !== lease.rootPid
+          recordIdentity.gatewayInstanceId !== identity.gatewayInstanceId
         ) {
           await processLeaseStore.markState(identity.leaseId, "lost");
         }
@@ -1379,9 +1378,11 @@ export class AcpxRuntime implements AcpRuntime {
       });
       await this.processLeaseStore?.markState(
         lease.leaseId,
-        result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
-          ? "closed"
-          : "lost",
+        result.skippedReason === "process-list-unavailable"
+          ? "open"
+          : result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
+            ? "closed"
+            : "lost",
       );
       return;
     }
