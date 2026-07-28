@@ -35,6 +35,56 @@ describe("QmdSessionExporter", () => {
     mocks.replaceArtifactMappings.mockReset();
   });
 
+  it("forwards canonical session provenance and identity to the entry builder", async () => {
+    await withTempDir("qmd-session-exporter-", async (tempDir) => {
+      const exportDir = path.join(tempDir, "exports");
+      const storePath = path.join(tempDir, "sessions.json");
+      const corpusEntry = {
+        agentId: "main",
+        artifactKind: "active-session" as const,
+        contentRevision: "sqlite:1:100:1:1",
+        sessionFile: "sqlite:main:session-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionKind: "interactive" as const,
+        storePath,
+        transcriptSource: "sqlite" as const,
+        updatedAtMs: 1,
+      };
+      mocks.corpusEntries.mockResolvedValue([corpusEntry]);
+      mocks.buildSessionEntry.mockResolvedValue({
+        absPath: corpusEntry.sessionFile,
+        content: "User: hello",
+        hash: "entry-hash",
+        lineMap: [1],
+        messageTimestampsMs: [1],
+        mtimeMs: 1,
+        path: "sessions/main/session-1.jsonl",
+        size: 100,
+      });
+      const exporter = new QmdSessionExporter(
+        { collectionName: "sessions-main", dir: exportDir },
+        "main",
+        tempDir,
+        path.join(tempDir, "index.sqlite"),
+        () => "unused",
+      );
+
+      await exporter.exportSessions(createLease());
+
+      expect(mocks.buildSessionEntry).toHaveBeenCalledWith(corpusEntry.sessionFile, {
+        agentId: "main",
+        generatedByCronRun: false,
+        generatedByDreamingNarrative: false,
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionKind: "interactive",
+        storePath,
+        updatedAtMs: 1,
+      });
+    });
+  });
+
   it("skips unchanged transcript parsing by canonical corpus revision", async () => {
     await withTempDir("qmd-session-exporter-", async (tempDir) => {
       const exportDir = path.join(tempDir, "exports");
