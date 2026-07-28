@@ -76,10 +76,10 @@ function setupDeps(params: {
       workspace: "/tmp/openclaw-workspace",
       setupComplete: false,
     })),
-    detect: vi.fn(async () => ({
+    detect: vi.fn<NonNullable<GuidedOnboardingDeps["detect"]>>(async () => ({
       candidates: [
         {
-          kind: "claude-cli" as const,
+          kind: "claude-cli",
           label: "Claude Code",
           detail: "logged in",
           modelRef: "claude-cli/opus",
