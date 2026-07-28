@@ -408,18 +408,16 @@ must be `wav` because the local endpoint does not emit compressed audio:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "openai",
-      providers: {
-        openai: {
-          apiKey: "local",
-          baseUrl: "http://127.0.0.1:8080/v1",
-          model: "tts-1",
-          speakerVoice: "alloy",
-          responseFormat: "wav",
-        },
+  tts: {
+    auto: "always",
+    provider: "openai",
+    providers: {
+      openai: {
+        apiKey: "local",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: "tts-1",
+        speakerVoice: "alloy",
+        responseFormat: "wav",
       },
     },
   },
@@ -437,17 +435,15 @@ output path:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "tts-local-cli",
-      providers: {
-        "tts-local-cli": {
-          command: "speech",
-          args: ["speak", "{{Text}}", "--output", "{{OutputPath}}"],
-          outputFormat: "wav",
-          timeoutMs: 120000,
-        },
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "speech",
+        args: ["speak", "{{Text}}", "--output", "{{OutputPath}}"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
       },
     },
   },
@@ -468,17 +464,15 @@ Then configure the packaged Kokoro command:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "tts-local-cli",
-      providers: {
-        "tts-local-cli": {
-          command: "speech",
-          args: ["speak", "{{Text}}", "{{OutputPath}}"],
-          outputFormat: "wav",
-          timeoutMs: 120000,
-        },
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "speech",
+        args: ["speak", "{{Text}}", "{{OutputPath}}"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
       },
     },
   },
@@ -506,17 +500,15 @@ Then point Local CLI at the packaged Kokoro executable:
 
 ```json5
 {
-  messages: {
-    tts: {
-      auto: "always",
-      provider: "tts-local-cli",
-      providers: {
-        "tts-local-cli": {
-          command: "C:\\path\\to\\speech-0.0.11-windows-x64\\bin\\speech_synthesize.exe",
-          args: ["{{OutputPath}}", "{{Text}}", "en"],
-          outputFormat: "wav",
-          timeoutMs: 120000,
-        },
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "C:\\path\\to\\speech-0.0.11-windows-x64\\bin\\speech_synthesize.exe",
+        args: ["{{OutputPath}}", "{{Text}}", "en"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
       },
     },
   },
