@@ -292,8 +292,7 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     model,
     voice:
       normalizeOptionalString(talkRealtime?.speakerVoice) ??
-      normalizeOptionalString(talkRealtime?.speakerVoiceId) ??
-      normalizeOptionalString(talkRealtime?.voice),
+      normalizeOptionalString(talkRealtime?.speakerVoiceId),
     instructions: normalizeOptionalString(talkRealtime?.instructions),
     mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
     transport: normalizeRealtimeTransport(talkRealtime?.transport),
