@@ -18,6 +18,7 @@ type CliNetworkProxyPolicyResolver =
 type CliRoutedCommandId =
   | "health"
   | "status"
+  | "gateway-health"
   | "gateway-status"
   | "sessions"
   | "agents-list"
@@ -196,7 +197,12 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["gateway", "diagnostics"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "discover"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "export"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["gateway", "health"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["gateway", "health"],
+    exact: true,
+    policy: { networkProxy: "bypass" },
+    route: { id: "gateway-health" },
+  },
   { commandPath: ["gateway", "install"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "probe"], exact: true, policy: { networkProxy: "bypass" } },
   { commandPath: ["gateway", "restart"], exact: true, policy: { networkProxy: "bypass" } },
