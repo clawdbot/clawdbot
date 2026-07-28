@@ -258,6 +258,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sidebarSessionPaginationState.listRequestToken = null;
     this.sidebarSessionPaginationState.pageRequestToken = null;
     this.sessionsLoading = false;
+    this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogLive.clear();
   }
 
@@ -267,7 +268,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.sessionCatalogLive.resetConnection();
     this.sessionCatalogs = [];
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
-    this.loadingMoreSessionCatalogIds = new Set();
     this.sessionCatalogPageDepths.clear();
     this.sessionCatalogRevisions.clear();
     this.notify();
@@ -304,7 +304,6 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.retireSessionCatalogData();
     this.sessionCatalogRevision += 1;
     this.sessionCatalogRefreshStatus = createPanelRefreshStatus();
-    this.loadingMoreSessionCatalogIds = new Set();
 
     if (agentChanged || catalogAgentChanged) {
       // Catalog cursors and rows belong to the selected agent, not just its host.

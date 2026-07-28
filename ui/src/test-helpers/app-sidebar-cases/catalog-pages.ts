@@ -69,6 +69,87 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
+  it("releases a pending catalog page across a same-client Gateway reconnect", async () => {
+    vi.useFakeTimers();
+    let provider: HTMLElement | undefined;
+    try {
+      const pendingStalePage = deferred<SessionsCatalogListResult>();
+      const pendingFreshPage = deferred<SessionsCatalogListResult>();
+      const firstPage = catalogPage([{ threadId: "thread-1", name: "Newest" }], "page-2");
+      const expandedPage = catalogPage([{ threadId: "thread-2", name: "Expanded" }], "page-3");
+      let requestedThirdPages = 0;
+      const request = vi.fn((_method: string, params: { cursors?: Record<string, string> }) => {
+        const cursor = params.cursors?.["gateway:local"];
+        if (cursor === "page-2") {
+          return Promise.resolve(expandedPage);
+        }
+        if (cursor === "page-3") {
+          requestedThirdPages += 1;
+          return requestedThirdPages === 1 ? pendingStalePage.promise : pendingFreshPage.promise;
+        }
+        return Promise.resolve(firstPage);
+      });
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      const hello = {
+        features: { methods: ["sessions.catalog.list"] },
+      } as ApplicationGatewaySnapshot["hello"];
+      gateway.publish({ hello });
+      const mounted = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      const { sidebar } = mounted;
+      provider = mounted.provider;
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+
+      await sidebar.sessionData.loadMoreSessionCatalog("codex");
+      await sidebar.updateComplete;
+      expect(sidebar.textContent).toContain("Expanded");
+      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
+
+      const staleLoad = sidebar.sessionData.loadMoreSessionCatalog("codex");
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+
+      gateway.publish({ phase: "reconnecting", hello: null });
+      sidebar.sessionData.hostUpdate();
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(false);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
+
+      gateway.publish({ phase: "connected", hello });
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      expect(sidebar.textContent).toContain("Expanded");
+      const loadMore = sidebar.querySelector<HTMLButtonElement>(
+        '[data-session-catalog-load-more="codex"]',
+      );
+      expect(loadMore?.disabled).toBe(false);
+      loadMore?.click();
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+
+      pendingStalePage.resolve(catalogPage([{ threadId: "stale", name: "Stale page" }]));
+      await staleLoad;
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
+      expect(sidebar.textContent).not.toContain("Stale page");
+
+      pendingFreshPage.resolve(catalogPage([{ threadId: "thread-3", name: "Fresh page" }]));
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+      expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(false);
+      expect(sidebar.textContent).toContain("Fresh page");
+    } finally {
+      provider?.remove();
+      vi.useRealTimers();
+    }
+  });
+
   it("retires visible catalog rows and expanded cursors when the agent changes", async () => {
     vi.useFakeTimers();
     try {
