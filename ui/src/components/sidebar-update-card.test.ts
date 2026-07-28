@@ -312,4 +312,26 @@ describe("SidebarUpdateCard", () => {
 
     expect(element.querySelector(".sidebar-update-card")?.textContent).toContain("v3.0.0");
   });
+
+  it("labels beta channel updates with a (beta) suffix", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "beta",
+    });
+    expect(element.querySelector(".sidebar-update-card__text")?.textContent).toContain(
+      "v2.0.0 (beta)",
+    );
+  });
+
+  it("does not add beta label for stable channel updates", async () => {
+    const element = await mount({
+      currentVersion: "1.0.0",
+      latestVersion: "2.0.0",
+      channel: "stable",
+    });
+    const text = element.querySelector(".sidebar-update-card__text")?.textContent ?? "";
+    expect(text).toContain("v2.0.0");
+    expect(text).not.toContain("(beta)");
+  });
 });
