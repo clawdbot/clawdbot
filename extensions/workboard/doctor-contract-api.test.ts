@@ -488,7 +488,7 @@ describe("workboard doctor contract", () => {
           createdAt: 1,
           updatedAt: 1,
           metadata: {
-            automation: { createdCardIds: ["child"] },
+            automation: { createdCardIds: ["child"], decompositionMode: "orchestration" },
             links: [{ id: "parent-child", type: "child", targetCardId: "child", createdAt: 1 }],
           },
         },
@@ -505,7 +505,7 @@ describe("workboard doctor contract", () => {
           createdAt: 1,
           updatedAt: 1,
           metadata: {
-            automation: { createdByCardId: "parent" },
+            automation: { createdByCardId: "parent", decompositionMode: "orchestration" },
             links: [{ id: "child-parent", type: "parent", targetCardId: "parent", createdAt: 1 }],
           },
         },
