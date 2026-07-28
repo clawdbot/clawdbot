@@ -110,7 +110,7 @@ describe("renderMemoryOverview", () => {
     expect(container.textContent).toContain("Memory is hibernating");
     expect(container.textContent).toContain("Open Settings");
     expect(container.querySelector(".memory-overview__hero--sleeping")).not.toBeNull();
-    expect(container.querySelector(".lob-eye-peek")).not.toBeNull();
+    expect(container.querySelector(".lobster-pet__svg")).not.toBeNull();
     expect(container.querySelector(".lob-reading-book")).toBeNull();
   });
 
