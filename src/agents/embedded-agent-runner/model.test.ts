@@ -834,6 +834,7 @@ describe("resolveModel", () => {
       modelId: "mistral-medium-3-5",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
@@ -880,6 +881,7 @@ describe("resolveModel", () => {
       modelId: "gemini-3.1-pro-preview",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "google",
@@ -1180,12 +1182,14 @@ describe("resolveModel", () => {
       modelId: "claude-haiku-4-5",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
       provider: "openai",
       modelId: "gpt-4o",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
     expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1305,6 +1309,7 @@ describe("resolveModel", () => {
       modelId: "gpt-5.5-pro",
       cfg: undefined,
       workspaceDir: undefined,
+      includeRuntimeDiscovery: true,
     });
   });
 
