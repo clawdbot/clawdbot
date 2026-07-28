@@ -23,6 +23,7 @@ import {
   type ActiveHandlerState,
   type ChannelIngressDrainDispatchResult,
 } from "./ingress-drain-state.js";
+import { supersedeActiveStatesIfNeeded } from "./ingress-drain-supersede.js";
 export { isIngressAdoptionLostError } from "./ingress-drain-state.js";
 import type {
   ChannelIngressQueue,
@@ -542,46 +543,18 @@ export function createChannelIngressDrain<
   const supersedeActiveIfNeeded = async (
     candidate: ChannelIngressQueueRecord<TPayload, TMetadata>,
     laneKey: string,
-  ): Promise<boolean> => {
-    const pending = laneOwnerByKey.get(laneKey);
-    if (!pending || pending.phase === "adopted" || pending.phase === "settled") {
-      return false;
-    }
-    if (!(await options.shouldSupersedePending?.(candidate, pending.claim))) {
-      return false;
-    }
-    // Revalidate after async predicate: a late true must not kill an adopted turn
-    // or a different map entry that replaced this pending handler.
-    const stillPending = laneOwnerByKey.get(laneKey);
-    if (
-      stillPending !== pending ||
-      stillPending.phase === "adopted" ||
-      stillPending.phase === "settled" ||
-      stillPending.guillotined ||
-      stillPending.superseded
-    ) {
-      return false;
-    }
-    // Pre-adoption supersede only — after adoption core owns interruption.
-    // Tombstone (complete), never release: requeue would replay the aborted turn.
-    stillPending.superseded = true;
-    clearStallTimer(stillPending);
-    try {
-      stillPending.abortController.abort(new Error("ingress-superseded"));
-    } catch {
-      // ignore
-    }
-    try {
-      await stillPending.settleOnce(async () => {
-        await completeClaimWithRetry(stillPending.claim);
-      });
-    } catch (err) {
-      log(
-        `ingress drain: failed to tombstone superseded event ${stillPending.eventId}: ${formatError(err)}`,
-      );
-    }
-    return true;
-  };
+  ): Promise<boolean> =>
+    await supersedeActiveStatesIfNeeded({
+      candidate,
+      laneKey,
+      activeByClaim,
+      laneOwnerByKey,
+      shouldSupersedePending: options.shouldSupersedePending,
+      clearStallTimer,
+      completeClaim: completeClaimWithRetry,
+      formatError,
+      log,
+    });
 
   const runClaimed = (
     claim: ChannelIngressQueueClaim<TPayload, TMetadata>,

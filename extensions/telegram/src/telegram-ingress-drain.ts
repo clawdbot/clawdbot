@@ -156,15 +156,35 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         // result without retaining Telegram's ingress serialization lane.
         const participant = result.deferredWork;
         if (participant) {
+          let abortedWhilePending = participant.wasOwnerAbortedWhilePending();
+          const onAbort = () => {
+            if (!participant.isSettled()) {
+              abortedWhilePending = true;
+            }
+          };
+          telegramLifecycle.abortSignal.addEventListener("abort", onAbort, { once: true });
+          const removeAbortListener = () => {
+            telegramLifecycle.abortSignal.removeEventListener("abort", onAbort);
+          };
           void participant.task
             .then(async (terminal) => {
+              removeAbortListener();
               if (terminal.kind === "failed-retryable") {
                 await telegramLifecycle.onFailed(terminal.error);
+                return;
+              }
+              if (abortedWhilePending) {
+                await telegramLifecycle.onFailed(
+                  telegramLifecycle.abortSignal.reason instanceof Error
+                    ? telegramLifecycle.abortSignal.reason
+                    : new Error("ingress-aborted"),
+                );
                 return;
               }
               await lifecycle.onAdopted();
             })
             .catch(async (error: unknown) => {
+              removeAbortListener();
               await telegramLifecycle.onFailed(
                 error instanceof Error ? error : new Error(String(error)),
               );
