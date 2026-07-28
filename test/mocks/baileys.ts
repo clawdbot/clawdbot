@@ -4,6 +4,7 @@ import { vi } from "vitest";
 
 type BaileysExports = typeof import("baileys");
 type FetchLatestBaileysVersionFn = BaileysExports["fetchLatestBaileysVersion"];
+type FetchLatestWaWebVersionFn = BaileysExports["fetchLatestWaWebVersion"];
 type MakeCacheableSignalKeyStoreFn = BaileysExports["makeCacheableSignalKeyStore"];
 type MakeWASocketFn = BaileysExports["makeWASocket"];
 type UseMultiFileAuthStateFn = BaileysExports["useMultiFileAuthState"];
@@ -34,6 +35,7 @@ type MockBaileysModule = {
   DisconnectReason: { loggedOut: number };
   extractMessageContent: ReturnType<typeof vi.fn<ExtractMessageContentFn>>;
   fetchLatestBaileysVersion: ReturnType<typeof vi.fn<FetchLatestBaileysVersionFn>>;
+  fetchLatestWaWebVersion: ReturnType<typeof vi.fn<FetchLatestWaWebVersionFn>>;
   getContentType: ReturnType<typeof vi.fn<GetContentTypeFn>>;
   isJidGroup: ReturnType<typeof vi.fn<IsJidGroupFn>>;
   makeCacheableSignalKeyStore: ReturnType<typeof vi.fn<MakeCacheableSignalKeyStoreFn>>;
@@ -163,6 +165,9 @@ export function createMockBaileys(): {
     ),
     fetchLatestBaileysVersion: vi
       .fn<FetchLatestBaileysVersionFn>()
+      .mockResolvedValue({ version: [1, 2, 3], isLatest: true }),
+    fetchLatestWaWebVersion: vi
+      .fn<FetchLatestWaWebVersionFn>()
       .mockResolvedValue({ version: [1, 2, 3], isLatest: true }),
     getContentType: vi.fn<GetContentTypeFn>((message) => mockGetContentType(message)),
     isJidGroup: vi.fn<IsJidGroupFn>((jid) => mockIsJidGroup(jid)),

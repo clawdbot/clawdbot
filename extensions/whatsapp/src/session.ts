@@ -34,9 +34,9 @@ import {
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { getStatusCode } from "./session-errors.js";
+import { resolveWaSocketVersion } from "./session-version.js";
 import {
   createBaileysSignalRepository,
-  fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
   useMultiFileAuthState,
@@ -257,7 +257,7 @@ async function createWaSocketInternal(
   const saveCreds = async () => {
     await writeCredsJsonAtomically(authDir, state.creds);
   };
-  const { version } = await fetchLatestBaileysVersion();
+  const version = await resolveWaSocketVersion(sessionLogger);
   const waWebSocketUrl = resolveWaWebSocketUrl(opts.waWebSocketUrl) ?? resolveEnvWaWebSocketUrl();
   const agent = await resolveEnvProxyAgent(sessionLogger);
   const fetchAgent = await resolveEnvFetchDispatcher(sessionLogger, agent);
