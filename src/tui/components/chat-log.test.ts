@@ -825,6 +825,55 @@ describe("ChatLog", () => {
       }
     },
   );
+
+  it.each([
+    { capacity: 20, eviction: "first-assistant", evictedComponents: 1 },
+    { capacity: 40, eviction: "first-assistant", evictedComponents: 1 },
+    { capacity: 20, eviction: "all-assistants", evictedComponents: 3 },
+    { capacity: 40, eviction: "all-assistants", evictedComponents: 3 },
+  ])(
+    "orders a delayed prompt before owned tools after $eviction eviction at capacity $capacity",
+    ({ capacity, eviction, evictedComponents }) => {
+      const chatLog = new ChatLog(capacity);
+      const runId = `evicted-${eviction}-${capacity}`;
+
+      chatLog.updateAssistant("First evicted reply segment.", runId);
+      chatLog.startTool(`${runId}-first-tool`, "read_file", { path: "first-shared.txt" }, runId);
+      chatLog.updateAssistant("First evicted reply segment.\n\nLast evicted reply segment.", runId);
+      chatLog.startTool(`${runId}-last-tool`, "read_file", { path: "last-shared.txt" }, runId);
+      chatLog.finalizeAssistant(
+        "First evicted reply segment.\n\nLast evicted reply segment.",
+        runId,
+      );
+
+      while (chatLog.children.length < capacity) {
+        chatLog.addSystem(`Retained notice ${chatLog.children.length}.`);
+      }
+      for (let index = 0; index < evictedComponents; index += 1) {
+        chatLog.addSystem(`Evicting notice ${index}.`);
+      }
+
+      const prompt = { messageId: `${runId}-user`, runId };
+      chatLog.addLiveUser("Delayed prompt before surviving tools.", prompt);
+      chatLog.addLiveUser("Delayed prompt before surviving tools.", prompt);
+
+      const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+      expect(chatLog.children).toHaveLength(capacity);
+      expect(rendered.match(/Delayed prompt before surviving tools\./g)).toHaveLength(1);
+      expect(rendered.indexOf("Delayed prompt before surviving tools.")).toBeLessThan(
+        rendered.indexOf("last-shared.txt"),
+      );
+      if (eviction === "first-assistant") {
+        expect(rendered.indexOf("Delayed prompt before surviving tools.")).toBeLessThan(
+          rendered.indexOf("first-shared.txt"),
+        );
+        expect(rendered).toContain("Last evicted reply segment.");
+      } else {
+        expect(rendered).not.toContain("Last evicted reply segment.");
+      }
+    },
+  );
+
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     const chatLog = new ChatLog(40);
     chatLog.addPendingUser("shared-run", "Persisted prompt.");

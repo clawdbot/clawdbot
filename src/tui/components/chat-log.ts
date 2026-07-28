@@ -292,38 +292,32 @@ export class ChatLog extends Container {
 
     const component = new UserMessageComponent(text);
     this.liveUsers.set(options.messageId, component);
-    const frozen = options.runId ? this.frozenAssistants.get(options.runId) : undefined;
-    const finalized = options.runId ? this.finalizedAssistants.get(options.runId) : undefined;
-    const assistant =
-      frozen?.values().next().value ??
-      (options.runId
-        ? (this.streamingRuns.get(options.runId) ?? finalized?.values().next().value)
-        : undefined);
-    const assistantIndex = assistant ? this.children.indexOf(assistant) : -1;
-    if (assistant && assistantIndex >= 0) {
-      // Transcript broadcasts can trail the first delta; insert their prompt
-      // before the existing reply. Preserve both when full scrollback evicts
-      // older components so the newly recovered prompt cannot disappear.
-      this.repeatableSystemMessage = null;
-      this.children.splice(assistantIndex, 0, component);
-      const protectedComponents = new Set<Component>([component, assistant]);
-      if (options.runId) {
-        for (const segment of frozen ?? []) {
-          protectedComponents.add(segment);
-        }
-        const streaming = this.streamingRuns.get(options.runId);
-        if (streaming) {
-          protectedComponents.add(streaming);
-        }
-        for (const segment of finalized ?? []) {
-          protectedComponents.add(segment);
-        }
-        for (const [toolId, tool] of this.toolById) {
-          if (this.toolRunIds.get(toolId) === options.runId) {
-            protectedComponents.add(tool);
-          }
+    const protectedComponents = new Set<Component>([component]);
+    if (options.runId) {
+      for (const segment of this.frozenAssistants.get(options.runId) ?? []) {
+        protectedComponents.add(segment);
+      }
+      const streaming = this.streamingRuns.get(options.runId);
+      if (streaming) {
+        protectedComponents.add(streaming);
+      }
+      for (const segment of this.finalizedAssistants.get(options.runId) ?? []) {
+        protectedComponents.add(segment);
+      }
+      for (const [toolId, tool] of this.toolById) {
+        if (this.toolRunIds.get(toolId) === options.runId) {
+          protectedComponents.add(tool);
         }
       }
+    }
+    const firstRunComponentIndex = this.children.findIndex((entry) =>
+      protectedComponents.has(entry),
+    );
+    if (firstRunComponentIndex >= 0) {
+      // Scrollback may evict early reply segments before a peer prompt arrives;
+      // anchor before the earliest surviving reply or tool from the same run.
+      this.repeatableSystemMessage = null;
+      this.children.splice(firstRunComponentIndex, 0, component);
       this.pruneOverflow(protectedComponents);
       return component;
     }
