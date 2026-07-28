@@ -32,7 +32,7 @@ function hasControlOrWhitespace(value: string): boolean {
 }
 
 function isSafeSshTargetUser(user: string): boolean {
-  return !hasControlOrWhitespace(user);
+  return !hasControlOrWhitespace(user) && !user.startsWith("-");
 }
 
 // Reject hosts that would corrupt the SSH HostName field or enable argument

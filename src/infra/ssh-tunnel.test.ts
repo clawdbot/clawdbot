@@ -59,6 +59,7 @@ describe("parseSshTarget", () => {
     expect(parseSshTarget("me@example.com:not-a-port")).toBeNull();
     expect(parseSshTarget("-V")).toBeNull();
     expect(parseSshTarget("me@-badhost")).toBeNull();
+    expect(parseSshTarget("-oProxyCommand=touch@example.com")).toBeNull();
     expect(parseSshTarget("-oProxyCommand=echo")).toBeNull();
   });
 
