@@ -205,6 +205,8 @@ export function projectVisibleChatTranscriptMessages(
       return true;
     })
     .map((message) =>
-      options?.stripDeliveryMirrorMetadata === true ? stripDeliveryMirrorMetadata(message) : message,
+      options?.stripDeliveryMirrorMetadata === true
+        ? stripDeliveryMirrorMetadata(message)
+        : message,
     );
 }

@@ -482,7 +482,9 @@ export function createSessionsHistoryTool(opts?: {
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools
         ? rawMessages
-        : projectVisibleChatTranscriptMessages(rawMessages);
+        : projectVisibleChatTranscriptMessages(rawMessages, {
+            stripDeliveryMirrorMetadata: true,
+          });
       const sanitizedMessages = selectedMessages.map((message) => sanitizeHistoryMessage(message));
       const contentTruncated = sanitizedMessages.some((entry) => entry.truncated);
       const contentRedacted = sanitizedMessages.some((entry) => entry.redacted);

@@ -725,9 +725,7 @@ describe("sessions tools", () => {
     expect(details.messages).toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "gateway-injected" }),
     );
-    expect(details.messages).toContainEqual(
-      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
-    );
+    expect(JSON.stringify(details.messages)).not.toContain("delivery-mirror");
 
     const withTools = await tool.execute("call4", {
       sessionKey: "main",
