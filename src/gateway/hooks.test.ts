@@ -196,6 +196,19 @@ describe("gateway hooks helpers", () => {
     expect(bad.ok).toBe(false);
   });
 
+  test("normalizeAgentPayload rejects unsupported channelId with the delivery fields", () => {
+    const result = normalizeAgentPayload({
+      message: "notify the team",
+      channelId: "1528841267751030794",
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error:
+        'channelId is not supported; use channel and to to deliver the final agent reply (for example, channel: "discord", to: "<channel-id>")',
+    });
+  });
+
   test("normalizeAgentPayload passes agentId", () => {
     const ok = normalizeAgentPayload({ message: "hello", agentId: "hooks" });
     expect(ok.ok).toBe(true);

@@ -534,6 +534,8 @@ Query-string tokens are rejected.
 
     Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
 
+    `deliver: true` sends the final agent reply, not the incoming hook message. To target Discord, use `channel: "discord"` and `to: "<channel-id>"`; `channelId` is rejected because it is not a hook delivery field.
+
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms.

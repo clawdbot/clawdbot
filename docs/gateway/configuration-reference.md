@@ -943,7 +943,7 @@ Validation and safety notes:
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
-- `deliver: true` sends final reply to a channel; `channel` defaults to `last`.
+- `deliver: true` sends the final agent reply to a channel; `channel` defaults to `last`. To target Discord explicitly, use `channel: "discord"` and `to: "<channel-id>"`. The endpoint rejects unsupported `channelId` payload fields instead of treating them as a delivery target.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
 
 </Accordion>

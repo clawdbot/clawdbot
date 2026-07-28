@@ -265,6 +265,19 @@ describe("gateway server hooks", () => {
       expect(resBadChannel.status).toBe(400);
       expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
 
+      const isolatedRunCount = cronIsolatedRun.mock.calls.length;
+      const resUnsupportedChannelId = await postHook(port, "/hooks/agent", {
+        message: "Nope",
+        channelId: "1528841267751030794",
+      });
+      expect(resUnsupportedChannelId.status).toBe(400);
+      await expect(resUnsupportedChannelId.json()).resolves.toEqual({
+        ok: false,
+        error:
+          'channelId is not supported; use channel and to to deliver the final agent reply (for example, channel: "discord", to: "<channel-id>")',
+      });
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(isolatedRunCount);
+
       const resHeader = await postHook(
         port,
         "/hooks/wake",

@@ -423,6 +423,13 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       value: HookAgentPayload;
     }
   | { ok: false; error: string } {
+  if (Object.hasOwn(payload, "channelId")) {
+    return {
+      ok: false,
+      error:
+        'channelId is not supported; use channel and to to deliver the final agent reply (for example, channel: "discord", to: "<channel-id>")',
+    };
+  }
   const message = normalizeOptionalString(payload.message) ?? "";
   if (!message) {
     return { ok: false, error: "message required" };
