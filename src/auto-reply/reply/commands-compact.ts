@@ -66,6 +66,7 @@ function formatCompactionReason(reason?: string): string | undefined {
   const lower = normalizeLowercaseStringOrEmpty(reason);
   switch (classification) {
     case "no_compactable_entries":
+    case "no_real_conversation_messages":
       return "nothing compactable in this session yet";
     case "below_threshold":
       return lower.includes("already under target")
