@@ -708,10 +708,7 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               defaultRuntime.writeJson(result);
               return;
             }
-            const [
-              { formatHealthChannelLines },
-              { styleHealthChannelLine },
-            ] = await Promise.all([
+            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
               (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
               (deps.loadHealthStyleModule ?? loadHealthStyleModule)(),
             ]);
