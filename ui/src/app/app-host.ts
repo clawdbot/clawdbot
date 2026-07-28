@@ -114,7 +114,7 @@ import {
 } from "./native-web-chrome.ts";
 import { navigationSurfaceIsHidden, renderFloatingUpdateCard } from "./navigation-surface.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
-import { hasOperatorAdminAccess } from "./operator-access.ts";
+import { hasOperatorAdminAccess, readGatewayOperatorAccess } from "./operator-access.ts";
 import { controlUiPublicAssetPath } from "./public-assets.ts";
 import {
   applyServerUiPrefs,
@@ -1730,6 +1730,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     const gatewaySnapshot = context.gateway.snapshot;
     const gatewayConnected = gatewaySnapshot.phase === "connected";
+    const operatorAccess = readGatewayOperatorAccess(gatewaySnapshot);
     const outboxScopeHost = this.storedOutboxScopeHost(context);
     const outboxStoreRuntime = this.outboxStoreRuntime;
     const storedOutboxes = outboxStoreRuntime
@@ -1845,8 +1846,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           .outboxCountForSession=${outboxCountForSession}
           .terminalAvailable=${terminalAvailable}
           .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}
-          .canPairDevice=${gatewayConnected &&
-          hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
+          .canPairDevice=${gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair)}
           .sidebarEntries=${navigationSnapshot.sidebarEntries}
           .workboardBoards=${this.sidebarWorkboardSnapshot.boards}
           .workboardBoardsReady=${this.sidebarWorkboardSnapshot.ready}
