@@ -1073,7 +1073,22 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientDisplayName).toBeUndefined();
   });
 
-  it("waits for event-loop readiness before starting CLI pairing requests", async () => {
+  it("starts one-shot CLI pairing requests without an event-loop readiness delay", async () => {
+    setLocalLoopbackGatewayConfig();
+    eventLoopReadyState.promise = new Promise(() => {});
+
+    await callGateway({
+      method: "device.pair.list",
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
+    expect(eventLoopReadyState.calls).toHaveLength(0);
+    expect(startCalls).toBe(1);
+  });
+
+  it("keeps the event-loop readiness guard for backend requests", async () => {
     setLocalLoopbackGatewayConfig();
 
     let resolveReady:
@@ -1089,17 +1104,13 @@ describe("callGateway url resolution", () => {
       resolveReady = resolve;
     });
 
-    const promise = callGateway({
-      method: "device.pair.list",
-      mode: GATEWAY_CLIENT_MODES.CLI,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
-    });
+    const promise = callGateway({ method: "health" });
 
     await waitForFast(() => {
       expect(eventLoopReadyState.calls).toHaveLength(1);
     });
     expect(eventLoopReadyState.calls[0]?.maxWaitMs).toBe(10_000);
-    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.CLI);
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
     expect(startCalls).toBe(0);
 
     if (!resolveReady) {

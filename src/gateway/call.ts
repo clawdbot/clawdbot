@@ -923,6 +923,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
     deviceIdentity,
     surfaceGatewayClientRequestErrors,
   } = params;
+  const clientMode = opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   return await new Promise<T>((resolve, reject) => {
     if (opts.signal?.aborted) {
       reject(createGatewayRequestAbortError(opts.method));
@@ -1002,7 +1003,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       clientDisplayName: resolveGatewayClientDisplayName(opts),
       clientVersion: opts.clientVersion ?? VERSION,
       platform: opts.platform,
-      mode: opts.mode ?? GATEWAY_CLIENT_MODES.CLI,
+      mode: clientMode,
       ...(opts.approvalRuntimeToken ? { approvalRuntimeToken: opts.approvalRuntimeToken } : {}),
       ...(opts.agentRuntimeIdentityToken
         ? { agentRuntimeIdentityToken: opts.agentRuntimeIdentityToken }
@@ -1092,29 +1093,40 @@ async function executeGatewayRequestWithScopes<T>(params: {
       );
     }, safeTimerTimeoutMs);
 
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: safeTimerTimeoutMs,
-      signal: startAbort.signal,
-    })
-      .then((readiness) => {
-        if (settled || readiness.ready || readiness.aborted) {
-          return;
-        }
-        ignoreClose = true;
-        stop(
-          createGatewayTimeoutTransportError({
-            timeoutMs: startupTimeoutMs,
-            connectionDetails: params.connectionDetails,
-          }),
-        );
-      })
-      .catch((err: unknown) => {
-        if (settled) {
-          return;
-        }
+    if (clientMode === GATEWAY_CLIENT_MODES.CLI) {
+      // One-shot CLI calls reach this point after command module loading has settled.
+      // Start them immediately; the shared 15s handshake budget protects loaded hosts.
+      try {
+        client.start();
+      } catch (err) {
         ignoreClose = true;
         stop(err instanceof Error ? err : new Error(String(err)));
-      });
+      }
+    } else {
+      void startGatewayClientWhenEventLoopReady(client, {
+        timeoutMs: safeTimerTimeoutMs,
+        signal: startAbort.signal,
+      })
+        .then((readiness) => {
+          if (settled || readiness.ready || readiness.aborted) {
+            return;
+          }
+          ignoreClose = true;
+          stop(
+            createGatewayTimeoutTransportError({
+              timeoutMs: startupTimeoutMs,
+              connectionDetails: params.connectionDetails,
+            }),
+          );
+        })
+        .catch((err: unknown) => {
+          if (settled) {
+            return;
+          }
+          ignoreClose = true;
+          stop(err instanceof Error ? err : new Error(String(err)));
+        });
+    }
   });
 }
 
