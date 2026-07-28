@@ -188,7 +188,9 @@ export class GatewaySessionMessageSubscriptionCoordinator {
         this.#finishRelease(subscription, owner);
         return Promise.resolve();
       } catch (error) {
-        return Promise.reject(error);
+        return Promise.resolve().then(() => {
+          throw error;
+        });
       }
     }
     if (entry.release) {
