@@ -424,6 +424,47 @@ describe("switchChatHistoryBranch", () => {
     expect(state.sessions.listBranches).toHaveBeenCalledWith(state.sessionKey, expect.any(Object));
     expect(state.chatBranchesConnectionEpoch).toBe(state.connectionEpoch);
   });
+
+  it("starts a fresh snapshot and rejects in-flight history after a same-key branch switch", async () => {
+    let resolvePreviousHistory!: (result: ChatHistoryResult) => void;
+    const previousHistory = new Promise<ChatHistoryResult>((resolve) => {
+      resolvePreviousHistory = resolve;
+    });
+    const previous = { role: "assistant", content: "private old branch" };
+    const selected = { role: "assistant", content: "selected branch" };
+    const state = createState({ messages: [selected] }) as TestState & {
+      sessions: {
+        listBranches: ReturnType<typeof vi.fn>;
+        switchBranch: ReturnType<typeof vi.fn>;
+      };
+    };
+    state.sessionKey = "agent:main:branches";
+    state.chatMessages = [previous];
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(previousHistory)
+      .mockResolvedValueOnce({ messages: [selected] });
+    state.client = { request } as unknown as GatewayBrowserClient;
+    state.sessions = {
+      listBranches: vi.fn().mockResolvedValue([]),
+      switchBranch: vi.fn().mockResolvedValue({}),
+      setModelOverride: vi.fn(),
+    };
+
+    const staleHistory = loadChatHistory(state);
+    expect(request).toHaveBeenCalledOnce();
+
+    await expect(switchChatHistoryBranch(state as never, "selected-leaf")).resolves.toBe(true);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatMessages).toEqual([selected]);
+
+    resolvePreviousHistory({ messages: [previous] });
+    await staleHistory;
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.chatMessages).toEqual([selected]);
+  });
 });
 
 describe("canonical history snapshot projection", () => {
@@ -500,6 +541,83 @@ describe("canonical history snapshot projection", () => {
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual([prompt, reply]);
+  });
+
+  it("preserves live rows when an unselected leaf is reported without branch metadata", async () => {
+    const prompt = message("user", "delayed shared prompt", {
+      id: "finalized-run-user",
+      idempotencyKey: "shared-session-finalized-run:user",
+      seq: 1,
+    });
+    const reply = message("assistant", "already finished reply", {
+      id: "finalized-run-assistant",
+      seq: 2,
+    });
+    const state = createState({ messages: [reply], sessionId: "control-ui-e2e-session" });
+    state.currentSessionId = "control-ui-e2e-session";
+    state.chatDisplayedLeafEntryId = undefined;
+    const scope = {
+      sessionKey: state.sessionKey,
+      sessionId: state.currentSessionId,
+      activeLeafEntryId: null,
+    };
+    const projection = reduceSessionProjection(getChatSessionProjection(state, [reply], scope), {
+      type: "messagePersisted",
+      message: prompt,
+      scope,
+    });
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([prompt, reply]);
+  });
+
+  it("coalesces stale history while distinct live peer messages update the transcript", async () => {
+    let resolveHistory!: (history: ChatHistoryResult) => void;
+    const history = new Promise<ChatHistoryResult>((resolve) => {
+      resolveHistory = resolve;
+    });
+    const first = message("user", "shared prompt", {
+      id: "canonical-web-same-text",
+      idempotencyKey: "web-same-text-run:user",
+      seq: 1,
+    });
+    const second = message("user", "shared prompt", {
+      id: "canonical-tui-same-text",
+      idempotencyKey: "tui-same-text-run:user",
+      seq: 2,
+    });
+    const state = createState({ messages: [] });
+    const request = vi.fn().mockReturnValue(history);
+    state.client = { request } as unknown as GatewayBrowserClient;
+    const scope = { sessionKey: state.sessionKey };
+
+    const firstProjection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "messagePersisted", message: first, scope },
+    );
+    setChatSessionProjection(state, firstProjection);
+    state.chatMessages = [...firstProjection.messages];
+    const firstLoad = loadChatHistory(state);
+
+    const secondProjection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "messagePersisted", message: second, scope },
+    );
+    setChatSessionProjection(state, secondProjection);
+    state.chatMessages = [...secondProjection.messages];
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toEqual([first, second]);
+
+    resolveHistory({ messages: [] });
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toEqual([first, second]);
   });
 
   it("preserves pending input appended while the authoritative request is in flight", async () => {

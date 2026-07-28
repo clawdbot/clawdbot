@@ -146,6 +146,12 @@ function shouldApplyChatHistoryResult(
 }
 
 function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
+  const owner = state as object;
+  // A destructive reset keeps the session key, so invalidate both the old
+  // snapshot owner and its coalesced request before creating the next epoch.
+  chatHistoryRequestVersions.set(owner, (chatHistoryRequestVersions.get(owner) ?? 0) + 1);
+  inFlightChatHistoryRequests.delete(state);
+  state.chatLoading = false;
   const scope: SessionProjectionScope = {
     sessionKey: state.sessionKey,
     ...(agentId ? { agentId } : {}),
@@ -730,7 +736,6 @@ type InFlightChatHistoryRequest = {
   client: NonNullable<ChatState["client"]>;
   connectionEpoch: number;
   key: string;
-  messages: unknown[];
   promise: Promise<ChatHistoryResult | undefined>;
 };
 
@@ -1182,11 +1187,12 @@ export async function loadChatHistory(
   const connectionEpoch = state.connectionEpoch;
   const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
   const inFlight = inFlightChatHistoryRequests.get(state);
+  // Live events replace the rendered array while their snapshot is pending;
+  // only stable session and connection ownership may start another request.
   if (
     inFlight?.key === requestKey &&
     inFlight.client === client &&
-    inFlight.connectionEpoch === connectionEpoch &&
-    inFlight.messages === state.chatMessages
+    inFlight.connectionEpoch === connectionEpoch
   ) {
     return inFlight.promise;
   }
@@ -1213,7 +1219,6 @@ export async function loadChatHistory(
     client,
     connectionEpoch,
     key: requestKey,
-    messages: state.chatMessages,
     promise,
   });
   return promise;
@@ -1344,7 +1349,7 @@ async function loadChatHistoryUncached(
     });
     const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
       ? res.sessionInfo?.activeLeafEntryId?.trim() || null
-      : previousDisplayedLeafEntryId;
+      : (previousDisplayedLeafEntryId ?? null);
     const retainsTranscriptIdentity =
       (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
       (previousDisplayedLeafEntryId === undefined ||
@@ -1367,11 +1372,12 @@ async function loadChatHistoryUncached(
         ? { activeLeafEntryId: nextDisplayedLeafEntryId }
         : {}),
     };
-    // Only this pane's reducer proves which pending sends and live messages
-    // may survive a stale snapshot; a new session or leaf starts empty.
+    // Only the pane-owned reducer proves which live and pending rows survive;
+    // terminal-renderer cleanup must not reclassify them as history. A new
+    // session or leaf starts empty.
     const currentProjection = getChatSessionProjection(
       state,
-      retainsTranscriptIdentity ? reconciledTerminal.currentMessages : [],
+      retainsTranscriptIdentity ? state.chatMessages : [],
       scope,
     );
     const projection = reduceSessionProjection(currentProjection, {

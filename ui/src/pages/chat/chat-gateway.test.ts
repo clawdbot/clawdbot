@@ -2587,22 +2587,12 @@ describe("loadChatHistory filtering", () => {
     expect(secondState.chatMessages).toEqual(firstState.chatMessages);
   });
 
-  it("keeps displaced startup ownership across overlapping pane refreshes", async () => {
+  it("coalesces overlapping pane startup loads when rendered message arrays change", async () => {
     type StartupResult = {
       messages: Array<{ role: string; content: Array<{ type: string; text: string }> }>;
     };
     const sharedStartup = createDeferred<StartupResult>();
-    const firstFreshStartup = createDeferred<StartupResult>();
-    const secondFreshStartup = createDeferred<StartupResult>();
-    const startups = [sharedStartup, firstFreshStartup, secondFreshStartup];
-    let requestCount = 0;
-    const request = vi.fn(() => {
-      const startup = startups[requestCount++];
-      if (!startup) {
-        throw new Error("unexpected startup request");
-      }
-      return startup.promise;
-    });
+    const request = vi.fn(() => sharedStartup.promise);
     const client = { request } as unknown as ChatState["client"];
     const firstState = createState({
       client,
@@ -2622,24 +2612,16 @@ describe("loadChatHistory filtering", () => {
     secondState.chatMessages = [...secondState.chatMessages];
     const secondFreshLoad = loadChatHistory(secondState, { startup: true });
 
-    expect(request).toHaveBeenCalledTimes(3);
-    firstFreshStartup.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "first-fresh" }] }],
-    });
-    secondFreshStartup.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "second-fresh" }] }],
-    });
+    expect(request).toHaveBeenCalledOnce();
     sharedStartup.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "shared-stale" }] }],
+      messages: [{ role: "assistant", content: [{ type: "text", text: "shared" }] }],
     });
     await Promise.all([firstSharedLoad, secondSharedLoad, firstFreshLoad, secondFreshLoad]);
 
     expect(firstState.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "first-fresh" }] },
+      { role: "assistant", content: [{ type: "text", text: "shared" }] },
     ]);
-    expect(secondState.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "second-fresh" }] },
-    ]);
+    expect(secondState.chatMessages).toEqual(firstState.chatMessages);
   });
 
   it("keeps startup requests separate for different pane sessions", async () => {
@@ -3820,38 +3802,38 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatLoading).toBe(false);
   });
 
-  it("starts a fresh same-session history load after local messages change", async () => {
-    const staleRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const freshRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const request = vi
-      .fn()
-      .mockImplementationOnce(() => staleRequest.promise)
-      .mockImplementationOnce(() => freshRequest.promise);
+  it("coalesces same-session history while a proven pending send changes local messages", async () => {
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn(() => history.promise);
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
     });
 
-    const staleLoad = loadChatHistory(state);
-    state.chatMessages = [{ role: "user", content: [{ type: "text", text: "new local ask" }] }];
-    const freshLoad = loadChatHistory(state);
-
-    expect(request).toHaveBeenCalledTimes(2);
-    staleRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "old history" }] }],
+    const firstLoad = loadChatHistory(state);
+    const pending = createTextChatMessage("user", "new local ask", {
+      idempotencyKey: "same-session-pending-run:user",
     });
-    await staleLoad;
-    expect(state.chatMessages).toEqual([
-      { role: "user", content: [{ type: "text", text: "new local ask" }] },
-    ]);
-
-    freshRequest.resolve({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "fresh history" }] }],
+    projectChatMessageEvent(state, {
+      type: "sendPending",
+      runId: "same-session-pending-run",
+      message: pending,
     });
-    await freshLoad;
-    expect(state.chatMessages).toEqual([
-      { role: "assistant", content: [{ type: "text", text: "fresh history" }] },
-    ]);
+    const secondLoad = loadChatHistory(state);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toEqual([pending]);
+
+    const persisted = createTextChatMessage("assistant", "persisted history", {
+      id: "same-session-history-assistant",
+      seq: 1,
+    });
+    history.resolve({ messages: [persisted] });
+    await Promise.all([firstLoad, secondLoad]);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(state.chatMessages).toEqual([persisted, pending]);
+    expect(state.chatLoading).toBe(false);
   });
 
   it("rejects stale success and cleanup after a same-client reconnect", async () => {
