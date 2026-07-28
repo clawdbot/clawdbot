@@ -32,9 +32,10 @@ type DoctorAgentMemorySchemaReport = {
 function readMissingMemoryRecallMetadataColumns(
   database: DatabaseSync,
 ): MemoryRecallMetadataColumn[] | null {
-  const rows = database.prepare("PRAGMA table_info(memory_index_chunks)").all() as Array<{
-    name?: unknown;
-  }>;
+  const rows =
+    /* sqlite-allow-raw -- Read-only schema inspection before doctor maintenance. */ database
+      .prepare("PRAGMA table_info(memory_index_chunks)")
+      .all() as Array<{ name?: unknown }>;
   if (rows.length === 0) {
     return null;
   }

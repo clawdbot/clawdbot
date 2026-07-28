@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { ensureMemoryRecallMetadataColumns } from "../../packages/memory-host-sdk/src/host/memory-schema-recall.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
@@ -6,7 +7,6 @@ import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
-import { ensureMemoryRecallMetadataColumns } from "../memory-host-sdk/engine-storage.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
