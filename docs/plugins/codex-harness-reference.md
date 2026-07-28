@@ -267,15 +267,11 @@ Codex plugins are configured, OpenClaw uses the connected app-server's plugin
 control plane to install or refresh those plugins and then refreshes app
 inventory so plugin-owned apps are visible to the Codex thread. `app/installed`
 provides authoritative runtime state, and `app/read` provides app metadata.
-Callable apps with authorized metadata can be enabled directly. A modern
-base-disabled app owned by an explicitly configured plugin may be enabled
-provisionally in `thread/start`; OpenClaw immediately attests the effective
-thread-scoped inventory and discards the thread before its first turn unless
-the app is enabled and callable. Account-wide disabled apps and revoked,
+OpenClaw only enables apps in `thread/start` when they are callable, have
+authorized metadata, and are permitted by OpenClaw policy. Disabled, revoked,
 unauthenticated, policy-blocked, or missing apps remain excluded. Supported
 older app-server versions fall back to `app/list` only when `app/installed` is
-unavailable, and that fallback never provisionally enables a disabled app.
-This path only activates marketplace
+unavailable. This path only activates marketplace
 plugins via `plugin/install` and refreshes inventory. Only connect OpenClaw to
 remote app-servers that are trusted to accept OpenClaw-managed plugin installs
 and app inventory refreshes.

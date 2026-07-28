@@ -1,4 +1,3 @@
-import type { CodexAppsReadParams } from "./app-inventory-protocol.js";
 import type { CodexAppServerRequestParams, CodexAppServerRequestResult, v2 } from "./protocol.js";
 
 type CodexAppInventoryMethod = "app/installed" | "app/list" | "app/read";
@@ -21,7 +20,7 @@ export function codexAppInventoryResponse<Method extends CodexAppInventoryMethod
   }
 
   if (method === "app/read") {
-    const requestedIds = (params as CodexAppsReadParams | undefined)?.appIds;
+    const requestedIds = (params as v2.AppsReadParams | undefined)?.appIds;
     const requestedIdSet = requestedIds ? new Set(requestedIds) : undefined;
     const matchingApps = requestedIdSet ? apps.filter((app) => requestedIdSet.has(app.id)) : apps;
     const returnedIds = new Set(matchingApps.map((app) => app.id));

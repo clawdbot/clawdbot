@@ -696,7 +696,10 @@ export type CodexRequestObject = Record<string, unknown>;
 export declare namespace v2 {
   export type AppInfo = CodexAppInfo;
   export type AppSummary = CodexAppSummary;
+  export type AppsInstalledParams = CodexAppsInstalledParams;
   export type AppsInstalledResponse = CodexAppsInstalledResponse;
+  export type AppsReadParams = CodexAppsReadParams;
+  export type AppsReadResponse = CodexAppsReadResponse;
   export type HooksListParams = CodexHooksListParams;
   export type HooksListResponse = CodexHooksListResponse;
   export type PluginDetail = CodexPluginDetail;

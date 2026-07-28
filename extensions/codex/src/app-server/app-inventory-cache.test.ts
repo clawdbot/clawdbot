@@ -29,7 +29,6 @@ describe("Codex app inventory cache", () => {
 
     const snapshot = await cache.refreshNow({ key, request, nowMs: 0 });
     expect(snapshot.apps).toEqual(apps);
-    expect(snapshot.source).toBe("installed");
     expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
     expect(request).toHaveBeenNthCalledWith(2, "app/read", {
       appIds: ["app-1", "app-2"],
@@ -273,7 +272,6 @@ describe("Codex app inventory cache", () => {
     const snapshot = await cache.refreshNow({ key: "runtime", request });
 
     expect(snapshot.apps).toEqual([app("legacy-app")]);
-    expect(snapshot.source).toBe("legacy");
     expect(request).toHaveBeenNthCalledWith(1, "app/installed", { forceRefresh: true });
     expect(request).toHaveBeenNthCalledWith(2, "app/list", {
       cursor: undefined,

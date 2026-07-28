@@ -25,20 +25,8 @@ import {
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import {
-  collectInventoryOwnedAppIds,
-  readConfigLayersForAppAdmission,
-  readThreadAdmissibleAccountApps,
-  refreshAppInventoryNow,
-  resolveAccountAppThreadAdmission,
-  resolveExplicitAppEnablement,
-  resolvePluginAppThreadAdmission,
-  resolveThreadConfigAppsForRecord,
-  shouldForceRefreshForNotReadyPluginApps,
-  toOwnedAccountApp,
-  type CodexPluginThreadAppAdmissionDiagnostic,
-} from "./plugin-thread-app-admission.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import type { CodexAppServerRequestResult } from "./protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue, type v2 } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
 export type PluginAppPolicyContextEntry = {
@@ -632,12 +620,124 @@ function shouldRefreshMissingAppInventory(
   );
 }
 
+async function refreshAppInventoryNow(
+  params: BuildCodexPluginThreadConfigParams,
+  appCache: CodexAppInventoryCache,
+  options: { forceRefetch?: boolean; reason?: string; targetAppIds?: readonly string[] } = {},
+): Promise<CodexAppInventorySnapshot | undefined> {
+  const appCacheKey = params.appCacheKey;
+  if (!appCacheKey) {
+    return undefined;
+  }
+  const request: CodexAppInventoryRequest = async (method, requestParams) =>
+    (await params.request(method, requestParams)) as CodexAppServerRequestResult<typeof method>;
+  try {
+    const snapshot = await appCache.refreshNow({
+      key: appCacheKey,
+      request,
+      nowMs: params.nowMs,
+      forceRefetch: options.forceRefetch,
+      targetAppIds: options.targetAppIds,
+    });
+    return snapshot;
+  } catch (error) {
+    embeddedAgentLog.warn("codex plugin thread config app inventory refresh failed", {
+      reason: options.reason,
+      forceRefetch: options.forceRefetch === true,
+      error: serializeCodexAppInventoryError(error),
+    });
+    // Keep building from the diagnostic inventory state; app exposure remains scoped below.
+    return undefined;
+  }
+}
+
+function collectInventoryOwnedAppIds(inventory: CodexPluginInventory): string[] {
+  return Array.from(
+    new Set(inventory.records.flatMap((record) => record.ownedAppIds).filter(Boolean)),
+  ).toSorted();
+}
+
 function emptyCodexPluginInventory(policy: ResolvedCodexPluginsPolicy): CodexPluginInventory {
   return {
     policy,
     records: [],
     diagnostics: [],
   };
+}
+
+async function readAccessibleAccountApps(
+  params: BuildCodexPluginThreadConfigParams,
+  appCache: CodexAppInventoryCache,
+): Promise<{
+  apps: v2.AppInfo[];
+  diagnostic?: CodexPluginThreadConfigDiagnostic;
+}> {
+  // Account-wide mode needs metadata for every installed app, not only the
+  // configured plugin-owned app ids used by targeted startup refreshes.
+  const snapshot = await refreshAppInventoryNow(params, appCache, {
+    forceRefetch: false,
+    reason: "account_apps_all",
+    targetAppIds: [],
+  });
+  if (!snapshot) {
+    return {
+      apps: [],
+      diagnostic: {
+        code: "account_app_inventory_unavailable",
+        message: "Codex account app inventory was unavailable; account apps were not exposed.",
+      },
+    };
+  }
+  return {
+    apps: snapshot.apps
+      .filter((app) => app.isAccessible)
+      .toSorted((left, right) => left.id.localeCompare(right.id)),
+  };
+}
+
+function toOwnedAccountApp(app: v2.AppInfo): CodexPluginOwnedApp {
+  return {
+    id: app.id,
+    name: app.name,
+    accessible: app.isAccessible,
+    enabled: app.isEnabled,
+    needsAuth: !app.isAccessible,
+  };
+}
+
+function resolveThreadConfigAppsForRecord(params: {
+  record: CodexPluginInventoryRecord;
+  inventory: CodexPluginInventory;
+}): CodexPluginOwnedApp[] {
+  if (params.inventory.appInventory?.state === "missing") {
+    return [];
+  }
+  return params.record.apps;
+}
+
+function isPluginAppReadyForThreadStart(app: CodexPluginOwnedApp): boolean {
+  // The inventory only marks apps accessible when their installed runtime is
+  // callable, so thread overrides cannot re-enable blocked or disabled apps.
+  return app.accessible;
+}
+
+function shouldForceRefreshForNotReadyPluginApps(
+  params: BuildCodexPluginThreadConfigParams,
+  policy: ResolvedCodexPluginsPolicy,
+  inventory: CodexPluginInventory,
+): boolean {
+  if (!params.appCacheKey || !policy.pluginPolicies.some((plugin) => plugin.enabled)) {
+    return false;
+  }
+  if (inventory.appInventory?.state === "missing") {
+    return false;
+  }
+  return inventory.records.some(
+    (record) =>
+      record.appOwnership === "proven" &&
+      record.ownedAppIds.length > 0 &&
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible)),
+  );
 }
 
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {

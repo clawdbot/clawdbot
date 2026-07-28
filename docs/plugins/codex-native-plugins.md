@@ -355,12 +355,9 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 **Workspace plugin is installed but not visible:** confirm the workspace
 `plugin/list` result reports the exact configured ID as installed and enabled,
 then confirm `app/installed` returns every owned app for the same Codex
-account and `app/read` returns its metadata. A modern base-disabled app owned
-by an explicitly configured plugin is enabled provisionally for a new thread
-and must immediately attest as enabled and callable there. Account-wide
-disabled apps, legacy-inventory disabled apps, and apps that fail that
-thread-scoped attestation stay excluded; enable or reauthorize the app in Codex
-before starting another thread. If you changed that state after the gateway cached app
+account and `app/read` returns its metadata. Non-callable or disabled apps stay
+excluded; enable or reauthorize the app in Codex before starting a new thread.
+If you changed that state after the gateway cached app
 inventory, wait for the one-hour cache refresh or restart the gateway, then use
 `/new` or `/reset`. OpenClaw does not repair or authenticate workspace plugins.
 If the explicit workspace list request is rejected, each enabled workspace

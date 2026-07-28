@@ -202,7 +202,7 @@ export class CodexAppInventoryCache {
   ): Promise<CodexAppInventorySnapshot> {
     const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
-      const inventory = await readInstalledApps(
+      const apps = await readInstalledApps(
         params.request,
         params.forceRefetch ?? false,
         params.targetAppIds,
@@ -372,6 +372,76 @@ async function readInstalledApps(
     }),
     source: "installed",
   };
+}
+
+async function readLegacyInstalledApps(
+  request: CodexAppInventoryRequest,
+  forceRefetch: boolean,
+  targetAppIds: readonly string[],
+): Promise<v2.AppInfo[]> {
+  let installed: v2.AppsInstalledResponse;
+  try {
+    // A non-forced installed read returns the prior committed runtime snapshot;
+    // refreshing OpenClaw's cache must refresh the upstream snapshot as well.
+    installed = await request("app/installed", { forceRefresh: true });
+  } catch (error) {
+    // OpenClaw still supports Codex 0.143.0 and 0.144.x, which do not
+    // implement the 0.145.0 installed-app lifecycle methods.
+    if (
+      !(error instanceof CodexAppServerRpcError) ||
+      error.code !== -32601 ||
+      error.method !== "app/installed"
+    ) {
+      throw error;
+    }
+    return await readLegacyInstalledApps(request, forceRefetch, targetAppIds);
+  }
+  const targetIds = new Set(targetAppIds.filter(Boolean));
+  const apps =
+    targetIds.size === 0 ? installed.apps : installed.apps.filter((app) => targetIds.has(app.id));
+  if (apps.length === 0) {
+    return [];
+  }
+
+  const metadataResponses = await Promise.all(
+    Array.from({ length: Math.ceil(apps.length / CODEX_APP_READ_BATCH_LIMIT) }, (_, index) =>
+      request("app/read", {
+        appIds: apps
+          .slice(index * CODEX_APP_READ_BATCH_LIMIT, (index + 1) * CODEX_APP_READ_BATCH_LIMIT)
+          .map((app) => app.id),
+      }),
+    ),
+  );
+  const metadataById = new Map(
+    metadataResponses
+      .flatMap((response) => response.apps)
+      .map((metadata) => [metadata.id, metadata]),
+  );
+
+  return apps.flatMap((installedApp): v2.AppInfo[] => {
+    const metadata = metadataById.get(installedApp.id);
+    if (!metadata) {
+      return [];
+    }
+
+    return [
+      {
+        id: installedApp.id,
+        name: metadata.name,
+        description: metadata.description ?? null,
+        logoUrl: metadata.iconUrl ?? null,
+        logoUrlDark: metadata.iconUrlDark ?? null,
+        distributionChannel: metadata.distributionChannel ?? null,
+        branding: null,
+        appMetadata: null,
+        labels: null,
+        installUrl: metadata.installUrl ?? null,
+        isAccessible: installedApp.callable,
+        isEnabled: installedApp.enabled,
+        pluginDisplayNames: metadata.pluginDisplayNames,
+      },
+    ];
+  });
 }
 
 async function readLegacyInstalledApps(

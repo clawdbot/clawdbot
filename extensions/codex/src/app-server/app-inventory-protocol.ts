@@ -30,7 +30,7 @@ export type CodexAppsListResponse = {
 };
 
 /** Runtime app state returned by Codex app-server `app/installed`. */
-type CodexInstalledApp = {
+export type CodexInstalledApp = {
   id: string;
   runtimeName?: string | null;
   enabled: boolean;
@@ -47,7 +47,7 @@ export type CodexAppsInstalledResponse = {
 };
 
 /** Canonical connector metadata returned by Codex app-server `app/read`. */
-type CodexConnectorMetadata = {
+export type CodexConnectorMetadata = {
   id: string;
   name: string;
   description?: string | null;
