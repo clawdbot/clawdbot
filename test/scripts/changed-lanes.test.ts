@@ -645,6 +645,10 @@ describe("scripts/changed-lanes", () => {
     { name: "extension source", changedPaths: ["extensions/copilot/src/a.ts"], expected: true },
     { name: "ui source", changedPaths: ["ui/src/pages/a.ts"], expected: true },
     { name: "package source", changedPaths: ["packages/x/src/a.mts"], expected: true },
+    // Matches the `[cm]?[jt]sx?` selector the lint lanes in check-changed.mjs use.
+    { name: "tsx source", changedPaths: ["ui/src/pages/Page.tsx"], expected: true },
+    { name: "jsx source", changedPaths: ["ui/src/pages/Page.jsx"], expected: true },
+    { name: "cjs source", changedPaths: ["src/agents/legacy.cjs"], expected: true },
     // An import-only edit can orphan a barrel re-export in a file this diff never
     // touches, so selection is by path; inspecting changed lines would miss it.
     { name: "import-only edit", changedPaths: ["src/agents/tool-surface-plan.ts"], expected: true },
