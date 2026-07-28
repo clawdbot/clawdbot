@@ -23,7 +23,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { hasStagedMediaProjection } from "../../media/media-facts.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
@@ -240,7 +240,7 @@ export async function getReplyFromConfig(
       isFastTestEnv,
     }),
   );
-  const inboundMediaWasAlreadyStaged = hasStagedMediaProjection(ctx);
+  const inboundMediaWasAlreadyStaged = hasStagedMediaFacts(ctx.media);
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
@@ -846,6 +846,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
+    requestedRouteResolution,
     modelState,
     contextTokens,
     inlineStatusRequested,
@@ -870,6 +871,7 @@ export async function getReplyFromConfig(
     const action: ResetCommandAction = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
     await emitResetCommandHooks({
       action,
+      agentId,
       ctx,
       cfg,
       command,
@@ -1025,7 +1027,7 @@ export async function getReplyFromConfig(
     !useFastTestBootstrap &&
     sessionKey &&
     !inboundMediaWasAlreadyStaged &&
-    !hasStagedMediaProjection(ctx) &&
+    !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
     const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
@@ -1073,6 +1075,9 @@ export async function getReplyFromConfig(
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
+      requestedRouteResolution: runAutoFallbackPrimaryProbe
+        ? runModelState.requestedRouteResolution
+        : requestedRouteResolution,
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,

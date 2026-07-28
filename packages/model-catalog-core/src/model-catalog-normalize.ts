@@ -359,6 +359,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "supportsUsageInStreaming",
     "supportsTools",
     "supportsStrictMode",
+    "supportsJsonSchemaResponseFormat",
     "requiresStringContent",
     "strictMessageKeys",
     "requiresToolResultName",
@@ -409,6 +410,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     if (Object.keys(reasoningEffortMap).length > 0) {
       compat.reasoningEffortMap = reasoningEffortMap;
     }
+  }
+
+  const codeMode = normalizeOptionalString(value.codeMode) ?? "";
+  if (codeMode === "preferred" || codeMode === "capable") {
+    compat.codeMode = codeMode;
   }
 
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
@@ -536,11 +542,13 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const headers = normalizeStringMap(value.headers);
+  const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
+    ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
     models,
   };

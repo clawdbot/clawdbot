@@ -24,6 +24,11 @@
       "import": "./dist/boolean-coercion.mjs",
       "default": "./dist/boolean-coercion.mjs"
     },
+    "./cjk-chars": {
+      "types": "./dist/cjk-chars.d.mts",
+      "import": "./dist/cjk-chars.mjs",
+      "default": "./dist/cjk-chars.mjs"
+    },
     "./error-coercion": {
       "types": "./dist/error-coercion.d.mts",
       "import": "./dist/error-coercion.mjs",
@@ -71,7 +76,7 @@
     }
   },
   "scripts": {
-    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+    "build": "tsdown src/index.ts src/agent-id.ts src/boolean-coercion.ts src/cjk-chars.ts src/error-coercion.ts src/expect.ts src/number-coercion.ts src/phone-presentation.ts src/record-coerce.ts src/result.ts src/string-coerce.ts src/string-normalization.ts src/utf16-slice.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
     "libphonenumber-js": "1.13.9"

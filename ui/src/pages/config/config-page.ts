@@ -7,6 +7,7 @@ import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
+import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
   applicationContext,
@@ -27,6 +28,7 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
+import { resolveModelPrimary } from "../../lib/agents/display.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -46,6 +48,8 @@ import {
   type ConfigPageId,
 } from "./config-sections.ts";
 import { renderMcp } from "./mcp.ts";
+import { renderMemoryPage } from "./memory-page.ts";
+import { narrowMemorySchema, normalizeMemoryTab } from "./memory-schema.ts";
 import { renderQuickSettings } from "./quick.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import { renderSecurity, type SecurityOverview } from "./security.ts";
@@ -76,25 +80,13 @@ type ConfigPageSetting =
   | "catalogOpenTarget"
   | "composerHoldToRecord";
 
-const CONFIG_PAGE_I18N_KEYS = {
-  config: "config",
-  communications: "communications",
-  appearance: "appearance",
-  notifications: "notifications",
-  security: "security",
-  automation: "automation",
-  mcp: "mcp",
-  infrastructure: "infrastructure",
-  "ai-agents": "aiAgents",
-  advanced: "advanced",
-} as const satisfies Record<ConfigPageId, string>;
-
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
 const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "automation:approvals": { routeId: "security", keepSection: true },
+  "ai-agents:memory": { routeId: "memory", keepSection: true },
 };
 
 const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
@@ -125,6 +117,8 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
       return { activeSection: "commands", activeSubsection: null };
     case "mcp":
       return { activeSection: "mcp", activeSubsection: null };
+    case "memory":
+      return { activeSection: "memory", activeSubsection: null };
     case "infrastructure":
       return { activeSection: "gateway", activeSubsection: null };
     case "ai-agents":
@@ -168,9 +162,7 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
 function configPageTitle(pageId: ConfigPageId): string {
   // The takeover sidebar is titled "Settings"; the general page header reads
   // like its sibling sections instead of repeating it.
-  return pageId === "config"
-    ? t("nav.settingsGeneral")
-    : t(`tabs.${CONFIG_PAGE_I18N_KEYS[pageId]}`);
+  return pageId === "config" ? t("nav.settingsGeneral") : titleForRoute(pageId);
 }
 
 function extractQuickSettingsSecurity(config: unknown): SecurityOverview {
@@ -261,6 +253,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     security: "form",
     automation: "form",
     mcp: "form",
+    memory: "form",
     infrastructure: "form",
     "ai-agents": "form",
     advanced: "form",
@@ -273,6 +266,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     security: defaultConfigSelection("security"),
     automation: defaultConfigSelection("automation"),
     mcp: defaultConfigSelection("mcp"),
+    memory: defaultConfigSelection("memory"),
     infrastructure: defaultConfigSelection("infrastructure"),
     "ai-agents": defaultConfigSelection("ai-agents"),
     advanced: defaultConfigSelection("advanced"),
@@ -946,6 +940,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
+      forceShowAdvanced: this.pageId === "advanced",
       forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
       sessionObserverUtilityModel:
@@ -1041,6 +1036,28 @@ export class ConfigPage extends OpenClawLightDomElement {
         }),
       });
     }
+    if (this.pageId === "memory") {
+      return renderMemoryPage({
+        configObject,
+        pluginsHref: pathForRoute("plugins", this.context.basePath),
+        memoryImportHref: pathForRoute("memory-import", this.context.basePath),
+        tab: normalizeMemoryTab(this.routeData?.tab),
+        // Memory's engine and backend are product decisions, not power-user
+        // knobs: this page forces the advanced tier open so they never hide
+        // behind the global Advanced toggle.
+        buildEditor: (keys) =>
+          renderConfig({
+            ...props,
+            schema: narrowMemorySchema(props.schema, keys),
+            activeSection: "memory",
+            activeSubsection: null,
+            showModeToggle: false,
+            embeddedEditor: true,
+            forceShowAdvanced: true,
+            navRootLabel: t("tabs.memory"),
+          }),
+      });
+    }
     if (this.pageId === "security") {
       const runtimeState = runtimeConfig.state;
       const configBusy =
@@ -1067,10 +1084,10 @@ export class ConfigPage extends OpenClawLightDomElement {
   private renderQuickConfig(configObject: Record<string, unknown>) {
     const runtimeConfig = this.context.runtimeConfig;
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const model = typeof agentsDefaults?.model === "string" ? agentsDefaults.model : "default";
+    const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
     const thinkingLevel =
       typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const fastMode = agentsDefaults?.fastMode;
+    const fastMode = agentsDefaults?.fastModeDefault;
     const appConfig = this.context.config.current;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
@@ -1105,7 +1122,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       onThinkingChange: (level) =>
         runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
       onFastModeChange: (mode: FastMode) =>
-        runtimeConfig.patchForm(["agents", "defaults", "fastMode"], mode),
+        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
     });
   }
 

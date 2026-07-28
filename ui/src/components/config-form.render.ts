@@ -20,9 +20,10 @@ type ConfigFormProps = {
   activeSection?: string | null;
   activeSubsection?: string | null;
   showAdvanced?: boolean;
-  expandedAdvancedSections?: ReadonlySet<string>;
   forceAdvancedSection?: string | null;
-  onAdvancedSectionToggle?: (section: string, expanded: boolean) => void;
+  /** Required: the collapsed-advanced ghost row's only action. Optional would
+   *  permit an inert "Show advanced" control that strands hidden settings. */
+  onShowAdvanced: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
@@ -33,6 +34,73 @@ type ConfigFormProps = {
   onToggleSensitivePath?: (path: Array<string | number>) => void;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
+
+function renderAdvancedDivider(onHideAdvanced: (() => void) | undefined) {
+  return html`<div class="config-advanced-divider">
+    <span>${t("configForm.advancedDivider")}</span>
+    ${onHideAdvanced
+      ? html`<button
+          type="button"
+          class="config-advanced-divider__toggle"
+          @click=${() => onHideAdvanced()}
+        >
+          ${t("common.hideAdvanced")}
+        </button>`
+      : nothing}
+  </div>`;
+}
+
+/** Common/advanced split body shared by the config page and channel forms so
+ *  every schema surface hides advanced settings behind the same ghost row. */
+export function renderConfigTierGroups(params: {
+  schema: JsonSchema;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  revealAdvanced: boolean;
+  onShowAdvanced: () => void;
+  /** Surfaces without a toolbar toggle pass this so the divider can collapse
+   *  the tier again; the config page omits it and uses its toolbar button. */
+  onHideAdvanced?: () => void;
+  renderTier: (node: JsonSchema) => TemplateResult | typeof nothing;
+}) {
+  const split = splitConfigSchemaByTier({
+    schema: params.schema,
+    path: params.path.map(String),
+    hints: params.hints,
+  });
+  // An advanced-only schema needs no separator, but a surface whose only
+  // collapse control lives on the divider would otherwise strand the tier open.
+  const showDivider = Boolean(split.common) || Boolean(params.onHideAdvanced);
+  return html`
+    ${split.common
+      ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
+      : nothing}
+    ${split.advanced && split.advancedLeafCount > 0
+      ? params.revealAdvanced
+        ? html`
+            ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
+            <div class="settings-group">${params.renderTier(split.advanced)}</div>
+          `
+        : html`
+            <button
+              type="button"
+              class="config-advanced-ghost"
+              @click=${() => params.onShowAdvanced()}
+            >
+              <span class="config-advanced-ghost__count">
+                ${t(
+                  split.advancedLeafCount === 1
+                    ? "configForm.advancedHidden"
+                    : "configForm.advancedHiddenPlural",
+                  { count: String(split.advancedLeafCount) },
+                )}
+              </span>
+              <span class="config-advanced-ghost__action">${t("configForm.showAdvanced")}</span>
+            </button>
+          `
+      : nothing}
+  `;
+}
 
 function matchesSearch(params: {
   key: string;
@@ -136,18 +204,7 @@ export function renderConfigForm(props: ConfigFormProps) {
     nodeValue: unknown;
     path: Array<string | number>;
   }) => {
-    const split = splitConfigSchemaByTier({
-      schema: params.node,
-      path: params.path.map(String),
-      hints: props.uiHints,
-    });
-    const sectionKey = params.path.join(".");
-    const advancedOpen =
-      props.showAdvanced === true ||
-      props.forceAdvancedSection === params.path[0] ||
-      Boolean(searchQuery) ||
-      props.expandedAdvancedSections?.has(sectionKey) === true;
-    const advancedOpenControlled =
+    const revealAdvanced =
       props.showAdvanced === true ||
       props.forceAdvancedSection === params.path[0] ||
       Boolean(searchQuery);
@@ -178,32 +235,14 @@ export function renderConfigForm(props: ConfigFormProps) {
         ${params.description
           ? html`<p class="settings-section__desc">${params.description}</p>`
           : nothing}
-        ${split.common
-          ? html`<div class="settings-group">${renderTier(split.common)}</div>`
-          : nothing}
-        ${split.advanced && split.advancedLeafCount > 0
-          ? html`
-              <details
-                class="config-advanced-fields"
-                ?open=${advancedOpen}
-                @toggle=${(event: Event) => {
-                  if (advancedOpenControlled) {
-                    (event.currentTarget as HTMLDetailsElement).open = advancedOpen;
-                    return;
-                  }
-                  const details = event.currentTarget as HTMLDetailsElement;
-                  props.onAdvancedSectionToggle?.(sectionKey, details.open);
-                }}
-              >
-                <summary class="config-advanced-fields__summary">
-                  ${t("configForm.advancedCount", { count: String(split.advancedLeafCount) })}
-                </summary>
-                <div class="settings-group config-advanced-fields__content">
-                  ${renderTier(split.advanced)}
-                </div>
-              </details>
-            `
-          : nothing}
+        ${renderConfigTierGroups({
+          schema: params.node,
+          path: params.path,
+          hints: props.uiHints,
+          revealAdvanced,
+          onShowAdvanced: props.onShowAdvanced,
+          renderTier,
+        })}
       </section>
     `;
   };

@@ -203,9 +203,6 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
   const { normalizePluginId } = await loadPluginsConfigState();
   const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
-  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
-  const { logSlotWarnings } = await loadPluginsCommandHelpers();
-  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   const snapshot = await readConfigFileSnapshot();
   const cfg = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const report = buildPluginRegistrySnapshotReport({ config: cfg });
@@ -216,12 +213,30 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
   const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
     updateChannelConfig: false,
   });
+  // A blocked request must not displace the active slot or rewrite persisted state.
+  if (!enableResult.enabled) {
+    defaultRuntime.log(
+      theme.warn(
+        `Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`,
+      ),
+    );
+    return;
+  }
+
+  const { applySlotSelectionForPlugin } = await loadPluginSlotSelection();
+  const { logSlotWarnings } = await loadPluginsCommandHelpers();
+  const { refreshPluginRegistryAfterConfigMutation } = await loadPluginsRegistryRefresh();
   let next: OpenClawConfig = enableResult.config;
   const slotResult = applySlotSelectionForPlugin(next, id);
   next = slotResult.config;
   await replaceConfigFile({
     nextConfig: next,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    // Source/runtime projection must retain the explicitly merged canonical
+    // entry; otherwise compatibility-only nested settings are silently lost.
+    writeOptions: {
+      explicitSetPaths: [["plugins", "entries", enableResult.pluginId]],
+    },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,
@@ -233,13 +248,7 @@ async function runPluginsEnableCommandUnlocked(idInput: string): Promise<void> {
     },
   });
   logSlotWarnings(slotResult.warnings);
-  if (enableResult.enabled) {
-    defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
-    return;
-  }
-  defaultRuntime.log(
-    theme.warn(`Plugin "${id}" could not be enabled (${enableResult.reason ?? "unknown reason"}).`),
-  );
+  defaultRuntime.log(`Enabled plugin "${id}". Restart the gateway to apply.`);
 }
 
 /** Disable a plugin in config and refresh the registry snapshot for the changed policy. */
@@ -272,6 +281,11 @@ async function runPluginsDisableCommandUnlocked(idInput: string): Promise<void> 
   await replaceConfigFile({
     nextConfig: next,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+    // `id` was normalized before discovery; persist that same canonical entry
+    // so alias invocations cannot lose settings during source projection.
+    writeOptions: {
+      explicitSetPaths: [["plugins", "entries", id]],
+    },
   });
   await refreshPluginRegistryAfterConfigMutation({
     config: next,

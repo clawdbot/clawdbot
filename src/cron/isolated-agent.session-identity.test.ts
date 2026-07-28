@@ -163,25 +163,18 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       const call = lastEmbeddedAgentCall();
       expect(call.sessionKey).toMatch(/^agent:ops:cron:job-ops:run:/);
       expect(call.workspaceDir).toBe(opsWorkspace);
-      expect(call.sessionFile).toContain(path.join("agents", "ops"));
+      expect(call.sessionFile).toBe(call.sessionKey);
     });
   });
 
-  it("passes sessionFile to isolated cron runs", async () => {
+  it("passes the canonical key through the deprecated sessionFile field", async () => {
     await withTempHome(async (home) => {
       await runCronTurn(home, {
         jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
       });
       const call = lastEmbeddedAgentCall();
 
-      expect(call.sessionFile).toBe(
-        `sqlite:main:${call.sessionId}:${path.join(
-          home,
-          ".openclaw",
-          "sessions",
-          "sessions.json",
-        )}`,
-      );
+      expect(call.sessionFile).toBe(call.sessionKey);
     });
   });
 
@@ -243,13 +236,11 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       await expect(readSessionEntry(storePath, executionSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session-rotated",
-          sessionFile: rotatedSessionFile,
         }),
       );
       await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
         expect.objectContaining({
           sessionId: "bound-session",
-          sessionFile: originalSessionFile,
         }),
       );
     });

@@ -26,10 +26,9 @@ import {
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
-  CLAUDE_FABLE_5_FALLBACK_MODEL_COST,
+  ANTHROPIC_SERVER_SIDE_FALLBACKS,
   applyClaudeRequestContract,
   applyAnthropicFallbackBoundary,
-  buildAnthropicServerSideFallbacks,
   defaultsClaudeAdaptiveThinking,
   applyAnthropicRefusal,
   findActiveAnthropicToolTurnAssistantIndex,
@@ -46,6 +45,7 @@ import {
   readAnthropicPromptUsageSnapshot,
   readAnthropicUsageTokenCount,
   readLastAnthropicIterationUsage,
+  resolveAnthropicFallbackServingModelCost,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
@@ -92,6 +92,7 @@ import {
   mergeTransportHeaders,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
+  transportAbortError,
 } from "./transport-stream-shared.js";
 import {
   createAbortError as createNamedAbortError,
@@ -345,7 +346,11 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
  * identity) requests are excluded until the beta is verified there.
  */
 function useAnthropicServerSideFallback(model: AnthropicTransportModel): boolean {
-  return usesClaudeFable5MessagesContract(model) && isDirectAnthropicModel(model);
+  return (
+    (usesClaudeFable5MessagesContract(model) ||
+      resolveClaudeOpus5ModelIdentity(model) !== undefined) &&
+    isDirectAnthropicModel(model)
+  );
 }
 
 function supportsReasoningContentReplay(
@@ -1073,11 +1078,11 @@ async function buildAnthropicParams(
     max_tokens: maxTokens,
     stream: true,
   };
-  // Fable safety classifiers can decline benign-adjacent work; server-side
-  // fallback re-serves the same call on claude-opus-4-8 instead of failing
-  // the turn. Requires the matching beta header from the transport client.
+  // Fable 5 and Opus 5 safety classifiers can decline benign-adjacent work.
+  // Anthropic owns the per-category fallback recommendation so routing can
+  // evolve without a client release.
   if (!isOAuthToken && useAnthropicServerSideFallback(model)) {
-    params.fallbacks = buildAnthropicServerSideFallbacks();
+    params.fallbacks = ANTHROPIC_SERVER_SIDE_FALLBACKS;
   }
   if (isOAuthToken) {
     params.system = [
@@ -1512,7 +1517,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // Cost intentionally mirrors top-level usage (serving attempt at
               // serving-model rates). A mid-stream decline's billed partial is
               // only in usage.iterations and is not folded in here.
-              costModel = { ...model, cost: CLAUDE_FABLE_5_FALLBACK_MODEL_COST };
+              costModel = {
+                ...model,
+                cost: resolveAnthropicFallbackServingModelCost({
+                  requestedModelId: model.id,
+                  servingModelId: fallbackBoundary.toModel,
+                  requestedCost: model.cost,
+                }),
+              };
               calculateCost(costModel, output.usage);
               eventSink.push({ type: "start", partial: output as never });
               for (const [i, block] of output.content.entries()) {
@@ -1885,7 +1897,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error("Anthropic stream ended before message_stop");
         }
         if (transportOptions.signal?.aborted) {
-          throw new Error("Request was aborted");
+          throw transportAbortError(transportOptions.signal);
         }
         if (output.stopReason === "aborted" || output.stopReason === "error") {
           throw new Error(output.errorMessage ?? "An unknown error occurred");

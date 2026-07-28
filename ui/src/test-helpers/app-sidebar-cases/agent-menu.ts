@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { AgentsListResult } from "../../api/types.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
+import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -11,6 +14,80 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar agent chip", () => {
+  it("loads the workspace identity used by the Agents editor", async () => {
+    const request = vi.fn().mockResolvedValue({
+      agentId: "main",
+      name: "Workspace Molty",
+      emoji: "🦞",
+      avatar: "data:image/png;base64,d29ya3NwYWNl",
+    });
+    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
+    const { sidebar } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+        agents: [{ id: "main" }],
+      },
+      [],
+      agentIdentity,
+    );
+
+    sidebar.connected = true;
+    await vi.waitFor(() => {
+      expect(sidebar.querySelector(".sidebar-agent-card__name")?.textContent?.trim()).toContain(
+        "Workspace Molty",
+      );
+      expect(sidebar.querySelector<HTMLImageElement>(".sidebar-agent-card__avatar img")?.src).toBe(
+        "data:image/png;base64,d29ya3NwYWNl",
+      );
+    });
+    expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" });
+  });
+
+  it("hydrates agents added while the switcher remains open", async () => {
+    const request = vi.fn(async (_method: string, params: { agentId: string }) => ({
+      agentId: params.agentId,
+      name: `Workspace ${params.agentId}`,
+    }));
+    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const agentIdentity = createAgentIdentityCapability(gatewayHarness.gateway);
+    const { sidebar, context } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "agent",
+        agents: [{ id: "main" }],
+      },
+      [],
+      agentIdentity,
+    );
+    sidebar.connected = true;
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "main" }),
+    );
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")?.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
+
+    (context.agents.state as { agentsList: AgentsListResult | null }).agentsList = TWO_AGENTS;
+    sidebar.requestUpdate();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("agent.identity.get", { agentId: "research" });
+      expect(sidebar.querySelector(".sidebar-agent-menu")?.textContent).toContain(
+        "Workspace research",
+      );
+    });
+  });
+
   it("opens the agent-scoped menu with its inline roster", async () => {
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
@@ -76,12 +153,41 @@ describe("AppSidebar agent chip", () => {
     );
     await sidebar.updateComplete;
 
-    // No cached sessions for the other agent: resume falls back to its main key.
+    // No cached sessions for the other agent: resume falls back to its main key, and
+    // the uncached face is a guess, so navigation is marked for gateway re-derivation.
     expect(setSessionKey).toHaveBeenCalledWith("agent:research:main");
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Aresearch%3Amain",
+      pathname: "/chat/research",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(sidebar.querySelector(".sidebar-agent-menu")).toBeNull();
+  });
+
+  it("drops the menu below the agent card instead of covering it", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    const card = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main");
+    if (!card) {
+      throw new Error("Expected the sidebar agent card");
+    }
+    card.getBoundingClientRect = () => ({ bottom: 88, left: 12, right: 252, top: 40 }) as DOMRect;
+    card.click();
+    await sidebar.updateComplete;
+
+    const menus = (sidebar as unknown as { sidebarMenus: { agentMenuPosition: unknown } })
+      .sidebarMenus;
+    expect(menus.agentMenuPosition).toEqual({ x: 12, top: 92 });
+    const menu = sidebar.querySelector(".sidebar-agent-menu");
+    expect(menu?.getAttribute("placement")).toBe("bottom-start");
+    expect(menu?.querySelector('[slot="trigger"]')?.getAttribute("style")).toContain("top: 92px");
   });
 
   it("collapses a single-agent roster to the three agent actions", async () => {

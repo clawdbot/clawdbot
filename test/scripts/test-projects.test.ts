@@ -298,6 +298,7 @@ describe("scripts/test-projects changed-target routing", () => {
         targets: [
           "extensions/codex/src/manifest.test.ts",
           "extensions/openai/openai-provider.test.ts",
+          "test/scripts/codex-client-version-contract.test.ts",
         ],
       });
     },
@@ -1068,25 +1069,6 @@ describe("scripts/test-projects changed-target routing", () => {
     });
   });
 
-  it("routes code-mode namespace live repro changes through its regression test", () => {
-    expect(resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live.ts"])).toEqual({
-      mode: "targets",
-      targets: ["test/scripts/code-mode-namespace-live.test.ts"],
-    });
-  });
-
-  it("routes code-mode namespace live Docker repro changes through its regression tests", () => {
-    expect(
-      resolveChangedTestTargetPlan(["scripts/repro/code-mode-namespace-live-docker.sh"]),
-    ).toEqual({
-      mode: "targets",
-      targets: [
-        "test/scripts/code-mode-namespace-live.test.ts",
-        "test/scripts/docker-build-helper.test.ts",
-      ],
-    });
-  });
-
   it("routes group visible reply config changes through channel delivery regressions", () => {
     expect(
       resolveChangedTestTargetPlan([
@@ -1341,6 +1323,7 @@ describe("scripts/test-projects changed-target routing", () => {
       ".github/workflows/clawsweeper-dispatch.yml",
       ".github/workflows/labeler.yml",
       ".github/workflows/real-behavior-proof.yml",
+      ".github/workflows/stale.yml",
     ]) {
       expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
         mode: "targets",
@@ -1601,7 +1584,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it("keeps package, release, and install tooling edits on owner tests", () => {
     const expectedTargets = new Map([
-      ["scripts/generate-npm-shrinkwrap.mjs", ["test/scripts/generate-npm-shrinkwrap.test.ts"]],
+      ["scripts/generate-npm-package-lock.mjs", ["test/scripts/generate-npm-package-lock.test.ts"]],
       ["scripts/npm-runner.d.mts", ["test/scripts/npm-runner.test.ts"]],
       ["scripts/pnpm-runner.d.mts", ["test/scripts/pnpm-runner.test.ts"]],
       [
@@ -1744,8 +1727,13 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
       [
         "scripts/pr",
-        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-operation-lock.test.ts",
+          "test/scripts/pr-wrappers.test.ts",
+        ],
       ],
+      ["scripts/pr-lib/merge.sh", ["test/scripts/pr-merge.test.ts"]],
       ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
@@ -3652,6 +3640,33 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes isolated ui test targets to the isolated project", () => {
+    expect(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the isolated project for broad ui targets", () => {
+    const plans = buildVitestRunPlans(["ui/src"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+  });
+
+  it("rejects broad ui watch targets that cross shared and isolated projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "ui/src"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
+  });
+
   it("keeps explicit non-renderer ui test targets scoped", () => {
     expect(
       buildVitestRunPlans([
@@ -4366,6 +4381,12 @@ describe("scripts/test-projects full-suite sharding", () => {
     expect(fullSuiteMatches.get("src/tui/tui-pty-harness.e2e.test.ts")).toEqual([
       "test/vitest/vitest.tui-pty.config.ts",
     ]);
+  });
+
+  it("covers Codex attempt client prewarming in full-suite routing", () => {
+    expect(
+      fullSuiteMatches.get("extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts"),
+    ).toEqual(["test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts"]);
   });
 
   it("uses the global host worker budget for roomy local hosts", () => {

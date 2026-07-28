@@ -30,8 +30,15 @@ function createTool(params: {
   requests?: CallGatewayRequest[];
   truncated?: boolean;
 }) {
+  const config = params.config ?? { tools: { sessions: { visibility: "self" } } };
   return createSessionsSearchTool({
-    config: params.config ?? { tools: { sessions: { visibility: "self" } } },
+    config: {
+      ...config,
+      agents: {
+        entries: { main: { default: true } },
+        ...(config.agents as Record<string, unknown> | undefined),
+      },
+    },
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
     sandboxed: params.sandboxed,
@@ -273,7 +280,10 @@ describe("sessions_search tool", () => {
 
   it("accepts the gateway's canonical key for the current-session alias", async () => {
     const tool = createSessionsSearchTool({
-      config: { tools: { sessions: { visibility: "self" } } },
+      config: {
+        agents: { entries: { main: { default: true } } },
+        tools: { sessions: { visibility: "self" } },
+      },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
         if (request.method === "sessions.list") {
           return { sessions: [], hasMore: false } as T;

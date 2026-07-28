@@ -258,6 +258,86 @@ describe("qa coverage report", () => {
     ).toContain("session-memory.memory-recall");
   });
 
+  it("inventories runnable multi-actor turn ordering as primary runtime evidence", () => {
+    const coverageId = "agent-runtime.session-turn-ordering";
+    const sourcePath = "qa/scenarios/channels/channel-multi-actor-ordering.yaml";
+    const scenarios = readQaScenarioPack().scenarios;
+    const scenario = expectDefined(
+      scenarios.find((candidate) => candidate.id === "channel-multi-actor-ordering"),
+      "multi-actor turn ordering scenario",
+    );
+
+    expect(scenario.execution.kind).toBe("flow");
+    expect(scenario.coverage?.primary).toEqual(["channels.room-allowlist", coverageId]);
+
+    const orderingActions = (
+      scenario.execution.flow?.steps.flatMap((step) => step.actions) ?? []
+    ).filter(
+      (action): action is Record<string, unknown> =>
+        typeof action === "object" &&
+        action !== null &&
+        ("sendInbound" in action ||
+          "waitForNoOutbound" in action ||
+          "waitForOutbound" in action ||
+          "assert" in action),
+    );
+    expect(orderingActions).toMatchObject([
+      {
+        sendInbound: {
+          conversation: { id: { ref: "config.conversationId" } },
+          senderId: "observer",
+        },
+      },
+      { waitForNoOutbound: { sinceIndex: { ref: "outboundStartIndex" } } },
+      {
+        sendInbound: {
+          conversation: { id: { ref: "config.conversationId" } },
+          senderId: "driver",
+        },
+      },
+      {
+        waitForOutbound: {
+          conversation: { id: { ref: "config.conversationId" } },
+          textIncludes: { ref: "config.expectedMarker" },
+        },
+      },
+      { assert: { expr: expect.stringContaining("config.blockedMarker") } },
+    ]);
+
+    const inventory = buildQaCoverageInventory(scenarios);
+    const coverage = expectDefined(
+      inventory.coverageIds.find((candidate) => candidate.id === coverageId),
+      "session turn ordering coverage inventory",
+    );
+    expect(coverage.scenarios).toContainEqual(
+      expect.objectContaining({
+        id: scenario.id,
+        sourcePath,
+        intent: "primary",
+      }),
+    );
+
+    const category = expectDefined(
+      inventory.scorecardTaxonomy.categories.find(
+        (candidate) => candidate.id === TEST_EXECUTABLE_CATEGORY_ID,
+      ),
+      "agent turn execution scorecard category",
+    );
+    expect(category.inventoryRefs).toContainEqual({
+      coverageId,
+      kind: "qa-scenario",
+      path: null,
+      role: "primary",
+      scenarioRefs: [sourcePath],
+    });
+    expect(inventory.scorecardTaxonomy.validationIssues).not.toContainEqual(
+      expect.objectContaining({
+        code: "coverage-id-missing-primary-inventory",
+        ref: coverageId,
+      }),
+    );
+  });
+
   it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {
     const scenario = scenarioWithCoverage({
       primary: [TEST_EXECUTABLE_COVERAGE_ID],

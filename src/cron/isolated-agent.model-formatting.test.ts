@@ -291,7 +291,7 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'openai/gpt-5.5' rejected by agents.list[].modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
+          "cron payload.model 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
       });
     });
 

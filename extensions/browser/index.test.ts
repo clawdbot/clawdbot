@@ -11,6 +11,7 @@ import {
 } from "./plugin-registration.js";
 import type { OpenClawPluginApi } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
+import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
 
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
 
@@ -215,6 +216,7 @@ describe("browser plugin", () => {
     expect(tool.name).toBe("browser");
     expect(tool.description).toContain("action=profiles");
     expect(tool.description).not.toContain('profile="user"');
+    expect(tool.outputSchema).toBe(BrowserToolOutputSchema);
     expect(runtimeApiMocks.createBrowserTool).not.toHaveBeenCalled();
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
@@ -239,6 +241,7 @@ describe("browser plugin", () => {
 
     const tool = factory({
       sessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", modelId: "gpt-5.5" },
@@ -251,6 +254,7 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "status" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       agentSessionKey: "agent:main:webchat:direct:123",
+      agentId: "main",
       agentDir: "/tmp/agent",
       workspaceDir: "/tmp/workspace",
       activeModel: { provider: "openai", model: "gpt-5.5" },
@@ -340,6 +344,7 @@ describe("browser plugin", () => {
           name: "browser",
           description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
           hasSubcommands: true,
+          machineOutput: expect.any(Function),
         },
       ],
     });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
+import { resolveQaRepoPath } from "./repo-path.js";
 import {
   listQaScenarioYamlPaths,
   readQaBootstrapScenarioCatalog,
@@ -89,6 +90,24 @@ describe("qa scenario catalog", () => {
     ).toBe(true);
     const recall = readQaScenarioById("memory-recall");
     expect(recall.coverage?.primary).toContain(`${memory}.memory-recall`);
+  });
+
+  it("keeps scenario documentation and code references backed by the repository", () => {
+    for (const scenario of readQaScenarioPack().scenarios) {
+      const referenceGroups = [
+        ["docsRefs", scenario.docsRefs],
+        ["codeRefs", scenario.codeRefs],
+      ] as const;
+
+      for (const [kind, references] of referenceGroups) {
+        for (const reference of references ?? []) {
+          const resolvedReference =
+            resolveQaRepoPath(import.meta.dirname, reference, "file") ??
+            resolveQaRepoPath(import.meta.dirname, reference, "directory");
+          expect(resolvedReference, `${scenario.id} ${kind} ${reference} exists`).not.toBeNull();
+        }
+      }
+    }
   });
 
   it("exposes bootstrap data from the YAML pack", () => {
@@ -323,6 +342,7 @@ describe("qa scenario catalog", () => {
 
   it("loads runtime tool fixture metadata for core and extended lanes", () => {
     const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
+    const sessionsSpawn = readQaScenarioById("runtime-tool-sessions-spawn");
     const messageTool = readQaScenarioById("runtime-tool-message-tool");
     const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
     const webFetch = readQaScenarioById("runtime-tool-web-fetch");
@@ -330,6 +350,23 @@ describe("qa scenario catalog", () => {
     const imageGenerate = readQaScenarioById("runtime-tool-image-generate");
 
     expect(applyPatch.runtimePairLane).toBe("core");
+    for (const scenarioId of [
+      "runtime-tool-apply-patch",
+      "runtime-tool-bash",
+      "runtime-tool-edit",
+      "runtime-tool-exec",
+      "runtime-tool-fs-list",
+      "runtime-tool-fs-read",
+      "runtime-tool-fs-write",
+      "runtime-tool-grep",
+    ]) {
+      const nativeWorkspaceScenario = readQaScenarioById(scenarioId);
+      expect(nativeWorkspaceScenario.coverage?.primary, scenarioId).toEqual([]);
+      expect(nativeWorkspaceScenario.coverage?.secondary?.length, scenarioId).toBeGreaterThan(0);
+    }
+    expect(sessionsSpawn.coverage?.primary).toEqual([
+      "agent-runtime.subagent-turns-sessions-spawn",
+    ]);
     expect(messageTool.runtimePairLane).toBe("extended");
     expect(tavilySearch.runtimePairLane).toBe("extended");
     expect(imageGenerate.runtimePairLane).toBe("extended");
@@ -338,8 +375,25 @@ describe("qa scenario catalog", () => {
       toolCoverage: {
         bucket: "codex-native-workspace",
         expectedLayer: "codex-native-workspace",
+        required: true,
       },
     });
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).not.toHaveProperty("knownHarnessGap");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.happyPrompt).toContain(
+      "runtime-tool-fixture-patch.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "../runtime-tool-fixture-denied.txt",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime-tool-fixture-denied-original",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).toContain(
+      "runtime patch outside the workspace",
+    );
+    expect(readQaScenarioExecutionConfig(applyPatch.id)?.failurePrompt).not.toContain(
+      "missing-context",
+    );
     expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
       toolName: "message",
       expectedAvailable: false,
@@ -358,6 +412,16 @@ describe("qa scenario catalog", () => {
         required: true,
       },
     });
+    expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).toMatchObject({
+      toolName: "sessions_spawn",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(sessionsSpawn.id)).not.toHaveProperty("knownHarnessGap");
     const webFetchConfig = readQaScenarioExecutionConfig(webFetch.id);
     expect(webFetchConfig?.happyPrompt).toContain("Call web_fetch exactly once");
     expect(webFetchConfig?.happyPrompt).toContain("call it directly without tool_search");
@@ -448,14 +512,26 @@ describe("qa scenario catalog", () => {
     ).toContain('"alsoAllow":["qa_restart_wait","qa_restart_unsafe_probe"]');
     expect(gatewayRestartContract).toContain("plannedToolName === 'wait'");
     expect(gatewayRestartContract).toContain("lastAssistantToolNames?.includes('wait')");
-    expect(gatewayRestartContract).toContain('"taskTracking":false');
+    expect(gatewayRestartContract).toContain("restartRecoveryDeliveryContext");
+    expect(gatewayRestartContract).toContain("sendInbound");
+    expect(gatewayRestartContract).not.toContain("startAgentRun");
     expect(gatewayRestartContract).toContain('"restartGatewayWithConfigPatch"');
     expect(gatewayRestartContract).toContain("interruptedMatches.length === 1");
     expect(gatewayRestartContract).toContain("restartNotices.length === 0");
     expect(gatewayRestartContract).toContain("dispatching restart-safe recovery");
     expect(gatewayRestartContract).toContain("[OpenClaw heartbeat poll]");
     expect(gatewayRestartContract).toContain("liveTurnTimeoutMs(env, 180000)");
-    expect(gatewayRestartContract).toContain("dmScope: 'per-channel-peer'");
+    expect(gatewayRestartContract).toContain("id: `dm:${conversationId}`");
+    expect(gatewayRestartContract).toContain("dmScope: env.cfg.session?.dmScope");
+    expect(readQaScenarioById("gateway-restart-inflight-run").gatewayConfigPatch).toMatchObject({
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          acpx: { enabled: false },
+          "memory-core": { enabled: false },
+        },
+      },
+    });
     const liveMultiRestart = readQaScenarioById("gateway-restart-multi-live");
     const liveMultiRestartContract = JSON.stringify(liveMultiRestart.execution.flow);
     expect(JSON.stringify(liveMultiRestart.gatewayConfigPatch)).toContain(
@@ -648,6 +724,15 @@ describe("qa scenario catalog", () => {
     expect(scenario?.execution.flow?.steps.map((step) => step.name)).toContain(
       "keeps codex coordination chatter out of the visible reply",
     );
+  });
+
+  it("binds model switch follow-up assertions to the configured alternate model", () => {
+    const scenario = requireFlowScenario(readQaScenarioById("model-switch-follow-up"));
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(flow).toContain("alternate?.model");
+    expect(flow).toContain("config.followupPrompt");
+    expect(flow).not.toContain("gpt-5.6-luna-alt");
   });
 
   it("keeps provider-sensitive QA flow scenarios on their supported lanes", () => {

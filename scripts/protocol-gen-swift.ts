@@ -2,13 +2,13 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ErrorCodes } from "../packages/gateway-protocol/src/schema/error-codes.js";
+import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
-  ErrorCodes,
   MIN_CLIENT_PROTOCOL_VERSION,
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
-  ProtocolSchemas,
-} from "../packages/gateway-protocol/src/schema.js";
+} from "../packages/gateway-protocol/src/version.js";
 
 type JsonSchema = {
   type?: string | string[];

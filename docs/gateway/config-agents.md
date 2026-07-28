@@ -63,7 +63,7 @@ Optional default skill allowlist for agents that do not set
 
 ### `agents.defaults.skipBootstrap`
 
-Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`).
+Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`).
 
 ```json5
 {
@@ -73,7 +73,7 @@ Disables automatic creation of workspace bootstrap files (`AGENTS.md`, `SOUL.md`
 
 ### `agents.defaults.skipOptionalBootstrapFiles`
 
-Skips creation of selected optional workspace files while still writing required bootstrap files (`AGENTS.md`, `TOOLS.md`, `BOOTSTRAP.md`). Valid values: `SOUL.md`, `USER.md`, and `IDENTITY.md` (`HEARTBEAT.md` is accepted but a no-op since heartbeat context moved to cron monitor scratch).
+Skips creation of selected optional workspace files while still writing required bootstrap files (`AGENTS.md`, `BOOTSTRAP.md`). Valid values: `SOUL.md`, `USER.md`, and `IDENTITY.md` (`HEARTBEAT.md` is accepted but a no-op since heartbeat context moved to cron monitor scratch).
 
 ```json5
 {
@@ -446,7 +446,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `localService`: optional provider-level process manager for local/self-hosted model servers. When the selected model belongs to that provider, OpenClaw probes `healthUrl` (or `baseUrl + "/models"`), starts `command` with `args` if the endpoint is down, waits up to `readyTimeoutMs`, then sends the model request. `command` must be an absolute path. `idleStopMs: 0` keeps the process alive until OpenClaw exits; a positive value stops the OpenClaw-spawned process after that many idle milliseconds. See [Local model services](/gateway/local-model-services).
 - Runtime policy belongs on providers or models, not on `agents.defaults`. Use `models.providers.<provider>.agentRuntime` for provider-wide rules or `agents.defaults.models["provider/model"].agentRuntime` / `agents.entries.*.models["provider/model"].agentRuntime` for model-specific rules. A provider/model prefix alone never selects a harness. With runtime unset or `auto`, OpenAI may select Codex implicitly only for an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored request override. See [OpenAI implicit agent runtime](/providers/openai#implicit-agent-runtime).
 - Config writers that mutate these fields (for example `/models set`, `/models set-image`, and fallback add/remove commands) save canonical object form and preserve existing fallback lists when possible.
-- `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). Default: `4`.
+- `maxConcurrent`: max parallel agent runs across sessions (each session still serialized). By default, OpenClaw uses `min(16, max(8, available CPU parallelism))`, based on `os.availableParallelism()` with `os.cpus().length` as a fallback.
 
 ### Runtime policy
 
@@ -542,21 +542,19 @@ Periodic heartbeat runs.
   agents: {
     defaults: {
       heartbeat: {
+        agentId: "ops", // ambient owner when no per-agent heartbeat is configured
         every: "30m", // 0m disables
+        activeHours: { start: "08:00", end: "24:00" },
         model: "openai/gpt-5.4-mini",
-        includeReasoning: false,
-        includeSystemPromptSection: true, // default: true; false omits the Heartbeat section from the system prompt
+        session: "main",
+        target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
+        directPolicy: "allow", // allow (default) | block
+        to: "+15555550123",
+        accountId: "ops-bot",
+        prompt: "Follow the heartbeat monitor scratch context...",
+        timeoutSeconds: 45,
         lightContext: false, // default: false; true skips workspace bootstrap files for heartbeat runs
         isolatedSession: false, // default: false; true runs each heartbeat in a fresh session (no conversation history)
-        skipWhenBusy: false, // default: false; true also waits for this agent's subagent/nested lanes
-        session: "main",
-        to: "+15555550123",
-        directPolicy: "allow", // allow (default) | block
-        target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
-        prompt: "Follow the heartbeat monitor scratch context...",
-        ackMaxChars: 300,
-        suppressToolErrorWarnings: false,
-        timeoutSeconds: 45,
       },
     },
   },
@@ -564,16 +562,33 @@ Periodic heartbeat runs.
 ```
 
 - `every`: duration string (ms/s/m/h). Default: `30m` (API-key auth) or `1h` (OAuth auth). Set to `0m` to disable.
+- `agentId`: explicit owner for ambient heartbeat runs when no `agents.entries.*.heartbeat` block exists. A shared heartbeat block without `agentId` keeps the existing all-agent enrollment behavior.
 - Cadence is written into a system-owned cron monitor row. Run `openclaw doctor --fix` to materialize a missing or stale row. If cron is disabled, scheduled heartbeats do not run and the gateway logs a startup warning.
-- `includeSystemPromptSection`: when false, omits the Heartbeat section from the system prompt. Default: `true`.
-- `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
+- The heartbeat object is strict. Its supported fields are `every`, `activeHours`, `model`, `session`, `target`, `directPolicy`, `to`, `accountId`, `prompt`, `timeoutSeconds`, `lightContext`, and `isolatedSession`.
 - `timeoutSeconds`: maximum time in seconds allowed for a heartbeat agent turn before it is aborted. Leave unset to use `agents.defaults.timeoutSeconds` when set, otherwise the heartbeat cadence capped at 600 seconds.
 - `directPolicy`: direct/DM delivery policy. `allow` (default) permits direct-target delivery. `block` suppresses direct-target delivery and emits `reason=dm-blocked`.
 - `lightContext`: when true, heartbeat runs use lightweight bootstrap context and skip workspace bootstrap files. Monitor scratch is injected by the heartbeat runner either way.
 - `isolatedSession`: when true, each heartbeat runs in a fresh session with no prior conversation history. Same isolation pattern as cron `sessionTarget: "isolated"`. Reduces per-heartbeat token cost from ~100K to ~2-5K tokens.
-- `skipWhenBusy`: when true, heartbeat runs defer on that agent's extra busy lanes: its own session-keyed subagent or nested command work. Cron lanes always defer heartbeats, even without this flag.
+- Busy deferral is automatic: scheduled heartbeats wait for main/cron activity, same-agent active runs, and target-session work. Immediate and manual wakes bypass only the broad same-agent active-run precheck.
+- The default agent's Heartbeats system-prompt section is included automatically while its cadence is enabled. Ack suppression uses a fixed 300-character remainder budget, reasoning payloads remain internal, and tool error warnings remain enabled.
 - Per-agent: set `agents.entries.*.heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
+
+### `agents.defaults.systemAgent`
+
+Selects the agent whose model and credentials own ambient OpenClaw system-agent and Custodian consults:
+
+```json5
+{
+  agents: {
+    defaults: {
+      systemAgent: { agentId: "ops" },
+    },
+  },
+}
+```
+
+Delegated consults with a requesting agent keep that requester as their owner. When `agentId` is absent, OpenClaw preserves configured-default routing.
 
 ### `agents.defaults.compaction`
 
@@ -582,6 +597,7 @@ Periodic heartbeat runs.
   agents: {
     defaults: {
       compaction: {
+        enabled: false, // disable embedded proactive auto-compaction (default: true)
         mode: "safeguard", // default | safeguard
         provider: "my-provider", // id of a registered compaction provider plugin (optional)
         thinkingLevel: "low", // optional compaction-only thinking override
@@ -594,7 +610,7 @@ Periodic heartbeat runs.
         postIndexSync: "async", // off | async | await
         postCompactionSections: ["Session Startup", "Red Lines"],
         model: "openrouter/anthropic/claude-sonnet-4-6", // optional compaction-only model override
-        truncateAfterCompaction: true, // rotate to a smaller successor JSONL after compaction
+        truncateAfterCompaction: true, // adopt a context-engine successor when one is returned
         maxActiveTranscriptBytes: "20mb", // optional preflight local compaction trigger
         notifyUser: true, // notices when compaction starts/completes and on memory-flush degradation (default: false)
         memoryFlush: {
@@ -609,11 +625,12 @@ Periodic heartbeat runs.
 }
 ```
 
+- `enabled`: when `false`, disables threshold-driven auto-compaction inside the embedded agent runtime. OpenClaw's preflight and overflow-recovery compaction paths and manual `/compact` remain available. Default: `true`.
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `thinkingLevel`: optional thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`). It overrides the session's current thinking level and is clamped to the selected compaction model/runtime. Leave unset to inherit the session level. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
 - `timeoutSeconds`: maximum seconds allowed for a single compaction operation before OpenClaw aborts it. Default: `180`.
-- `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Manual `/compact` honors this when explicitly set; otherwise manual compaction is a hard checkpoint.
+- `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
 - `identifierPolicy`: `strict` (default) or `off`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
 - `qualityGuard`: retry-on-malformed-output checks for safeguard summaries. Enabled by default in safeguard mode; set `enabled: false` to skip the audit.
@@ -621,8 +638,8 @@ Periodic heartbeat runs.
 - `postIndexSync`: post-compaction session-memory reindex mode. Default: `"async"`. Use `"await"` for strongest freshness, `"async"` for lower compaction latency, or `"off"` only when session-memory sync is handled elsewhere.
 - `postCompactionSections`: optional AGENTS.md H2/H3 section names to re-inject after compaction. Leave unset or use `[]` to disable.
 - `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
-- `truncateAfterCompaction`: rotates the active session transcript after compaction so future turns load only the summary and unsummarized tail, while the previous full transcript remains archived. Prevents unbounded active transcript growth in long-running sessions. Default: `false`.
-- `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when transcript history grows past the threshold. Requires `truncateAfterCompaction` so successful compaction can rotate to a smaller successor transcript. Disabled when unset or `0`.
+- `truncateAfterCompaction`: allows a context engine to advance the session to an explicit compacted successor identity. The built-in SQLite compactor keeps the current identity. Default: `false`.
+- `maxActiveTranscriptBytes`: optional byte threshold (`number` or strings like `"20mb"`) that triggers normal local compaction before a run when transcript history grows past the threshold. Requires `truncateAfterCompaction`; durable size reduction also requires a context engine that returns a successor identity. Disabled when unset or `0`.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default to keep these notices silent.
 - `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when transcript size reaches the threshold even if token counters are stale. Skipped when workspace is read-only.
 
@@ -1422,6 +1439,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
 ```json5
 {
   talk: {
+    agentId: "ops",
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
@@ -1466,6 +1484,7 @@ Defaults for Talk mode (macOS/iOS/Android and the browser Control UI).
 ```
 
 - `talk.provider` must match a key in `talk.providers` when multiple Talk providers are configured.
+- `talk.agentId` owns Talk sessions created without an explicit agent-scoped session key. Session-scoped Talk calls continue to use the agent encoded in that key. Doctor may create a minimal `talk` block containing only this owner for an existing multi-agent config.
 - Legacy flat Talk keys (`talk.voiceId`, `talk.voiceAliases`, `talk.modelId`, `talk.outputFormat`, `talk.apiKey`) are compatibility-only. Run `openclaw doctor --fix` to rewrite persisted config into `talk.providers.<provider>`.
 - Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID` (macOS Talk client behavior).
 - `providers.*.apiKey` accepts plaintext strings or SecretRef objects.

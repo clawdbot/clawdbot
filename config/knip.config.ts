@@ -78,7 +78,6 @@ const repositoryScriptEntries = [
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
-  "scripts/repro/tsx-name-repro.ts!",
   "scripts/resolve-frozen-codex-live-suite.mjs!",
   "scripts/secrets/openclaw-bws-resolver.mjs!",
   "scripts/sync-labels.ts!",
@@ -106,9 +105,6 @@ const rootEntries = [
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
   "src/agents/compaction-planning.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
-  "scripts/repro/code-mode-namespace-live.ts!",
-  "scripts/repro/tool-schema-hint-bench.ts!",
-  "scripts/repro/tool-surface-live-bench.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
   "scripts/openclaw-cross-os-release-checks.ts!",
   "scripts/bench-transcript-cursors.ts!",
@@ -171,7 +167,8 @@ const rootEntries = [
   bundledPluginFile("telegram", "src/token.ts", "!"),
   "src/hooks/bundled/*/handler.ts!",
   "src/hooks/llm-slug-generator.ts!",
-  "src/plugin-sdk/*.ts!",
+  // Local-only test-state consumers are modeled by the full-tree test scan.
+  "src/plugin-sdk/!(test-state).ts!",
 ] as const;
 
 const bundledPluginEntries = [
@@ -369,6 +366,14 @@ const config = {
     // Focused tests consume these diagnostic/test seams; production code uses
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
+    // The resolver's executable-path validation is covered through focused tests;
+    // production imports only the narrower op resolver.
+    "extensions/onepassword/onepassword-op-path.js": ["exports"],
+    // Focused CLI tests exercise plan construction through this explicit test seam.
+    "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
+    // Mirror config parsing, redaction mapping, cap fitting, and the runner are
+    // asserted by the focused Beam mirror tests; production wires only the service.
+    "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
@@ -397,6 +402,8 @@ const config = {
       ],
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // The stylelint config lives under config/, not a root default path.
+      stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -486,6 +493,21 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
+    "packages/model-catalog-core": {
+      // Mirror the published export map so package-owned runtime dependencies
+      // are traced from the TypeScript sources instead of the JS fallback.
+      entry: [
+        "src/index.ts!",
+        "src/configured-model-refs.ts!",
+        "src/model-catalog-normalize.ts!",
+        "src/model-catalog-refs.ts!",
+        "src/model-catalog-types.ts!",
+        "src/provider-id.ts!",
+        "src/provider-model-id-normalization.ts!",
+        "src/provider-model-id-normalize.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
     "packages/normalization-core": {
       // Mirror package.json exports; root and UI builds consume these source subpaths directly.
       entry: [
@@ -540,10 +562,7 @@ const config = {
     "packages/acp-core": {
       entry: [
         "src/index.ts!",
-        "src/normalize-text.ts!",
         "src/meta.ts!",
-        "src/numeric-options.ts!",
-        "src/record-shared.ts!",
         "src/session.ts!",
         "src/session-interaction-mode.ts!",
         "src/session-lineage-meta.ts!",
@@ -709,6 +728,10 @@ const config = {
       "realtime-provider-shared.ts!",
       "tts.ts!",
       "usage.ts!",
+    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/onepassword`]: bundledPluginWorkspace([
+      // Shipped resolver child process declared as a static plugin artifact.
+      "onepassword-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/opencode`]: bundledPluginWorkspace([
       // Session catalog and provider helpers are plugin-owned runtime surfaces.

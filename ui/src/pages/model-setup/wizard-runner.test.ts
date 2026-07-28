@@ -174,4 +174,52 @@ describe("ModelSetupWizardRunner", () => {
     expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(2);
     expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
   });
+
+  it("keeps polling gateway-executed progress steps without user input", async () => {
+    // Regression: download/pull progress steps carry no controls, so nothing
+    // asked for the next one and the sheet froze on the first frame while the
+    // gateway kept downloading (observed live: "Preparing…" stuck at 900 MB).
+    const messages = ["Preparing model download…", "Downloading… 7%", "Downloading… 16%"];
+    let nextIndex = 0;
+    const request = vi.fn((method: string) => {
+      if (method === "openclaw.setup.prepare.start") {
+        return Promise.resolve({ sessionId: "session-progress", done: false, status: "running" });
+      }
+      if (method === "wizard.next") {
+        const message = messages[nextIndex];
+        nextIndex += 1;
+        if (message === undefined) {
+          return Promise.resolve({ done: true, status: "done" });
+        }
+        return Promise.resolve({
+          done: false,
+          status: "running",
+          step: { id: `progress-${nextIndex}`, type: "progress", message, executor: "gateway" },
+        });
+      }
+      return Promise.resolve({});
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const seen: string[] = [];
+    const onDone = vi.fn();
+    const runner = new ModelSetupWizardRunner({
+      getClient: () => client,
+      onChange: (state) => {
+        if (state.phase === "step" && state.step.type === "progress") {
+          seen.push(state.step.message ?? "");
+        }
+      },
+      onDone,
+      requestFailedMessage: () => "failed",
+      cancelledMessage: () => "cancelled",
+      sessionExpiredMessage: () => "expired",
+    });
+
+    await runner.start("llama-cpp", "openclaw.setup.prepare.start");
+    await vi.waitFor(() => {
+      expect(onDone).toHaveBeenCalledWith("openclaw.setup.prepare.start");
+    });
+
+    expect(seen).toEqual(messages);
+  });
 });

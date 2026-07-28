@@ -2,6 +2,7 @@ import { html } from "lit";
 import { property } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import "./web-awesome.ts";
@@ -15,35 +16,11 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onAction: (action: NativeLinkMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
 
-  override connectedCallback() {
-    super.connectedCallback();
-    document.addEventListener("keydown", this.handleDocumentKeydown, true);
-  }
-
-  override disconnectedCallback() {
-    document.removeEventListener("keydown", this.handleDocumentKeydown, true);
-    super.disconnectedCallback();
-  }
-
-  protected override firstUpdated() {
-    const dropdown = this.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
-      "wa-dropdown",
-    );
-    void Promise.resolve(dropdown?.updateComplete).then(() => {
-      this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
-    });
-  }
-
-  private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      event.stopPropagation();
-      this.trigger?.focus();
-      this.onClose();
-      return;
-    }
-    activateMenuShortcut(this, event);
-  };
+  readonly menuLifecycle = new DropdownMenuController(this, {
+    getTrigger: () => this.trigger,
+    onClose: () => this.onClose(),
+    onKeydown: (event) => activateMenuShortcut(this, event),
+  });
 
   private runAction(action: NativeLinkMenuAction) {
     this.onClose();

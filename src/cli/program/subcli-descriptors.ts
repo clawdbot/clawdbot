@@ -1,4 +1,12 @@
 // Sub-CLI descriptor catalog used for root help placeholders and lazy registration.
+import { isCronMachineOutput } from "../cron-cli/output-mode.js";
+import { isDevicesMachineOutput } from "../devices-output-mode.js";
+import { isGatewayMachineOutput } from "../gateway-cli/output-mode.js";
+import { isModelsStatusJsonOutput } from "../models-output-mode.js";
+import { isNodesMachineOutput } from "../nodes-cli/output-mode.js";
+import { isProxyMachineOutput } from "../proxy-output-mode.js";
+import { isSkillsMachineOutput } from "../skills-output-mode.js";
+import { isSystemMachineOutput } from "../system-output-mode.js";
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
@@ -12,6 +20,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "gateway",
     description: "Run, inspect, and query the WebSocket Gateway",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isGatewayMachineOutput(argv),
   },
   {
     name: "daemon",
@@ -23,11 +32,13 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "system",
     description: "System tools (events, heartbeat, presence)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isSystemMachineOutput(argv),
   },
   {
     name: "models",
     description: "Model discovery, scanning, and configuration",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isModelsStatusJsonOutput(argv),
   },
   {
     name: "promos",
@@ -64,11 +75,13 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "nodes",
     description: "Manage gateway-owned nodes (pairing, status, invoke, and media)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isNodesMachineOutput(argv),
   },
   {
     name: "devices",
     description: "Device pairing and auth tokens",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isDevicesMachineOutput(argv),
     parentDefaultHelp: true,
   },
   {
@@ -127,6 +140,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "cron",
     description: "Manage cron jobs (via Gateway)",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isCronMachineOutput(argv),
     parentDefaultHelp: true,
   },
   {
@@ -148,6 +162,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "proxy",
     description: "Run the OpenClaw debug proxy and inspect captured traffic",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isProxyMachineOutput(argv),
   },
   {
     name: "hooks",
@@ -205,6 +220,7 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "skills",
     description: "List and inspect available skills",
     hasSubcommands: true,
+    machineOutput: ({ argv }) => isSkillsMachineOutput(argv),
   },
   {
     name: "update",

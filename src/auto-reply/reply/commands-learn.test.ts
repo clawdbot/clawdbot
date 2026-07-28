@@ -1,5 +1,6 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
 import { describe, expect, it } from "vitest";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -30,8 +31,9 @@ function buildLearnParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
+  const loadedConfig = migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig;
   return {
-    cfg: { ...cfg, models: cfg.models ?? DEFAULT_TEST_MODELS },
+    cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
       Provider: INTERNAL_MESSAGE_CHANNEL,
       Surface: INTERNAL_MESSAGE_CHANNEL,

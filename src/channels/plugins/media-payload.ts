@@ -23,5 +23,11 @@ export function buildMediaPayload(
   mediaList: MediaPayloadInput[],
   opts?: { preserveMediaTypeCardinality?: boolean },
 ): MediaPayload {
-  return projectMediaFacts(mediaList, opts?.preserveMediaTypeCardinality ? "aligned" : "compact");
+  const projected = projectMediaFacts(mediaList, "compact");
+  return opts?.preserveMediaTypeCardinality
+    ? {
+        ...projected,
+        MediaTypes: mediaList.map((entry) => entry.contentType ?? ""),
+      }
+    : projected;
 }

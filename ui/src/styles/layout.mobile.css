@@ -124,8 +124,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 /* A session dashboard keeps the board primary on narrow shells. Every desktop
    edge becomes one bounded bottom sheet; the stored tab preference is left
    untouched and returns when the viewport widens. */
-.shell--mobile-nav .board-session-surface--dock-left,
-.shell--mobile-nav .board-session-surface--dock-right,
 .shell--mobile-nav .board-session-surface--dock-bottom {
   flex-direction: column;
 }

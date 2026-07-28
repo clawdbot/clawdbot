@@ -34,8 +34,10 @@ import {
   resolveSupportedThinkingLevel,
 } from "../auto-reply/thinking.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeExecTarget } from "../infra/exec-approvals.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -139,6 +141,7 @@ export async function projectSessionsPatchEntry(params: {
   patch: SessionsPatchParams;
   archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
@@ -197,7 +200,9 @@ export async function projectSessionsPatchEntry(params: {
     return loadedModelCatalog;
   };
 
-  const existing = params.existingEntry;
+  const existing = params.existingEntry
+    ? projectCanonicalSessionEntryShape(params.existingEntry as unknown as Record<string, unknown>)
+    : undefined;
   // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
@@ -207,7 +212,6 @@ export async function projectSessionsPatchEntry(params: {
     : {
         ...existing,
         sessionId: randomUUID(),
-        sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
   if (existing && !existing.sessionId) {
@@ -262,6 +266,10 @@ export async function projectSessionsPatchEntry(params: {
       }
       next.category = trimmed;
     }
+  }
+
+  if ("boardFace" in patch && patch.boardFace !== undefined) {
+    next.boardFace = patch.boardFace;
   }
 
   if ("icon" in patch) {
@@ -525,6 +533,9 @@ export async function projectSessionsPatchEntry(params: {
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolvedDefault.provider,
+          ...(params.providerAuthMetadataSnapshot
+            ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+            : {}),
         }),
       });
       delete next.liveModelSwitchPending;
@@ -570,6 +581,9 @@ export async function projectSessionsPatchEntry(params: {
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
           provider: resolved.provider,
+          ...(params.providerAuthMetadataSnapshot
+            ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
+            : {}),
         }),
         markLiveSwitchPending: true,
       });
@@ -664,6 +678,7 @@ export async function applySessionsPatchToStore(params: {
   patch: SessionsPatchParams;
   archivedBy?: SessionCreatedActor;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
@@ -676,6 +691,7 @@ export async function applySessionsPatchToStore(params: {
     patch: params.patch,
     archivedBy: params.archivedBy,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
     authorizedAgentHarnessId: params.authorizedAgentHarnessId,
   });
   if (projected.ok) {

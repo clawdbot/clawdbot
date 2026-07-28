@@ -590,6 +590,35 @@ Example:
   </Tab>
 </Tabs>
 
+### Guild channel maps are allowlists
+
+A guild entry with no `channels` map lets the bot work in every channel it can see, subject to the guild's `requireMention` and `users` rules. **Adding even one channel entry turns the map into an allowlist**: any channel not matched by an entry is denied, not merely left at guild defaults.
+
+This surprises people who add one channel to give it special settings and find the bot has gone silent everywhere else. Use the `"*"` wildcard key to keep the rest of the guild reachable:
+
+```json5
+{
+  channels: {
+    discord: {
+      guilds: {
+        YOUR_SERVER_ID: {
+          requireMention: true,
+          users: ["YOUR_USER_ID"],
+          channels: {
+            // always-on room: everyone in it can talk to the bot, no mention needed
+            YOUR_CHANNEL_ID: { enabled: true, requireMention: false, users: ["*"] },
+            // every other channel keeps the guild defaults
+            "*": { enabled: true, requireMention: true },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Channel entries override guild-level values, so a channel entry with `users: ["*"]` opens that one room to any sender even when the guild `users` list is narrow. Entries match by channel ID, name, or slug, and a thread falls back to its parent channel's entry.
+
 ### Role-based agent routing
 
 Use `bindings[].match.roles` to route Discord guild members to different agents by role ID. Role-based bindings accept role IDs only and are evaluated after peer or parent-peer bindings and before guild-only bindings. If a binding also sets other match fields (for example `peer` + `guildId` + `roles`), all configured fields must match.
@@ -810,6 +839,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   agents: {
     entries: {
       codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {

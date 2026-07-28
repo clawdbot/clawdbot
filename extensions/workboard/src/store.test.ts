@@ -1484,6 +1484,8 @@ describe("WorkboardStore", () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({ title: "Legacy dispatch", status: "ready" });
     const expectedAuthority = {
+      boardId: "default",
+      status: card.status,
       agentId: card.agentId,
       workspace: card.metadata?.automation?.workspace,
       workspaceAccess: card.metadata?.automation?.workspaceAccess,
@@ -1519,6 +1521,8 @@ describe("WorkboardStore", () => {
       { ownerId: "dispatcher" },
       {
         expectedAuthority: {
+          boardId: "default",
+          status: legacy.status,
           agentId: legacy.agentId,
           workspace: legacy.metadata?.automation?.workspace,
           workspaceAccess: legacy.metadata?.automation?.workspaceAccess,
@@ -1539,6 +1543,44 @@ describe("WorkboardStore", () => {
     await expect(store.claim(child.id, { ownerId: "other" })).rejects.toThrow(
       "card already claimed by main.",
     );
+  });
+
+  it("protects a running worker's expired claim throughout its heartbeat grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: "Grace-protected worker", status: "ready" });
+      const claimed = await store.claim(card.id, { ownerId: "original", ttlSeconds: 1 });
+      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+      if (expiresAt === undefined) {
+        throw new Error("expected a timed worker claim");
+      }
+
+      vi.setSystemTime(expiresAt + 1);
+      await expect(store.claim(card.id, { ownerId: "replacement" })).rejects.toThrow(
+        "card already claimed by original.",
+      );
+      const renewed = await store.heartbeat(card.id, {
+        ownerId: "original",
+        token: claimed.token,
+      });
+      const renewedExpiresAt = renewed.metadata?.claim?.expiresAt;
+      if (renewedExpiresAt === undefined) {
+        throw new Error("expected the worker heartbeat to renew its claim");
+      }
+
+      vi.setSystemTime(renewedExpiresAt + 5 * 60_000);
+      await expect(store.claim(card.id, { ownerId: "replacement" })).rejects.toThrow(
+        "card already claimed by original.",
+      );
+
+      vi.setSystemTime(renewedExpiresAt + 5 * 60_000 + 1);
+      const replacement = await store.claim(card.id, { ownerId: "replacement" });
+      expect(replacement.card.metadata?.claim?.ownerId).toBe("replacement");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves scheduled and retry-budget errors when a claim is active", async () => {
@@ -2517,6 +2559,47 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("keeps archived cards out of diagnostics without rewriting their history", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Archived completed work", status: "done" });
+    const now = Date.now();
+
+    await expect(store.refreshDiagnostics(now)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: card.id }),
+          diagnostics: [expect.objectContaining({ kind: "missing_proof" })],
+        }),
+      ],
+      count: 1,
+    });
+
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    const unsubscribe = store.subscribeChanges(changes);
+
+    await expect(store.diagnostics(now + 1)).resolves.toEqual({ diagnostics: [], count: 0 });
+    await expect(store.refreshDiagnostics(now + 1)).resolves.toEqual({
+      diagnostics: [],
+      count: 0,
+    });
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    await expect(store.list()).resolves.toEqual([archived]);
+    expect(changes).not.toHaveBeenCalled();
+
+    unsubscribe();
+    const restored = await store.archive(card.id, false);
+    await expect(store.diagnostics(now + 2)).resolves.toMatchObject({
+      diagnostics: [
+        expect.objectContaining({
+          card: expect.objectContaining({ id: restored.id }),
+          diagnostics: [expect.objectContaining({ kind: "missing_proof" })],
+        }),
+      ],
+      count: 1,
+    });
+  });
+
   it("does not drop concurrent updates while refreshing diagnostics", async () => {
     let proofPromise: Promise<unknown> | undefined;
     let triggered = false;
@@ -2637,6 +2720,47 @@ describe("WorkboardStore", () => {
     });
     expect(metadataBoardFirst.position).toBe(1000);
     expect(metadataBoardSecond.position).toBe(2000);
+  });
+
+  it("excludes archived ready cards from active queue-age statistics", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const oldReady = await store.create({
+        title: "Archived ready work",
+        boardId: "ops",
+        status: "ready",
+      });
+      vi.setSystemTime(2_000);
+      await store.archive(oldReady.id, true);
+
+      await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
+        total: 1,
+        active: 0,
+        archived: 1,
+        byStatus: { ready: 1 },
+      });
+      await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.not.toHaveProperty(
+        "oldestReadyAgeMs",
+      );
+
+      vi.setSystemTime(3_000);
+      await store.create({
+        title: "Active ready work",
+        boardId: "ops",
+        status: "ready",
+      });
+      await expect(store.stats({ boardId: "ops" }, 5_000)).resolves.toMatchObject({
+        total: 2,
+        active: 1,
+        archived: 1,
+        byStatus: { ready: 2 },
+        oldestReadyAgeMs: 2_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects completed manifests for cards not created from the parent", async () => {
@@ -2802,6 +2926,64 @@ describe("WorkboardStore", () => {
     });
   });
 
+  it("excludes archived cards from notification replay without discarding their history", async () => {
+    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
+    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
+    const historical = await store.create({
+      title: "Archived notifications",
+      boardId: "ops",
+      status: "done",
+      metadata: {
+        notifications: [
+          { id: "archived-completed", kind: "completed", createdAt: 101, message: "Done" },
+          { id: "archived-failed", kind: "failed", createdAt: 102, message: "Failed" },
+        ],
+        stale: { detectedAt: 103, reason: "Previous worker stopped" },
+      },
+    });
+    const archived = await store.archive(historical.id, true);
+    const active = await store.create({ title: "Active notifications", boardId: "ops" });
+    await store.complete(active.id, { summary: "Still active." });
+    const boardSubscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+    });
+    const archivedSubscription = await store.subscribeNotifications({
+      cardId: archived.id,
+      target: "session:operator",
+    });
+
+    await expect(
+      store.notificationEvents({ subscriptionId: boardSubscription.id }),
+    ).resolves.toMatchObject({
+      events: [expect.objectContaining({ kind: "completed", message: "Still active." })],
+    });
+    await expect(
+      store.notificationEvents({ subscriptionId: archivedSubscription.id }),
+    ).resolves.toMatchObject({ events: [] });
+    await expect(
+      store.advanceNotificationEvents({ subscriptionId: archivedSubscription.id }),
+    ).resolves.toMatchObject({ events: [] });
+    const storedSubscription = await subscriptions.lookup(archivedSubscription.id);
+    expect(storedSubscription?.subscription).not.toHaveProperty("lastEventAt");
+    expect(storedSubscription?.subscription).not.toHaveProperty("lastEventId");
+    expect(storedSubscription?.subscription).not.toHaveProperty("lastEventSequence");
+    await expect(store.get(archived.id)).resolves.toEqual(archived);
+
+    await store.archive(archived.id, false);
+    const restored = await store.notificationEvents({
+      subscriptionId: archivedSubscription.id,
+    });
+    expect(restored.events).toHaveLength(3);
+    expect(restored.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "archived-completed", kind: "completed" }),
+        expect.objectContaining({ id: "archived-failed", kind: "failed" }),
+        expect.objectContaining({ kind: "stale" }),
+      ]),
+    );
+  });
+
   it("replays notification events with subscription cursors", async () => {
     const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>();
     const store = new WorkboardStore(createMemoryStore(), { subscriptions });
@@ -2845,6 +3027,48 @@ describe("WorkboardStore", () => {
     await expect(store.advanceNotificationEvents({ boardId: "ops" })).rejects.toThrow(
       /subscriptionId is required/,
     );
+  });
+
+  it("does not resurrect a subscription deleted during cursor advancement", async () => {
+    let markCursorWriteStarted!: () => void;
+    let releaseCursorWrite!: () => void;
+    const cursorWriteStarted = new Promise<void>((resolve) => {
+      markCursorWriteStarted = resolve;
+    });
+    const cursorWriteReleased = new Promise<void>((resolve) => {
+      releaseCursorWrite = resolve;
+    });
+    const subscriptions = createMemoryStore<PersistedWorkboardNotificationSubscription>({
+      async beforeRegister(_key, value) {
+        if (!value.subscription.lastEventId) {
+          return;
+        }
+        markCursorWriteStarted();
+        await cursorWriteReleased;
+      },
+    });
+    const store = new WorkboardStore(createMemoryStore(), { subscriptions });
+    const card = await store.create({ title: "Delete in-flight notification", boardId: "ops" });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+    await store.complete(card.id, { summary: "Done." });
+
+    const advancing = store.advanceNotificationEvents({ subscriptionId: subscription.id });
+    await cursorWriteStarted;
+    const deleting = store.deleteNotificationSubscription(subscription.id);
+    releaseCursorWrite();
+
+    await expect(Promise.all([advancing, deleting])).resolves.toEqual([
+      expect.objectContaining({
+        events: [expect.objectContaining({ kind: "completed" })],
+      }),
+      { deleted: true },
+    ]);
+    await expect(subscriptions.lookup(subscription.id)).resolves.toBeUndefined();
+    await expect(store.listNotificationSubscriptions()).resolves.toEqual({ subscriptions: [] });
   });
 
   it("does not skip same-millisecond notification events after cursor advancement", async () => {
@@ -2895,6 +3119,62 @@ describe("WorkboardStore", () => {
 
     const second = await store.notificationEvents({ subscriptionId: subscription.id });
     expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
+  });
+
+  it("does not skip unsequenced notifications after a sequenced same-millisecond event", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    await store.create({
+      title: "Sequenced notification",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "z-event",
+            kind: "completed",
+            createdAt: 1234,
+            sequence: 1234000,
+            message: "First",
+          },
+        ],
+      },
+    });
+    await store.create({
+      title: "Unsequenced notification",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "a-event",
+            kind: "completed",
+            createdAt: 1234,
+            message: "Second",
+          },
+        ],
+      },
+    });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    const first = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(first.events).toEqual([expect.objectContaining({ id: "z-event" })]);
+
+    const second = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [],
+    });
   });
 
   it("drains large same-millisecond notification batches without replaying delivered ids", async () => {
@@ -3085,6 +3365,109 @@ describe("WorkboardStore", () => {
     await expect(store.get(archived.id)).resolves.not.toMatchObject({
       metadata: { workerProtocol: expect.any(Object) },
     });
+  });
+
+  it("does not mutate archived ready cards during repeated dispatch", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Archived ready work",
+      status: "ready",
+    });
+    const archived = await store.archive(card.id, true);
+    const changes = vi.fn();
+    store.subscribeChanges(changes);
+
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      await expect(store.dispatch(10 + attempt)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+    }
+
+    await expect(store.get(card.id)).resolves.toEqual(archived);
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it("does not promote or claim an archived scheduled card", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({
+        title: "Archived scheduled work",
+        status: "scheduled",
+        scheduledAt: 2_000,
+      });
+      const archived = await store.archive(card.id, true);
+      const changes = vi.fn();
+      store.subscribeChanges(changes);
+
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await expect(store.promoteReady(3_000 + attempt)).resolves.toEqual({
+          cards: [],
+          count: 0,
+        });
+      }
+      await expect(store.claim(card.id, { ownerId: "worker" })).rejects.toThrow(/archived/);
+      await expect(store.get(card.id)).resolves.toEqual(archived);
+      expect(changes).not.toHaveBeenCalled();
+
+      vi.setSystemTime(3_000);
+      await store.archive(card.id, false);
+      await expect(store.claim(card.id, { ownerId: "worker" })).resolves.toMatchObject({
+        card: { id: card.id, status: "running" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not promote, time out, or reclaim archived cards during dispatch", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const timedOut = await store.create({
+        title: "Archived timed-out work",
+        status: "running",
+        maxRuntimeSeconds: 1,
+      });
+      const scheduled = await store.create({
+        title: "Archived scheduled work",
+        status: "scheduled",
+        scheduledAt: 2_000,
+      });
+      const parent = await store.create({ title: "Dependency parent", status: "running" });
+      const dependent = await store.create({
+        title: "Archived dependent work",
+        parents: [parent.id],
+      });
+      const archived = await Promise.all([
+        store.archive(timedOut.id, true),
+        store.archive(scheduled.id, true),
+        store.archive(dependent.id, true),
+      ]);
+      await store.complete(parent.id, { summary: "Dependency finished." });
+      const changes = vi.fn();
+      store.subscribeChanges(changes);
+
+      await expect(store.dispatch(3_000)).resolves.toEqual({
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      });
+      await expect(Promise.all(archived.map((card) => store.get(card.id)))).resolves.toEqual(
+        archived,
+      );
+      expect(changes).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("applies auto orchestration dispatch caps per board", async () => {

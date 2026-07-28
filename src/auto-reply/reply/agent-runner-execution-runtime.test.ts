@@ -4,7 +4,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createMockTypingSignaler,
   createFollowupRun,
   requireRecord,
@@ -16,7 +16,7 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: runtime selection", () => {
+describe("executeAgentTurn: runtime selection", () => {
   it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -30,13 +30,13 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "codex-cli";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.messageProvider = "stale-provider";
 
-    await runAgentTurnWithFallback({
+    await executeAgentTurn({
       commandBody: "hello",
       followupRun,
       sessionCtx: {
@@ -93,7 +93,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "anthropic";
     followupRun.run.model = "claude-opus-4-7";
@@ -105,7 +105,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       },
     };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       getActiveSessionEntry: () =>
         ({
@@ -138,12 +138,12 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       getActiveSessionEntry: () =>
         ({
@@ -174,7 +174,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "anthropic";
     followupRun.run.model = "claude-opus-4-6";
@@ -188,7 +188,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       },
     };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       isHeartbeat: true,
       getActiveSessionEntry: () =>
@@ -232,13 +232,13 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
     followupRun.run.config = {};
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       getActiveSessionEntry: () =>
         ({
@@ -272,7 +272,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       meta: {},
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const followupRun = createFollowupRun();
     followupRun.run.provider = "openai";
     followupRun.run.model = "gpt-5.4";
@@ -284,7 +284,7 @@ describe("runAgentTurnWithFallback: runtime selection", () => {
       },
     };
 
-    const result = await runAgentTurnWithFallback({
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       getActiveSessionEntry: () =>
         ({

@@ -7,6 +7,7 @@ import {
   writePersistedAuthProfileStateRaw,
 } from "../../agents/auth-profiles/sqlite.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -64,7 +65,6 @@ import {
   restoreSqliteCompactionCheckpointSession,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
-import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
@@ -669,21 +669,21 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         ...scope,
         sessionId: "support-session",
       });
-      const marker = parseSqliteSessionFileMarker(runtimeTarget.sessionFile);
 
       expect(loadSqliteSessionEntry({ ...scope, storePath: customSqlitePath })).toMatchObject({
         model: "gpt-5.5",
         sessionId: "support-session",
       });
       expect(fs.existsSync(customSqlitePath)).toBe(true);
-      expect(marker).toMatchObject({
+      expect(runtimeTarget).toMatchObject({
         agentId: "support",
         sessionId: "support-session",
+        sessionKey: scope.sessionKey,
         storePath: customStorePath,
       });
     });
 
-    it("does not parse unrelated SQLite entry blobs for keyed loads", async () => {
+    it("parses SQLite entry blobs once across keyed loads", async () => {
       const scope = sqliteAdapter.entryScope(paths);
       for (let index = 0; index < 20; index += 1) {
         await upsertSqliteSessionEntry(
@@ -710,7 +710,13 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
           model: "target",
           sessionId: "target-session",
         });
-        expect(parseSpy.mock.calls.length).toBeLessThanOrEqual(2);
+        const initialParseCount = parseSpy.mock.calls.length;
+        expect(initialParseCount).toBe(21);
+        expect(loadSqliteSessionEntry(scope)).toMatchObject({
+          model: "target",
+          sessionId: "target-session",
+        });
+        expect(parseSpy).toHaveBeenCalledTimes(initialParseCount);
       } finally {
         parseSpy.mockRestore();
       }
@@ -1582,7 +1588,7 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
-  it("preserves an active SQLite cron entry when durable entries exceed maxEntries", async () => {
+  it("preserves an admitted SQLite session when another session triggers maintenance", async () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
       session: {
         maintenance: {
@@ -1597,7 +1603,7 @@ describe("sqlite session normalization", () => {
       agentId: "main",
       env,
       sessionKey,
-      storePath: paths.sqlitePath,
+      storePath: paths.storePath,
     });
     const cronKey = "agent:main:cron:job-1";
     const cronEntry = {
@@ -1624,17 +1630,28 @@ describe("sqlite session normalization", () => {
     await patchSqliteSessionEntry(scopeFor(cronKey), () => cronEntry, {
       fallbackEntry: cronEntry,
       replaceEntry: true,
+      skipMaintenance: true,
     });
-    await patchSqliteSessionEntry(scopeFor(cronKey), () => ({
-      model: "gpt-5.5",
-      updatedAt: Date.now() + 1,
-    }));
+    const admission = await beginSessionWorkAdmission({
+      scope: paths.storePath,
+      identities: [cronKey, cronEntry.sessionId],
+      assertAllowed: () => {},
+    });
+    try {
+      const triggerKey = "agent:main:maintenance-trigger";
+      await patchSqliteSessionEntry(
+        scopeFor(triggerKey),
+        () => ({ sessionId: "trigger-session", updatedAt: Date.now() + 1 }),
+        {
+          fallbackEntry: { sessionId: "trigger-session", updatedAt: Date.now() + 1 },
+          replaceEntry: true,
+        },
+      );
 
-    expect(loadSqliteSessionEntry(scopeFor(cronKey))).toMatchObject({
-      lifecycleRevision: "cron-revision-1",
-      model: "gpt-5.5",
-      sessionId: "cron-session",
-    });
+      expect(loadSqliteSessionEntry(scopeFor(cronKey))).toMatchObject(cronEntry);
+    } finally {
+      admission.release();
+    }
   });
 
   it("keeps live entries and transcripts under byte pressure at save time", async () => {
@@ -2031,7 +2048,6 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         label: "Source (checkpoint)",
         parentSessionKey: sourceEntryScope.sessionKey,
-        sessionFile: expect.stringMatching(/^sqlite:main:/),
         totalTokens: 42,
         totalTokensFresh: true,
       }),
@@ -2161,7 +2177,6 @@ describe("sqlite session normalization", () => {
     await upsertSqliteSessionEntry(sourceEntryScope, {
       label: "Current",
       sessionId: "current-session",
-      sessionFile: "sqlite:main:current-session",
       updatedAt: 10,
       compactionCheckpoints: [checkpoint],
     });
@@ -2186,7 +2201,6 @@ describe("sqlite session normalization", () => {
       expect.objectContaining({
         label: "Current",
         compactionCheckpoints: [checkpoint],
-        sessionFile: expect.stringMatching(/^sqlite:main:/),
         totalTokens: 12,
         totalTokensFresh: true,
       }),

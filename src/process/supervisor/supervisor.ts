@@ -23,6 +23,11 @@ type ActiveRun = {
   scopeKey?: string;
 };
 
+type StartingScope = {
+  runs: Set<Promise<ManagedRun>>;
+  replacement?: Promise<ManagedRun>;
+};
+
 const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
 const DEFAULT_MAX_CAPTURED_OUTPUT_CHARS = 1024 * 1024;
 
@@ -94,6 +99,7 @@ function resolveElapsedTimeoutReason(params: {
 export function createProcessSupervisor(): ProcessSupervisor {
   const registry = createRunRegistry();
   const active = new Map<string, ActiveRun>();
+  const startingScopes = new Map<string, StartingScope>();
 
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
@@ -118,9 +124,8 @@ export function createProcessSupervisor(): ProcessSupervisor {
     }
   };
 
-  const spawn = async (input: SpawnInput): Promise<ManagedRun> => {
+  const startRun = async (input: SpawnInput, scopeKey?: string): Promise<ManagedRun> => {
     const runId = normalizeOptionalString(input.runId) ?? crypto.randomUUID();
-    const scopeKey = normalizeOptionalString(input.scopeKey);
     if (input.replaceExistingScope && scopeKey) {
       cancelScope(scopeKey, "manual-cancel");
     }
@@ -371,6 +376,44 @@ export function createProcessSupervisor(): ProcessSupervisor {
       warnProcessSupervisorSpawnFailure(`spawn failed: runId=${runId} reason=${String(err)}`);
       throw err;
     }
+  };
+
+  const spawn = (input: SpawnInput): Promise<ManagedRun> => {
+    const scopeKey = normalizeOptionalString(input.scopeKey);
+    if (!scopeKey) {
+      return startRun(input);
+    }
+
+    const starting = startingScopes.get(scopeKey) ?? { runs: new Set<Promise<ManagedRun>>() };
+    startingScopes.set(scopeKey, starting);
+
+    // Ordinary runs start together, but replacements fence later arrivals so
+    // delayed cancellation cannot accidentally terminate a newer scoped run.
+    const previous = input.replaceExistingScope
+      ? Array.from(starting.runs)
+      : starting.replacement
+        ? [starting.replacement]
+        : [];
+    const pending =
+      previous.length > 0
+        ? Promise.allSettled(previous).then(() => startRun(input, scopeKey))
+        : startRun(input, scopeKey);
+    starting.runs.add(pending);
+    if (input.replaceExistingScope) {
+      starting.replacement = pending;
+    }
+
+    const clearPendingStart = () => {
+      starting.runs.delete(pending);
+      if (starting.replacement === pending) {
+        delete starting.replacement;
+      }
+      if (starting.runs.size === 0 && startingScopes.get(scopeKey) === starting) {
+        startingScopes.delete(scopeKey);
+      }
+    };
+    void pending.then(clearPendingStart, clearPendingStart);
+    return pending;
   };
 
   return {

@@ -878,7 +878,9 @@ export function createSubagentRunManager(params: {
         sourceId: runId,
         ownerKey: requesterSessionKey,
         scopeKind: "session",
-        requesterOrigin,
+        // Detached task runtimes are plugin-replaceable. Isolate their input so
+        // mutation cannot change the already-persisted registry record.
+        requesterOrigin: requesterOrigin ? structuredClone(requesterOrigin) : undefined,
         childSessionKey,
         runId,
         label: registerParams.label,
@@ -907,7 +909,6 @@ export function createSubagentRunManager(params: {
       });
     }
     params.ensureListener();
-    params.persist();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).

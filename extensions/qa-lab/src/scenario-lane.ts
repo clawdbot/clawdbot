@@ -32,6 +32,11 @@ export function describeQaProviderLaneMismatches(params: {
   if (scenarioChannel && effectiveChannel !== scenarioChannel) {
     mismatches.push(`channel=${scenarioChannel}`);
   }
+  const allowedChannels =
+    params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
+  if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
+    mismatches.push(`channel=${allowedChannels.join("|")}`);
+  }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);
   if (requiredProvider && selected?.provider !== requiredProvider) {

@@ -128,6 +128,20 @@ describe("createEditorSubmitHandler", () => {
   });
 
   it.each([
+    { name: "a slash command", input: "/exit\npasted notes" },
+    { name: "a local shell command", input: "!touch pasted-file\npasted notes" },
+    { name: "a whitespace-prefixed slash command", input: "  /abort\npasted notes" },
+  ])("treats a complete multiline paste beginning with $name as chat", ({ input }) => {
+    const { handleCommand, sendMessage, handleBangLine, onSubmit } = createSubmitHarness();
+
+    onSubmit(input);
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith(input.trim());
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["local shell", "!false", "handleBangLine"],
     ["command", "/broken", "handleCommand"],
     ["message", "hello", "sendMessage"],
@@ -176,6 +190,37 @@ describe("createSubmitBurstCoalescer", () => {
 
     expect(submit).toHaveBeenCalledTimes(1);
     expect(submit).toHaveBeenCalledWith("Line 1\nLine 2\nLine 3");
+    vi.useRealTimers();
+  });
+
+  it("preserves a newer real editor draft when a buffered message flushes", () => {
+    vi.useFakeTimers();
+    const tui = { requestRender: vi.fn() } as unknown as TUI;
+    const editor = new CustomEditor(tui, editorTheme);
+    const sendMessage = vi.fn();
+    const submit = createEditorSubmitHandler({
+      editor,
+      handleCommand: vi.fn(),
+      sendMessage,
+      handleBangLine: vi.fn(),
+      onSubmitError: vi.fn(),
+    });
+    editor.onSubmit = createSubmitBurstCoalescer({
+      submit,
+      enabled: true,
+      burstWindowMs: 50,
+    });
+    editor.setText("submitted message");
+
+    editor.handleInput("\r");
+    for (const character of "new draft") {
+      editor.handleInput(character);
+    }
+
+    vi.advanceTimersByTime(50);
+
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("submitted message");
+    expect(editor.getText()).toBe("new draft");
     vi.useRealTimers();
   });
 

@@ -91,12 +91,14 @@ describe("attempt execution prompt materialization", () => {
 });
 
 describe("persistSessionEntry", () => {
+  const sessionKey = "agent:main:main";
+
   it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
     const dir = tempDirs.make("openclaw-session-store-");
     try {
       const storePath = path.join(dir, "sessions.json");
       const sessionStore = {
-        main: {
+        [sessionKey]: {
           sessionId: "stale",
           updatedAt: 1,
         },
@@ -106,9 +108,9 @@ describe("persistSessionEntry", () => {
       // memory must be cleared too so later turns do not reuse stale entries.
       const persisted = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
-        initialEntry: sessionStore.main,
+        initialEntry: sessionStore[sessionKey],
         entry: {
           sessionId: "stale",
           updatedAt: 2,
@@ -117,7 +119,7 @@ describe("persistSessionEntry", () => {
       });
 
       expect(persisted).toBeUndefined();
-      expect(sessionStore.main).toBeUndefined();
+      expect(sessionStore[sessionKey]).toBeUndefined();
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -155,12 +157,12 @@ describe("persistSessionEntry", () => {
       if (current.pinnedAt === undefined) {
         delete currentEntry.pinnedAt;
       }
-      await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
-      const sessionStore = { main: staleEntry };
+      await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
+      const sessionStore = { [sessionKey]: staleEntry };
 
       const persisted = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
         initialEntry: staleEntry,
         entry: {
@@ -174,10 +176,10 @@ describe("persistSessionEntry", () => {
       expect(persisted?.label).toBe(expected.label);
       expect(persisted?.pinnedAt).toBe(expected.pinnedAt);
       expect(persisted?.updatedAt).toBeGreaterThanOrEqual(currentEntry.updatedAt);
-      expect(sessionStore.main).toEqual(persisted);
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(persisted);
+      expect(sessionStore[sessionKey]).toEqual(persisted);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        persisted,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -201,12 +203,12 @@ describe("persistSessionEntry", () => {
         model: "gpt-5.4",
         sendPolicy: "deny",
       };
-      await replaceSessionEntry({ sessionKey: "main", storePath }, currentEntry);
-      const sessionStore = { main: initialEntry };
+      await replaceSessionEntry({ sessionKey, storePath }, currentEntry);
+      const sessionStore = { [sessionKey]: initialEntry };
 
       const persisted = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
         initialEntry,
         entry: {
@@ -224,9 +226,9 @@ describe("persistSessionEntry", () => {
       });
       expect(persisted?.elevatedLevel).toBeUndefined();
       expect(persisted?.inheritedToolAllow).toBeUndefined();
-      expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
-      ).toEqual(persisted);
+      expect(loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" })).toEqual(
+        persisted,
+      );
     } finally {
       clearSessionStoreCacheForTest();
     }
@@ -240,11 +242,11 @@ describe("persistSessionEntry", () => {
         sessionId: "deleted-session",
         updatedAt: 1,
       };
-      const sessionStore = { main: staleEntry };
+      const sessionStore = { [sessionKey]: staleEntry };
 
       const persisted = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
         initialEntry: staleEntry,
         entry: {
@@ -254,9 +256,9 @@ describe("persistSessionEntry", () => {
       });
 
       expect(persisted).toBeUndefined();
-      expect(sessionStore.main).toBeUndefined();
+      expect(sessionStore[sessionKey]).toBeUndefined();
       expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
+        loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" }),
       ).toBeUndefined();
     } finally {
       clearSessionStoreCacheForTest();
@@ -271,20 +273,18 @@ describe("persistSessionEntry", () => {
         sessionId: "deleted-session",
         updatedAt: 1,
       };
-      const sessionStore = {
-        main: staleEntry,
-      };
+      const sessionStore = { [sessionKey]: staleEntry };
 
       const first = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
         initialEntry: staleEntry,
         entry: staleEntry,
       });
       const second = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
         initialEntry: staleEntry,
         entry: {
@@ -295,9 +295,9 @@ describe("persistSessionEntry", () => {
 
       expect(first).toBeUndefined();
       expect(second).toBeUndefined();
-      expect(sessionStore.main).toBeUndefined();
+      expect(sessionStore[sessionKey]).toBeUndefined();
       expect(
-        loadSessionEntry({ sessionKey: "main", storePath, readConsistency: "latest" }),
+        loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" }),
       ).toBeUndefined();
     } finally {
       clearSessionStoreCacheForTest();
@@ -316,7 +316,7 @@ describe("persistSessionEntry", () => {
 
       const persisted = await persistSessionEntry({
         sessionStore,
-        sessionKey: "main",
+        sessionKey,
         storePath,
         initialEntry: entry,
         entry,
@@ -324,7 +324,7 @@ describe("persistSessionEntry", () => {
       });
 
       expect(persisted?.sessionId).toBe("created-session");
-      expect(sessionStore.main?.sessionId).toBe("created-session");
+      expect(sessionStore[sessionKey]?.sessionId).toBe("created-session");
     } finally {
       clearSessionStoreCacheForTest();
     }

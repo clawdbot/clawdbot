@@ -7,6 +7,7 @@ import {
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
+  createNativeApprovalMessagingTargetResolvers,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPromptPayloadForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import { buildTypedApprovalPresentation } from "openclaw/plugin-sdk/approval-reply-runtime";
@@ -16,10 +17,7 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
@@ -31,66 +29,27 @@ import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normaliz
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
 type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
-type ChannelApprovalForwardTarget = Parameters<
-  NonNullable<
-    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
-  >
->[0]["target"];
-type WhatsAppApprovalTarget = {
-  to: string;
-  accountId?: string | null;
-  threadId?: string | number | null;
-};
 
 const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
+const whatsappApprovalTargetResolvers = createNativeApprovalMessagingTargetResolvers({
+  channel: "whatsapp",
+  normalizeTo: normalizeWhatsAppMessagingTarget,
+});
+type WhatsAppApprovalTarget = NonNullable<
+  ReturnType<typeof whatsappApprovalTargetResolvers.normalizeForwardTarget>
+>;
+const {
+  normalizeForwardTarget: normalizeWhatsAppForwardTarget,
+  normalizeTarget: normalizeWhatsAppApprovalTarget,
+  resolveSessionTarget: resolveSessionWhatsAppOriginTarget,
+  resolveTurnSourceTarget: resolveTurnSourceWhatsAppOriginTarget,
+} = whatsappApprovalTargetResolvers;
 
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   return resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
-}
-
-function normalizeWhatsAppForwardTarget(
-  target: Pick<ChannelApprovalForwardTarget, "channel" | "to" | "accountId" | "threadId">,
-): WhatsAppApprovalTarget | null {
-  if (normalizeLowercaseStringOrEmpty(target.channel) !== "whatsapp") {
-    return null;
-  }
-  const to = normalizeWhatsAppMessagingTarget(target.to);
-  if (!to) {
-    return null;
-  }
-  return {
-    to,
-    accountId: normalizeOptionalString(target.accountId),
-    threadId: target.threadId ?? null,
-  };
-}
-
-function resolveTurnSourceWhatsAppOriginTarget(
-  request: ApprovalRequest,
-): WhatsAppApprovalTarget | null {
-  const turnSourceChannel = normalizeLowercaseStringOrEmpty(request.request.turnSourceChannel);
-  if (turnSourceChannel !== "whatsapp") {
-    return null;
-  }
-  const to = normalizeWhatsAppMessagingTarget(request.request.turnSourceTo ?? "");
-  if (!to) {
-    return null;
-  }
-  return {
-    to,
-    accountId: normalizeOptionalString(request.request.turnSourceAccountId),
-  };
-}
-
-function resolveSessionWhatsAppOriginTarget(sessionTarget: {
-  to: string;
-  accountId?: string | null;
-}): WhatsAppApprovalTarget | null {
-  const to = normalizeWhatsAppMessagingTarget(sessionTarget.to);
-  return to ? { to, accountId: normalizeOptionalString(sessionTarget.accountId) } : null;
 }
 
 const whatsappApprovalRouteGates = createNativeApprovalChannelRouteGates({
@@ -116,10 +75,7 @@ const resolveWhatsAppOriginTargetBase = createChannelNativeOriginTargetResolver(
   shouldHandleRequest: shouldHandleWhatsAppApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceWhatsAppOriginTarget,
   resolveSessionTarget: resolveSessionWhatsAppOriginTarget,
-  normalizeTarget: (target) => {
-    const to = normalizeWhatsAppMessagingTarget(target.to);
-    return to ? { ...target, to } : null;
-  },
+  normalizeTarget: normalizeWhatsAppApprovalTarget,
 });
 
 function resolveWhatsAppOriginTarget(params: {

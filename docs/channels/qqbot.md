@@ -146,6 +146,11 @@ Notes:
   `allowFrom` has a concrete (non-wildcard) entry, otherwise `open`.
   `groupPolicy` defaults to `allowlist` once either `groupAllowFrom` or
   `allowFrom` has a concrete entry, otherwise `open`.
+- `contextVisibility` controls quoted-message text that QQ supplies as
+  supplemental context. The default, `"all"`, keeps quoted text as received.
+  Set `"allowlist"` to include quoted bodies only when the quoted sender passes
+  the configured sender policy, or `"allowlist_quote"` to keep explicit quotes
+  while filtering other supplemental context. See [Groups](/channels/groups#context-visibility-and-allowlists).
 - "Auth: allowlist" slash commands require an explicit non-wildcard entry in
   `allowFrom` (or `groupAllowFrom` for group invocations) regardless of
   `dmPolicy` / `groupPolicy` — see [Slash commands](#slash-commands).

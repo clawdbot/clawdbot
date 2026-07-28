@@ -1,5 +1,6 @@
 // Together provider module implements model/runtime integration.
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -35,7 +36,6 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const TOGETHER_MIN_DURATION_SECONDS = 1;
 const TOGETHER_MAX_DURATION_SECONDS = 10;
-const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type TogetherVideoResponse = {
   id?: string;
@@ -108,14 +108,6 @@ function resolveTogetherDurationSeconds(value: unknown): string | undefined {
     max: TOGETHER_MAX_DURATION_SECONDS,
   });
   return duration === undefined ? undefined : String(duration);
-}
-
-function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * 1024 * 1024);
-  }
-  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
 }
 
 async function pollTogetherVideo(params: {
@@ -326,7 +318,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
-          maxBytes: resolveGeneratedVideoMaxBytes(req),
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "video"),
         });
         return {
           videos: [video],

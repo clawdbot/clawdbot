@@ -23,11 +23,20 @@ import type { UpdateCheckResult } from "./update-check.js";
 const {
   detectRespawnSupervisorMock,
   getRuntimeConfigMock,
+  refreshRemoteModelCatalogMock,
   scheduleGatewaySigusr1RestartMock,
   startManagedServiceUpdateHandoffMock,
 } = vi.hoisted(() => ({
   detectRespawnSupervisorMock: vi.fn(),
   getRuntimeConfigMock: vi.fn(() => ({})),
+  refreshRemoteModelCatalogMock: vi.fn<
+    typeof import("../model-catalog/remote-refresh.js").refreshRemoteModelCatalog
+  >(async () => ({
+    status: "unchanged" as const,
+    providers: 1,
+    models: 1,
+    generatedAt: 1_753_500_000_000,
+  })),
   scheduleGatewaySigusr1RestartMock: vi.fn(() => ({ scheduled: true })),
   startManagedServiceUpdateHandoffMock: vi.fn<
     typeof import("./update-managed-service-handoff.js").startManagedServiceUpdateHandoff
@@ -42,6 +51,13 @@ const {
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
 }));
+
+vi.mock("../model-catalog/remote-refresh.js", async () => {
+  const actual = await vi.importActual<typeof import("../model-catalog/remote-refresh.js")>(
+    "../model-catalog/remote-refresh.js",
+  );
+  return { ...actual, refreshRemoteModelCatalog: refreshRemoteModelCatalogMock };
+});
 
 vi.mock("./openclaw-root.js", async () => {
   const actual = await vi.importActual<typeof import("./openclaw-root.js")>("./openclaw-root.js");
@@ -250,6 +266,7 @@ describe("update-startup", () => {
     vi.mocked(runCommandWithTimeout).mockClear();
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
+    refreshRemoteModelCatalogMock.mockClear();
     detectRespawnSupervisorMock.mockReset();
     detectRespawnSupervisorMock.mockReturnValue(null);
     scheduleGatewaySigusr1RestartMock.mockClear();
@@ -1245,6 +1262,70 @@ describe("update-startup", () => {
     expect(resolveOpenClawPackageRoot).not.toHaveBeenCalled();
     expect(checkUpdateStatus).not.toHaveBeenCalled();
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it("refreshes the remote catalog every six hours and stops with gateway cleanup", async () => {
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+    stop();
+    await vi.advanceTimersByTimeAsync(6 * 60 * 60_000);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("aborts an in-flight remote catalog refresh during cleanup", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    refreshRemoteModelCatalogMock.mockImplementationOnce(
+      async ({ signal }) =>
+        await new Promise((resolve) => {
+          capturedSignal = signal;
+          signal?.addEventListener(
+            "abort",
+            () => resolve({ status: "error", error: "aborted", providers: 0, models: 0 }),
+            { once: true },
+          );
+        }),
+    );
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(capturedSignal?.aborted).toBe(false);
+    stop();
+    expect(capturedSignal?.aborted).toBe(true);
+  });
+
+  it("uses the remaining stored TTL after a fresh startup check", async () => {
+    refreshRemoteModelCatalogMock.mockResolvedValueOnce({
+      status: "fresh",
+      providers: 1,
+      models: 1,
+      generatedAt: 1_753_500_000_000,
+      nextCheckInMs: 1_000,
+    });
+    const stop = scheduleGatewayUpdateCheck({
+      cfg: { update: { channel: "extended-stable", checkOnStart: false } },
+      log: { info: vi.fn() },
+      isNixMode: false,
+    });
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(refreshRemoteModelCatalogMock).toHaveBeenCalledTimes(2);
     stop();
   });
 });

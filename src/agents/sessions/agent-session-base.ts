@@ -702,9 +702,19 @@ export abstract class AgentSessionBase {
     return this.agent.followUpMode;
   }
 
-  /** Current session file path, or undefined if sessions are disabled */
+  /** Current persisted transcript target, or undefined for in-memory sessions. */
+  get sessionTarget() {
+    return this.sessionManager.getSessionTarget();
+  }
+
+  /** Current persisted session key, or undefined for in-memory sessions. */
+  get sessionKey(): string | undefined {
+    return this.sessionTarget?.sessionKey;
+  }
+
+  /** @deprecated Compatibility token; returns the session key, not a file path. */
   get sessionFile(): string | undefined {
-    return this.sessionManager.getSessionFile();
+    return this.sessionKey;
   }
 
   /** Current session ID */

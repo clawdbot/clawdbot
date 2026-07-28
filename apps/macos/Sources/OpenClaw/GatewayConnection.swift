@@ -409,7 +409,11 @@ actor GatewayConnection {
             }
             throw CancellationError()
         }
-        return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        let data = try await client.request(method: method, params: params, timeoutMs: timeoutMs)
+        guard await self.isCurrentRoute(route), self.client === client else {
+            throw CancellationError()
+        }
+        return data
     }
 
     /// Server-bound requests never reconfigure, reconnect, or cross onto a
@@ -424,11 +428,15 @@ actor GatewayConnection {
             throw OpenClawChatTransportSendError.notDispatched
         }
         do {
-            return try await lease.client.request(
+            let data = try await lease.client.request(
                 method: method,
                 params: params,
                 timeoutMs: timeoutMs,
                 ifCurrentConnectionGeneration: lease.socketGeneration)
+            guard await self.isCurrentServerLease(lease) else {
+                throw OpenClawChatTransportSendError.notDispatched
+            }
+            return data
         } catch is CancellationError {
             if Task.isCancelled {
                 throw CancellationError()

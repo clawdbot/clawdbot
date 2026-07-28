@@ -553,6 +553,30 @@
       }
     },
     {
+      "name": "@openclaw/buzz",
+      "description": "Connect OpenClaw agents to Buzz rooms",
+      "source": "official",
+      "kind": "channel",
+      "openclaw": {
+        "channel": {
+          "id": "buzz",
+          "label": "Buzz",
+          "selectionLabel": "Buzz",
+          "docsPath": "/channels/buzz",
+          "docsLabel": "buzz",
+          "blurb": "Connect OpenClaw agents to Buzz team rooms.",
+          "envVars": ["BUZZ_RELAY_URL", "BUZZ_PRIVATE_KEY", "BUZZ_AUTH_TAG"],
+          "order": 56
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/buzz",
+          "npmSpec": "@openclaw/buzz",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/nostr",
       "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted DMs",
       "source": "official",

@@ -139,7 +139,7 @@ export type AgentConfig = {
   contextLimits?: AgentContextLimitsConfig;
   contextTokens?: number;
   /** Optional per-agent heartbeat overrides. */
-  heartbeat?: AgentDefaultsConfig["heartbeat"];
+  heartbeat?: Omit<NonNullable<AgentDefaultsConfig["heartbeat"]>, "agentId">;
   identity?: IdentityConfig;
   groupChat?: Omit<GroupChatConfig, "visibleReplies">;
   subagents?: {

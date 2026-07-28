@@ -18,7 +18,12 @@ import {
   calculateCost,
   clampThinkingLevel,
 } from "../model-utils.js";
+import {
+  resolveOpenAICompletionsCompat,
+  type ResolvedOpenAICompletionsCompat,
+} from "../transports/openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "../transports/openai-reasoning-compat.js";
+import { transportAbortError } from "../transports/transport-stream-shared.js";
 import type {
   AssistantMessage,
   CacheRetention,
@@ -58,11 +63,11 @@ import {
 import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
-import {
-  resolveOpenAICompletionsCompat,
-  type ResolvedOpenAICompletionsCompat,
-} from "./openai-completions-compat.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
+import {
+  resolveOpenAICompletionsResponseFormat,
+  shouldOmitOllamaCompatResponseFormat,
+} from "./openai-response-format.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import {
   projectOpenAITools,
@@ -565,7 +570,7 @@ export const streamOpenAICompletions: StreamFunction<
         finishBlock(block);
       }
       if (options?.signal?.aborted) {
-        throw new Error("Request was aborted");
+        throw transportAbortError(options.signal);
       }
 
       if (output.stopReason === "aborted") {
@@ -727,9 +732,10 @@ function buildParams(
 
   type ChatCompletionRequestParams = Omit<
     OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
-    "reasoning_effort"
+    "reasoning_effort" | "response_format"
   > & {
     reasoning_effort?: string;
+    response_format?: Record<string, unknown>;
     stream_options?: { include_usage: boolean };
     max_tokens?: number;
     prompt_cache_key?: string;
@@ -782,6 +788,24 @@ function buildParams(
 
   if (options?.stop !== undefined && options.stop.length > 0) {
     params.stop = options.stop;
+  }
+
+  const requestedResponseFormat = options?.responseFormat;
+  const responseFormat =
+    requestedResponseFormat === undefined
+      ? undefined
+      : resolveOpenAICompletionsResponseFormat(
+          shouldOmitOllamaCompatResponseFormat({
+            provider: model.provider,
+            baseUrl: model.baseUrl,
+            hasTools: () => Boolean(context.tools?.length),
+          })
+            ? undefined
+            : requestedResponseFormat,
+          compat.supportsJsonSchemaResponseFormat,
+        );
+  if (responseFormat !== undefined) {
+    params.response_format = responseFormat;
   }
 
   let toolProjection: OpenAIToolProjection | undefined;

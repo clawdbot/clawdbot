@@ -1,4 +1,5 @@
 // Builds memory flush prompts when conversation context exceeds model budget.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { legacyModelKey, modelKey } from "../../agents/model-ref-shared.js";
@@ -35,12 +36,6 @@ export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
-    : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
     : undefined;
 }
 

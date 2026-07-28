@@ -36,6 +36,9 @@ export type GatewayThinkingLevelOption = {
 
 export type GatewayAgentKind = "agent" | "system";
 
+/** Per-session Control UI face preference carried by session list rows. */
+export type SessionBoardFace = "chat" | "dashboard";
+
 /** Common agent row shape used by session list responses. */
 export type GatewayAgentRow = {
   id: string;

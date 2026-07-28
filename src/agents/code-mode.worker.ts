@@ -1,7 +1,6 @@
 /**
  * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
  */
-import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
@@ -189,6 +188,30 @@ const CONTROLLER_SOURCE = String.raw`
     return true;
   }
 
+  function nodeHandle(descriptor) {
+    const handle = Object.create(null);
+    Object.defineProperties(handle, {
+      id: { value: descriptor.id, enumerable: true },
+      name: { value: descriptor.name, enumerable: true },
+      invoke: {
+        value: (command, params) => request("nodes", ["invoke", descriptor.id, command, params]),
+        enumerable: true,
+      },
+    });
+    if (typeof descriptor.listDirCommand === "string") {
+      Object.defineProperty(handle, "listDir", {
+        value: (path) => request("nodes", ["invoke", descriptor.id, descriptor.listDirCommand, { path }]),
+        enumerable: true,
+      });
+    }
+    return Object.freeze(handle);
+  }
+
+  const nodes = Object.freeze({
+    list: () => request("nodes", ["list"]),
+    get: async (idOrName) => nodeHandle(await request("nodes", ["get", idOrName])),
+  });
+
   const baseTools = Object.create(null);
   Object.defineProperties(baseTools, {
     search: { value: (query, options) => request("search", [query, options]), enumerable: true },
@@ -292,6 +315,7 @@ const CONTROLLER_SOURCE = String.raw`
   Object.defineProperties(globalThis, {
     ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
     API: { value: api, enumerable: true },
+    nodes: { value: nodes, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
@@ -327,6 +351,7 @@ function createHostRequestHandler(params: {
       method !== "describe" &&
       method !== "call" &&
       method !== "callValue" &&
+      method !== "nodes" &&
       method !== "yield" &&
       method !== "namespace" &&
       method !== "agentSpawn" &&
@@ -342,13 +367,9 @@ function createHostRequestHandler(params: {
       args = [];
     }
     // Snapshotted method counters keep launch identity independent of unrelated bridge traffic.
-    const requestedId = bridgeIdHandle?.toString() ?? "undefined";
-    const id = requestedId === "undefined" ? `bridge:legacy:${randomUUID()}` : requestedId;
-    const validId =
-      requestedId === "undefined"
-        ? /^bridge:legacy:[0-9a-f-]+$/u.test(id)
-        : id.startsWith(`bridge:${method}:`) && /^bridge:[A-Za-z]+:[1-9]\d*$/u.test(id);
-    if (!validId) {
+    // Snapshots are process-local, so every resumable guest comes from the ID-aware source above.
+    const id = bridgeIdHandle?.toString();
+    if (!id?.startsWith(`bridge:${method}:`) || !/^bridge:[A-Za-z]+:[1-9]\d*$/u.test(id)) {
       throw new Error("invalid code mode bridge id");
     }
     if (params.pendingRequests.some((request) => request.id === id)) {
@@ -501,6 +522,16 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       // format it like the synchronous path so async rejections keep their cause
       // and location instead of collapsing to the bare message.
       const dumped = vm.dump(error);
+      // Node module globals are deliberately absent from the WASI guest. Keep
+      // aliases fail-closed at that runtime boundary rather than guessing source
+      // provenance or installing a host-backed loader.
+      if (
+        dumped instanceof Error &&
+        dumped.name === "ReferenceError" &&
+        /^(?:require|module|process) is not defined$/u.test(dumped.message)
+      ) {
+        throw new CodeModeWorkerFailure("invalid_input", "code mode module access is disabled.");
+      }
       const text =
         dumped instanceof Error
           ? formatQuickJsError(dumped.name, dumped.message, dumped.stack)

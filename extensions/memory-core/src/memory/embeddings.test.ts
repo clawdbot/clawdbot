@@ -165,6 +165,18 @@ describe("createEmbeddingProvider", () => {
   });
 
   it("uses a generic embedding provider when no memory-specific provider exists", async () => {
+    const genericProvider = {
+      id: "generic",
+      model: "generic-model",
+      closed: false,
+      embed: async (_input: unknown, callOptions?: { inputType?: string }) =>
+        callOptions?.inputType === "query" ? [1] : [2],
+      embedBatch: async (inputs: unknown[], callOptions?: { inputType?: string }) =>
+        inputs.map(() => (callOptions?.inputType === "document" ? [3] : [4])),
+      async close() {
+        this.closed = true;
+      },
+    };
     registerGenericEmbeddingProvider({
       id: "openai-compatible",
       create: async (options) => {
@@ -176,13 +188,7 @@ describe("createEmbeddingProvider", () => {
           ).acquireLocalService,
         ).toBe(mockEmbeddingRegistry.acquireLocalService);
         return {
-          provider: {
-            id: "generic",
-            model: "generic-model",
-            embed: async (_input, callOptions) => (callOptions?.inputType === "query" ? [1] : [2]),
-            embedBatch: async (inputs, callOptions) =>
-              inputs.map(() => (callOptions?.inputType === "document" ? [3] : [4])),
-          },
+          provider: genericProvider,
         };
       },
     });
@@ -194,6 +200,8 @@ describe("createEmbeddingProvider", () => {
     expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([options.config]);
     await expect(result.provider?.embedQuery("hello")).resolves.toEqual([1]);
     await expect(result.provider?.embedBatch(["doc"])).resolves.toEqual([[3]]);
+    await result.provider?.close?.();
+    expect(genericProvider.closed).toBe(true);
   });
 
   it("keeps concurrent provider creation bound to each caller's local-service hook", async () => {

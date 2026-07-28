@@ -64,6 +64,18 @@ describe("resolveEffectiveModelFallbacks", () => {
     expect(resolveEffectiveModelFallbacks(entryModel, defaultModel)).toEqual(["openai/gpt-5-nano"]);
   });
 
+  it.each([
+    { name: "a string primary", model: "openai/gpt-5.4" },
+    { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
+  ])("does not inherit global fallbacks for $name", ({ model }) => {
+    expect(
+      resolveEffectiveModelFallbacks(model, {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["anthropic/claude-sonnet-4-6"],
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("keeps explicit empty entry fallback lists", () => {
     const entryModel = {
       primary: "openai/gpt-5-mini",

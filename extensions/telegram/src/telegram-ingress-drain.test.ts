@@ -109,4 +109,38 @@ describe("createTelegramIngressMonitor", () => {
       await monitor.stop();
     });
   });
+
+  it("logs a diagnostic when dispatch records no outcome and defers no participant", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueueForTests<TelegramSpooledUpdatePayload>({
+        channelId: "telegram",
+        accountId: "default",
+        stateDir,
+      });
+      const eventId = "3".padStart(16, "0");
+      const payload = updatePayload(3);
+      const laneKey = telegramSpooledUpdateLaneKey(payload.update);
+      await queue.enqueue(eventId, payload, { laneKey });
+
+      const logs: string[] = [];
+      const monitor = createTelegramIngressMonitor({
+        queue,
+        cfg,
+        accountId: "default",
+        dispatch: async () => {},
+        onLog: (message) => logs.push(message),
+      });
+
+      monitor.start();
+      await monitor.waitForIdle();
+
+      // Silent consumption still completes (skip semantics), but must leave a trace.
+      const status = await queue.enqueue(eventId, payload, { laneKey });
+      expect(status.kind).toBe("completed");
+      expect(
+        logs.some((line) => line.includes("completed without a recorded processing outcome")),
+      ).toBe(true);
+      await monitor.stop();
+    });
+  });
 });

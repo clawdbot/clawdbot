@@ -3,11 +3,13 @@ import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { syncDirectory, type DirectoryReceipt } from "@openclaw/fs-safe/durability";
 import {
   removePreparedBackupArchive,
   type BackupArchiveCleanupReceipt,
   type PreparedBackupArchive,
 } from "./backup-create-stream.js";
+import { requireDirectorySync, syncDirectoryIfSupported } from "./directory-durability.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
 type BackupArchiveLogger = (message: string) => void;
@@ -15,7 +17,7 @@ type BackupArchiveLogger = (message: string) => void;
 export type BackupArchivePublication = {
   canonicalOutputPath: string;
   canonicalParentPath: string;
-  parentIdentity: Stats;
+  parentReceipt: DirectoryReceipt;
   pendingCleanupArchives: BackupArchiveCleanupReceipt[];
   requestedOutputPath: string;
   requestedParentPath: string;
@@ -50,7 +52,7 @@ async function assertPublicationParentUnchanged(plan: BackupArchivePublication):
   if (
     !pathsEqual(currentCanonicalParent, plan.canonicalParentPath) ||
     !currentParentIdentity.isDirectory() ||
-    !sameFileIdentity(plan.parentIdentity, currentParentIdentity)
+    !sameFileIdentity(plan.parentReceipt.identity, currentParentIdentity)
   ) {
     throw new Error(
       `Backup output directory changed during archive creation: ${plan.requestedParentPath}`,
@@ -84,37 +86,6 @@ async function removeStagingDirectoryIfOwned(plan: BackupArchivePublication): Pr
   return await removeDirectoryIfOwned(plan.stagingDir, plan.stagingIdentity);
 }
 
-function isUnsupportedDirectorySyncError(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
-  return (
-    code === "EINVAL" ||
-    code === "ENOTSUP" ||
-    code === "ENOSYS" ||
-    (process.platform === "win32" && (code === "EISDIR" || code === "EPERM" || code === "EACCES"))
-  );
-}
-
-async function syncDirectoryBestEffort(directoryPath: string): Promise<void> {
-  const handle = await fs.open(directoryPath, "r").catch((error: unknown) => {
-    if (isUnsupportedDirectorySyncError(error)) {
-      return undefined;
-    }
-    throw error;
-  });
-  if (!handle) {
-    return;
-  }
-  try {
-    await handle.sync();
-  } catch (error) {
-    if (!isUnsupportedDirectorySyncError(error)) {
-      throw error;
-    }
-  } finally {
-    await handle.close();
-  }
-}
-
 async function syncPublishedArchiveCommit(
   plan: BackupArchivePublication,
   preparedHandle: FileHandle,
@@ -125,14 +96,12 @@ async function syncPublishedArchiveCommit(
     await preparedHandle.sync();
     return;
   }
-  const directoryHandle = await fs.open(plan.canonicalParentPath, "r");
-  try {
-    // Publication success requires a real directory fsync. Unsupported
-    // filesystems fail closed instead of weakening crash durability.
-    await directoryHandle.sync();
-  } finally {
-    await directoryHandle.close();
-  }
+  // Publication success requires a real directory fsync. Unsupported
+  // filesystems fail closed instead of weakening crash durability.
+  const outcome = await syncDirectory(plan.parentReceipt, {
+    label: "backup publication directory",
+  });
+  requireDirectorySync(outcome, "Backup publication directory");
 }
 
 function isUnsupportedHardLinkError(error: unknown): boolean {
@@ -213,7 +182,11 @@ export async function createBackupArchivePublication(
     return {
       canonicalOutputPath,
       canonicalParentPath,
-      parentIdentity,
+      parentReceipt: {
+        path: canonicalParentPath,
+        realPath: canonicalParentPath,
+        identity: parentIdentity,
+      },
       pendingCleanupArchives: [],
       requestedOutputPath,
       requestedParentPath,
@@ -286,7 +259,7 @@ export async function cleanupBackupArchivePublication(
     }
   }
   if (await removeStagingDirectoryIfOwned(plan)) {
-    await syncDirectoryBestEffort(plan.canonicalParentPath).catch(() => undefined);
+    await syncDirectoryIfSupported(plan.canonicalParentPath).catch(() => undefined);
     return;
   }
   const currentIdentity = await fs.lstat(plan.stagingDir).catch(() => undefined);
@@ -359,7 +332,7 @@ export async function publishPreparedBackupArchive(params: {
         `Backup archiver preserved changed or non-empty staging directory ${plan.stagingDir}.`,
       );
     }
-    await syncDirectoryBestEffort(plan.canonicalParentPath).catch((error: unknown) => {
+    await syncDirectoryIfSupported(plan.canonicalParentPath).catch((error: unknown) => {
       params.log?.(
         `Backup archiver could not sync cleanup in ${plan.canonicalParentPath}: ${
           (error as NodeJS.ErrnoException).code ?? String(error)
