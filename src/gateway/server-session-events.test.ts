@@ -103,6 +103,29 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     sessionRow.thinkingLevel = "ultra";
   });
 
+  it("never silently drops an authoritative session message for a slow subscriber", async () => {
+    const { broadcastToConnIds, handler } = createHandler(false);
+
+    handler({
+      sessionFile: "/tmp/sess-main.jsonl",
+      sessionKey: "agent:main:main",
+      message: { role: "user", content: [{ type: "text", text: "shared durable prompt" }] },
+      messageId: "durable-user-1",
+      messageSeq: 1,
+    });
+
+    await vi.waitFor(() => expect(broadcastToConnIds).toHaveBeenCalledTimes(1));
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "session.message",
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        messageId: "durable-user-1",
+        messageSeq: 1,
+      }),
+      expect.any(Set),
+    );
+  });
+
   it("keeps transcript snapshots active while plugin finalization delays the terminal event", async () => {
     // before_agent_finalize hooks run after the assistant transcript write but
     // before terminal delivery. The active-run registry remains authoritative

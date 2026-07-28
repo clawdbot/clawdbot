@@ -53,6 +53,7 @@ import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   isLocallyOptimisticHistoryMessage,
   messageDisplaySignature,
+  preserveLiveAuthoritativeUserMessages,
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
@@ -1186,6 +1187,7 @@ async function loadChatHistoryUncached(
   const previousMessages = state.chatMessages;
   const previousPagination = state.chatHistoryPagination;
   const previousSessionId = state.currentSessionId ?? null;
+  const previousDisplayedLeafEntryId = state.chatDisplayedLeafEntryId ?? null;
   const previousRunId = state.chatRunId;
   recordChatHistoryTiming(state, "start", startedAtMs, {
     requestSessionKey: sessionKey,
@@ -1275,11 +1277,24 @@ async function loadChatHistoryUncached(
       (message) =>
         !isPendingInitialUserMessage(state.initialUserMessage, state, sessionKey, message),
     );
-    state.chatMessages = preserveOptimisticTailMessages(
+    const preservedOptimisticMessages = preserveOptimisticTailMessages(
       authoritativeMessages,
       reconciledTerminal.previousMessages,
       shouldHideHistoryMessage,
     );
+    const nextDisplayedLeafEntryId = Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")
+      ? res.sessionInfo?.activeLeafEntryId?.trim() || null
+      : previousDisplayedLeafEntryId;
+    const retainsTranscriptIdentity =
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
+      (!previousDisplayedLeafEntryId || previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
+    state.chatMessages = retainsTranscriptIdentity
+      ? preserveLiveAuthoritativeUserMessages(
+          preservedOptimisticMessages,
+          reconciledTerminal.currentMessages,
+          shouldHideHistoryMessage,
+        )
+      : preservedOptimisticMessages;
     if (Object.hasOwn(res.sessionInfo ?? {}, "activeLeafEntryId")) {
       state.chatDisplayedLeafEntryId = res.sessionInfo?.activeLeafEntryId?.trim() || null;
     }

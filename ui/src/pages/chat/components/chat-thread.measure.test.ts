@@ -7,6 +7,7 @@
 // pane width and overlapping the bubbles in the dashboard chat dock.
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
@@ -318,5 +319,78 @@ describe("chat transcript row measurement", () => {
     expect(hostA?.measureRowRefs.size).toBe(0);
     transcript.hostDisconnected();
     expect(observedElements.size).toBe(0);
+  });
+
+  it("updates MCP App pinning when the same provider's capability changes", async () => {
+    const provider = {
+      sessionKey: "agent:main:main",
+      canPinWidgets: true,
+      canPinMcpApps: false,
+      pinMcpApp: vi.fn(async () => undefined),
+      snapshot$: {
+        value: {
+          sessionKey: "agent:main:main",
+          revision: 1,
+          tabs: [],
+          widgets: [],
+        },
+        subscribe: () => () => undefined,
+      },
+    };
+    const props = {
+      ...threadProps("pane-mcp-capability"),
+      boardProvider: provider as unknown as BoardProvider,
+      messages: [
+        {
+          role: "assistant",
+          timestamp: 1_000,
+          content: [
+            { type: "text", text: "Here is the dashboard app." },
+            {
+              type: "canvas",
+              preview: {
+                kind: "canvas",
+                surface: "assistant_message",
+                render: "url",
+                title: "Dashboard app",
+                viewId: "outer-view-must-not-be-pinned",
+                mcpApp: {
+                  viewId: "view-dashboard-app",
+                  serverName: "dashboard",
+                  toolName: "show",
+                  uiResourceUri: "ui://dashboard/app.html",
+                  toolCallId: "call-dashboard-app",
+                  originSessionKey: "agent:main:main",
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+
+    render(renderChatThread(props, transcript), container);
+    transcript.hostConnected();
+    transcript.hostUpdated();
+    await flushDeferredRowPrune();
+
+    expect(container.querySelector('[data-content-kind="mcp-app"]')).not.toBeNull();
+    expect(container.querySelector("[data-pin-widget]")).toBeNull();
+
+    provider.canPinMcpApps = true;
+    render(renderChatThread(props, transcript), container);
+    transcript.hostUpdated();
+
+    expect(container.querySelector("[data-pin-widget]")).not.toBeNull();
+    expect(provider.snapshot$.value.revision).toBe(1);
+
+    provider.canPinMcpApps = false;
+    render(renderChatThread(props, transcript), container);
+    transcript.hostUpdated();
+
+    expect(container.querySelector("[data-pin-widget]")).toBeNull();
+    expect(provider.snapshot$.value.revision).toBe(1);
   });
 });

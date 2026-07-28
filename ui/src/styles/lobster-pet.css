@@ -154,6 +154,22 @@ openclaw-lobster-pet[data-dex-complete]::after {
   --lob-glint: #8fa8ff;
 }
 
+.lobster-pet--palette-sourdough {
+  --lob-glint: #e6bc82;
+}
+
+.lobster-pet--palette-zombie {
+  --lob-glint: #b8d49a;
+}
+
+.lobster-pet--palette-plush {
+  --lob-glint: #ffb59e;
+}
+
+.lobster-pet--palette-disco {
+  --lob-glint: #cbd5e6;
+}
+
 .lobster-pet--palette-blueprint .lob-antennae path {
   stroke: #cfe3ff;
   stroke-dasharray: 4 3;
@@ -304,6 +320,54 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: lobster-pet-lumen 3.2s ease-in-out infinite;
 }
 
+.lob-bee-wings ellipse {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lobster-pet-bee-wing-left 0.25s ease-in-out infinite alternate;
+}
+
+.lob-bee-wings ellipse:nth-child(2) {
+  animation-name: lobster-pet-bee-wing-right;
+}
+
+@keyframes lobster-pet-bee-wing-left {
+  from {
+    transform: rotate(-30deg);
+  }
+  to {
+    transform: rotate(-16deg);
+  }
+}
+
+@keyframes lobster-pet-bee-wing-right {
+  from {
+    transform: rotate(16deg);
+  }
+  to {
+    transform: rotate(30deg);
+  }
+}
+
+.lob-disco {
+  animation: lobster-pet-disco-sweep 6s linear infinite;
+}
+
+.lob-disco rect:nth-child(3n + 1) {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: lobster-pet-twinkle 2.4s ease-in-out infinite;
+}
+
+.lob-disco rect:nth-child(3n + 4) {
+  animation-delay: 0.8s;
+}
+
+@keyframes lobster-pet-disco-sweep {
+  to {
+    filter: hue-rotate(360deg);
+  }
+}
+
 :root[data-theme-mode="light"] .lob-lumen {
   filter: none;
   opacity: 0.3;
@@ -342,9 +406,10 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* Shiny: saturated sheen plus twinkling sparks. The filter skips retro so
-   the sticker-outline halo survives; sparkle spans carry the show there. */
-.lobster-pet--shiny:not(.lobster-pet--palette-retro) .lobster-pet__svg {
+/* Shiny: saturated sheen plus twinkling sparks. The filter skips both retro
+   palettes so their sticker-outline halos survive; sparkle spans carry the show. */
+.lobster-pet--shiny:not(.lobster-pet--palette-retro):not(.lobster-pet--palette-goldenretro)
+  .lobster-pet__svg {
   filter: saturate(1.3) brightness(1.07);
 }
 
@@ -376,9 +441,33 @@ openclaw-lobster-pet[data-dex-complete]::after {
 
 /* Retro: homage to the classic OpenClaw logo — white sticker outline around
    the whole sprite (the halo is two stacked 1px drop-shadows). */
-.lobster-pet--palette-retro .lobster-pet__svg {
+.lobster-pet--palette-retro .lobster-pet__svg,
+.lobster-pet--palette-goldenretro .lobster-pet__svg {
   filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
     drop-shadow(0 0 1.2px #f5f7fa);
+}
+
+.lobster-pet--palette-goldenretro .lobster-pet__svg {
+  animation:
+    lobster-pet-breathe 3.4s ease-in-out infinite,
+    lobster-pet-goldenretro-shimmer 4s ease-in-out infinite;
+}
+
+.lobster-pet--palette-goldenretro .lob-retro-claw-line {
+  stroke: #b8860b;
+}
+
+@keyframes lobster-pet-goldenretro-shimmer {
+  0%,
+  100% {
+    filter: saturate(1) brightness(1) drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+      drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 2px rgba(244, 184, 64, 0.75));
+  }
+  50% {
+    filter: saturate(1.25) brightness(1.12) drop-shadow(0 0 1.2px #f5f7fa)
+      drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
+      drop-shadow(0 0 2px rgba(244, 184, 64, 0.75));
+  }
 }
 
 /* Split two-tone: the right body half (drawn in lobster-pet.ts) plus the
@@ -1138,6 +1227,10 @@ openclaw-lobster-pet[data-dex-complete]::after {
   .lob-heisenbug-frame,
   .lob-led,
   .lob-pixel-frame,
+  .lob-bee-wings ellipse,
+  .lob-disco,
+  .lob-disco rect,
+  .lobster-pet--palette-goldenretro .lobster-pet__svg,
   .lobster-pet--palette-phosphor .lobster-pet__svg {
     animation: none !important;
   }
@@ -1429,7 +1522,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 .lobsterdex-page__card {
   position: relative;
   display: grid;
-  grid-template-rows: 94px auto minmax(42px, auto) 18px;
+  grid-template-rows: 94px auto minmax(42px, auto) auto;
   gap: 7px;
   justify-items: center;
   min-width: 0;
@@ -1439,6 +1532,24 @@ openclaw-lobster-pet[data-dex-complete]::after {
   background: linear-gradient(180deg, color-mix(in srgb, var(--card) 94%, white 6%), var(--card));
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
   text-align: center;
+}
+
+.lobsterdex-page__card--highlight {
+  animation: lobsterdex-card-highlight 2s ease-out;
+}
+
+@keyframes lobsterdex-card-highlight {
+  0%,
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08);
+  }
+  35% {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--accent) 26%, transparent),
+      0 0 22px color-mix(in srgb, var(--accent) 34%, transparent);
+  }
 }
 
 .lobsterdex-page__card--unseen {
@@ -1472,6 +1583,58 @@ openclaw-lobster-pet[data-dex-complete]::after {
 .lobsterdex-page__date {
   color: var(--muted);
   font-size: 10px;
+}
+
+.lobsterdex-page__dates {
+  min-height: 18px;
+}
+
+.lobsterdex-page__copy-link {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 5px;
+  border: 0;
+  border-radius: 7px;
+  place-items: center;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--card) 82%, transparent);
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition:
+    opacity 0.16s ease,
+    color 0.16s ease,
+    background 0.16s ease;
+}
+
+.lobsterdex-page__copy-link svg {
+  width: 15px;
+  height: 15px;
+}
+
+.lobsterdex-page__card:hover .lobsterdex-page__copy-link,
+.lobsterdex-page__card:focus-within .lobsterdex-page__copy-link {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Touch screens have no hover to reveal the control; keep it tappable in a
+   quieter resting state instead of unreachable. */
+@media (hover: none) {
+  .lobsterdex-page__copy-link {
+    opacity: 0.55;
+    pointer-events: auto;
+  }
+}
+
+.lobsterdex-page__copy-link:hover,
+.lobsterdex-page__copy-link:focus-visible {
+  color: var(--text-strong);
+  background: color-mix(in srgb, var(--accent) 13%, var(--card));
 }
 
 .lobsterdex-page__star {

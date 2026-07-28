@@ -53,6 +53,7 @@ type CronProps = {
   basePath: string;
   agentId: string;
   loading: boolean;
+  /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
@@ -769,11 +770,17 @@ function renderLastRunCell(job: CronJob) {
 // Run now and pause/resume are visible controls (rows and detail header);
 // the menu only carries the low-traffic actions.
 function renderJobMenu(props: CronProps, job: CronJob) {
+  if (!props.canManage) {
+    return nothing;
+  }
   return html`
     <wa-dropdown
       class="cron-job-menu"
       placement="bottom-end"
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        if (!props.canManage) {
+          return;
+        }
         switch (event.detail.item.value) {
           case "run-if-due":
             props.onRun(job, "due");
@@ -940,9 +947,13 @@ function renderEnabledSwitch(
     >
       ${renderSettingsToggle({
         checked: job.enabled,
-        disabled: props.busy,
+        disabled: props.busy || !props.canManage,
         ariaLabel: opts?.compact ? actionLabel : stateLabel,
-        onChange: (checked) => props.onToggle(job, checked),
+        onChange: (checked) => {
+          if (props.canManage) {
+            props.onToggle(job, checked);
+          }
+        },
       })}
       ${opts?.compact ? nothing : html`<span class="cron-detail-sub">${stateLabel}</span>`}
     </span>
@@ -1072,7 +1083,7 @@ function renderMenuItem(
       class=${options?.danger ? "cron-job-menu__item danger" : "cron-job-menu__item"}
       value=${value}
       variant=${options?.danger ? "danger" : "default"}
-      ?disabled=${props.busy}
+      ?disabled=${props.busy || !props.canManage}
     >
       ${label}
     </wa-dropdown-item>

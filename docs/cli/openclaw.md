@@ -81,6 +81,9 @@ channels
 channel info slack
 connect slack
 open channel wizard for slack
+configure skills
+configure web search
+open search wizard
 plugins list
 plugins search slack
 plugin install clawhub:openclaw-codex-app-server
@@ -96,7 +99,7 @@ OpenClaw uses typed operations instead of editing config ad hoc.
 
 Read-only operations run immediately: show overview, list agents, list installed plugins, search ClawHub plugins, show model/backend status, run status/health checks, check Gateway reachability, run doctor without interactive fixes, validate config, show the audit-log path.
 
-Starting guided channel setup (`connect telegram`) also runs immediately. Its wizard collects explicit answers and owns the resulting writes.
+Starting a guided setup flow also runs immediately: channel setup (`connect telegram`), workspace skills setup (`configure skills`), and web-search provider setup (`configure web search`). Each hosted wizard collects explicit answers and owns the resulting writes; completions append audit entries and re-validate config. A web-search provider that needs a plugin install writes config only after the install succeeds — a failed or timed-out install stops setup and reports it instead of claiming the provider is configured.
 
 Persistent operations require conversational approval (or `--yes` for a direct command): write config, `config set`, `config set-ref`, setup/onboarding bootstrap, change the default model, start/stop/restart the Gateway, create agents, and install plugins.
 
@@ -142,24 +145,29 @@ Discovery and read-only operations are not included. Secrets never appear in
 change history; config journal records contain changed paths rather than config
 values, and value comparison uses protected fingerprints.
 
-Channel setup can run as a hosted conversation until it reaches a secret. The
-local OpenClaw TUI does not accept sensitive wizard answers because terminal
-chat input is visible. It offers `open channel wizard` immediately, carrying
-the selected channel into the masked terminal wizard; you can also run
-`openclaw channels add --channel <channel>` later.
+Channel and web-search setup can run as hosted conversations until they reach
+a secret. The local OpenClaw TUI does not accept sensitive wizard answers
+because terminal chat input is visible. It offers `open channel wizard`
+(carrying the selected channel) or `open search wizard` immediately, handing
+off to the masked terminal wizard; you can also run
+`openclaw channels add --channel <channel>` or
+`openclaw configure --section web` later.
 
-### Switching to masked channel setup
+### Switching to a masked terminal wizard
 
-The local chat can hand control to the masked channel wizard:
+The local chat can hand control to a masked terminal wizard:
 
 ```text
 open channel wizard for slack
 channel info slack
+open search wizard
 ```
 
 `open channel wizard for <channel>` opens masked channel setup after the chat
 TUI closes. Use `channel info <channel>` first for the channel label, setup
-state, prerequisites summary, and docs link.
+state, prerequisites summary, and docs link. `open search wizard` works the
+same way for web-search provider setup, opening the masked search wizard after
+the chat TUI closes.
 
 OpenClaw never changes provider/auth access from inside its own session: the
 session already depends on that inference route. For model-provider setup or

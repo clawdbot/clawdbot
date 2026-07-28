@@ -6,7 +6,7 @@ import { renderQuickSettings } from "./quick.ts";
 
 type QuickSettingsProps = Parameters<typeof renderQuickSettings>[0];
 
-type QuickControl = HTMLElement & { checked?: boolean; disabled: boolean };
+type QuickControl = HTMLElement & { disabled: boolean };
 
 function expectButtonByText(container: Element, text: string): QuickControl {
   const button = Array.from(container.querySelectorAll<QuickControl>("button, wa-radio")).find(
@@ -16,19 +16,6 @@ function expectButtonByText(container: Element, text: string): QuickControl {
     throw new Error(`Expected button labelled ${text}`);
   }
   return button;
-}
-
-function selectRadio(control: QuickControl) {
-  if (control.checked) {
-    return;
-  }
-  const group = control.closest<HTMLElement & { value: string }>("wa-radio-group");
-  expect(group).not.toBeNull();
-  if (!group) {
-    return;
-  }
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function expectRowByTitle(container: Element, text: string): HTMLElement {
@@ -45,38 +32,25 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
   return {
     locale: "en",
     onLocaleChange: vi.fn(),
-    currentModel: "gpt-5.5",
-    thinkingLevel: "off",
-    fastMode: false,
-    onModelChange: vi.fn(),
-    onThinkingChange: vi.fn(),
-    onFastModeChange: vi.fn(),
+    onModelsClick: vi.fn(),
     connected: true,
     ...overrides,
   };
 }
 
 describe("renderQuickSettings", () => {
-  it("renders the slim general hub with stable target ids", () => {
+  it("renders the slim general hub", () => {
     const container = document.createElement("div");
 
     render(renderQuickSettings(createProps()), container);
 
     expect(container.querySelectorAll(".settings-page")).toHaveLength(1);
-    const targetIds = Array.from(
-      container.querySelectorAll<HTMLElement>("[id^='settings-general-']"),
-    ).map((element) => element.id);
-    expect(targetIds).toEqual(["settings-general-model"]);
-    expect(container.querySelectorAll(".settings-section")).toHaveLength(2);
+    expect(container.querySelector("[id^='settings-general-']")).toBeNull();
+    expect(container.querySelectorAll(".settings-section")).toHaveLength(1);
     expect(container.textContent).not.toContain("Connected");
     expect(container.querySelector(".config-host")).toBeNull();
-    // One group surface per section; no nested cards. Channels, security,
-    // automations, appearance, and identity all have dedicated pages now.
-    for (const id of targetIds) {
-      const section = container.querySelector(`#${id}`);
-      expect(section?.querySelectorAll(".settings-group")).toHaveLength(1);
-      expect(section?.querySelector(".settings-group .settings-group")).toBeNull();
-    }
+    expect(container.querySelectorAll(".settings-group")).toHaveLength(1);
+    expect(container.querySelector(".settings-group .settings-group")).toBeNull();
   });
 
   it("changes the Control UI language from General settings", () => {
@@ -96,17 +70,19 @@ describe("renderQuickSettings", () => {
     expect(onLocaleChange).toHaveBeenCalledWith("en");
   });
 
-  it("drills into model settings from the Model row", () => {
-    const onModelChange = vi.fn();
+  it("drills into the Models page", () => {
+    const onModelsClick = vi.fn();
     const container = document.createElement("div");
 
-    render(renderQuickSettings(createProps({ onModelChange })), container);
+    render(renderQuickSettings(createProps({ onModelsClick })), container);
 
-    const row = expectRowByTitle(container, "Model");
+    const row = expectRowByTitle(container, "Models");
     expect(row.classList.contains("settings-row--nav")).toBe(true);
-    expect(row.querySelector(".settings-row__value")?.textContent?.trim()).toBe("gpt-5.5");
+    expect(row.textContent).toContain(
+      "Default models, behavior, provider access, usage, and cost.",
+    );
     row.click();
-    expect(onModelChange).toHaveBeenCalledTimes(1);
+    expect(onModelsClick).toHaveBeenCalledTimes(1);
   });
 
   it("hides the restart banner while the config needs no apply", () => {
@@ -217,58 +193,5 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".config-apply-banner button")?.hasAttribute("disabled")).toBe(
       true,
     );
-  });
-
-  it("locks config-backed quick controls while a config operation is pending", () => {
-    for (const pending of [
-      { configLoading: true },
-      { configSaving: true },
-      { configApplying: true },
-      { configUpdating: true },
-    ]) {
-      const onThinkingChange = vi.fn();
-      const onFastModeChange = vi.fn();
-      const container = document.createElement("div");
-      render(
-        renderQuickSettings(createProps({ onThinkingChange, onFastModeChange, ...pending })),
-        container,
-      );
-
-      const thinkingButton = expectButtonByText(expectRowByTitle(container, "Thinking"), "High");
-      expect(
-        (thinkingButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
-      ).toBe(true);
-      thinkingButton.click();
-      expect(onThinkingChange).not.toHaveBeenCalled();
-      const fastButton = expectButtonByText(expectRowByTitle(container, "Fast mode"), "Fast");
-      expect(
-        (fastButton.closest("wa-radio-group") as HTMLElement & { disabled?: boolean }).disabled,
-      ).toBe(true);
-      fastButton.click();
-      expect(onFastModeChange).not.toHaveBeenCalled();
-    }
-  });
-
-  it("keeps auto as a first-class quick settings fast mode", () => {
-    const onFastModeChange = vi.fn();
-    const container = document.createElement("div");
-
-    render(renderQuickSettings(createProps({ fastMode: "auto", onFastModeChange })), container);
-
-    const row = expectRowByTitle(container, "Fast mode");
-    const buttons = Array.from(row.querySelectorAll<QuickControl>("wa-radio"));
-    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
-      "Auto",
-      "Fast",
-      "Standard",
-    ]);
-    expect(row.querySelector(".settings-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
-
-    selectRadio(expectButtonByText(row, "Auto"));
-    expect(onFastModeChange).not.toHaveBeenCalled();
-
-    selectRadio(expectButtonByText(row, "Standard"));
-
-    expect(onFastModeChange).toHaveBeenCalledWith(false);
   });
 });

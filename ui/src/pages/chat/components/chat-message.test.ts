@@ -3261,7 +3261,7 @@ describe("grouped chat rendering", () => {
     ).toContain("mediaTicket=ticket-fresh");
   });
 
-  it("retries unavailable local assistant media after the retry window", async () => {
+  it("automatically retries unavailable local assistant media after the retry window", async () => {
     vi.useFakeTimers();
     const source = `/tmp/openclaw/${crypto.randomUUID()}-retry.png`;
     const fetchMock = vi
@@ -3298,12 +3298,58 @@ describe("grouped chat rendering", () => {
     );
 
     await vi.advanceTimersByTimeAsync(5_001);
-    rerender();
     await flushAssistantAttachmentAvailabilityChecks();
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(
       expectElement(container, ".chat-message-image", HTMLImageElement).getAttribute("src"),
     ).toContain("mediaTicket=ticket-retry");
+  });
+
+  it("stops automatically retrying permanently unavailable local assistant media", async () => {
+    vi.useFakeTimers();
+    const source = `/tmp/openclaw/${crypto.randomUUID()}-permanently-unavailable.png`;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ available: false }),
+    }));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const container = document.createElement("div");
+    const rerender = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-local-media-permanently-unavailable",
+          role: "assistant",
+          content: `Local image\nMEDIA:${source}`,
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: rerender,
+        },
+      );
+
+    rerender();
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    await flushAssistantAttachmentAvailabilityChecks();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
+      "Unavailable",
+    );
+
+    rerender();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("preserves same-origin assistant attachments without local preview rewriting", () => {

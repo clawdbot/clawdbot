@@ -1,6 +1,6 @@
 // Covers TUI session action routing and backend calls.
 import { describe, expect, it, vi } from "vitest";
-import type { ChatLog } from "./components/chat-log.js";
+import { ChatLog } from "./components/chat-log.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createSessionActions } from "./tui-session-actions.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
@@ -44,6 +44,7 @@ describe("tui session actions", () => {
       addUser,
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
       updateAssistant: vi.fn(),
       startTool: vi.fn(),
@@ -87,6 +88,7 @@ describe("tui session actions", () => {
         clearPendingUsers: vi.fn(),
         clearAll: vi.fn(),
         reconcilePendingUsers: vi.fn().mockReturnValue([]),
+        restoreLiveUsers: vi.fn(),
         restorePendingUsers: vi.fn(),
       } as unknown as import("./components/chat-log.js").ChatLog,
       btw: createBtwPresenter(),
@@ -538,6 +540,259 @@ describe("tui session actions", () => {
     });
   });
 
+  it("preserves an authoritative user received while same-session history is loading", async () => {
+    const deferredHistory = createDeferred<unknown>();
+    const chatLog = new ChatLog();
+    const state = createBaseState({ currentSessionId: "session-main" });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn(() => deferredHistory.promise),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const loading = loadHistory();
+    chatLog.addLiveUser("Browser prompt received during refresh", {
+      messageId: "shared-user-1",
+      messageSeq: 1,
+      runId: "shared-run-1",
+    });
+    deferredHistory.resolve({
+      sessionId: "session-main",
+      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+      messages: [
+        {
+          role: "assistant",
+          content: "History completed",
+          __openclaw: { id: "shared-assistant-1", seq: 2 },
+        },
+      ],
+    });
+
+    await expect(loading).resolves.toMatchObject({ loaded: true });
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("Browser prompt received during refresh");
+    expect(rendered.match(/Browser prompt received during refresh/g)).toHaveLength(1);
+    expect(rendered).toContain("History completed");
+    expect(rendered.indexOf("Browser prompt received during refresh")).toBeLessThan(
+      rendered.indexOf("History completed"),
+    );
+  });
+
+  it("does not restore deleted history while recovering an in-flight authoritative live user", async () => {
+    const deferredHistory = createDeferred<unknown>();
+    const chatLog = new ChatLog();
+    chatLog.addUser("Deleted prompt from an earlier branch", {
+      messageId: "deleted-history-user",
+      messageSeq: 1,
+    });
+    const state = createBaseState({ currentSessionId: "session-main" });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn(() => deferredHistory.promise),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const loading = loadHistory();
+    chatLog.addLiveUser("Browser prompt received during refresh", {
+      messageId: "live-user",
+      messageSeq: 3,
+      runId: "live-run",
+    });
+    deferredHistory.resolve({
+      sessionId: "session-main",
+      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+      messages: [
+        {
+          role: "user",
+          content: "Current branch prompt",
+          __openclaw: { id: "current-history-user", seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: "Current branch reply",
+          __openclaw: { id: "current-assistant", seq: 4 },
+        },
+      ],
+    });
+
+    await expect(loading).resolves.toMatchObject({ loaded: true });
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("Deleted prompt from an earlier branch");
+    expect(rendered.match(/Browser prompt received during refresh/g)).toHaveLength(1);
+    expect(rendered.indexOf("Browser prompt received during refresh")).toBeLessThan(
+      rendered.indexOf("Current branch reply"),
+    );
+  });
+
+  it("deduplicates an authoritative live user already included in same-session history", async () => {
+    const deferredHistory = createDeferred<unknown>();
+    const chatLog = new ChatLog();
+    const state = createBaseState({ currentSessionId: "session-main" });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn(() => deferredHistory.promise),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const loading = loadHistory();
+    chatLog.addLiveUser("Persisted browser prompt", {
+      messageId: "shared-user-2",
+      messageSeq: 1,
+      runId: "shared-run-2",
+    });
+    deferredHistory.resolve({
+      sessionId: "session-main",
+      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+      messages: [
+        {
+          role: "user",
+          content: "Persisted browser prompt",
+          __openclaw: { id: "shared-user-2", seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: "Persisted reply",
+          __openclaw: { id: "shared-assistant-2", seq: 2 },
+        },
+      ],
+    });
+
+    await expect(loading).resolves.toMatchObject({ loaded: true });
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.match(/Persisted browser prompt/g)).toHaveLength(1);
+    expect(rendered).toContain("Persisted reply");
+  });
+
+  it("preserves new-session live users without leaking the previous session during a switch", async () => {
+    const deferredHistory = createDeferred<unknown>();
+    const chatLog = new ChatLog();
+    chatLog.addLiveUser("Private prompt from previous session", {
+      messageId: "previous-user",
+      runId: "previous-run",
+    });
+    const state = createBaseState({ currentSessionId: "session-main" });
+    const { setSession } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn(() => deferredHistory.promise),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const switching = setSession("agent:main:other");
+    chatLog.addLiveUser("Browser prompt in selected session", {
+      messageId: "other-user",
+      messageSeq: 1,
+      runId: "other-run",
+    });
+    deferredHistory.resolve({
+      sessionId: "session-other",
+      sessionInfo: { key: "agent:main:other", sessionId: "session-other" },
+      messages: [
+        {
+          role: "assistant",
+          content: "Other session reply",
+          __openclaw: { id: "other-assistant", seq: 2 },
+        },
+      ],
+    });
+
+    await switching;
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("Browser prompt in selected session");
+    expect(rendered.match(/Browser prompt in selected session/g)).toHaveLength(1);
+    expect(rendered).toContain("Other session reply");
+    expect(rendered.indexOf("Browser prompt in selected session")).toBeLessThan(
+      rendered.indexOf("Other session reply"),
+    );
+    expect(rendered).not.toContain("Private prompt from previous session");
+  });
+
+  it("keeps a recovered authoritative user ahead of its reply at full scrollback", async () => {
+    const deferredHistory = createDeferred<unknown>();
+    const chatLog = new ChatLog(20);
+    const state = createBaseState({ currentSessionId: "session-main" });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn(() => deferredHistory.promise),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const loading = loadHistory();
+    chatLog.addLiveUser("Browser prompt at the scrollback limit", {
+      messageId: "scrollback-user",
+      messageSeq: 19,
+      runId: "scrollback-run",
+    });
+    deferredHistory.resolve({
+      sessionId: "session-main",
+      sessionInfo: { key: "agent:main:main", sessionId: "session-main" },
+      messages: [
+        ...Array.from({ length: 18 }, (_, index) => ({
+          role: "user",
+          content: `Earlier history ${index + 1}`,
+          __openclaw: { id: `history-user-${index + 1}`, seq: index + 1 },
+        })),
+        {
+          role: "assistant",
+          content: "Reply at the scrollback limit",
+          __openclaw: { id: "scrollback-assistant", seq: 20 },
+        },
+      ],
+    });
+
+    await expect(loading).resolves.toMatchObject({ loaded: true });
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered.match(/Browser prompt at the scrollback limit/g)).toHaveLength(1);
+    expect(rendered.indexOf("Browser prompt at the scrollback limit")).toBeLessThan(
+      rendered.indexOf("Reply at the scrollback limit"),
+    );
+    expect(chatLog.children).toHaveLength(20);
+  });
+
+  it("discards old live users when a same-key history response rotates the session id", async () => {
+    const deferredHistory = createDeferred<unknown>();
+    const chatLog = new ChatLog();
+    const state = createBaseState({ currentSessionId: "session-before-reset" });
+    const { loadHistory } = createTestSessionActions({
+      client: {
+        listSessions: vi.fn(),
+        loadHistory: vi.fn(() => deferredHistory.promise),
+      } as unknown as TuiBackend,
+      chatLog,
+      state,
+    });
+
+    const loading = loadHistory();
+    chatLog.addLiveUser("Private prompt from before reset", {
+      messageId: "before-reset-user",
+      runId: "before-reset-run",
+    });
+    deferredHistory.resolve({
+      sessionId: "session-after-reset",
+      sessionInfo: { key: "agent:main:main", sessionId: "session-after-reset" },
+      messages: [{ role: "assistant", content: "Fresh session reply" }],
+    });
+
+    await expect(loading).resolves.toMatchObject({ loaded: true });
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("Fresh session reply");
+    expect(rendered).not.toContain("Private prompt from before reset");
+  });
+
   it("accepts older session snapshots after switching session keys", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
@@ -693,6 +948,7 @@ describe("tui session actions", () => {
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
@@ -728,6 +984,7 @@ describe("tui session actions", () => {
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
@@ -760,6 +1017,7 @@ describe("tui session actions", () => {
       addUser: vi.fn(),
       finalizeAssistant: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
       updateAssistant,
       startTool: vi.fn(),
@@ -1723,6 +1981,7 @@ describe("tui session actions", () => {
       clearAll: vi.fn(),
       clearPendingUsers: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
     };
 
@@ -1736,7 +1995,11 @@ describe("tui session actions", () => {
 
     const result = await runLoadHistory();
 
-    expect(chatLog.clearAll).toHaveBeenCalledWith({ preservePendingUsers: true });
+    expect(chatLog.clearAll).toHaveBeenCalledWith({
+      preservePendingUsers: true,
+      preserveLiveUsers: true,
+    });
+    expect(chatLog.restoreLiveUsers).toHaveBeenCalledTimes(1);
     expect(chatLog.reconcilePendingUsers).toHaveBeenCalledWith([
       { text: "persisted", timestamp: 2_000 },
     ]);
@@ -1755,6 +2018,7 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       clearAll: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue(["run-pending"]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
     };
     const state = createBaseState({
@@ -1780,6 +2044,7 @@ describe("tui session actions", () => {
       finalizeAssistant: vi.fn(),
       clearAll: vi.fn(),
       reconcilePendingUsers: vi.fn().mockReturnValue([]),
+      restoreLiveUsers: vi.fn(),
       restorePendingUsers: vi.fn(),
     };
     const state = createBaseState({

@@ -7,6 +7,7 @@ import {
   createChatFlowE2eSuite,
   expectDefined,
   installMockGateway,
+  pauseVirtualClock,
   requireRecord,
   sidebarSessionOrder,
   waitForChatScrollIdle,
@@ -839,20 +840,29 @@ suite.define(() => {
       }));
       expect(layout.scrollWidth, JSON.stringify(layout)).toBeGreaterThan(layout.clientWidth);
 
+      // Freeze the clock so the 500ms hover-intent delay elapses only via
+      // runFor; a ticking clock let slow runners start the marquee before the
+      // "not yet scrolling" asserts below.
+      await pauseVirtualClock(page);
       await recentRow.dispatchEvent("mouseenter");
       await page.clock.runFor(250);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseleave");
+      // 250 + 300 exceeds the hover delay: only the leave-cancel keeps it off.
       await page.clock.runFor(300);
       expect(await recentLabel.evaluate((label) => label.classList.value)).not.toContain(
         "hover-marquee--scrolling",
       );
       await recentRow.dispatchEvent("mouseenter");
+      await page.clock.runFor(500);
       await expect
         .poll(() => recentLabel.evaluate((label) => label.classList.value), { timeout: 1_500 })
         .toContain("hover-marquee--scrolling");
+      // Resume real time: the snap-back below is a compositor-driven CSS
+      // transition, not a fake-timer callback.
+      await page.clock.resume();
       await recentRow.dispatchEvent("mouseleave");
       await expect
         .poll(

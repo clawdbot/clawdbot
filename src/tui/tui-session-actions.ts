@@ -18,7 +18,10 @@ import {
   formatTuiErrorMessage,
   isCommandMessage,
 } from "./tui-formatters.js";
-import { readTuiSessionUserMessage } from "./tui-session-events.js";
+import {
+  readTuiSessionUserMessage,
+  readTuiTranscriptMessageSequence,
+} from "./tui-session-events.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -484,6 +487,7 @@ export function createSessionActions(context: SessionActionContext) {
     // latest request may render, or a slow reload can replace a newer selection.
     const generation = ++historyLoadGeneration;
     const selection = captureSessionSelection();
+    const previousSessionId = state.currentSessionId;
     const isCurrentLoad = () =>
       generation === historyLoadGeneration && isCurrentSessionSelection(selection);
     try {
@@ -544,7 +548,13 @@ export function createSessionActions(context: SessionActionContext) {
       }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
       const historyUsers: Array<{ text: string; timestamp?: number | null }> = [];
-      chatLog.clearAll({ preservePendingUsers: true });
+      // An authoritative live prompt can arrive while history is in flight.
+      // Preserve it only while this response still owns the same session generation.
+      chatLog.clearAll({
+        preservePendingUsers: true,
+        preserveLiveUsers:
+          previousSessionId === null || previousSessionId === state.currentSessionId,
+      });
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {
@@ -552,6 +562,10 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         const message = entry as Record<string, unknown>;
+        const messageSeq = readTuiTranscriptMessageSequence(message);
+        if (messageSeq !== undefined) {
+          chatLog.restoreLiveUsers(messageSeq);
+        }
         if (isCommandMessage(message)) {
           const text = extractTextFromMessage(message);
           if (text) {
@@ -568,7 +582,10 @@ export function createSessionActions(context: SessionActionContext) {
             });
             const liveUserMessage = readTuiSessionUserMessage({ message });
             if (liveUserMessage) {
-              chatLog.addUser(text, { messageId: liveUserMessage.messageId });
+              chatLog.addUser(text, {
+                messageId: liveUserMessage.messageId,
+                ...(messageSeq !== undefined ? { messageSeq } : {}),
+              });
             } else {
               chatLog.addUser(text);
             }
@@ -605,6 +622,7 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
+      chatLog.restoreLiveUsers();
       submit.reconcilePendingSubmitHistory(state, chatLog.reconcilePendingUsers(historyUsers));
       chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway
@@ -645,9 +663,11 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const setSession = async (rawKey: string) => {
+    const previousSelection = captureSessionSelection();
     const nextKey = resolveSessionKey(rawKey);
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
+    const selectionChanged = !isCurrentSessionSelection(previousSelection);
     state.activeChatRunId = null;
     submit.clearPendingSubmit(state);
     setActivityStatus("idle");
@@ -656,6 +676,10 @@ export function createSessionActions(context: SessionActionContext) {
     // so refresh data for the newly selected session isn't rejected as stale.
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
+    if (selectionChanged) {
+      // Live prompt identities belong to the old selection, not its pending successor.
+      chatLog.clearAll();
+    }
     chatLog.clearPendingUsers();
     clearLocalRunIds?.();
     btw.clear();

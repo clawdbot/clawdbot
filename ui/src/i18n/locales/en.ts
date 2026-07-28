@@ -1135,7 +1135,7 @@ export const en: TranslationMap = {
     },
   },
   // Historical namespace from the pre-restructure "quick settings" page; its
-  // keys now serve General, Privacy & Security, Appearance, and Profile.
+  // keys now serve Models, General, Privacy & Security, Appearance, and Profile.
   // Renaming would force retranslation of every key, so the name stays.
   quickSettings: {
     language: "Language",
@@ -1171,6 +1171,8 @@ export const en: TranslationMap = {
       lobsterdexSeen: "{seen}/{total} visited",
       lobsterdexFirstVisited: "{name} · first visited {date}",
       lobsterdexCardFirstVisited: "First visited {date}",
+      lobsterdexCardShinySeen: "✦ Shiny spotted {date}",
+      lobsterdexCardCopyLink: "Copy link",
       lobsterdexOpen: "Open Lobsterdex",
     },
     security: {
@@ -1768,7 +1770,7 @@ export const en: TranslationMap = {
     },
   },
   routeTitles: {
-    modelProviders: "Model Providers",
+    modelProviders: "Models",
     notifications: "Notifications",
     advanced: "Advanced",
   },
@@ -1831,7 +1833,7 @@ export const en: TranslationMap = {
     chat: "Gateway chat for quick interventions.",
     dashboards: "Threads that open on their dashboard face.",
     custodian: "System setup and care.",
-    config: "Model defaults and language.",
+    config: "Language and shortcuts to core settings.",
     profile: "Your agent's stats, streaks, and life in the reef.",
     communications: "Messages, talk, and voice settings.",
     appearance: "Theme, UI, and setup wizard settings.",
@@ -1842,9 +1844,9 @@ export const en: TranslationMap = {
     infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
     labs: "Experimental agent and tool capabilities.",
     about: "Control UI and connected Gateway build identity.",
-    aiAgents: "Global agent defaults: models, skills, tools, memory, session.",
+    aiAgents: "Global agent defaults: skills, tools, and session.",
     modelSetup: "Connect a verified AI model",
-    modelProviders: "Configured providers with plan, quota, and cost.",
+    modelProviders: "Default models, behavior, provider access, usage, and cost.",
     memoryImport: "Bring Codex and Claude Code memory into an agent workspace.",
     notifications: "Browser push notifications from your gateway.",
     security: "Gateway auth, exec policy, tool profile, and approvals.",

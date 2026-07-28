@@ -58,6 +58,10 @@ class CronPage extends OpenClawLightDomElement {
 
   private modelSuggestionsState: CronState | null = null;
   private gatewaySource?: ApplicationContext["gateway"];
+  private get canManageCron(): boolean {
+    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+  }
+
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.agents,
@@ -254,10 +258,6 @@ class CronPage extends OpenClawLightDomElement {
     }
   }
 
-  private get canManageCron() {
-    return hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null);
-  }
-
   private runCronAdminTask<T>(task: (cronState: CronState) => Promise<T>): void {
     // Scope can change between render and click after a reconnect. Recheck at
     // dispatch so a stale control cannot send an admin-only Gateway request.
@@ -268,6 +268,9 @@ class CronPage extends OpenClawLightDomElement {
   }
 
   private patchForm(patch: Partial<CronFormState>) {
+    if (!this.canManageCron) {
+      return;
+    }
     this.cron.cronForm = normalizeCronFormState({ ...this.cron.cronForm, ...patch });
     this.cron.cronFieldErrors = validateCronForm(this.cron.cronForm);
     this.requestCronUpdate();

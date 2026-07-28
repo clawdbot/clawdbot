@@ -20,19 +20,28 @@ export type LobsterPetPaletteId =
   | "oilslick"
   | "aurora"
   | "nebula"
+  | "banana"
   | "mood"
+  | "bee"
+  | "rubberduck"
   | "clawtron"
   | "selene"
   | "geode"
   | "ghost"
   | "glass"
   | "split"
+  | "sourdough"
+  | "zombie"
+  | "plush"
   | "cottoncandy"
+  | "disco"
   | "pixel"
   | "blueprint"
   | "phosphor"
   | "heisenbug"
-  | "retro";
+  | "invisible"
+  | "retro"
+  | "goldenretro";
 
 // Pass-through ledge visitors. Strangers are other lobsters; everyone else
 // is, at best, lobster-adjacent. None of them count for the Lobsterdex.

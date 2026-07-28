@@ -6,7 +6,7 @@ import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
@@ -28,7 +28,6 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
-import { resolveModelPrimary } from "../../lib/agents/display.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -84,12 +83,23 @@ type ConfigPageSetting =
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
+// Scroll targets relocated by the settings restructure, keyed by
+// "<oldPage>:<targetId>". Same rationale as MOVED_SECTION_ROUTES: generated
+// settings-search links predating the move must land on the new home.
+const MOVED_TARGET_ROUTES: Record<string, { routeId: RouteId; hash: string }> = {
+  "config:settings-general-model": {
+    routeId: "model-providers",
+    hash: "#settings-model-behavior",
+  },
+};
+
 const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
+  "ai-agents:models": { routeId: "model-providers", keepSection: false },
 };
 
 const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
@@ -433,6 +443,15 @@ export class ConfigPage extends OpenClawLightDomElement {
           search: movedRoute.keepSection ? `?section=${encodeURIComponent(rawSection)}` : "",
           hash: globalThis.location?.hash ?? "",
         });
+        return;
+      }
+    }
+    const rawTargetId =
+      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    if (rawTargetId) {
+      const movedTarget = MOVED_TARGET_ROUTES[`${this.pageId}:${rawTargetId}`];
+      if (movedTarget) {
+        this.context?.navigate(movedTarget.routeId, { search: "", hash: movedTarget.hash });
         return;
       }
     }
@@ -1076,26 +1095,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     return renderConfig(props);
   }
 
-  private renderQuickConfig(configObject: Record<string, unknown>) {
+  private renderQuickConfig() {
     const runtimeConfig = this.context.runtimeConfig;
-    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
-    const thinkingLevel =
-      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const fastMode = agentsDefaults?.fastModeDefault;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
       onLocaleChange: (locale) => this.setLocale(locale),
-      currentModel: model,
-      thinkingLevel,
-      fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
-      onModelChange: () => {
-        this.selections = {
-          ...this.selections,
-          "ai-agents": { activeSection: "models", activeSubsection: null },
-        };
-        this.navigate("ai-agents");
-      },
+      onModelsClick: () => this.navigate("model-providers"),
       connected: runtimeConfig.state.connected,
       configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
@@ -1108,10 +1113,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onApplyConfig: () => void runtimeConfig.apply(),
       onRetrySaveConfig: () => void runtimeConfig.save(),
       onDiscardConfig: () => void runtimeConfig.discardDraft(),
-      onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
-      onFastModeChange: (mode: FastMode) =>
-        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
     });
   }
 
@@ -1120,9 +1121,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const configObject =
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body =
-      this.pageId === "config"
-        ? this.renderQuickConfig(configObject)
-        : this.renderAdvancedConfig(configObject);
+      this.pageId === "config" ? this.renderQuickConfig() : this.renderAdvancedConfig(configObject);
     return html`
       <section class="content-header">
         <div>

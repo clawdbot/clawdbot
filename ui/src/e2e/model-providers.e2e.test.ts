@@ -1,4 +1,4 @@
-// Control UI tests cover the Model Providers settings page against a mocked Gateway.
+// Control UI tests cover the Models settings page against a mocked Gateway.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
@@ -39,7 +39,7 @@ function providerConfig(value: string): { apiKey: string } {
   return Object.fromEntries([["apiKey", value]]) as { apiKey: string };
 }
 
-describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
+describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
   beforeAll(async () => {
     if (!chromiumAvailable) {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
@@ -148,7 +148,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
     try {
       const response = await page.goto(`${server.baseUrl}settings/model-providers`);
       expect(response?.status()).toBe(200);
-      await page.locator(".page-title", { hasText: "Model Providers" }).first().waitFor();
+      await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
 
       const claudeCard = page.locator(".model-providers__row", { hasText: "Claude" });
       await claudeCard.waitFor();
@@ -217,7 +217,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
 
     try {
       await page.goto(`${server.baseUrl}settings/model-providers`);
-      await page.locator(".page-title", { hasText: "Model Providers" }).first().waitFor();
+      await page.locator(".page-title", { hasText: "Models" }).first().waitFor();
 
       for (const { id, expected } of cases) {
         const icon = page.locator(`[data-provider-id="${id}"] .provider-brand-icon--fallback`);

@@ -795,7 +795,12 @@ describe("session.message websocket events", () => {
         expect(subscription.ok).toBe(true);
       }
 
-      for (const [index, text] of ["Sent from the web.", "Sent from the TUI."].entries()) {
+      const sharedMessages = [
+        "Sent from the web.",
+        "Sent from the TUI.",
+        ...Array.from({ length: 30 }, (_, index) => `Shared burst message ${index + 1}.`),
+      ];
+      for (const [index, text] of sharedMessages.entries()) {
         const messageId = `shared-turn-${index + 1}`;
         const deliveries = [webWs, tuiWs].map((ws) =>
           onceMessage(
@@ -846,10 +851,12 @@ describe("session.message websocket events", () => {
       await connectOk(reconnectedTuiWs, { scopes: ["operator.read"] });
       const history = await rpcReq(reconnectedTuiWs, "chat.history", { sessionKey });
       expect(history.ok).toBe(true);
-      expect((history.payload as { messages?: unknown[] }).messages).toMatchObject([
-        { content: [{ type: "text", text: "Sent from the web." }], role: "user" },
-        { content: [{ type: "text", text: "Sent from the TUI." }], role: "user" },
-      ]);
+      expect((history.payload as { messages?: unknown[] }).messages).toMatchObject(
+        sharedMessages.map((text) => ({
+          content: [{ type: "text", text }],
+          role: "user",
+        })),
+      );
     } finally {
       webWs.close();
       tuiWs.close();

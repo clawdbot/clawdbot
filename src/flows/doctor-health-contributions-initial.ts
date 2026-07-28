@@ -5,6 +5,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   runChannelIngressDeadLettersHealth,
+  runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
@@ -112,6 +113,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy state",
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:agent-memory-schema",
+      label: "Agent memory schema",
+      run: runAgentMemorySchemaHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
