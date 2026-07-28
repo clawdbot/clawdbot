@@ -48,10 +48,10 @@ export class GatewayBoardProvider implements BoardProvider {
     readonly sessionKey: string,
     client: BoardGatewayClient,
     connected = true,
-    public canPinWidgets = true,
-    public canPinMcpApps = false,
-    public canMutate = true,
-    public canGrant = true,
+    public readonly canPinWidgets = true,
+    public readonly canPinMcpApps = false,
+    public readonly canMutate = true,
+    public readonly canGrant = true,
   ) {
     this.snapshotSignal = new ValueSignal(emptyBoardSnapshot(sessionKey));
     this.snapshot$ = this.snapshotSignal;
@@ -64,23 +64,12 @@ export class GatewayBoardProvider implements BoardProvider {
     }
   }
 
-  attachClient(
-    client: BoardGatewayClient,
-    connected = true,
-    canPinWidgets = true,
-    canPinMcpApps = false,
-    canMutate = true,
-    canGrant = true,
-  ): void {
+  attachClient(client: BoardGatewayClient, connected = true): void {
     if (this.disposed) {
       return;
     }
     const connectionActivated = connected && !this.connected;
     this.connected = connected;
-    this.canPinWidgets = canPinWidgets;
-    this.canPinMcpApps = canPinMcpApps;
-    this.canMutate = canMutate;
-    this.canGrant = canGrant;
     if (client === this.client) {
       if (connectionActivated) {
         void this.activate();
