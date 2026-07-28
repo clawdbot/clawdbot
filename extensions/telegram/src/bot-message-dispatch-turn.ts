@@ -177,6 +177,8 @@ export async function runTelegramDispatchTurn(params: {
             queuedDeliveryCorrelations: isRoomEvent
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
+            // Recovery must use the canonical runId emitted by the native agent-run lifecycle;
+            // do not derive or regenerate ownership identity inside the Telegram host.
             onAgentRunStart: recovery ? (runId) => recovery.onAgentRunStart(runId) : undefined,
             suppressTyping: isRoomEvent,
             onPartialReply:
