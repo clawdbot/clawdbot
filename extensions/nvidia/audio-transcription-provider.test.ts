@@ -18,7 +18,6 @@ describe("NVIDIA audio transcription provider", () => {
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
-        providerConfig: {},
       }),
     ).toBeUndefined();
 
@@ -27,6 +26,7 @@ describe("NVIDIA audio transcription provider", () => {
         provider: "nvidia",
         providerConfig: {
           baseUrl: "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com/v1",
+          models: [],
         },
       }),
     ).toBeUndefined();
@@ -36,14 +36,13 @@ describe("NVIDIA audio transcription provider", () => {
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
-        providerConfig: { baseUrl: "http://127.0.0.1:9000/v1" },
+        providerConfig: { baseUrl: "http://127.0.0.1:9000/v1", models: [] },
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
 
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
-        providerConfig: {},
         effectiveBaseUrl: "http://127.0.0.1:9001/v1",
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
@@ -52,14 +51,13 @@ describe("NVIDIA audio transcription provider", () => {
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
-        providerConfig: {},
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
 
     expect(
       nvidiaMediaUnderstandingProvider.resolveAuth?.({
         provider: "nvidia",
-        providerConfig: { baseUrl: "https://integrate.api.nvidia.com/v1" },
+        providerConfig: { baseUrl: "https://integrate.api.nvidia.com/v1", models: [] },
       }),
     ).toEqual({ kind: "none", source: "nvidia-self-hosted" });
   });

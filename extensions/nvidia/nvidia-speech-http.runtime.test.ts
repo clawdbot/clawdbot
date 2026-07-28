@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   postMultipartRequest: vi.fn(),
   postTranscriptionRequest: vi.fn(),
-  transcodeAudioBufferToOpus: vi.fn(async () => Buffer.from("transcoded-opus")),
+  transcodeAudioBufferToOpus: vi.fn(async (_params: { timeoutMs: number }) =>
+    Buffer.from("transcoded-opus"),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", () => ({

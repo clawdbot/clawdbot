@@ -6,8 +6,8 @@ import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/s
 
 export const NVIDIA_ASR_BASE_URL =
   "https://1598d209-5e27-4d3c-8079-4751568b1081.invocation.api.nvcf.nvidia.com";
-export const NVIDIA_CHAT_BASE_URL = "https://integrate.api.nvidia.com/v1";
-export const NVIDIA_TTS_BASE_URL =
+const NVIDIA_CHAT_BASE_URL = "https://integrate.api.nvidia.com/v1";
+const NVIDIA_TTS_BASE_URL =
   "https://877104f7-e885-42b9-8de8-f6e4c6303969.invocation.api.nvcf.nvidia.com";
 
 export const NVIDIA_DEFAULT_ASR_MODEL = "nvidia/parakeet-ctc-1.1b-asr";
