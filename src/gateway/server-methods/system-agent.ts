@@ -67,6 +67,7 @@ const DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT = 100;
 const PROVIDER_AUTH_SESSION_TIMEOUT_MS = 25 * 60 * 1000;
 const PROVIDER_PREPARE_SESSION_TIMEOUT_MS = 2 * 60 * 60 * 1000;
 const SYSTEM_AGENT_GATEWAY_EXECUTION_KEY = "gateway";
+const SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN = /^[a-z0-9/_-]{1,64}$/iu;
 const systemAgentGatewayExecutionQueue = new KeyedAsyncQueue();
 const systemAgentSessionQueues = new WeakMap<
   Map<string, SystemAgentChatSession>,
@@ -82,6 +83,36 @@ function getSystemAgentSessionQueue(
     systemAgentSessionQueues.set(sessions, queue);
   }
   return queue;
+}
+
+function sanitizeSystemAgentChatParams(params: unknown): unknown {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return params;
+  }
+  const record = params as Record<string, unknown>;
+  const context = record.context;
+  if (context === undefined) {
+    return params;
+  }
+  if (
+    record.delegation !== undefined ||
+    !context ||
+    typeof context !== "object" ||
+    Array.isArray(context)
+  ) {
+    const { context: _droppedContext, ...rest } = record;
+    return rest;
+  }
+  const contextRecord = context as Record<string, unknown>;
+  const page = typeof contextRecord.page === "string" ? contextRecord.page.trim() : "";
+  if (!SYSTEM_AGENT_UI_CONTEXT_PAGE_PATTERN.test(page)) {
+    const { context: _droppedContext, ...rest } = record;
+    return rest;
+  }
+  if (page === contextRecord.page) {
+    return params;
+  }
+  return { ...record, context: { ...contextRecord, page } };
 }
 
 function acknowledgeDeliveredSystemAgentWelcome(session: SystemAgentChatSession): void {
@@ -491,7 +522,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "openclaw.chat": async ({ params, respond, client, context }) => {
+  "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {
+    const params = sanitizeSystemAgentChatParams(rawParams);
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
@@ -660,7 +692,12 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
-          reply = await session.engine.handle(params.message);
+          reply = await session.engine.handle(
+            params.message,
+            params.delegation === undefined && params.context
+              ? { uiContext: params.context }
+              : undefined,
+          );
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
           if (!isSystemAgentInferenceUnavailableError(error)) {

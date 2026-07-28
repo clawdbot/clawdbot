@@ -41,6 +41,7 @@ import {
   retireCustodianQuestions,
   type CustodianMessage,
 } from "./transcript.ts";
+import { currentCustodianUiContext } from "./ui-context.ts";
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SYSTEM_CHANGE_PAGE_SIZE = 50;
@@ -521,10 +522,12 @@ export class CustodianPage extends OpenClawLightDomElement {
       },
     ];
     this.input = "";
+    const uiContext = currentCustodianUiContext();
     const reply = this.requestReply(client, {
       sessionId: this.sessionId,
       ...welcomeVariant(sessionVariant(this.onboarding, this.newAgentIntent)),
       message,
+      ...(uiContext ? { context: uiContext } : {}),
     });
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;

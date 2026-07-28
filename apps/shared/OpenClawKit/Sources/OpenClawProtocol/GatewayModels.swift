@@ -9133,6 +9133,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     public let message: String?
     public let welcomevariant: AnyCodable?
     public let reset: Bool?
+    public let context: [String: AnyCodable]?
     public let delegation: [String: AnyCodable]?
 
     public init(
@@ -9140,12 +9141,14 @@ public struct SystemAgentChatParams: Codable, Sendable {
         message: String? = nil,
         welcomevariant: AnyCodable? = nil,
         reset: Bool? = nil,
+        context: [String: AnyCodable]? = nil,
         delegation: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.message = message
         self.welcomevariant = welcomevariant
         self.reset = reset
+        self.context = context
         self.delegation = delegation
     }
 
@@ -9154,6 +9157,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
         case message
         case welcomevariant = "welcomeVariant"
         case reset
+        case context
         case delegation
     }
 }
