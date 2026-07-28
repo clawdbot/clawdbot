@@ -3,7 +3,6 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { USAGE_PAYLOAD_TTL_MS } from "../pages/usage/refresh-policy.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -12,6 +11,9 @@ import {
   type ControlUiE2eServer,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+
+// Mirrors the module-private default usage TTL asserted by this flow.
+const USAGE_PAYLOAD_TTL_MS = 5 * 60_000;
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
