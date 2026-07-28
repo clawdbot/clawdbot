@@ -68,7 +68,10 @@ function findProviderOption(
 
 /**
  * The provider whose models/voices the pickers offer: the explicitly
- * configured one, else the catalog's credential-based auto-selection.
+ * configured one, else the catalog's credential-based auto-selection. An
+ * explicit provider the catalog cannot resolve returns no option — falling
+ * back to the active provider would offer another provider's models and let a
+ * "Provider default" reset clear that unrelated provider's entry.
  */
 export function selectedTalkProviderOption(
   catalog: TalkCatalogState,
@@ -77,10 +80,10 @@ export function selectedTalkProviderOption(
   if (catalog.kind !== "ready") {
     return undefined;
   }
-  return (
-    findProviderOption(catalog.providers, selection.provider) ??
-    findProviderOption(catalog.providers, catalog.activeProvider)
-  );
+  if (selection.provider) {
+    return findProviderOption(catalog.providers, selection.provider);
+  }
+  return findProviderOption(catalog.providers, catalog.activeProvider);
 }
 
 /**
