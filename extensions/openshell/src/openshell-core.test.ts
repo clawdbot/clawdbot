@@ -222,6 +222,29 @@ describe("openshell backend manager", () => {
   afterAll(uninstallOpenShellBackendMocks);
   beforeEach(resetOpenShellBackendMocks);
 
+  it("builds deterministic OpenShell-compatible sandbox names", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
+    const createBackend = async (scopeKey: string) =>
+      await factory({
+        sessionKey: `${scopeKey}:turn`,
+        scopeKey,
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: createOpenShellBackendSandboxConfig(),
+      });
+
+    const first = await createBackend("agent:main");
+    const repeated = await createBackend("agent:main");
+    const other = await createBackend("agent:other");
+
+    expect(first.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
+    expect(first.runtimeId).toHaveLength(19);
+    expect(repeated.runtimeId).toBe(first.runtimeId);
+    expect(other.runtimeId).not.toBe(first.runtimeId);
+  });
+
   it.runIf(process.platform !== "win32")(
     "clears the materialized skills directory through the remote backend boundary",
     async () => {
