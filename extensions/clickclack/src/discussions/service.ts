@@ -32,13 +32,13 @@ import {
 } from "./eligibility.js";
 import { formatDiscussionHistory } from "./history-format.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
-import { DiscussionReconcileScheduler } from "./reconcile-scheduler.js";
 import {
   discussionCredentialFingerprint,
   fallbackDiscussionLabel,
   resolveDiscussionLabel,
   truncateDiscussionDisplayTitle,
 } from "./naming.js";
+import { DiscussionReconcileScheduler } from "./reconcile-scheduler.js";
 import {
   clearClickClackDiscussionChannelRevoked,
   isClickClackDiscussionChannelRevoked,
