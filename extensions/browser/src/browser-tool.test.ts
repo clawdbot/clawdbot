@@ -3522,4 +3522,69 @@ describe("browser tool upload inbound media fallback (#83544)", () => {
     ).rejects.toThrow("path outside allowed directories");
   });
 });
+
+describe("browser tool upload on remote browser nodes (#115251)", () => {
+  beforeEach(resetBrowserToolMocks);
+  afterEach(() => vi.restoreAllMocks());
+
+  it("forwards requested upload paths without gateway-local path resolution", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      ok: true,
+      payload: { result: { ok: true, targetId: "t1" }, files: [] },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-upload-node-1", {
+      action: "upload",
+      target: "node",
+      paths: ["/home/node-user/uploads/report.pdf"],
+      ref: "file-input-1",
+    });
+
+    // The node-side /hooks/file-chooser route resolves paths against the
+    // node's own filesystem; resolving on the Gateway would pin paths to a
+    // host the browser node cannot see.
+    expect(pathValidationMocks.resolveExistingUploadPaths).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/hooks/file-chooser",
+          body: expect.objectContaining({
+            paths: ["/home/node-user/uploads/report.pdf"],
+            ref: "file-input-1",
+          }),
+        }),
+      }),
+      expect.objectContaining({ scopes: ["operator.admin"] }),
+    );
+  });
+
+  it("does not reject node-local files missing from the Gateway filesystem", async () => {
+    mockSingleBrowserProxyNode();
+    pathValidationMocks.resolveExistingUploadPaths.mockResolvedValue({
+      ok: false as const,
+      error: "file does not exist in uploads directory",
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      ok: true,
+      payload: { result: { ok: true, targetId: "t1" }, files: [] },
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-upload-node-2", {
+      action: "upload",
+      target: "node",
+      paths: ["media://inbound/node-only-file.pdf"],
+      ref: "file-input-1",
+    });
+
+    expect(pathValidationMocks.resolveExistingUploadPaths).not.toHaveBeenCalled();
+    expect(result?.content[0]).toHaveProperty("type", "text");
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

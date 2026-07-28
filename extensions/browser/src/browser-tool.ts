@@ -977,11 +977,21 @@ export function createBrowserTool(opts?: {
           if (paths.length === 0) {
             throw new Error("paths required");
           }
-          const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
-          if (!resolvedResult.ok) {
-            throw new Error(resolvedResult.error);
+          // When a remote browser node owns the session, upload paths must
+          // resolve against the node's filesystem, not the Gateway's. The
+          // node-side /hooks/file-chooser route re-resolves them locally, so
+          // forward the requested paths as-is. Resolving here would pin them
+          // to Gateway-local paths the node cannot see (#115251). The same
+          // applies when the proxy falls back to the host control server,
+          // which also resolves paths at the route boundary.
+          let normalizedPaths = paths;
+          if (!proxyRequest) {
+            const resolvedResult = await resolveExistingUploadPaths({ requestedPaths: paths });
+            if (!resolvedResult.ok) {
+              throw new Error(resolvedResult.error);
+            }
+            normalizedPaths = resolvedResult.paths;
           }
-          const normalizedPaths = resolvedResult.paths;
           const ref = readStringParam(params, "ref");
           const inputRef = readStringParam(params, "inputRef");
           const element = readStringParam(params, "element");
