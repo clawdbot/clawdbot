@@ -295,6 +295,54 @@ describe("GPT-Live offer broker", () => {
     }
   });
 
+  it.each(["error", "close"] as const)(
+    "fails safely when the sideband emits %s immediately after opening",
+    async (terminalEvent) => {
+      const { realtime, sockets, logger } = createBroker({
+        socketFactory: () => {
+          const socket = new FakeSocket("manual");
+          queueMicrotask(() => {
+            socket.readyState = 1;
+            socket.emit("open");
+            if (terminalEvent === "error") {
+              socket.emit("error", new Error("post-open failure"));
+            } else {
+              socket.readyState = 3;
+              socket.emit("close");
+            }
+          });
+          return socket;
+        },
+      });
+      try {
+        const reservation = await realtime.broker.createBrowserSession(
+          {
+            providerConfig: {},
+            model: "gpt-live-1-codex",
+            runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+          },
+          { type: "api-key", token: "platform-key" },
+        );
+        if (reservation.transport !== "webrtc") {
+          throw new Error("Expected WebRTC reservation");
+        }
+        const response = createResponseHarness();
+        await realtime.handler(createRequest({ token: reservation.clientSecret }), response.res);
+
+        expect(response.res.statusCode).toBe(502);
+        expect(response.readBody()).toContain("sideband failed during startup");
+        expect(sockets).toHaveLength(1);
+        if (terminalEvent === "error") {
+          expect(logger.warn).toHaveBeenCalledWith(
+            "OpenAI GPT-Live sideband socket failed: post-open failure",
+          );
+        }
+      } finally {
+        await realtime.cleanup();
+      }
+    },
+  );
+
   it("keeps nonfatal error frames alive but closes on fatal auth errors", async () => {
     const { realtime, sockets, logger } = createBroker();
     try {

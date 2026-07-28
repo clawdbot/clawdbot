@@ -38,19 +38,29 @@ export type OpenAIQuicksilverSocketFactory = (
 ) => OpenAIQuicksilverSocket;
 
 type OpenAIQuicksilverBufferedFrame = { data: RawData; isBinary: boolean };
+type OpenAIQuicksilverTerminalEvent =
+  | { kind: "error"; error: Error }
+  | { kind: "close" };
 
 type OpenAIQuicksilverConnectedSideband = {
   socket: OpenAIQuicksilverSocket;
   bufferedFrames: OpenAIQuicksilverBufferedFrame[];
-  detachBuffer: () => void;
+  detachBuffer: () => OpenAIQuicksilverTerminalEvent | undefined;
 };
 
 function waitForSocketOpen(params: {
   socket: OpenAIQuicksilverSocket;
   signal: AbortSignal;
-}): Promise<void> {
+}): Promise<{ detachTerminalListeners: () => OpenAIQuicksilverTerminalEvent | undefined }> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let opened = false;
+    let terminalEvent: OpenAIQuicksilverTerminalEvent | undefined;
+    const detachTerminalListeners = () => {
+      params.socket.off("error", onError);
+      params.socket.off("close", onClose);
+      return terminalEvent;
+    };
     const finish = (error?: Error) => {
       if (settled) {
         return;
@@ -59,17 +69,31 @@ function waitForSocketOpen(params: {
       clearTimeout(timeout);
       params.signal.removeEventListener("abort", onAbort);
       params.socket.off("open", onOpen);
-      params.socket.off("error", onError);
-      params.socket.off("close", onClose);
       if (error) {
+        detachTerminalListeners();
         reject(error);
       } else {
-        resolve();
+        resolve({ detachTerminalListeners });
       }
     };
-    const onOpen = () => finish();
-    const onError = (error: Error) => finish(error);
-    const onClose = () => finish(new Error("GPT-Live sideband closed during startup"));
+    const onOpen = () => {
+      opened = true;
+      finish();
+    };
+    const onError = (error: Error) => {
+      if (opened) {
+        terminalEvent ??= { kind: "error", error };
+        return;
+      }
+      finish(error);
+    };
+    const onClose = () => {
+      if (opened) {
+        terminalEvent ??= { kind: "close" };
+        return;
+      }
+      finish(new Error("GPT-Live sideband closed during startup"));
+    };
     const onAbort = () =>
       finish(
         params.signal.reason instanceof Error
@@ -82,8 +106,8 @@ function waitForSocketOpen(params: {
     );
     timeout.unref?.();
     params.socket.once("open", onOpen);
-    params.socket.once("error", onError);
-    params.socket.once("close", onClose);
+    params.socket.on("error", onError);
+    params.socket.on("close", onClose);
     params.signal.addEventListener("abort", onAbort, { once: true });
     if (params.signal.aborted) {
       onAbort();
@@ -146,11 +170,14 @@ export async function connectOpenAIQuicksilverSideband(params: {
     };
     socket.on("message", bufferFrame);
     try {
-      await waitForSocketOpen({ socket, signal: params.signal });
+      const openHandoff = await waitForSocketOpen({ socket, signal: params.signal });
       return {
         socket,
         bufferedFrames,
-        detachBuffer: () => socket.off("message", bufferFrame),
+        detachBuffer: () => {
+          socket.off("message", bufferFrame);
+          return openHandoff.detachTerminalListeners();
+        },
       };
     } catch (error) {
       lastError = error;

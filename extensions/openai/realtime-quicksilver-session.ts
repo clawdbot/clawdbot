@@ -596,9 +596,19 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
       activeSessions.set(token, session);
       reservationTransferred = true;
       attachSidebandHandlers(session, runAgentConsult);
-      connected.detachBuffer();
+      const terminalEvent = connected.detachBuffer();
       for (const frame of connected.bufferedFrames) {
         handleSidebandFrame(session, frame.data, frame.isBinary, runAgentConsult);
+      }
+      if (terminalEvent && activeSessions.get(token) === session) {
+        if (terminalEvent.kind === "error") {
+          params.logger.warn(
+            `OpenAI GPT-Live sideband socket failed: ${terminalEvent.error.message}`,
+          );
+          closeSession(session);
+        } else {
+          finalizeSession(session);
+        }
       }
       if (activeSessions.get(token) !== session) {
         throw new Error("OpenAI GPT-Live sideband failed during startup");
