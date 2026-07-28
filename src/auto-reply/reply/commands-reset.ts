@@ -6,6 +6,7 @@ import {
 /** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import {
   buildAllowedModelSetWithFallbacks,
   isModelKeyAllowedBySet,
@@ -52,6 +53,20 @@ async function resolveColdPluginModelRef(
 ): Promise<boolean> {
   try {
     const catalog = await loadPreparedModelCatalogSnapshot(catalogParams);
+    // The token may reference a model through a manifest alias (e.g. google/gemini-3-pro
+    // for gemini-3.1-pro-preview) while the loaded catalog stores canonical ids. Apply the
+    // same static manifest normalization the reset-model resolver applies downstream so
+    // classification cannot diverge from the resolution that consumes the directive.
+    const slash = firstToken.indexOf("/");
+    const tokenProvider = slash > 0 ? normalizeProviderId(firstToken.slice(0, slash)) : "";
+    const tokenModel = slash > 0 ? firstToken.slice(slash + 1).trim() : "";
+    const normalizedTokenKey =
+      tokenProvider && tokenModel
+        ? modelKey(
+            tokenProvider,
+            normalizeStaticProviderModelId(tokenProvider, tokenModel),
+          ).toLowerCase()
+        : "";
     for (const entry of catalog.entries) {
       const providerId =
         typeof entry.provider === "string" ? entry.provider.trim().toLowerCase() : "";
@@ -61,7 +76,16 @@ async function resolveColdPluginModelRef(
       // Match only the model ID (not the display name), mirroring the reset-model resolver's
       // allowed keys so classification never diverges from what the resolver can select.
       const entryId = typeof entry.id === "string" ? entry.id.trim().toLowerCase() : "";
-      if (entryId && `${providerId}/${entryId}` === firstToken) {
+      if (!entryId) {
+        continue;
+      }
+      if (`${providerId}/${entryId}` === firstToken) {
+        return true;
+      }
+      if (
+        normalizedTokenKey &&
+        modelKey(providerId, entryId).toLowerCase() === normalizedTokenKey
+      ) {
         return true;
       }
     }

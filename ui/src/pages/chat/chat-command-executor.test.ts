@@ -31,7 +31,7 @@ function createSessionCapability(client: GatewayBrowserClient): SessionCapabilit
     setModelOverride: () => undefined,
     delete: async () => false,
     deleteMany: async () => ({ deleted: [], errors: [], preservedWorktrees: [] }),
-    reset: async () => true,
+    reset: async () => ({ outcome: "completed" as const }),
     compact: (key: string, options: { agentId?: string | null } = {}) =>
       request("sessions.compact", { key, ...options }),
     steer: (key: string, message: string, options: { agentId?: string | null } = {}) =>

@@ -21,6 +21,14 @@ export type SessionPatch = {
   archived?: boolean;
   pinned?: boolean;
   unread?: boolean;
+  /**
+   * CAS guards forwarded to sessions.patch: the gateway rejects the patch when
+   * the session's current incarnation no longer matches, so a mutation captured
+   * against one incarnation (e.g. a post-reset label) cannot land on a
+   * replacement conversation that reused the same key.
+   */
+  expectedSessionId?: string;
+  expectedLifecycleRevision?: string;
 };
 
 export type SessionPatchOptions = {
