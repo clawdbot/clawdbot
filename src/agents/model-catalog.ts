@@ -18,6 +18,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
+import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-catalog-order.js";
 import type {
   ModelCatalogEntry,
   ModelCatalogSnapshot,
@@ -215,6 +216,7 @@ function overlayCatalogMetadata(
     ...(overlay.input !== undefined ? { input: overlay.input } : {}),
     ...(params ? { params } : {}),
     ...(overlay.mediaInput !== undefined ? { mediaInput: overlay.mediaInput } : {}),
+    ...(overlay.providerOrder !== undefined ? { providerOrder: overlay.providerOrder } : {}),
     ...(overlay.status !== undefined ? { status: overlay.status } : {}),
     ...(overlay.statusReason !== undefined ? { statusReason: overlay.statusReason } : {}),
     ...(overlay.replaces !== undefined ? { replaces: overlay.replaces } : {}),
@@ -378,6 +380,19 @@ export function loadManifestModelCatalog(params: {
     },
     config: params.config,
   });
+  const providerOrderByKey = new Map<string, number>();
+  for (const plugin of resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config)) {
+    for (const [provider, providerCatalog] of Object.entries(
+      plugin.modelCatalog?.providers ?? {},
+    )) {
+      providerCatalog.models.forEach((model, providerOrder) => {
+        const key = catalogEntryDedupeKey(provider, model.id);
+        if (!providerOrderByKey.has(key)) {
+          providerOrderByKey.set(key, providerOrder);
+        }
+      });
+    }
+  }
   const rows = plan.rows.map((row) => {
     const entry: ModelCatalogEntry = {
       id: row.id,
@@ -386,6 +401,10 @@ export function loadManifestModelCatalog(params: {
       api: row.api,
       status: row.status,
     };
+    const providerOrder = providerOrderByKey.get(catalogEntryDedupeKey(row.provider, row.id));
+    if (providerOrder !== undefined) {
+      entry.providerOrder = providerOrder;
+    }
     if (row.baseUrl) {
       entry.baseUrl = row.baseUrl;
     }
@@ -421,13 +440,7 @@ export function loadManifestModelCatalog(params: {
 }
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return entries.map(normalizeCatalogEntryContract).toSorted((a, b) => {
-    const p = a.provider.localeCompare(b.provider);
-    if (p !== 0) {
-      return p;
-    }
-    return a.name.localeCompare(b.name);
-  });
+  return entries.map(normalizeCatalogEntryContract).toSorted(compareModelCatalogEntries);
 }
 
 /** Builds the catalog once for a lifecycle generation. No request-time discovery or cache IO. */
@@ -468,10 +481,14 @@ export async function buildPreparedModelCatalogSnapshot(
       if (!rawId) {
         continue;
       }
-      const provider = normalizeOptionalString(entry?.provider) ?? "";
-      if (!provider) {
+      const rawProvider = normalizeOptionalString(entry?.provider) ?? "";
+      if (!rawProvider) {
         continue;
       }
+      const provider = canonicalizePreparedModelCatalogProvider(
+        rawProvider,
+        manifestMetadataSnapshot,
+      );
       const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, {
         manifestPlugins: getManifestPlugins(),
       });
@@ -594,25 +611,31 @@ export async function buildPreparedModelCatalogSnapshot(
         );
         const normalizedSupplemental: ModelCatalogEntry[] = [];
         for (const entry of supplemental) {
-          const id = normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
+          const provider = canonicalizePreparedModelCatalogProvider(
+            entry.provider,
+            manifestMetadataSnapshot,
+          );
+          const id = normalizeConfiguredProviderCatalogModelId(provider, entry.id, {
             manifestPlugins: getManifestPlugins(),
           });
           // Account-discovered providers own the visible model set. Synthetic
           // metadata can enrich an available or explicitly configured model,
           // but must never advertise a model the account did not discover.
           if (
-            runtimeDiscoveryProviders.has(normalizeProviderId(entry.provider)) &&
-            !accountVisibleModelKeys.has(catalogEntryDedupeKey(entry.provider, id))
+            runtimeDiscoveryProviders.has(normalizeProviderId(provider)) &&
+            !accountVisibleModelKeys.has(catalogEntryDedupeKey(provider, id))
           ) {
             continue;
           }
           normalizedSupplemental.push({
             ...entry,
+            provider,
             id,
           });
         }
-        mergeCatalogRouteVariants(routeVariants, normalizedSupplemental);
-        mergeCatalogEntries(models, normalizedSupplemental);
+        const orderedSupplemental = assignProviderModelOrder(normalizedSupplemental);
+        mergeCatalogRouteVariants(routeVariants, orderedSupplemental);
+        mergeCatalogEntries(models, orderedSupplemental);
       }
     }
     logStage("plugin-models-merged", `entries=${models.length}`);

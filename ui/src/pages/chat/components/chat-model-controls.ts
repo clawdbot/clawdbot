@@ -26,6 +26,7 @@ import {
   formatThinkingOverrideLabel,
   resolveChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
+import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
@@ -56,12 +57,15 @@ export type ChatModelControlsProps = {
 
 type ChatModelProviderOption = ChatModelSelectOption & {
   commitValue: string;
+  contextWindow?: number;
   isDefault: boolean;
   provider: string;
 };
 
 const CHAT_MODEL_PROVIDER_GROUP_ALIASES: Readonly<Record<string, string>> = {
   "google-gemini-cli": "google",
+  "moonshot-ai": "moonshot",
+  moonshotai: "moonshot",
   "opencode-go": "opencode",
   "opencode-zen": "opencode",
 };
@@ -111,11 +115,10 @@ function resolveChatModelProvider(
   return "other";
 }
 
-function resolveChatModelPickerLabel(
+function resolveChatModelCatalogEntry(
   value: string,
-  fallbackLabel: string,
   catalog: ModelCatalogEntry[],
-): string {
+): ModelCatalogEntry | undefined {
   const trimmedValue = value.trim().toLowerCase();
   const separator = trimmedValue.indexOf("/");
   const normalizedValue =
@@ -125,14 +128,23 @@ function resolveChatModelPickerLabel(
         )}`
       : trimmedValue;
   if (!normalizedValue) {
-    return fallbackLabel;
+    return undefined;
   }
   const matches = catalog.filter((candidate) => {
     const provider = normalizeChatModelProviderId(candidate.provider);
     return `${provider}/${candidate.id.trim().toLowerCase()}` === normalizedValue;
   });
-  const entry =
-    matches.find((candidate) => candidate.provider.trim().toLowerCase() === "openai") ?? matches[0];
+  return (
+    matches.find((candidate) => candidate.provider.trim().toLowerCase() === "openai") ?? matches[0]
+  );
+}
+
+function resolveChatModelPickerLabel(
+  value: string,
+  fallbackLabel: string,
+  catalog: ModelCatalogEntry[],
+): string {
+  const entry = resolveChatModelCatalogEntry(value, catalog);
   if (entry && normalizeChatModelProviderId(entry.provider) === "openai") {
     return entry.name.trim() || fallbackLabel;
   }
@@ -194,8 +206,10 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   const modelOptions: ChatModelProviderOption[] = selectOptions.map((option) => {
     const isDefault =
       defaultSelectable && option.value.trim().toLowerCase() === normalizedDefaultModel;
+    const catalogEntry = resolveChatModelCatalogEntry(option.value, props.modelCatalog);
     return {
       commitValue: isDefault ? "" : option.value,
+      ...(catalogEntry?.contextWindow ? { contextWindow: catalogEntry.contextWindow } : {}),
       isDefault,
       value: option.value,
       label: resolveChatModelPickerLabel(option.value, option.label, props.modelCatalog),
@@ -514,50 +528,51 @@ function renderChatModelReasoningSelect(params: {
     const selected =
       entry.value === selectedModelValue || (entry.isDefault && selectedModelValue === "");
     const modelLabel = formatCombinedPickerModelOptionLabel(entry);
+    const contextLabel = entry.contextWindow
+      ? `${formatCompactTokenCount(entry.contextWindow)} context`
+      : "";
     return html`
       <div class="chat-controls__combined-model">
-        <openclaw-tooltip .content=${entry.label}>
-          <button
-            class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
-              ? "chat-controls__inline-select-option--selected"
-              : ""}"
-            data-chat-model-option=${entry.value}
-            data-chat-model-default=${entry.isDefault ? "true" : nothing}
-            role="option"
-            aria-selected=${selected ? "true" : "false"}
-            type="button"
-            ?disabled=${disabled || modelSelectionLocked}
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              if (disabled || modelSelectionLocked || entry.commitValue === selectedModelValue) {
-                event.preventDefault();
-                return;
-              }
-              commitModel(entry.commitValue);
-            }}
-          >
-            <span class="chat-controls__model-option-copy">
-              <span class="chat-controls__model-option-title">
-                <span class="chat-controls__model-option-name">${modelLabel}</span>
-                ${entry.isDefault
-                  ? html`<span class="chat-controls__model-default-label"
-                      >${t("chat.modelControls.default")}</span
-                    >`
-                  : ""}
-              </span>
-              <span class="chat-controls__model-option-provider">
-                ${providerDisplayLabel(entry.provider)}
-              </span>
+        <button
+          class="chat-controls__inline-select-option chat-controls__combined-model-option ${selected
+            ? "chat-controls__inline-select-option--selected"
+            : ""}"
+          data-chat-model-option=${entry.value}
+          data-chat-model-default=${entry.isDefault ? "true" : nothing}
+          role="option"
+          aria-selected=${selected ? "true" : "false"}
+          type="button"
+          ?disabled=${disabled || modelSelectionLocked}
+          @click=${(event: MouseEvent) => {
+            event.stopPropagation();
+            if (disabled || modelSelectionLocked || entry.commitValue === selectedModelValue) {
+              event.preventDefault();
+              return;
+            }
+            commitModel(entry.commitValue);
+          }}
+        >
+          <span class="chat-controls__model-option-copy">
+            <span class="chat-controls__model-option-title">
+              <span class="chat-controls__model-option-name">${modelLabel}</span>
+              ${entry.isDefault
+                ? html`<span class="chat-controls__model-default-label"
+                    >${t("chat.modelControls.default")}</span
+                  >`
+                : ""}
             </span>
-            ${selected
-              ? html`
-                  <span class="chat-controls__inline-select-check" aria-hidden="true">
-                    ${icons.check}
-                  </span>
-                `
+            ${contextLabel
+              ? html`<span class="chat-controls__model-option-meta">${contextLabel}</span>`
               : ""}
-          </button>
-        </openclaw-tooltip>
+          </span>
+          ${selected
+            ? html`
+                <span class="chat-controls__inline-select-check" aria-hidden="true">
+                  ${icons.check}
+                </span>
+              `
+            : ""}
+        </button>
       </div>
     `;
   };
