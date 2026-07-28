@@ -160,6 +160,46 @@ describe("google provider catalog", () => {
     expect(release).toHaveBeenCalledTimes(2);
   });
 
+  it("propagates static compat to discovered id variants of the same weights", async () => {
+    const cases: ReadonlyArray<{ id: string; compat: { codeMode: string } | undefined }> = [
+      { id: "gemini-3.5-flash", compat: { codeMode: "preferred" } },
+      { id: "gemini-3.5-flash-preview-06-17", compat: { codeMode: "preferred" } },
+      { id: "gemini-3.1-pro-preview-05-06", compat: { codeMode: "preferred" } },
+      { id: "gemini-flash-latest", compat: { codeMode: "preferred" } },
+      { id: "gemini-flash-lite-latest", compat: { codeMode: "preferred" } },
+      { id: "gemini-pro-latest", compat: { codeMode: "preferred" } },
+      // Dated variant of unflagged weights resolves but carries no compat.
+      { id: "gemini-2.5-flash-preview-05-20", compat: undefined },
+      // Unknown family member fails closed: no static entry, no compat.
+      { id: "gemini-3.9-flash", compat: undefined },
+    ];
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
+      response: Response.json({
+        models: cases.map(({ id }) => ({
+          name: `models/${id}`,
+          displayName: id,
+          inputTokenLimit: 1_048_576,
+          outputTokenLimit: 65_536,
+          supportedGenerationMethods: ["generateContent"],
+          thinking: true,
+        })),
+      }),
+      finalUrl: url,
+      release: async () => undefined,
+    }));
+
+    const provider = await buildGoogleLiveCatalogProvider({
+      apiKey: "GEMINI_API_KEY",
+      fetchGuard,
+    });
+
+    for (const { id, compat } of cases) {
+      const model = provider.models.find((entry) => entry.id === id);
+      expect(model, id).toBeDefined();
+      expect(model?.compat, id).toEqual(compat);
+    }
+  });
+
   it("falls back to bundled rows when live discovery is unusable", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => ({
       response: Response.json({ models: [{ name: "models/gemini-3.6-flash" }] }),
