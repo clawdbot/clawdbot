@@ -2406,7 +2406,8 @@ export const en: TranslationMap = {
     saveFailed: "The feature setting could not be saved.",
     codeMode: {
       title: "Code Mode",
-      description: "Let agents combine tools in compact, sandboxed JavaScript workflows.",
+      description:
+        "Let agents combine tools in compact, sandboxed JavaScript workflows. Auto engages code mode only for models evaluated as strong code-mode performers.",
     },
     swarm: {
       title: "Swarm",
