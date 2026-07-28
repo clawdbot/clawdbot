@@ -210,6 +210,7 @@ describe("production lint suppressions", () => {
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         // Context preparation owns the mapped descriptor array until rendering.
         "src/agents/system-prompt.ts|unicorn/no-array-sort|1",
+        "src/agents/workspace-extra-bootstrap-walker.ts|unicorn/prefer-regexp-test|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
