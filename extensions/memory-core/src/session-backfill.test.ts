@@ -238,6 +238,39 @@ describe("runSessionBackfill", () => {
     ]);
   });
 
+  it("applies the per-file cap after ordering delayed timestamps", async () => {
+    const workspaceDir = await createIsolatedWorkspace("delayed-timestamp-");
+    await seedCanonicalTranscript("delayed-timestamp", [
+      ...Array.from({ length: 80 }, (_, index) => ({
+        role: "user" as const,
+        content: `February note ${index}`,
+        timestamp: new Date(Date.parse("2026-02-01T00:00:00.000Z") + index * 60_000).toISOString(),
+        owner: true,
+      })),
+      {
+        role: "user",
+        content: "Delayed January note",
+        timestamp: "2026-01-01T12:00:00.000Z",
+        owner: true,
+      },
+    ]);
+
+    const result = await runSessionBackfill({
+      agentId: "main",
+      workspaceDir,
+      limitDays: 1,
+      timezone: "UTC",
+    });
+
+    expect(result.days).toEqual([
+      {
+        day: "2026-01-01",
+        candidateCount: 1,
+        topCandidates: ["User: Delayed January note"],
+      },
+    ]);
+  });
+
   it("keeps self-asserted owner metadata in foreign transcripts untrusted", async () => {
     const workspaceDir = await createIsolatedWorkspace("provenance-");
     const transcriptPath = path.join(workspaceDir, "untrusted.jsonl");

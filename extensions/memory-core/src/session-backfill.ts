@@ -238,6 +238,22 @@ function candidateDayInRange(
   return (from === undefined || day >= from) && (to === undefined || day <= to);
 }
 
+function compareSessionBackfillCandidates(
+  a: SessionBackfillCandidate,
+  b: SessionBackfillCandidate,
+): number {
+  if (a.day !== b.day) {
+    return a.day.localeCompare(b.day);
+  }
+  if (a.provenance.observedAt !== b.provenance.observedAt) {
+    return a.provenance.observedAt - b.provenance.observedAt;
+  }
+  if (a.scope !== b.scope) {
+    return a.scope.localeCompare(b.scope);
+  }
+  return a.lineNumber - b.lineNumber;
+}
+
 async function collectSessionBackfillCandidates(params: {
   sources: SessionBackfillSource[];
   files: Record<string, SessionIngestionFileState>;
@@ -284,13 +300,9 @@ async function collectSessionBackfillCandidates(params: {
       previous.lineCount === lines.length;
     const startIndex = unchanged ? Math.min(previous.lastContentLine, lines.length) : 0;
     const sourceCandidates: SessionBackfillCandidate[] = [];
-    let fileCount = 0;
     let progressBlockIndex: number | undefined;
     let scannedEndIndex = startIndex;
     for (let index = startIndex; index < lines.length; index += 1) {
-      if (fileCount >= perFileCap) {
-        break;
-      }
       scannedEndIndex = index + 1;
       const snippet = normalizeSessionCorpusSnippet(lines[index] ?? "");
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
@@ -346,11 +358,12 @@ async function collectSessionBackfillCandidates(params: {
         scope: source.scope,
         snippet,
       } satisfies SessionBackfillCandidate;
-      candidates.push(candidate);
       sourceCandidates.push(candidate);
       seen.add(hash);
-      fileCount += 1;
     }
+    candidates.push(
+      ...sourceCandidates.toSorted(compareSessionBackfillCandidates).slice(0, perFileCap),
+    );
     scans.push({
       candidates: sourceCandidates,
       contentHash: entry.hash,
@@ -363,18 +376,7 @@ async function collectSessionBackfillCandidates(params: {
     });
   }
   const selected = candidates
-    .toSorted((a, b) => {
-      if (a.day !== b.day) {
-        return a.day.localeCompare(b.day);
-      }
-      if (a.provenance.observedAt !== b.provenance.observedAt) {
-        return a.provenance.observedAt - b.provenance.observedAt;
-      }
-      if (a.scope !== b.scope) {
-        return a.scope.localeCompare(b.scope);
-      }
-      return a.lineNumber - b.lineNumber;
-    })
+    .toSorted(compareSessionBackfillCandidates)
     .slice(0, SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP);
   const byDay = new Map<string, SessionBackfillCandidate[]>();
   for (const candidate of selected) {
