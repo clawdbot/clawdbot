@@ -9,5 +9,13 @@
     "tsBuildInfoFile": ".artifacts/tsgo-cache/core.tsbuildinfo"
   },
   "include": ["src/**/*", "packages/**/*"],
-  "exclude": ["node_modules", "dist", "**/dist/**", "**/*.test.ts", "**/*.test.tsx", "test/**"]
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/dist/**",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/*.test-compat.d.ts",
+    "test/**"
+  ]
 }

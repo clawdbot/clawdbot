@@ -2,7 +2,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
-import { emitModelTransportDebug } from "@openclaw/ai/transports";
+import { emitModelTransportDebug, isCodeModeModelVisibleToolName } from "@openclaw/ai/transports";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -163,7 +163,7 @@ function readPayloadToolName(tool: unknown): string | undefined {
 }
 
 function isCodeModePayloadToolName(name: string | undefined): boolean {
-  return name === "exec" || name === "wait";
+  return typeof name === "string" && isCodeModeModelVisibleToolName(name);
 }
 
 function filterCodeModeToolDeclarations(declarations: unknown): unknown[] | undefined {
@@ -698,8 +698,15 @@ export function createCodexNativeWebSearchWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    // Under `tools.codeMode.enabled: "auto"` the config alone cannot prove the
+    // surface; the run-level wrapper passes it down via stream options so the
+    // provider-family wrapper stays aligned for the same request.
+    const codeModeSurfaceFromOptions =
+      (options as OpenClawSimpleStreamOptions | undefined)?.openclawCodeModeToolSurface === true;
     if (
-      (params.codeModeToolSurfaceEnabled === true || isCodeModeEnabled(params.config)) &&
+      (params.codeModeToolSurfaceEnabled === true ||
+        codeModeSurfaceFromOptions ||
+        isCodeModeEnabled(params.config)) &&
       hasCodeModeVisibleTools(context)
     ) {
       emitModelTransportDebug(

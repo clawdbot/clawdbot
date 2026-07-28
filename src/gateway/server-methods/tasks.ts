@@ -14,7 +14,6 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
-import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -165,6 +164,8 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
+    const { cancelDetachedTaskRunById } =
+      await import("../../tasks/task-executor-cancel.runtime.js");
     const result = await cancelDetachedTaskRunById({
       cfg: context.getRuntimeConfig(),
       taskId,

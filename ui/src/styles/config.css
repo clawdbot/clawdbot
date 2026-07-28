@@ -86,47 +86,6 @@
   background: var(--accent-subtle);
 }
 
-.config-advanced-divider {
-  margin-top: var(--space-5);
-  padding: 0 var(--space-4) var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 550;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.config-advanced-ghost {
-  width: 100%;
-  min-height: 48px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) var(--space-4);
-  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
-  border-radius: var(--radius-lg);
-  background: var(--secondary);
-  text-align: left;
-  transition: background var(--duration-fast) ease;
-}
-
-.config-advanced-ghost:hover {
-  background: var(--bg-hover);
-}
-
-.config-advanced-ghost__count {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
-.config-advanced-ghost__action {
-  color: var(--accent);
-  font-size: var(--control-ui-text-sm);
-  font-weight: 600;
-  flex: 0 0 auto;
-}
-
 /* Restart affordance shown after a successful save until apply */
 .config-apply-banner {
   display: flex;

@@ -38,6 +38,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   createSessionStore,
   createSubagentRunParams,
@@ -4469,6 +4470,85 @@ describe("subagent registry seam flow", () => {
         .listSubagentRunsForRequester("agent:main:main")
         .find((entry) => entry.runId === "run-durability-required"),
     ).toBeUndefined();
+  });
+
+  it.each([
+    { name: "running", queued: false },
+    { name: "queued", queued: true },
+  ])("persists a $name registration exactly once", ({ queued }) => {
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": { status: "pending" },
+    });
+
+    mod.registerSubagentRun({
+      runId: `run-single-persist-${queued ? "queued" : "running"}`,
+      task: "persist one registry snapshot",
+      queued,
+    });
+
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "running", queued: false },
+    { name: "queued", queued: true },
+  ])("isolates a $name registration from task runtime input mutation", ({ queued }) => {
+    const runId = `run-isolated-origin-${queued ? "queued" : "running"}`;
+    const expectedRequesterOrigin = {
+      channel: "discord",
+      to: "channel:123",
+      accountId: "acct-1",
+      threadId: 42,
+    };
+    const requesterOrigin = {
+      ...expectedRequesterOrigin,
+      deliveryIntent: {
+        id: "delivery-1",
+        kind: "outbound_queue" as const,
+        queuePolicy: "required" as const,
+      },
+    };
+    let persistedEntry: SubagentRunRecord | undefined;
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementationOnce((runs) => {
+      persistedEntry = structuredClone(runs.get(runId));
+    });
+    mockGatewayMethods(mocks.callGateway, {
+      "agent.wait": { status: "pending" },
+    });
+    const defaultRuntime = getDetachedTaskLifecycleRuntime();
+    const createMutatingTaskRun = vi.fn(
+      (taskParams: Parameters<typeof defaultRuntime.createQueuedTaskRun>[0]) => {
+        if (!taskParams.requesterOrigin) {
+          throw new Error("expected requester origin");
+        }
+        Object.assign(taskParams.requesterOrigin, {
+          channel: "mutated",
+          to: "mutated",
+          accountId: "mutated",
+          threadId: "mutated",
+        });
+        return null;
+      },
+    );
+    setDetachedTaskLifecycleRuntime({
+      ...defaultRuntime,
+      createQueuedTaskRun: createMutatingTaskRun,
+      createRunningTaskRun: createMutatingTaskRun,
+    });
+
+    mod.registerSubagentRun({
+      runId,
+      task: "isolate the registry delivery context",
+      queued,
+      requesterOrigin,
+    });
+
+    expect(createMutatingTaskRun).toHaveBeenCalledOnce();
+    expect(findRequesterRun(runId)?.requesterOrigin).toEqual(expectedRequesterOrigin);
+    expect(persistedEntry?.requesterOrigin).toEqual(expectedRequesterOrigin);
+    expect(mocks.persistSubagentRunsToDiskOrThrow).toHaveBeenCalledOnce();
+    expect(mocks.persistSubagentRunsToDisk).not.toHaveBeenCalled();
   });
 
   it("retains an already-running replacement when its durable write fails", () => {

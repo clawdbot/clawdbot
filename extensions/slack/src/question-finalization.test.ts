@@ -24,13 +24,25 @@ vi.mock("./send.js", () => ({ updateMessageSlack: hoisted.update }));
 
 import { slackOutbound } from "./outbound-adapter.js";
 
+function jsonRoundTrip<T>(value: T): T {
+  // oxlint-disable-next-line unicorn/prefer-structured-clone -- This test exercises JSON transport.
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
 describe("Slack question finalization", () => {
   it("removes action blocks and appends terminal context", async () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const headers = Array.from({ length: 21 }, (_value, index) => `Column ${String(index)}`);
     const payload = {
       channelData: { askUser: { questionId } },
       presentation: {
         blocks: [
+          {
+            type: "table" as const,
+            caption: "Option metadata",
+            headers,
+            rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+          },
           { type: "text" as const, text: "Pick one" },
           {
             type: "buttons" as const,
@@ -48,18 +60,20 @@ describe("Slack question finalization", () => {
       ctx: { cfg: {}, to: "C123", text: "Pick one", payload },
     });
     expect(rendered).not.toBeNull();
-    const slackData = rendered!.channelData?.slack as {
-      renderedPresentationSegments: unknown[];
-    };
-    slackData.renderedPresentationSegments.unshift({
-      kind: "text",
-      text: "Preface",
-      mrkdwn: false,
-    });
+    const renderedAfterTransport = jsonRoundTrip(rendered);
+    const renderedSegments = (
+      renderedAfterTransport?.channelData?.slack as
+        | { renderedPresentationSegments?: unknown[] }
+        | undefined
+    )?.renderedPresentationSegments;
+    expect(renderedSegments?.map((segment) => (segment as { kind?: unknown }).kind)).toEqual([
+      "text",
+      "blocks",
+    ]);
     await slackOutbound.afterDeliverPayload?.({
       cfg: {},
       target: { channel: "slack", to: "C123", accountId: "default" },
-      payload: rendered!,
+      payload: renderedAfterTransport!,
       results: [
         { channel: "slack", messageId: "44", channelId: "C123" },
         { channel: "slack", messageId: "55", channelId: "C123" },

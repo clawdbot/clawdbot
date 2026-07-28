@@ -123,6 +123,21 @@ describe("nodes-cli coverage", () => {
     });
   });
 
+  it("shows the registered pending command in node pairing help", () => {
+    const nodes = sharedProgram.commands.find((command) => command.name() === "nodes");
+    const output: string[] = [];
+
+    expect(nodes).toBeDefined();
+    nodes?.configureOutput({
+      writeOut: (value) => output.push(value),
+      writeErr: (value) => output.push(value),
+    });
+    nodes?.outputHelp();
+
+    expect(output.join("")).toContain("openclaw nodes pending");
+    expect(output.join("")).not.toContain("openclaw nodes pairing pending");
+  });
+
   it("explains unknown nodes approve request ids with the current pending requests", async () => {
     callGateway.mockResolvedValueOnce({
       pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],

@@ -406,7 +406,7 @@ export async function runEmbeddedAttempt(
           },
         },
       });
-      return await runEmbeddedAttemptExecutionPhase({
+      const executionResult = await runEmbeddedAttemptExecutionPhase({
         attempt: params,
         ...(activeContextEngine ? { activeContextEngine } : {}),
         agentDir,
@@ -447,6 +447,22 @@ export async function runEmbeddedAttempt(
           },
         },
       });
+      // Read catalog counters before the finally-phase cleanup clears the
+      // run-scoped catalog session; afterwards the counts are gone.
+      const catalogSession = toolSearchCatalogRef?.current;
+      return {
+        ...executionResult,
+        codeModeEngaged: codeModeControlsEnabledForRun,
+        ...(catalogSession
+          ? {
+              bridgeCalls: {
+                search: catalogSession.searchCount,
+                describe: catalogSession.describeCount,
+                call: catalogSession.callCount,
+              },
+            }
+          : {}),
+      };
     } finally {
       const terminal = projectAgentRunAttemptTerminal(executionState.terminal);
       await cleanupEmbeddedAttemptSessionPhase({

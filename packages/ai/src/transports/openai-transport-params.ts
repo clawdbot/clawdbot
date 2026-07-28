@@ -2,12 +2,12 @@ import type { Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getAiTransportHost } from "../host.js";
+import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
+import type { OpenAIToolProjection } from "../providers/openai-tool-projection.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   resolveOpenAIProjectedToolsStrictToolFlag,
-  type OpenAIToolProjection,
-} from "../internal/openai.js";
-import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
+} from "../providers/openai-tool-schema.js";
 import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";

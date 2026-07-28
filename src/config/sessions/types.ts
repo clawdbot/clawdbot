@@ -22,7 +22,6 @@ import type {
   SessionCreatedVia,
   SessionEntryProvenance,
 } from "./session-entry-provenance.js";
-import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 
 export type SessionScope = "per-sender" | "global";
@@ -250,7 +249,7 @@ export type RestartRecoveryRun = {
   lifecycleGeneration: string;
 };
 
-export type SessionEntry = SessionRestartRecoveryState &
+type SessionEntryCore = SessionRestartRecoveryState &
   SessionEntryProvenance & {
     /** Collaboration mode. Missing legacy values are equivalent to "shared". */
     visibility?: SessionVisibility;
@@ -306,7 +305,6 @@ export type SessionEntry = SessionRestartRecoveryState &
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
     lastActivityAt?: number;
-    sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
     /** Immutable session key authorized to receive this child's completion handoff. */
@@ -558,10 +556,14 @@ export type SessionEntry = SessionRestartRecoveryState &
     acp?: SessionAcpMeta;
   };
 
+export interface SessionEntry extends SessionEntryCore {}
+
 /** Internal durable fields excluded from public/plugin session projections. */
-export type InternalSessionEntry = SessionEntry & {
+export type InternalSessionEntryCore = SessionEntryCore & {
   mainRestartRecovery?: MainRestartRecoveryState;
 };
+
+export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
 export function isTerminalSessionStatus(
   status: unknown,
@@ -694,12 +696,14 @@ function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({
-      ...patch,
-      sessionId,
-      updatedAt,
-      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
-    });
+    return stripRetiredSessionEntryLocators(
+      normalizeSessionRuntimeModelFields({
+        ...patch,
+        sessionId,
+        updatedAt,
+        sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+      }),
+    );
   }
   const next = {
     ...existing,
@@ -725,20 +729,6 @@ function mergeSessionEntryWithPolicy(
     next.forkSource = existing.forkSource;
   }
 
-  if (existing.sessionId !== sessionId) {
-    // Session id rotations should move transcript paths when they match known reset/fork shapes.
-    const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");
-    const candidateSessionFile = patchHasSessionFile ? patch.sessionFile : existing.sessionFile;
-    const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
-      sessionFile: candidateSessionFile,
-      previousSessionId: existing.sessionId,
-      nextSessionId: sessionId,
-    });
-    if (rewrittenSessionFile) {
-      next.sessionFile = rewrittenSessionFile;
-    }
-  }
-
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
   if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
@@ -748,7 +738,14 @@ function mergeSessionEntryWithPolicy(
       delete next.modelProvider;
     }
   }
-  return normalizeSessionRuntimeModelFields(next);
+  return stripRetiredSessionEntryLocators(normalizeSessionRuntimeModelFields(next));
+}
+
+function stripRetiredSessionEntryLocators(entry: SessionEntry): SessionEntry {
+  const mutable = entry as SessionEntry & { sessionFile?: unknown; transcriptPath?: unknown };
+  delete mutable.sessionFile;
+  delete mutable.transcriptPath;
+  return entry;
 }
 
 export function mergeSessionEntry(

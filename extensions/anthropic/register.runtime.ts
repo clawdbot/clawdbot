@@ -33,6 +33,7 @@ import {
 import {
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
+  type ModelCompatConfig,
   modelCostsEqual,
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
@@ -442,6 +443,30 @@ function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
   return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5";
 }
 
+// Lazily indexed manifest compat per provider so hand-built dynamic rows keep
+// catalog capability metadata even when the run's model registry is empty
+// (for example env-key-only runs without a generated models.json).
+let anthropicManifestCompatIndex: Map<string, ModelCompatConfig> | undefined;
+
+function resolveAnthropicManifestCompat(
+  provider: string,
+  modelId: string,
+): ModelCompatConfig | undefined {
+  if (!anthropicManifestCompatIndex) {
+    anthropicManifestCompatIndex = new Map();
+    const providers = manifest.modelCatalog?.providers ?? {};
+    for (const [providerId, catalog] of Object.entries(providers)) {
+      for (const model of catalog.models ?? []) {
+        const compat = (model as { compat?: ModelCompatConfig }).compat;
+        if (compat) {
+          anthropicManifestCompatIndex.set(`${providerId}/${model.id}`, compat);
+        }
+      }
+    }
+  }
+  return anthropicManifestCompatIndex.get(`${provider}/${modelId}`);
+}
+
 function buildAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -457,10 +482,21 @@ function buildAnthropicForwardCompatModel(
   }
   const provider =
     normalizedProvider === CLAUDE_CLI_BACKEND_ID ? CLAUDE_CLI_BACKEND_ID : PROVIDER_ID;
+  // This hand-built row replaces the catalog row when the runtime prefers
+  // plugin-resolved modern models, so it must carry the catalog's compat
+  // capability metadata (for example compat.codeMode) instead of dropping it.
+  // Registry compat wins when present (it may carry config overrides); the
+  // manifest index covers empty-registry runs such as env-key-only sessions.
+  const catalogModel = ctx.modelRegistry.find(provider, trimmedModelId) as
+    | Pick<ProviderRuntimeModel, "compat">
+    | null
+    | undefined;
+  const compat = catalogModel?.compat ?? resolveAnthropicManifestCompat(provider, trimmedModelId);
   return {
     id: trimmedModelId,
     name: trimmedModelId,
     provider,
+    ...(compat ? { compat } : {}),
     api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     reasoning: true,

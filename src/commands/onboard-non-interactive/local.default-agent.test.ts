@@ -4,8 +4,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
+  applyAuthChoice: vi.fn(),
+  applyGatewayConfig: vi.fn(),
   commitConfig: vi.fn(),
+  ensureOnboardingAgent: vi.fn(),
   ensureWorkspaceAndSessions: vi.fn(),
+  inferAuthChoice: vi.fn(),
   logConfigUpdated: vi.fn(),
   logJson: vi.fn(),
 }));
@@ -30,14 +34,20 @@ vi.mock("./config-write.js", () => ({
   commitNonInteractiveOnboardConfig: mocks.commitConfig,
 }));
 
+vi.mock("../onboard-agent.js", () => ({
+  ensureOnboardingAgent: mocks.ensureOnboardingAgent,
+}));
+
+vi.mock("./local/auth-choice.js", () => ({
+  applyNonInteractiveAuthChoice: mocks.applyAuthChoice,
+}));
+
+vi.mock("./local/auth-choice-inference.js", () => ({
+  inferAuthChoiceFromFlags: mocks.inferAuthChoice,
+}));
+
 vi.mock("./local/gateway-config.js", () => ({
-  applyNonInteractiveGatewayConfig: ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({
-    nextConfig,
-    port: 18789,
-    bind: "loopback",
-    authMode: "token",
-    tailscaleMode: "off",
-  }),
+  applyNonInteractiveGatewayConfig: mocks.applyGatewayConfig,
 }));
 
 vi.mock("./local/output.js", () => ({
@@ -60,9 +70,136 @@ const runtime = {
 describe("runNonInteractiveLocalSetup default-agent ownership", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.applyAuthChoice.mockImplementation(
+      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig,
+    );
+    mocks.applyGatewayConfig.mockImplementation(
+      ({ nextConfig }: { nextConfig: OpenClawConfig }) => ({
+        nextConfig,
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        tailscaleMode: "off",
+      }),
+    );
     mocks.commitConfig.mockImplementation(
       async ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig,
     );
+    mocks.ensureOnboardingAgent.mockImplementation(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config,
+        agentId: "ops",
+        bootstrapPending: false,
+      }),
+    );
+    mocks.inferAuthChoice.mockReturnValue({ matches: [] });
+  });
+
+  it("rejects ambiguous provider flags before creating an agent or writing setup state", async () => {
+    mocks.inferAuthChoice.mockReturnValue({
+      matches: [
+        { optionKey: "openaiApiKey", authChoice: "openai-api-key", label: "--openai-api-key" },
+        {
+          optionKey: "anthropicApiKey",
+          authChoice: "anthropic-api-key",
+          label: "--anthropic-api-key",
+        },
+      ],
+    });
+
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        openaiApiKey: "openai-test-key",
+        anthropicApiKey: "anthropic-test-key",
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+      },
+      runtime,
+      baseConfig: {},
+    });
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Multiple API key flags were provided"),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.applyGatewayConfig).not.toHaveBeenCalled();
+    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
+    expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
+    expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
+  });
+
+  it("resolves provider auth in the requested first-agent workspace before creating state", async () => {
+    const workspace = "/tmp/requested-provider-workspace";
+    mocks.ensureOnboardingAgent.mockImplementationOnce(
+      async ({ config }: { config: OpenClawConfig }) => ({
+        config: {
+          ...config,
+          agents: {
+            ...config.agents,
+            entries: { main: { default: true, workspace } },
+          },
+        },
+        agentId: "main",
+        bootstrapPending: true,
+      }),
+    );
+
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        workspace,
+        authChoice: "demo-api-key",
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+      },
+      runtime,
+      baseConfig: {},
+    });
+
+    expect(mocks.applyAuthChoice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: expect.objectContaining({
+          agents: expect.objectContaining({ defaults: expect.objectContaining({ workspace }) }),
+        }),
+        target: expect.objectContaining({ agentId: "main", workspaceDir: workspace }),
+      }),
+    );
+    expect(mocks.applyAuthChoice.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.commitConfig.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mocks.ensureOnboardingAgent.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("rejects invalid gateway options before provider auth or first-agent creation", async () => {
+    mocks.applyGatewayConfig.mockReturnValue(null);
+
+    await runNonInteractiveLocalSetup({
+      opts: {
+        nonInteractive: true,
+        mode: "local",
+        authChoice: "demo-api-key",
+        gatewayPort: 70_000,
+        skipHooks: true,
+        skipSkills: true,
+        skipHealth: true,
+      },
+      runtime,
+      baseConfig: {},
+    });
+
+    expect(mocks.applyGatewayConfig).toHaveBeenCalledOnce();
+    expect(mocks.applyAuthChoice).not.toHaveBeenCalled();
+    expect(mocks.ensureOnboardingAgent).not.toHaveBeenCalled();
+    expect(mocks.commitConfig).not.toHaveBeenCalled();
+    expect(mocks.ensureWorkspaceAndSessions).not.toHaveBeenCalled();
   });
 
   it("provisions and reports the keyed default agent while preserving the global workspace", async () => {

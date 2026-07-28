@@ -411,7 +411,7 @@ export function renderWorkboard(props: WorkboardProps) {
                     aria-controls=${workboardCardModalId}
                     ?disabled=${state.dispatching}
                     @click=${() => {
-                      openCreateModal(state);
+                      openCreateModal(state, props);
                       props.onRequestUpdate?.();
                     }}
                   >

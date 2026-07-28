@@ -1023,9 +1023,11 @@ export async function runBtwSideQuestion(
   if (messages.length === 0) {
     messages = await toSimpleContextMessages({
       messages: await readBtwTranscriptMessages({
+        agentId: sessionAgentId,
         sessionFile,
         sessionId,
         sessionKey: params.sessionKey,
+        storePath: params.storePath,
         snapshotLeafId: activeRunSnapshot?.transcriptLeafId,
       }),
       imageLimits,

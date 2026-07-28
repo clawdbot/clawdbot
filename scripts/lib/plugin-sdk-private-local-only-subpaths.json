@@ -136,6 +136,7 @@
   "secure-random-runtime",
   "session-binding-runtime",
   "session-catalog",
+  "session-catalog-runtime",
   "session-key-runtime",
   "session-transcript-hit",
   "session-transcript-runtime",

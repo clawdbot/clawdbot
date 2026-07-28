@@ -3,6 +3,7 @@
  */
 import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -156,6 +157,9 @@ async function summarizeChunks(params: {
           maxDelayMs: 5000,
           jitter: 0.2,
           label: "compaction/generateSummary",
+          // Backoff must honor caller cancellation; otherwise an abort during
+          // the sleep would stall compaction until the full delay elapses.
+          sleep: (ms) => sleepWithAbort(ms, params.signal),
           shouldRetry: (err) => {
             // Stop retrying when the caller explicitly cancelled.
             if (params.signal.aborted) {

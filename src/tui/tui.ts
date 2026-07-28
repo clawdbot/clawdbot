@@ -17,7 +17,6 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -48,7 +47,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatModelFooter,
-  sanitizeRenderableText,
+  formatTuiErrorMessage,
   formatTokens,
 } from "./tui-formatters.js";
 import {
@@ -411,7 +410,7 @@ type TuiShutdownTask = () => void | Promise<void>;
 export function beginTuiShutdown(params: {
   stopClient: TuiShutdownTask;
   stopTui: TuiShutdownTask;
-  stopStatusTimeout: () => void;
+  disposeStatus: () => void;
   requestFinish: () => void;
   forceExit: () => void;
   hardExitMs: number;
@@ -425,6 +424,8 @@ export function beginTuiShutdown(params: {
     ((callback, timeoutMs) => setTimeout(callback, timeoutMs) as unknown as TuiProcessExitTimer);
   const hardExitTimer = setTimeoutFn(params.forceExit, params.hardExitMs);
   hardExitTimer.unref?.();
+  // Stop referenced animations before transport teardown can stall or redraw.
+  params.disposeStatus();
   void Promise.resolve()
     .then(params.stopClient)
     .then(params.stopTui)
@@ -435,7 +436,7 @@ export function beginTuiShutdown(params: {
           ((timer) => clearTimeout(timer as unknown as ReturnType<typeof setTimeout>));
         clearTimeoutFn(hardExitTimer);
       }
-      params.stopStatusTimeout();
+      params.disposeStatus();
     })
     .catch(params.onError)
     .finally(params.requestFinish);
@@ -605,6 +606,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let pendingSubmit: TuiPendingSubmit | null = null;
   let historyLoaded = false;
   let isConnected = false;
+  let connectionGeneration = 0;
   let wasDisconnected = false;
   let toolsExpanded = false;
   let showThinking = false;
@@ -985,20 +987,24 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     }).catch(() => undefined);
   };
 
-  const restoreRememberedSession = async () => {
+  const restoreRememberedSession = async (expectedConnectionGeneration: number) => {
     if (initialSessionInput || rememberedSessionApplied) {
       return;
     }
-    rememberedSessionApplied = true;
     const remembered = await readTuiLastSessionKey({
       scopeKey: buildLastSessionScopeKeyFor(),
     });
+    if (expectedConnectionGeneration !== connectionGeneration || !isConnected || exitRequested) {
+      return;
+    }
     const rememberedKey = remembered ? resolveSessionKey(remembered) : null;
     if (!rememberedKey || rememberedKey === currentSessionKey) {
+      rememberedSessionApplied = true;
       return;
     }
     const rememberedAgent = parseAgentSessionKey(rememberedKey)?.agentId;
     if (rememberedAgent && normalizeAgentId(rememberedAgent) !== currentAgentId) {
+      rememberedSessionApplied = true;
       return;
     }
     const sessions = await client
@@ -1010,9 +1016,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         agentId: currentAgentId,
       })
       .catch(() => null);
-    if (!sessions) {
+    if (
+      !sessions ||
+      expectedConnectionGeneration !== connectionGeneration ||
+      !isConnected ||
+      exitRequested
+    ) {
       return;
     }
+    // An abandoned connection must leave restoration eligible for the next handshake.
+    rememberedSessionApplied = true;
     const restored = resolveRememberedTuiSessionKey({
       rememberedKey,
       currentAgentId,
@@ -1159,6 +1172,16 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     clearInterval(waitingTimer);
     waitingTimer = null;
     waitingPhrase = null;
+  };
+
+  const disposeStatus = () => {
+    stopStatusTimer();
+    stopWaitingTimer();
+    stopStatusTimeout();
+    clearDynamicSlashCommandsRefreshTimer();
+    dynamicSlashCommandsRequestId += 1;
+    statusLoader?.stop();
+    statusLoader = null;
   };
 
   const renderStatus = () => {
@@ -1415,6 +1438,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     exitRequested = true;
+    connectionGeneration += 1;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
@@ -1425,7 +1449,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     beginTuiShutdown({
       stopClient: () => client.stop(),
       stopTui: () => drainAndStopTuiSafely(tui),
-      stopStatusTimeout,
+      disposeStatus,
       requestFinish: deferredFinish.requestFinish,
       forceExit,
       hardExitMs: resolveTuiShutdownHardExitMs({ localMode: isLocalMode }),
@@ -1433,7 +1457,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
-            process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
+            process.stderr.write(`openclaw tui shutdown failed: ${formatTuiErrorMessage(err)}\n`);
           } catch {
             // Best effort only; exit must still complete.
           }
@@ -1503,7 +1527,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
-    const message = sanitizeRenderableText(formatErrorMessage(error));
+    const message = formatTuiErrorMessage(error);
     chatLog.addSystem(`${action} submit failed: ${message}`);
     tui.requestRender();
   };
@@ -1590,7 +1614,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   tui.addInputListener((data) => {
-    if (!chatLog.hasVisibleBtw()) {
+    // A visible overlay owns Enter even while an inline BTW card remains visible.
+    if (tui.hasOverlay() || !chatLog.hasVisibleBtw()) {
       return undefined;
     }
     if (editor.getText().length > 0) {
@@ -1605,6 +1630,9 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   });
 
   client.onEvent = (evt) => {
+    if (exitRequested) {
+      return;
+    }
     pluginApprovals?.handleEvent(evt.event, evt.payload);
     taskSuggestions?.handleEvent(evt.event, evt.payload);
     if (evt.event === "chat") {
@@ -1625,6 +1653,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   client.onConnected = () => {
+    if (exitRequested) {
+      return;
+    }
+    const connectedGeneration = ++connectionGeneration;
+    const ownsConnection = () =>
+      connectedGeneration === connectionGeneration && isConnected && !exitRequested;
     isConnected = true;
     pairingHintShown = false;
     const reconnected = wasDisconnected;
@@ -1642,23 +1676,50 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       try {
         await client.subscribeSessionEvents?.();
       } catch (err) {
-        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
+        if (!ownsConnection()) {
+          return;
+        }
+        chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsConnection()) {
+        return;
       }
       await refreshAgents();
-      await restoreRememberedSession();
+      if (!ownsConnection()) {
+        return;
+      }
+      await restoreRememberedSession(connectedGeneration);
+      if (!ownsConnection()) {
+        return;
+      }
       updateHeader();
       updateAutocompleteProvider();
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        if (!ownsConnection()) {
+          return;
+        }
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsConnection()) {
+        return;
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        if (!ownsConnection()) {
+          return;
+        }
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
+      }
+      if (!ownsConnection()) {
+        return;
       }
       await loadHistory();
+      if (!ownsConnection()) {
+        return;
+      }
       if (activityStatus === "starting up") {
         setActivityStatus("idle");
       }
@@ -1672,11 +1733,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (!autoMessageSent && autoMessage) {
         autoMessageSent = true;
         await sendMessage(autoMessage);
+        if (!ownsConnection()) {
+          return;
+        }
       }
       updateFooter();
       tui.requestRender();
     })().catch((err: unknown) => {
-      chatLog.addSystem(`startup failed: ${String(err)}`);
+      if (!ownsConnection()) {
+        return;
+      }
+      chatLog.addSystem(`startup failed: ${formatTuiErrorMessage(err)}`);
       if (activityStatus === "starting up") {
         setActivityStatus("idle");
       }
@@ -1686,6 +1753,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   client.onDisconnected = (reason) => {
+    if (exitRequested) {
+      return;
+    }
+    connectionGeneration += 1;
     isConnected = false;
     wasDisconnected = true;
     historyLoaded = false;
@@ -1715,17 +1786,20 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   client.onGap = (info) => {
+    if (exitRequested || !isConnected) {
+      return;
+    }
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
     void (async () => {
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
       }
     })();
     tui.requestRender();
@@ -1748,6 +1822,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   client.start();
   await new Promise<void>((resolve) => {
     const finish = () => {
+      disposeStatus();
       disposeEventHandlers();
       pluginApprovals?.dispose();
       taskSuggestions?.dispose();
