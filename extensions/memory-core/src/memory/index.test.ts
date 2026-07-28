@@ -2105,9 +2105,14 @@ describe("memory index", () => {
     ).provider;
     provider.embedQuery = async (_text, options) =>
       await new Promise<number[]>((_, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
-          once: true,
-        });
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("query embedding aborted"));
+          },
+          { once: true },
+        );
       });
 
     const coldDebug: Array<{
@@ -2168,9 +2173,14 @@ describe("memory index", () => {
     ).provider;
     provider.embedQuery = async (_text, options) =>
       await new Promise<number[]>((_, reject) => {
-        options?.signal?.addEventListener("abort", () => reject(options.signal?.reason), {
-          once: true,
-        });
+        options?.signal?.addEventListener(
+          "abort",
+          () => {
+            const reason = options.signal?.reason;
+            reject(reason instanceof Error ? reason : new Error("query embedding aborted"));
+          },
+          { once: true },
+        );
       });
 
     const debug: Array<{ effectiveMode?: string; fallback?: string }> = [];
