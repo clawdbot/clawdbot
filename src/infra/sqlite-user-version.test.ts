@@ -1,7 +1,9 @@
 // Tests for SQLite user_version pragma helper.
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   createNewerSqliteSchemaVersionError,
+  describeRunningOpenClawBuild,
   readSqliteUserVersion,
 } from "./sqlite-user-version.js";
 
@@ -55,5 +57,32 @@ describe("createNewerSqliteSchemaVersionError", () => {
 
     expect(error.name).toBe("SqliteSchemaVersionError");
     expect(error.message).toContain("https://docs.openclaw.ai/reference/database-schemas");
+  });
+
+  it("names the refusing install and both schema versions", () => {
+    const error = createNewerSqliteSchemaVersionError("test database", "/tmp/test.sqlite", 12, 11);
+
+    expect(error.message).toContain("uses newer schema version 12");
+    expect(error.message).toContain("this build supports 11");
+    expect(error.message).toContain(describeRunningOpenClawBuild());
+    expect(error.message).toContain("supports schema 12 or newer");
+  });
+
+  it("does not assert a downgrade the operator never performed", () => {
+    // Two builds sharing one release version can support different schemas (#115008).
+    // Telling the operator to upgrade or stop downgrading is unactionable and often wrong.
+    const error = createNewerSqliteSchemaVersionError("test database", "/tmp/test.sqlite", 12, 11);
+
+    expect(error.message).not.toContain("Do not downgrade");
+    expect(error.message).not.toContain("Upgrade OpenClaw");
+  });
+});
+
+describe("describeRunningOpenClawBuild", () => {
+  it("reports the version and the install root operators can act on", () => {
+    const described = describeRunningOpenClawBuild();
+
+    expect(described).toContain(VERSION);
+    expect(described).toContain("installed at ");
   });
 });
