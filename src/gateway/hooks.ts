@@ -246,7 +246,7 @@ const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
 /** Reject unsupported channelId payloads; hooks deliver via channel + to. */
-export const getUnsupportedHookChannelIdError = () =>
+const unsupportedHookChannelIdError =
   "channelId is not supported; use channel and to to deliver the final agent reply";
 
 /** Resolve a raw hook channel value, defaulting omitted values to `last`. */
@@ -428,7 +428,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     }
   | { ok: false; error: string } {
   if (Object.hasOwn(payload, "channelId")) {
-    return { ok: false, error: getUnsupportedHookChannelIdError() };
+    return { ok: false, error: unsupportedHookChannelIdError };
   }
   const message = normalizeOptionalString(payload.message) ?? "";
   if (!message) {
