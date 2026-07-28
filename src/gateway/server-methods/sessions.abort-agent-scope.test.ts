@@ -753,7 +753,6 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("infers selected-agent global subscriptions from agent-prefixed aliases", async () => {
-    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: "global" }));
     const subscribeSessionMessageEvents = vi.fn();
     const context = createContext({
       globalScope: true,
@@ -769,7 +768,7 @@ describe("sessions.abort agent scope", () => {
       },
     );
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("agent:work:main", { agentId: "work" });
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-work-alias",
       "agent:work:global",
