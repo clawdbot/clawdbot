@@ -59,6 +59,7 @@ import {
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
 import { SETTINGS_SEARCH_TARGETS } from "./settings-targets.ts";
+import { renderTalkPage } from "./talk-page.ts";
 import {
   createConfigViewState,
   renderConfig,
@@ -99,6 +100,7 @@ const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: bool
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "communications:channels": { routeId: "channels", keepSection: false },
   "communications:broadcast": { routeId: "advanced", keepSection: true },
+  "communications:talk": { routeId: "talk", keepSection: true },
   "automation:approvals": { routeId: "security", keepSection: true },
   "ai-agents:memory": { routeId: "memory", keepSection: true },
   "ai-agents:models": { routeId: "model-providers", keepSection: false },
@@ -122,6 +124,8 @@ function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
       return { activeSection: "mcp", activeSubsection: null };
     case "memory":
       return { activeSection: "memory", activeSubsection: null };
+    case "talk":
+      return { activeSection: "talk", activeSubsection: null };
     case "infrastructure":
       return { activeSection: "gateway", activeSubsection: null };
     case "ai-agents":
@@ -1050,6 +1054,20 @@ export class ConfigPage extends OpenClawLightDomElement {
             embeddedEditor: true,
             forceShowAdvanced: true,
             navRootLabel: t("tabs.memory"),
+          }),
+      });
+    }
+    if (this.pageId === "talk") {
+      return renderTalkPage({
+        configObject,
+        buildEditor: () =>
+          renderConfig({
+            ...props,
+            activeSection: "talk",
+            activeSubsection: null,
+            showModeToggle: false,
+            embeddedEditor: true,
+            navRootLabel: t("tabs.talk"),
           }),
       });
     }
