@@ -33,6 +33,7 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
   listSessionTranscriptCorpusEntriesForAgentSync,
   type SessionTranscriptCorpusEntry,
+  type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
 import type { MemorySessionSyncTarget } from "./types.js";
 import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from "./types.js";
@@ -40,6 +41,7 @@ import type { MemoryEntryProvenance, MemoryOriginClass, MemorySessionKind } from
 export {
   listSessionTranscriptCorpusEntriesForAgent,
   type SessionTranscriptCorpusEntry,
+  type SessionTranscriptCorpusOptions,
 } from "./session-transcript-corpus.js";
 
 // Keep the historical one-line-per-message export shape for normal turns, but
