@@ -599,6 +599,8 @@ private fun VoiceHomeMode(
       else -> stringResource(R.string.speak_to_agent)
     }
   val dictateClickLabel = stringResource(R.string.dictate)
+  val orbClick = if (liveEnabled) toggleLive else startDictate
+  val orbClickLabel = if (liveEnabled) liveClickLabel else dictateClickLabel
   val fontScale = LocalDensity.current.fontScale
   BoxWithConstraints(
     modifier = Modifier.fillMaxSize(),
@@ -651,10 +653,11 @@ private fun VoiceHomeMode(
               .size(layout.orbSize)
               .offset(y = voiceControlOffset)
               .combinedClickable(
-                enabled = liveEnabled,
-                onClickLabel = liveClickLabel,
+                // combinedClickable gates every gesture together; fall back to Dictate when Live is unavailable.
+                enabled = liveEnabled || dictateEnabled,
+                onClickLabel = orbClickLabel,
                 role = Role.Button,
-                onClick = toggleLive,
+                onClick = orbClick,
                 onDoubleClick = onOpenThread,
                 onLongClickLabel = dictateClickLabel.takeIf { dictateEnabled },
                 onLongClick = startDictate.takeIf { dictateEnabled },
