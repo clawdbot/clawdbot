@@ -17,6 +17,7 @@ import {
   resolvePreferredOpenClawTmpDir,
   runSshSandboxCommand,
   sanitizeEnvVars,
+  shellEscape,
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
 import type { OpenShellSandboxBackend } from "./backend.types.js";
@@ -720,9 +721,7 @@ class OpenShellSandboxBackendImpl {
     }
     if (this.params.legacyRuntimeAdopted) {
       const detail = getResult.stderr.trim();
-      const recreateCommand = `openclaw sandbox recreate --session ${JSON.stringify(
-        this.params.createParams.scopeKey,
-      )}`;
+      const recreateCommand = `openclaw sandbox recreate --session ${shellEscape(this.params.createParams.scopeKey)}`;
       throw new Error(
         [
           `Registered legacy OpenShell sandbox "${this.params.execContext.sandboxName}" could not be reached.`,

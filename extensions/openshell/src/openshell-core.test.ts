@@ -254,7 +254,8 @@ describe("openshell backend manager", () => {
   });
 
   it("does not recreate an unreachable registered legacy sandbox name", async () => {
-    const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
+    const scopeKey = "agent:main'$(touch /tmp/pwn)";
+    const legacyRuntimeId = "openclaw-agent-main-touch-tmp-pwn-87608e6a";
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 1,
       stdout: "",
@@ -264,8 +265,8 @@ describe("openshell backend manager", () => {
       pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
     });
     const backend = await factory({
-      sessionKey: "agent:main:turn",
-      scopeKey: "agent:main",
+      sessionKey: `${scopeKey}:turn`,
+      scopeKey,
       registeredRuntimeIds: [legacyRuntimeId],
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/tmp/workspace",
@@ -277,7 +278,7 @@ describe("openshell backend manager", () => {
         script: "true",
       }),
     ).rejects.toThrow(
-      'Registered legacy OpenShell sandbox "openclaw-agent-main-25bffc4d" could not be reached.',
+      `Run \`openclaw sandbox recreate --session ${shellEscape(scopeKey)}\` to migrate this scope`,
     );
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledTimes(1);
     expect(cliMocks.runOpenShellCli).not.toHaveBeenCalledWith(
