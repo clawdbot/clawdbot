@@ -452,6 +452,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   action: "warn" | "block";
   detector:
     | "generic_repeat"
+    | "argument_churn"
     | "unknown_tool_repeat"
     | "known_poll_no_progress"
     | "global_circuit_breaker"

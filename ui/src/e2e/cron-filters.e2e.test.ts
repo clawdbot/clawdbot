@@ -442,6 +442,80 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("creates and edits agent-turn jobs with an explicit zero timeout", async () => {
+    const existingJob = {
+      ...cronJob("existing-no-timeout", "Existing no-timeout task", {
+        kind: "every",
+        everyMs: 60_000,
+      }),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "Continue until the existing task finishes",
+        timeoutSeconds: 0,
+      },
+    };
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "cron.add": { id: "created-no-timeout" },
+        "cron.update": { id: existingJob.id },
+        "cron.list": cronListResponse([existingJob]),
+        "cron.runs": cronRunsResponse([]),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill("Created no-timeout task");
+      await page.locator("#cron-payload-text").fill("Continue until the new task finishes");
+      await page.locator("details.cron-advanced > summary").click();
+      await page.locator("#cron-timeout-seconds").fill("0");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: "Created no-timeout task",
+        payload: {
+          kind: "agentTurn",
+          message: "Continue until the new task finishes",
+          timeoutSeconds: 0,
+        },
+      });
+
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await page.locator("details.cron-advanced > summary").click();
+      expect(await page.locator("#cron-timeout-seconds").inputValue()).toBe("0");
+      await page.locator("#cron-payload-text").fill("Continue until the edited task finishes");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const updateRequest = await gateway.waitForRequest("cron.update");
+      expect(requestParams(updateRequest)).toMatchObject({
+        id: existingJob.id,
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            message: "Continue until the edited task finishes",
+            timeoutSeconds: 0,
+          },
+        },
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
   it("defaults recurring jobs converted to one-time cleanup", async () => {
     const existingJob = {
       ...cronJob("recurring-to-once", "Recurring retention", { kind: "every", everyMs: 60_000 }),

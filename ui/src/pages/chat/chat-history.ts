@@ -56,7 +56,10 @@ import {
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import {
+  isPendingInitialUserMessage,
+  reconcileInitialUserMessageHandoff,
+} from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -93,6 +96,10 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const chatBranchRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
+const pendingSessionMessageSubscriptionReleases = new WeakMap<
+  object,
+  Set<SessionMessageSubscription>
+>();
 
 type ChatHistoryRequestOwnership = {
   version: number;
@@ -596,6 +603,39 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
   );
 }
 
+function rememberPendingSessionMessageSubscriptionRelease(
+  state: ChatSessionMessageSubscriptionState,
+  subscription: SessionMessageSubscription,
+): void {
+  const key = state as object;
+  const pending = pendingSessionMessageSubscriptionReleases.get(key) ?? new Set();
+  pending.add(subscription);
+  pendingSessionMessageSubscriptionReleases.set(key, pending);
+}
+
+async function retryPendingSessionMessageSubscriptionReleases(
+  state: ChatSessionMessageSubscriptionState,
+): Promise<void> {
+  const key = state as object;
+  const pending = pendingSessionMessageSubscriptionReleases.get(key);
+  if (!pending) {
+    return;
+  }
+  await Promise.all(
+    [...pending].map(async (subscription) => {
+      try {
+        await state.sessions.unsubscribeMessages(subscription);
+        pending.delete(subscription);
+      } catch {
+        // Keep the handle for the next synchronization attempt or connection cleanup.
+      }
+    }),
+  );
+  if (pending.size === 0) {
+    pendingSessionMessageSubscriptionReleases.delete(key);
+  }
+}
+
 export async function syncSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
   opts?: { force?: boolean },
@@ -608,6 +648,7 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
+  await retryPendingSessionMessageSubscriptionReleases(state);
   const generation = beginSelectedSessionMessageSubscriptionSync(state);
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
@@ -641,19 +682,62 @@ export async function syncSelectedSessionMessageSubscription(
       requestedAgentId: nextSubscriptionAgentId,
     });
   try {
+    let unsubscribePromise: Promise<void> = Promise.resolve();
     if (shouldUnsubscribePrevious && previousSubscription) {
+      unsubscribePromise = state.sessions.unsubscribeMessages(previousSubscription);
+    }
+    const subscribePromise =
+      shouldSubscribe && isCurrent()
+        ? state.sessions.subscribeMessages(nextKey, {
+            agentId: nextSubscriptionAgentId ?? undefined,
+          })
+        : Promise.resolve(null);
+    // Gateway subscriptions are independent canonical-key entries. Overlap the old
+    // release with the new acquire so a session switch pays one RTT, not two.
+    const [unsubscribeResult, subscribeResult] = await Promise.allSettled([
+      unsubscribePromise,
+      subscribePromise,
+    ]);
+    if (unsubscribeResult.status === "rejected") {
+      if (subscribeResult.status === "fulfilled" && subscribeResult.value) {
+        try {
+          await state.sessions.unsubscribeMessages(subscribeResult.value);
+        } catch (replacementReleaseError) {
+          if (isCurrent()) {
+            if (previousSubscription) {
+              // Both live handles stay owned: the replacement becomes active while the
+              // failed previous release remains queued until a later sync releases it.
+              rememberPendingSessionMessageSubscriptionRelease(state, previousSubscription);
+            }
+            state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+            state.chatSessionMessageSubscription = subscribeResult.value;
+            state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
+          } else {
+            rememberPendingSessionMessageSubscriptionRelease(state, subscribeResult.value);
+          }
+          return;
+        }
+      }
       if (isCurrent()) {
+        state.sessionsError = String(unsubscribeResult.reason);
+      }
+      return;
+    }
+    if (subscribeResult.status === "rejected") {
+      if (isCurrent() && shouldUnsubscribePrevious) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
-      await state.sessions.unsubscribeMessages(previousSubscription);
+      throw subscribeResult.reason;
     }
-    if (!shouldSubscribe || !isCurrent()) {
+    const subscribed = subscribeResult.value;
+    if (!subscribed) {
+      if (isCurrent() && shouldUnsubscribePrevious) {
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscription = null;
+      }
       return;
     }
-    const subscribed = await state.sessions.subscribeMessages(nextKey, {
-      agentId: nextSubscriptionAgentId ?? undefined,
-    });
     if (!isCurrent()) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
       await state.sessions.unsubscribeMessages(subscribed).catch(() => undefined);
@@ -677,6 +761,7 @@ type InFlightChatHistoryRequest = {
 };
 
 type LoadChatHistoryOptions = {
+  deferBranches?: boolean;
   startup?: boolean;
 };
 
@@ -993,8 +1078,9 @@ export async function loadChatHistory(
     return inFlight.promise;
   }
   if (
-    state.chatBranchesSessionKey !== sessionKey ||
-    state.chatBranchesConnectionEpoch !== connectionEpoch
+    opts.deferBranches !== true &&
+    (state.chatBranchesSessionKey !== sessionKey ||
+      state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
   }
@@ -1185,6 +1271,9 @@ async function loadChatHistoryUncached(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
       authoritativeMessages,
+    ).filter(
+      (message) =>
+        !isPendingInitialUserMessage(state.initialUserMessage, state, sessionKey, message),
     );
     state.chatMessages = preserveOptimisticTailMessages(
       authoritativeMessages,

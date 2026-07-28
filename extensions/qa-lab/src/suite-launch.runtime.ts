@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+import { QaSuiteArtifactError, QaSuiteInfraError } from "./errors.js";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
@@ -32,6 +33,7 @@ import {
   resolveQaSuiteWorkerStartStaggerMs,
   scenarioRequiresIsolatedQaSuiteWorker,
 } from "./suite-planning.js";
+import { createQaSuiteProgressController } from "./suite-progress.js";
 import {
   buildQaSuiteSummaryJson,
   type QaSuiteResult,
@@ -80,6 +82,14 @@ type QaSuiteExecutionPlan =
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
+const QA_SUITE_INFRA_RETRY_LIMIT = 1;
+const QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "EPIPE",
+  "ETIMEDOUT",
+  "UND_ERR_SOCKET",
+]);
 const CREDENTIAL_POOL_UNAVAILABLE_CODES = new Set(["NO_CREDENTIAL_AVAILABLE", "POOL_EXHAUSTED"]);
 
 type QaUnifiedPartitionResult = {
@@ -105,6 +115,50 @@ type QaFlowChannelGroup = {
   isolatesAdapterInstances?: boolean;
   scenarios: QaSeedScenarioWithSource[];
 };
+
+function hasQaSuiteRetryableNetworkCode(error: unknown) {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current; depth += 1) {
+    if (typeof current !== "object") {
+      return false;
+    }
+    const record = current as { cause?: unknown; code?: unknown };
+    if (
+      typeof record.code === "string" &&
+      QA_SUITE_INFRA_RETRY_NETWORK_ERROR_CODES.has(record.code.toUpperCase())
+    ) {
+      return true;
+    }
+    current = record.cause;
+  }
+  return false;
+}
+
+function isQaSuiteInfraRetryableError(error: unknown) {
+  if (error instanceof QaSuiteArtifactError || error instanceof QaSuiteInfraError) {
+    return true;
+  }
+  return hasQaSuiteRetryableNetworkCode(error);
+}
+
+export async function runQaSuiteWithInfraRetry<Result>(
+  run: () => Promise<Result>,
+  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
+) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isQaSuiteInfraRetryableError(error) || attempt >= maxRetries) {
+        throw error;
+      }
+      process.stderr.write(
+        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
+      );
+    }
+  }
+  throw new Error("unreachable qa suite retry state");
+}
 
 async function loadQaLabServerRuntime() {
   const { startQaLabServer } = await import("./lab-server.js");
@@ -604,6 +658,14 @@ async function runUnifiedQaSuite(params: {
   const startedAt = new Date();
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
+  const progress = params.runParams?.lab
+    ? createQaSuiteProgressController({
+        lab: params.runParams.lab,
+        scenarios: params.plan.scenarios,
+        startedAt: startedAt.toISOString(),
+      })
+    : undefined;
+  progress?.start();
   const providerMode = normalizeQaProviderMode(
     params.runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE,
   );
@@ -774,6 +836,13 @@ async function runUnifiedQaSuite(params: {
             }
             const result = await runFlowSuite({
               ...params.runParams,
+              ...(progress
+                ? {
+                    lab: progress.createPartitionLab(
+                      partition.scenarios.map((scenario) => scenario.id),
+                    ),
+                  }
+                : {}),
               outputDir: partitionName
                 ? flowSuitePartitionOutputDir(outputDir, partitionName)
                 : suitePartitionOutputDir(outputDir, "flow"),
@@ -852,6 +921,11 @@ async function runUnifiedQaSuite(params: {
         const testFileScenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
         const testFileStartedScenarioIds: string[] = [];
         for (const [kind, testFileScenarios] of scenariosByKind) {
+          progress?.markRunning(
+            (failFast ? testFileScenarios.slice(0, 1) : testFileScenarios).map(
+              (scenario) => scenario.id,
+            ),
+          );
           const result = await runQaTestFileSuiteFromRuntime({
             runParams: {
               ...params.runParams,
@@ -869,12 +943,12 @@ async function runUnifiedQaSuite(params: {
               repoRoot,
             }),
           );
-          testFileScenarioResults.push(
-            ...result.results.map((scenarioResult) => ({
-              scenarioId: scenarioResult.scenario.id,
-              result: testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
-            })),
-          );
+          const scenarioResults = result.results.map((scenarioResult) => ({
+            scenarioId: scenarioResult.scenario.id,
+            result: testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
+          }));
+          testFileScenarioResults.push(...scenarioResults);
+          progress?.recordResults(scenarioResults);
           const resultsByScenarioId = new Map(
             result.results.map((scenarioResult) => [scenarioResult.scenario.id, scenarioResult]),
           );
@@ -1001,12 +1075,19 @@ async function runUnifiedQaSuite(params: {
     );
     return partition.startedScenarioIds.some((scenarioId) => !returnedScenarioIds.has(scenarioId));
   };
-  const runPartitionTasks = async (tasks: readonly QaUnifiedPartitionTask[], maxWeight: number) =>
-    failFast
-      ? await mapQaSuiteWithConcurrency(tasks, 1, runFailFastPartition, {
+  const runPartitionTasks = async (tasks: readonly QaUnifiedPartitionTask[], maxWeight: number) => {
+    // Retry inside the scheduled task so its weight and exclusive key stay held;
+    // one failed channel must not replay partitions that already completed.
+    const retryingTasks = tasks.map((task) => ({
+      ...task,
+      run: async () => await runQaSuiteWithInfraRetry(task.run),
+    }));
+    return failFast
+      ? await mapQaSuiteWithConcurrency(retryingTasks, 1, runFailFastPartition, {
           shouldStop: partitionFailed,
         })
-      : await runWeightedUnifiedPartitionTasks(tasks, maxWeight);
+      : await runWeightedUnifiedPartitionTasks(retryingTasks, maxWeight);
+  };
   const concurrentPartitionResults = await runPartitionTasks(concurrentPartitionTasks, concurrency);
   // Script scenarios may rebuild the checkout's shared dist tree. Wait until every
   // flow Gateway has stopped so package postbuild cannot invalidate its loaded chunks.
@@ -1049,7 +1130,7 @@ async function runUnifiedQaSuite(params: {
       } satisfies QaSuiteScenarioResult,
     ];
   });
-  return await writeUnifiedQaSuiteArtifacts({
+  const unifiedResult = await writeUnifiedQaSuiteArtifacts({
     alternateModel,
     channelDriver: params.runParams?.channelDriver,
     concurrency,
@@ -1064,6 +1145,33 @@ async function runUnifiedQaSuite(params: {
     scenarios,
     startedAt,
   });
+  const progressResults = params.plan.scenarios.flatMap((scenario) => {
+    const result = scenarioResultsById.get(scenario.id);
+    if (result) {
+      return [{ scenarioId: scenario.id, result }];
+    }
+    if (failFast && !startedScenarioIds.has(scenario.id)) {
+      return [];
+    }
+    return [
+      {
+        scenarioId: scenario.id,
+        result: {
+          name: scenario.title,
+          status: "fail" as const,
+          details: "suite partition returned no scenario result",
+          steps: [],
+        },
+      },
+    ];
+  });
+  progress?.complete(progressResults, finishedAt.toISOString());
+  params.runParams?.lab?.setLatestReport({
+    outputPath: unifiedResult.reportPath,
+    markdown: unifiedResult.report,
+    generatedAt: finishedAt.toISOString(),
+  });
+  return unifiedResult;
 }
 
 export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteRuntimeResult> {
@@ -1081,7 +1189,7 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
   }
   return {
     executionKind: "flow",
-    result: await runQaFlowSuiteFromRuntime(...args),
+    result: await runQaSuiteWithInfraRetry(() => runQaFlowSuiteFromRuntime(...args)),
   };
 }
 

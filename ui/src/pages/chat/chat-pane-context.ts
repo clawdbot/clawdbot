@@ -1,11 +1,13 @@
 import {
   applyChatAgentsList,
   applySelectedSessionProjection,
-  areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   canonicalUiSessionKeyForPersistence,
   clearChatMessagesFromCache,
   hasOperatorAdminAccess,
+  invalidateChatAvatarCache,
+  invalidateAssistantIdentityCache,
+  invalidateChatMetadataCache,
   isGatewayMethodAdvertised,
   loadSettings,
   markQueuedChatSendsWaitingForReconnect,
@@ -23,6 +25,7 @@ import {
   resolveSessionKey,
   resolveUiConfiguredMainKey,
   retryReconnectableQueuedChatSends,
+  selectedChatSessionRow,
   setQuestionPromptClient,
   syncSelectedSessionMessageSubscription,
   uiSessionEventMatches,
@@ -56,7 +59,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
     for (const row of stateValue.result?.sessions ?? []) {
-      const sessionKey = this.resolveBoardSessionKey(row.key);
+      const sessionKey = this.resolveObserverDigestHistoryKey(
+        row.key,
+        row.observerDigest?.agentId ?? stateValue.agentId ?? undefined,
+      );
       this.observerDigestHistory.sync(sessionKey, row.sessionId);
       if (row.observerDigest) {
         this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
@@ -64,9 +70,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     }
     this.refreshSwarmRoster();
     this.refreshBuiltinBoardSnapshot();
-    const selectedSession = stateValue.result?.sessions.find((row) =>
-      areUiSessionKeysEquivalent(row.key, state.sessionKey),
-    );
+    const selectedSession = selectedChatSessionRow(state);
     if (applySelectedSessionProjection(state, selectedSession)) {
       this.markSessionRead(selectedSession);
     }
@@ -159,6 +163,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       // A reconnect can retain the browser client. Keep async ownership tied
       // to the logical connection, not only the transport object identity.
       this.connectionGeneration += 1;
+      invalidateChatAvatarCache(state);
+      invalidateAssistantIdentityCache(state.client);
+      state.assistantIdentityRequestVersion += 1;
+      invalidateChatMetadataCache(state);
       this.swarmHydrator?.dispose();
       this.swarmHydrator = null;
       this.builtinBoardSnapshot = null;
@@ -205,13 +213,10 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
     if (state.connected && state.pendingAbort) {
       void replayPendingChatAbort(state).finally(() => state.requestUpdate?.());
     }
-    if (sourceChanged && snapshot.phase === "connected" && state.sessionKey) {
-      // Reconnects clear the probed states above; re-probe the active session
-      // so source-owned affordances reappear without a manual session switch.
-      void this.probeSessionDiscussion(state.sessionKey);
-      if (!clientChanged) {
-        void this.refreshSessionPullRequests();
-      }
+    if (sourceChanged && snapshot.phase === "connected" && state.sessionKey && !clientChanged) {
+      // A logical reconnect can retain the browser client and skip full startup.
+      // The existing transcript is already authoritative, so rehydrate after its next commit.
+      this.deferSessionHydrationUntilTranscript(state.sessionKey, Promise.resolve());
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
@@ -318,14 +323,19 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       }
       void syncSelectedSessionMessageSubscription(state, { force: true });
       void retryReconnectableQueuedChatSends(state);
-      void refreshPageChat(state, { startup: true, awaitHistory: true }).finally(() => {
+      const historyRefresh = refreshPageChat(state, {
+        startup: true,
+        awaitHistory: true,
+        deferBranches: true,
+      });
+      this.deferSessionHydrationUntilTranscript(startupSessionKey, historyRefresh);
+      void historyRefresh.finally(() => {
         void finishStartup();
       });
       void refreshChatModelAuthStatus(state).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
       void this.refreshTaskSuggestions();
       void this.refreshSessionSuggestions();
-      void this.refreshSessionPullRequests();
     }
     this.reconcileWaitingApprovalSnapshot();
     state.requestUpdate?.();

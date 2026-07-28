@@ -1,3 +1,4 @@
+import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
@@ -18,14 +19,17 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import { assertCodexThreadStartResponse } from "./protocol-validators.js";
-import type { JsonObject } from "./protocol.js";
+import type { CodexThread, JsonObject } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
   CodexAppServerContextEngineBinding,
   CodexAppServerThreadBinding,
 } from "./session-binding.js";
 import { isCodexAppServerStartSelectionChangedError } from "./shared-client.js";
-import { readActiveCodexTurnIdsFromResume } from "./thread-fingerprints.js";
+import {
+  fingerprintCodexThreadConfig,
+  readActiveCodexTurnIdsFromResume,
+} from "./thread-fingerprints.js";
 import {
   CodexAdoptedThreadActiveError,
   CodexRingZeroAttestationError,
@@ -76,6 +80,10 @@ type ThreadRequestContext = {
 type ResumeThreadContext = ThreadRequestContext & {
   binding: CodexAppServerThreadBinding;
   clearCurrentBinding: (operation: string) => Promise<void>;
+  prebuiltFinalConfigPatch?: {
+    configPatch?: JsonObject;
+    nativeHookRelayGeneration?: string;
+  };
 };
 
 type StartThreadContext = ThreadRequestContext & {
@@ -83,6 +91,19 @@ type StartThreadContext = ThreadRequestContext & {
   preserveExistingBinding: boolean;
   rotatedContextEngineBinding: boolean;
 };
+
+function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined {
+  const rolloutPath = thread.path?.trim();
+  if (
+    !rolloutPath ||
+    !path.isAbsolute(rolloutPath) ||
+    path.extname(rolloutPath) !== ".jsonl" ||
+    !path.basename(rolloutPath).includes(thread.id)
+  ) {
+    return undefined;
+  }
+  return rolloutPath;
+}
 
 export async function resumeExistingCodexThread(
   params: CodexStartOrResumeThreadParams,
@@ -117,13 +138,14 @@ export async function resumeExistingCodexThread(
       resumeBinding.connectionScope === "supervision"
         ? undefined
         : (params.params.authProfileId ?? resumeBinding.authProfileId);
-    const finalConfigPatch = params.buildFinalConfigPatch?.({
-      action: "resume",
-      binding: resumeBinding,
-    }) ?? {
-      configPatch: params.finalConfigPatch,
-      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-    };
+    const finalConfigPatch = context.prebuiltFinalConfigPatch ??
+      params.buildFinalConfigPatch?.({
+        action: "resume",
+        binding: resumeBinding,
+      }) ?? {
+        configPatch: params.finalConfigPatch,
+        nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+      };
     // Codex rebuilds effective config on thread/resume, so replay the app
     // allowlist persisted at thread/start or plugin tools disappear after one turn.
     const pluginAppsConfigPatch =
@@ -209,6 +231,7 @@ export async function resumeExistingCodexThread(
         : resumeBinding.mcpServersFingerprint;
     const resumePatch = {
       cwd: params.cwd,
+      rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId: boundAuthProfileId,
       model: response.model ?? resumeParams.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
@@ -274,6 +297,25 @@ export async function resumeExistingCodexThread(
       ...resumeBinding,
       threadId: response.thread.id,
       ...resumePatch,
+      liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
+        {
+          ...resumeParams,
+          model:
+            resumeBinding.preserveNativeModel === true
+              ? null
+              : (response.model ?? resumeParams.model ?? null),
+          requestedModel:
+            resumeBinding.preserveNativeModel === true ? null : (resumeParams.model ?? null),
+          modelProvider:
+            resumeBinding.preserveNativeModel === true ? null : (resumePatch.modelProvider ?? null),
+          requestedModelProvider:
+            resumeBinding.preserveNativeModel === true
+              ? null
+              : (resumeParams.modelProvider ?? resumePatch.modelProvider ?? null),
+        },
+        authProfileId,
+        dynamicToolsFingerprint,
+      ),
       lifecycle: {
         action: "resumed",
         ...(activeTurnIds.length ? { activeTurnIds } : {}),
@@ -409,6 +451,7 @@ export async function startFreshCodexThread(
     }
   });
   const response = assertCodexThreadStartResponse(threadStartResponse);
+  const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
   if (ringZeroActive) {
     try {
       await lifecycleTiming.measure("ring-zero-mcp-attestation", () =>
@@ -427,6 +470,10 @@ export async function startFreshCodexThread(
     agentDir: params.params.agentDir,
     config: params.params.config,
   });
+  const bindingModelProvider = normalizeBindingModelProvider(
+    params.params.authProfileId,
+    response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
+  );
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
   if (!preserveExistingBinding) {
@@ -438,12 +485,10 @@ export async function startFreshCodexThread(
           threadId: response.thread.id,
           ...(clientId ? { clientId } : {}),
           cwd: params.cwd,
+          ...(rolloutPath ? { rolloutPath } : {}),
           authProfileId: params.params.authProfileId,
           model: response.model ?? startParams.model ?? params.params.modelId,
-          modelProvider: normalizeBindingModelProvider(
-            params.params.authProfileId,
-            response.modelProvider ?? requestModelProvider ?? startModelProvider ?? modelProvider,
-          ),
+          modelProvider: bindingModelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           webSearchThreadConfigFingerprint,
@@ -490,6 +535,7 @@ export async function startFreshCodexThread(
     threadId: response.thread.id,
     ...(clientId ? { clientId } : {}),
     cwd: params.cwd,
+    ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider:
@@ -509,6 +555,23 @@ export async function startFreshCodexThread(
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
     contextEngine: contextEngineBinding,
     environmentSelectionFingerprint,
+    // Transient starts do not own the persisted binding, so their native
+    // subscriptions must be released instead of entering the warm cache.
+    ...(!preserveExistingBinding
+      ? {
+          liveThreadConfigFingerprint: fingerprintCodexThreadConfig(
+            {
+              ...startParams,
+              model: response.model ?? startParams.model ?? null,
+              requestedModel: startParams.model ?? null,
+              modelProvider: bindingModelProvider ?? null,
+              requestedModelProvider: startParams.modelProvider ?? bindingModelProvider ?? null,
+            },
+            params.params.authProfileId,
+            dynamicToolsFingerprint,
+          ),
+        }
+      : {}),
     lifecycle: {
       action: "started",
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),

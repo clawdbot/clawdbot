@@ -8,6 +8,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
@@ -27,9 +28,13 @@ import {
   DEFAULT_SESSION_LIST_QUERY,
   filterSessionRows,
   scopedAgentParamsForSession,
-  searchForSession,
   type SessionArchivedFilter,
 } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  resolveSessionNavigationAgentId,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -39,6 +44,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -423,6 +429,10 @@ class SessionsPage extends OpenClawLightDomElement {
     return agentId;
   }
 
+  private sessionPathAgentId(key: string, context: ApplicationContext): string {
+    return this.sessionAgentId(key, context) ?? resolveSessionNavigationAgentId(context);
+  }
+
   private sessionListOptions() {
     // Narrow the query only for a route deep link (?session=...); an open
     // drawer is pure UI state and must not filter subsequent reloads.
@@ -693,18 +703,22 @@ class SessionsPage extends OpenClawLightDomElement {
           areUiSessionKeysEquivalent(key, scope.gateway.snapshot.sessionKey),
         );
         if (deletedCurrent) {
-          scope.gateway.setSessionKey(
-            buildAgentMainSessionKey({
-              agentId:
-                parseAgentSessionKey(deletedCurrent)?.agentId ??
-                scope.context.agentSelection.state.selectedId ??
-                "main",
+          const agentId =
+            parseAgentSessionKey(deletedCurrent)?.agentId ??
+            scope.context.agentSelection.state.selectedId ??
+            "main";
+          selectApplicationSession({
+            selection: scope.context.agentSelection,
+            gateway: scope.gateway,
+            agentId,
+            sessionKey: buildAgentMainSessionKey({
+              agentId,
               mainKey: resolveUiConfiguredMainKey({
                 agentsList: scope.context.agents.state.agentsList,
                 hello: scope.gateway.snapshot.hello,
               }),
             }),
-          );
+          });
         }
       }
       if (result.errors.length > 0) {
@@ -957,7 +971,15 @@ class SessionsPage extends OpenClawLightDomElement {
         return;
       }
       if (forkedKey) {
-        scope.context.navigate("chat", { search: searchForSession(forkedKey), hash: "" });
+        scope.context.navigate("chat", {
+          ...sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: forkedKey,
+            agentId: agentId ?? this.sessionPathAgentId(forkedKey, scope.context),
+          }).options,
+          hash: "",
+        });
       } else if (scope.sessions.state.error) {
         this.error = scope.sessions.state.error;
       }
@@ -1049,7 +1071,15 @@ class SessionsPage extends OpenClawLightDomElement {
         agentId: this.sessionAgentId(sessionKey, scope.context),
       });
       if (this.isRequestScopeCurrent(scope)) {
-        scope.context.navigate("chat", { search: searchForSession(result.key), hash: "" });
+        scope.context.navigate("chat", {
+          ...sessionNavigationTarget({
+            context: scope.context,
+            face: "chat",
+            sessionKey: result.key,
+            agentId: this.sessionPathAgentId(result.key, scope.context),
+          }).options,
+          hash: "",
+        });
       }
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1154,6 +1184,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const workboardState = context.workboard.state;
     const capturedSessionKeys = new Set(
       workboardState.cards
+        .filter(isActiveWorkboardCard)
         .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
         .filter((key): key is string => typeof key === "string" && key.length > 0),
     );
@@ -1188,14 +1219,22 @@ class SessionsPage extends OpenClawLightDomElement {
         .workboard=${canCapture && row.kind !== "global"
           ? {
               captured: capturedSessionKeys.has(row.key),
-              busy: [...workboardState.capturingSessionKeys][0] === row.key,
+              busy: workboardState.capturingSessionKeys.has(row.key),
             }
           : null}
         .onClose=${() => this.closeSessionMenu()}
         .onAction=${(action: SessionMenuAction) => {
           switch (action.kind) {
             case "open-chat":
-              context.navigate("chat", { search: searchForSession(row.key), hash: "" });
+              context.navigate("chat", {
+                ...sessionNavigationTarget({
+                  context,
+                  face: "chat",
+                  sessionKey: row.key,
+                  agentId: this.sessionPathAgentId(row.key, context),
+                }).options,
+                hash: "",
+              });
               break;
             case "open-pr":
               openExternalUrlSafe(action.url);
@@ -1276,6 +1315,11 @@ class SessionsPage extends OpenClawLightDomElement {
           includeUnknown: this.includeUnknown,
           statusFilter: this.statusFilter,
           basePath: context.basePath,
+          agentId: resolveSessionNavigationAgentId(context),
+          mainKey: resolveUiConfiguredMainKey({
+            agentsList: context.agents.state.agentsList,
+            hello: context.gateway.snapshot.hello,
+          }),
           searchQuery: this.searchQuery,
           transcriptSearchAvailable:
             isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.search") === true,
@@ -1359,8 +1403,19 @@ class SessionsPage extends OpenClawLightDomElement {
             this.selectedKeys = new Set();
           },
           onDeleteSelected: () => void this.deleteSelected(),
-          onNavigateToChat: (sessionKey) =>
-            context.navigate("chat", { search: searchForSession(sessionKey), hash: "" }),
+          onNavigateToChat: (sessionKey) => {
+            const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+            context.navigate(face, {
+              ...sessionNavigationTarget({
+                context,
+                face,
+                sessionKey,
+                agentId: this.sessionPathAgentId(sessionKey, context),
+                preferenceDerivedFace: true,
+              }).options,
+              hash: "",
+            });
+          },
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
           onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),

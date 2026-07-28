@@ -39,12 +39,13 @@ export async function resolveInitialWizardChannel(
     installedPlugins: listActiveChannelSetupPlugins(),
     workspaceDir: resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)),
   });
-  return resolved.entries.find(
-    (entry) =>
-      normalizeOptionalLowercaseString(entry.id) === normalized ||
+  return (
+    resolved.entries.find((entry) => normalizeOptionalLowercaseString(entry.id) === normalized) ??
+    resolved.entries.find((entry) =>
       (entry.meta.aliases ?? []).some(
         (alias) => normalizeOptionalLowercaseString(alias) === normalized,
       ),
+    )
   )?.id;
 }
 

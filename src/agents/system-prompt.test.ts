@@ -841,6 +841,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Several: most specific");
   });
 
+  it("switches skills access guidance under code mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      codeModeActive: true,
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain(
+      'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.',
+    );
+    expect(prompt).not.toContain("read exact <location> with `read`");
+  });
+
   it("instructs models to use skill_workshop only when the tool is available", () => {
     const section = buildSkillWorkshopPromptSection();
     expect(section).toEqual([
@@ -949,11 +963,22 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
     );
     expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
     expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
       prompt.indexOf("NEVER use [[tts:...]]"),
+    );
+  });
+
+  it("adds USER guidance when a user-model file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
+    });
+
+    expect(prompt).toContain(
+      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
     );
   });
 
@@ -1165,6 +1190,38 @@ describe("buildAgentSystemPrompt", () => {
     expect(telegramPrompt).toContain("final text normally routes to source");
   });
 
+  it("adds collapsible-details guidance only for supported full prompts", () => {
+    const supportedPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram", capabilities: ["markdownDetails"] },
+    });
+    const unsupportedPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "discord", capabilities: [] },
+    });
+    const sameChannelUnsupportedPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: { channel: "telegram", capabilities: [] },
+    });
+    const minimalPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      runtimeInfo: { channel: "telegram", capabilities: ["markdownDetails"] },
+    });
+
+    expect(supportedPrompt).toContain("## Collapsible Details");
+    expect(supportedPrompt).toContain(
+      "This surface renders `<details>` disclosures. When a reply has optional depth — long derivations, logs, background, worked examples — you may place it inside `<details><summary>Label</summary>` … `</details>` written on their own lines.",
+    );
+    expect(supportedPrompt).toContain("Never hide the actual answer behind a disclosure.");
+    expect(unsupportedPrompt).not.toContain("## Collapsible Details");
+    expect(minimalPrompt).not.toContain("## Collapsible Details");
+
+    const stablePrefix = (prompt: string) =>
+      prompt.slice(0, prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY));
+    expect(stablePrefix(supportedPrompt)).toBe(stablePrefix(sameChannelUnsupportedPrompt));
+  });
+
   it("describes source replies without the message tool", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -1178,7 +1235,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("### message tool");
   });
 
-  it("uses Slack interactive reply hints instead of generic inline button config guidance", () => {
+  it("uses Slack typed presentation hints instead of generic inline button config guidance", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
@@ -1186,13 +1243,11 @@ describe("buildAgentSystemPrompt", () => {
         channel: "slack",
       },
       messageToolHints: [
-        "- Prefer Slack buttons/selects for 2-5 discrete choices or parameter picks instead of asking the user to type one.",
-        "- Slack interactive replies: use `[[slack_buttons: Label:value, Other:other]]` to add action buttons that route clicks back as Slack interaction system events.",
+        "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
       ],
     });
 
-    expect(prompt).toContain("Slack interactive replies");
-    expect(prompt).toContain("[[slack_buttons: Label:value, Other:other]]");
+    expect(prompt).toContain("`presentation` buttons/selects");
     expect(prompt).not.toContain("Inline buttons not enabled for slack");
     expect(prompt).not.toContain("slack.capabilities.inlineButtons");
     expect(prompt).not.toContain("buttons=[[{text,callback_data,style?}]]");
@@ -1598,6 +1653,33 @@ describe("buildAgentSystemPrompt", () => {
     for (const variant of [otherOwnerPrompt, manualApprovalPrompt]) {
       expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
     }
+  });
+
+  it("keeps automatic tool discovery in the stable prompt-cache prefix", () => {
+    const toolSchemaDirectoryPrompt = [
+      "Available deferred-schema tools:",
+      "- fake_calendar: Schedule a calendar event",
+      "- fake_weather: Read current weather",
+      "",
+      "Use tool_search_code with openclaw.tools.search(query).",
+    ].join("\n");
+    const buildPrompt = (owner: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        toolNames: ["tool_search_code"],
+        toolSchemaDirectoryPrompt,
+        ownerNumbers: [owner],
+      });
+    const first = buildPrompt("+123");
+    const second = buildPrompt("+456");
+    const firstBoundary = first.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+    const secondBoundary = second.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+    expect(firstBoundary).toBeGreaterThan(first.indexOf("### Deferred Tool Schemas"));
+    expect(first.slice(0, firstBoundary)).toBe(second.slice(0, secondBoundary));
+    expect(first.slice(0, firstBoundary)).toContain(toolSchemaDirectoryPrompt);
+    expect(first.slice(firstBoundary)).toContain("Allowlisted senders: +123");
+    expect(second.slice(secondBoundary)).toContain("Allowlisted senders: +456");
   });
 });
 

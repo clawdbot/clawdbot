@@ -5,6 +5,7 @@ import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/bind
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { applyCommandTextToContext } from "./command-context-rewrite.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -17,18 +18,9 @@ type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
 };
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
-  const mutableCtx = ctx as Record<string, unknown>;
-  mutableCtx.commandText = resetTail;
-  mutableCtx.agentText = resetTail;
-  mutableCtx.rawText = resetTail;
-  mutableCtx.Body = resetTail;
-  mutableCtx.RawBody = resetTail;
-  mutableCtx.CommandBody = resetTail;
-  mutableCtx.BodyForCommands = resetTail;
-  mutableCtx.BodyForAgent = resetTail;
-  mutableCtx.BodyStripped = resetTail;
+  applyCommandTextToContext(ctx, resetTail);
   // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
-  mutableCtx.AcpDispatchTailAfterReset = true;
+  ctx.AcpDispatchTailAfterReset = true;
 }
 
 function isResetAuthorized(params: HandleCommandsParams): boolean {
@@ -106,6 +98,7 @@ export async function maybeHandleResetCommand(
 
     await emitResetCommandHooks({
       action: "reset",
+      agentId: params.agentId,
       ctx: params.ctx,
       cfg: params.cfg,
       command: params.command,
@@ -180,6 +173,7 @@ export async function maybeHandleResetCommand(
 
   const hookResult = await emitResetCommandHooks({
     action: commandAction,
+    agentId: params.agentId,
     ctx: params.ctx,
     cfg: params.cfg,
     command: params.command,

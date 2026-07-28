@@ -9,7 +9,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
-import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
+import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import { isCliRuntimeAliasForProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection.js";
@@ -33,27 +33,26 @@ import {
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
+  resolveStorePath,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
-  readTranscriptStatsSync,
+  readRecentSessionTranscriptActiveEvents,
+  readSessionTranscriptActiveStats,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../config/sessions/sqlite-marker.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { selectSessionTranscriptLeafControlledPath } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
 import { CommandLane } from "../../process/lanes.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -166,6 +165,7 @@ const memoryDeps = {
   incrementCompactionCount,
   updateSessionEntry: updateSessionEntryDefault,
   emitAgentEvent,
+  resolveSessionLogPath,
   randomUUID: () => crypto.randomUUID(),
   now: () => Date.now(),
 };
@@ -182,6 +182,7 @@ function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDeps>): v
     incrementCompactionCount,
     updateSessionEntry: updateSessionEntryDefault,
     emitAgentEvent,
+    resolveSessionLogPath,
     randomUUID: () => crypto.randomUUID(),
     now: () => Date.now(),
     ...overrides,
@@ -220,18 +221,6 @@ function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
-function isPreflightCompactionSkipReason(reason?: string): boolean {
-  const classification = classifyCompactionReason(reason);
-  // Preflight compaction is a guardrail, not a hard dependency. These classes
-  // mean the context engine found nothing useful to compact, so the reply should
-  // continue instead of surfacing a generic user-facing failure.
-  return (
-    classification === "below_threshold" ||
-    classification === "no_compactable_entries" ||
-    classification === "already_compacted_recently"
-  );
-}
-
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
   model?: string,
@@ -253,6 +242,7 @@ function resolveMemoryFlushModelFallbackOptions(
         ...options,
         provider: overrideProvider,
         model: overrideModel,
+        requestedRouteResolution: "raw" as const,
         fallbacksOverride: [],
       };
     }
@@ -260,6 +250,7 @@ function resolveMemoryFlushModelFallbackOptions(
   return {
     ...options,
     model: override,
+    requestedRouteResolution: "raw" as const,
     fallbacksOverride: [],
   };
 }
@@ -383,6 +374,7 @@ type SessionTranscriptUsageSnapshot = {
 // transcript reads in time to flip memory-flush gating when needed.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
+const SQLITE_USAGE_TAIL_MAX_EVENTS = 512;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
 
 function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
@@ -407,46 +399,14 @@ function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalize
 }
 
 function resolveSessionLogPath(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { agentId?: string; storePath?: string },
+  _sessionId?: string,
+  _sessionEntry?: SessionEntry,
+  _sessionKey?: string,
+  _opts?: { agentId?: string; storePath?: string },
 ): string | undefined {
-  if (!sessionId) {
-    return undefined;
-  }
-
-  try {
-    const transcriptPath = normalizeOptionalString(
-      (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
-    );
-    const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
-    if (parseSqliteSessionFileMarker(sessionFile)) {
-      return sessionFile;
-    }
-    const agentId =
-      opts?.agentId ??
-      (sessionKey?.startsWith("agent:") ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    if (!sessionFile && agentId && opts?.storePath) {
-      return formatSqliteSessionFileMarker({
-        agentId,
-        sessionId,
-        storePath: opts.storePath,
-      });
-    }
-    if (!sessionFile) {
-      return undefined;
-    }
-    const pathOpts = resolveSessionFilePathOptions({
-      agentId,
-      storePath: opts?.storePath,
-    });
-    // Normalize sessionFile through resolveSessionFilePath so relative entries
-    // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(sessionId, { sessionFile }, pathOpts);
-  } catch {
-    return undefined;
-  }
+  // Runtime session rows carry SQLite identity only. Tests may inject an artifact
+  // resolver to cover explicit exported JSONL inputs, but runtime never infers one.
+  return undefined;
 }
 
 function deriveTranscriptUsageSnapshot(
@@ -482,6 +442,51 @@ function deriveTranscriptUsageSnapshot(
   };
 }
 
+function readLatestNonzeroUsageFromTranscriptEvents(
+  events: readonly unknown[],
+): ReturnType<typeof normalizeUsage> | undefined {
+  const activeEvents = selectSessionTranscriptLeafControlledPath(events) ?? events;
+  for (const event of activeEvents.toReversed()) {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      continue;
+    }
+    const record = event as { message?: unknown; type?: unknown; usage?: UsageLike };
+    if (record.type === "compaction" || record.type === "reset") {
+      return undefined;
+    }
+    const message =
+      record.message && typeof record.message === "object" && !Array.isArray(record.message)
+        ? (record.message as { usage?: UsageLike })
+        : undefined;
+    const usage = normalizeUsage(message?.usage ?? record.usage);
+    if (usage && hasNonzeroUsage(usage)) {
+      return usage;
+    }
+  }
+  return undefined;
+}
+
+function readSqliteSessionLogSnapshot(
+  scope: { agentId?: string; sessionId: string; sessionKey?: string; storePath: string },
+  options: { includeByteSize: boolean; includeUsage: boolean },
+): SessionLogSnapshot {
+  const snapshot: SessionLogSnapshot = {};
+  try {
+    if (options.includeByteSize) {
+      snapshot.byteSize = readSessionTranscriptActiveStats(scope).sizeBytes;
+    }
+    if (options.includeUsage) {
+      const events = readRecentSessionTranscriptActiveEvents(scope, SQLITE_USAGE_TAIL_MAX_EVENTS);
+      snapshot.usage = deriveTranscriptUsageSnapshot({
+        usage: readLatestNonzeroUsageFromTranscriptEvents(events),
+      });
+    }
+  } catch {
+    return snapshot;
+  }
+  return snapshot;
+}
+
 type SessionLogSnapshot = {
   byteSize?: number;
   usage?: SessionTranscriptUsageSnapshot;
@@ -510,6 +515,7 @@ async function appendPostCompactionRefreshPrompt(params: {
 }
 
 async function readSessionLogSnapshot(params: {
+  agentId?: string;
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -517,30 +523,39 @@ async function readSessionLogSnapshot(params: {
   includeByteSize: boolean;
   includeUsage: boolean;
 }): Promise<SessionLogSnapshot> {
-  const logPath = resolveSessionLogPath(
+  const logPath = memoryDeps.resolveSessionLogPath(
     params.sessionId,
     params.sessionEntry,
     params.sessionKey,
     params.opts,
   );
-  if (!logPath) {
-    return {};
+  const sqliteMarker = logPath ? parseSqliteSessionFileMarker(logPath) : undefined;
+  if (logPath && !sqliteMarker) {
+    return await readFileSessionLogSnapshot(logPath, params);
   }
-  const sqliteMarker = parseSqliteSessionFileMarker(logPath);
+  const agentId =
+    params.agentId ?? params.opts?.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  if (params.sessionId && params.opts?.storePath && agentId) {
+    return readSqliteSessionLogSnapshot(
+      {
+        agentId,
+        sessionId: params.sessionId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        storePath: params.opts.storePath,
+      },
+      params,
+    );
+  }
   if (sqliteMarker) {
-    // SQLite-backed transcripts intentionally skip the legacy JSONL tail scan
-    // (there is no usage line to parse), but the byte-size guard below still
-    // needs a real value or it silently degrades to token-only triggering.
-    if (!params.includeByteSize) {
-      return {};
-    }
-    try {
-      return { byteSize: readTranscriptStatsSync(sqliteMarker).sizeBytes };
-    } catch {
-      return {};
-    }
+    return readSqliteSessionLogSnapshot(sqliteMarker, params);
   }
+  return {};
+}
 
+async function readFileSessionLogSnapshot(
+  logPath: string,
+  params: { includeByteSize: boolean; includeUsage: boolean },
+): Promise<SessionLogSnapshot> {
   const snapshot: SessionLogSnapshot = {};
   let usageScan: SessionLogUsageScan | undefined;
 
@@ -666,6 +681,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   }
   try {
     const snapshot = await readSessionLogSnapshot({
+      agentId: params.agentId,
       sessionId,
       sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
@@ -699,9 +715,12 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       };
     }
     const messages = (await readSessionMessagesAsync(
-      sessionId,
-      params.storePath,
-      params.sessionEntry?.sessionFile,
+      {
+        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+        sessionId,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      },
       {
         mode: "recent",
         maxMessages: 200,
@@ -799,6 +818,25 @@ export async function runPreflightCompactionIfNeeded(params: {
     return entry ?? params.sessionEntry;
   }
 
+  const compactionSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  if (!compactionSessionKey) {
+    return entry ?? params.sessionEntry;
+  }
+  const keyAgentId = resolveAgentIdFromSessionKey(
+    compactionSessionKey,
+    params.followupRun.run.agentId,
+  );
+  const compactionAgentId = isUnscopedSessionKeySentinel(compactionSessionKey)
+    ? (params.followupRun.run.agentId ?? keyAgentId ?? "main")
+    : (keyAgentId ?? params.followupRun.run.agentId ?? "main");
+  const compactionStorePath = resolveSessionStorePathForScope({
+    agentId: compactionAgentId,
+    sessionKey: compactionSessionKey,
+    storePath:
+      params.storePath ??
+      resolveStorePath(params.cfg.session?.store, { agentId: compactionAgentId }),
+  });
+
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveFollowupContextConfigProvider({
@@ -843,19 +881,20 @@ export async function runPreflightCompactionIfNeeded(params: {
     typeof freshPersistedTokens === "number" && !freshNeedsOutputRead
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
-          agentId: params.followupRun.run.agentId,
+          agentId: compactionAgentId,
           sessionId: entry.sessionId,
           sessionEntry: entry,
-          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          storePath: params.storePath,
+          sessionKey: compactionSessionKey,
+          storePath: compactionStorePath,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
       ? await readSessionLogSnapshot({
+          agentId: compactionAgentId,
           sessionId: entry.sessionId,
           sessionEntry: entry,
-          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          opts: { agentId: params.followupRun.run.agentId, storePath: params.storePath },
+          sessionKey: compactionSessionKey,
+          opts: { agentId: compactionAgentId, storePath: compactionStorePath },
           includeByteSize: true,
           includeUsage: false,
         })
@@ -954,19 +993,24 @@ export async function runPreflightCompactionIfNeeded(params: {
   };
   try {
     await notifyStartCompaction();
-    const sessionFile = resolveSessionLogPath(
-      entry.sessionId,
-      entry,
-      params.sessionKey ?? params.followupRun.run.sessionKey,
-      { agentId: params.followupRun.run.agentId, storePath: params.storePath },
-    );
+    const sessionFile =
+      memoryDeps.resolveSessionLogPath(entry.sessionId, entry, compactionSessionKey, {
+        agentId: compactionAgentId,
+        storePath: compactionStorePath,
+      }) ?? normalizeOptionalString(compactionSessionKey);
     if (!sessionFile) {
       await notifyTerminalCompaction("skipped");
       return entry ?? params.sessionEntry;
     }
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey: compactionSessionKey,
+      sessionTarget: {
+        agentId: compactionAgentId,
+        sessionId: entry.sessionId,
+        sessionKey: compactionSessionKey,
+        storePath: compactionStorePath,
+      },
       sandboxSessionKey: params.runtimePolicySessionKey,
       allowGatewaySubagentBinding: true,
       messageChannel: params.followupRun.run.messageProvider,
@@ -1012,7 +1056,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result?.ok) {
       const reason = result?.reason ?? "not_compacted";
-      if (isPreflightCompactionSkipReason(reason)) {
+      if (result && isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
@@ -1024,7 +1068,7 @@ export async function runPreflightCompactionIfNeeded(params: {
 
     if (!result.compacted) {
       const reason = normalizeOptionalString(result.reason) ?? "not_compacted";
-      if (isPreflightCompactionSkipReason(reason)) {
+      if (isBenignCompactionSkipResult(result)) {
         await notifyTerminalCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry ?? params.sessionEntry;
@@ -1035,14 +1079,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     }
 
     await deps.incrementCompactionCount({
+      agentId: compactionAgentId,
       cfg: params.cfg,
       sessionEntry: entry,
       sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
+      sessionKey: compactionSessionKey,
+      storePath: compactionStorePath,
       tokensAfter: result.result?.tokensAfter,
       newSessionId: result.result?.sessionId,
-      newSessionFile: result.result?.sessionFile,
     });
     await appendPostCompactionRefreshPrompt({
       cfg: params.cfg,
@@ -1054,16 +1098,14 @@ export async function runPreflightCompactionIfNeeded(params: {
       const previousSessionId = params.followupRun.run.sessionId;
       params.followupRun.run.sessionId = entry.sessionId;
       params.replyOperation.updateSessionId(entry.sessionId);
-      if (entry.sessionFile) {
-        params.followupRun.run.sessionFile = entry.sessionFile;
-      }
       const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
       if (queueKey) {
+        params.followupRun.run.sessionFile = queueKey;
         deps.refreshQueuedFollowupSession({
           key: queueKey,
           previousSessionId,
           nextSessionId: entry.sessionId,
-          nextSessionFile: entry.sessionFile,
+          nextSessionFile: queueKey,
         });
       }
     }
@@ -1338,6 +1380,21 @@ export async function runMemoryFlushIfNeeded(params: {
     workspaceDir: params.followupRun.run.workspaceDir,
     relativePath: memoryFlushWritePath,
   });
+  const memoryFlushAbsolutePath = path.join(
+    params.followupRun.run.workspaceDir,
+    memoryFlushWritePath,
+  );
+  const readMemoryFlushContent = () =>
+    fs.promises.readFile(memoryFlushAbsolutePath, "utf8").catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
+  // Capture one baseline before any write can start. Per-write snapshots can
+  // pair a failed later write with an earlier success and miss mixed content.
+  const memoryFlushContentBefore = await readMemoryFlushContent();
+  let memoryFlushWroteTarget = false;
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
     activeMemoryFlushPlan.systemPrompt,
@@ -1345,7 +1402,6 @@ export async function runMemoryFlushIfNeeded(params: {
     .filter(Boolean)
     .join("\n\n");
   let postCompactionSessionId: string | undefined;
-  let postCompactionSessionFile: string | undefined;
   try {
     const selection = resolveMemoryFlushModelFallbackOptions(
       params.followupRun.run,
@@ -1357,6 +1413,7 @@ export async function runMemoryFlushIfNeeded(params: {
         cfg: selection.cfg,
         provider: selection.provider,
         model: selection.model,
+        requestedRouteResolution: selection.requestedRouteResolution,
         agentDir: selection.agentDir,
         fallbacksOverride: selection.fallbacksOverride,
       },
@@ -1434,6 +1491,11 @@ export async function runMemoryFlushIfNeeded(params: {
           abortSignal: params.replyOperation.abortSignal,
           replyOperation: params.replyOperation,
           onAgentEvent: (evt) => {
+            if (evt.stream === "tool" && evt.data.name === "write") {
+              if (evt.data.phase === "result" && evt.data.isError !== true) {
+                memoryFlushWroteTarget = true;
+              }
+            }
             if (evt.stream === "compaction") {
               const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
               if (phase === "end") {
@@ -1446,15 +1508,22 @@ export async function runMemoryFlushIfNeeded(params: {
         if (result.meta?.agentMeta?.sessionId) {
           postCompactionSessionId = result.meta.agentMeta.sessionId;
         }
-        if (result.meta?.agentMeta?.sessionFile) {
-          postCompactionSessionFile = result.meta.agentMeta.sessionFile;
-        }
         bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
           result.meta?.systemPromptReport,
         );
         return result;
       },
     });
+    if (activeMemoryFlushPlan.recordWriteProvenance && memoryFlushWroteTarget) {
+      await activeMemoryFlushPlan.recordWriteProvenance({
+        workspaceDir: params.followupRun.run.workspaceDir,
+        relativePath: memoryFlushWritePath,
+        contentBefore: memoryFlushContentBefore,
+        contentAfter: await readMemoryFlushContent(),
+        originClass: params.followupRun.run.senderIsOwner ? "agent" : "untrusted",
+        observedAt: memoryDeps.now(),
+      });
+    }
     const flushedCompactionCount =
       activeSessionEntry?.compactionCount ??
       (params.sessionKey ? activeSessionStore?.[params.sessionKey]?.compactionCount : 0) ??
@@ -1462,29 +1531,27 @@ export async function runMemoryFlushIfNeeded(params: {
     if (memoryCompactionCompleted) {
       const previousSessionId = activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId;
       await memoryDeps.incrementCompactionCount({
+        agentId: params.followupRun.run.agentId,
         cfg: params.cfg,
         sessionEntry: activeSessionEntry,
         sessionStore: activeSessionStore,
         sessionKey: params.sessionKey,
         storePath: params.storePath,
         newSessionId: postCompactionSessionId,
-        newSessionFile: postCompactionSessionFile,
       });
       const updatedEntry = params.sessionKey ? activeSessionStore?.[params.sessionKey] : undefined;
       if (updatedEntry) {
         activeSessionEntry = updatedEntry;
         params.followupRun.run.sessionId = updatedEntry.sessionId;
         params.replyOperation.updateSessionId(updatedEntry.sessionId);
-        if (updatedEntry.sessionFile) {
-          params.followupRun.run.sessionFile = updatedEntry.sessionFile;
-        }
         const queueKey = params.followupRun.run.sessionKey ?? params.sessionKey;
         if (queueKey) {
+          params.followupRun.run.sessionFile = queueKey;
           memoryDeps.refreshQueuedFollowupSession({
             key: queueKey,
             previousSessionId,
             nextSessionId: updatedEntry.sessionId,
-            nextSessionFile: updatedEntry.sessionFile,
+            nextSessionFile: queueKey,
           });
         }
       }
@@ -1513,8 +1580,9 @@ export async function runMemoryFlushIfNeeded(params: {
           activeSessionEntry = updatedEntry;
           params.followupRun.run.sessionId = updatedEntry.sessionId;
           params.replyOperation.updateSessionId(updatedEntry.sessionId);
-          if (updatedEntry.sessionFile) {
-            params.followupRun.run.sessionFile = updatedEntry.sessionFile;
+          const refreshedSessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+          if (refreshedSessionKey) {
+            params.followupRun.run.sessionFile = refreshedSessionKey;
           }
         }
       } catch (err) {

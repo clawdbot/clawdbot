@@ -6,6 +6,7 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
+import { installSessionManagerFileCompat } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
   onInternalDiagnosticEvent,
@@ -105,6 +106,8 @@ import {
   codexDynamicToolsFingerprint,
   startOrResumeThread as startOrResumeThreadImpl,
 } from "./thread-lifecycle.js";
+
+installSessionManagerFileCompat();
 
 const testing = {
   buildDeveloperInstructions,
@@ -217,11 +220,11 @@ async function writeExistingBinding(
   });
 }
 
-function attachSqliteSessionTarget(
+async function attachSqliteSessionTarget(
   params: EmbeddedRunAttemptParams,
   storePath: string,
   sessionId: string,
-): void {
+): Promise<void> {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.sessionTarget = {
@@ -230,6 +233,12 @@ function attachSqliteSessionTarget(
     sessionKey: params.sessionKey,
     storePath,
   };
+  await upsertSessionEntry({
+    agentId: "main",
+    sessionKey: params.sessionKey,
+    storePath,
+    entry: { sessionFile: params.sessionFile, sessionId, updatedAt: Date.now() },
+  });
 }
 
 async function readTranscriptMessagesByIdentity(
@@ -376,12 +385,7 @@ async function buildCodexTurnContextForTest(
     sessionAgentId,
     memoryToolNames,
   });
-  const threadDeveloperInstructions = [
-    testing.buildDeveloperInstructions(params, { dynamicTools }),
-    workspaceBootstrapContext.developerInstructions,
-  ]
-    .filter((section) => section?.trim())
-    .join("\n\n");
+  const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params,
     workspacePromptContext: workspaceBootstrapContext.promptContext,
@@ -1766,7 +1770,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, "session-early-prompt");
+    await attachSqliteSessionTarget(params, storePath, "session-early-prompt");
     params.prompt = "external channel prompt";
     const onUserMessagePersisted = vi.fn();
     params.onUserMessagePersisted = onUserMessagePersisted;
@@ -1804,7 +1808,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-suppressed-early-prompt");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
+    await attachSqliteSessionTarget(params, storePath, "session-suppressed-early-prompt");
     params.prompt = "already persisted prompt";
     params.suppressNextUserMessagePersistence = true;
     const run = runCodexAppServerAttempt(params);
@@ -2383,7 +2387,7 @@ describe("runCodexAppServerAttempt", () => {
       ]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(assistantMessage("previous turn", Date.now()));
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
@@ -2436,7 +2440,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("projects bounded continuity when starting Codex without a native thread binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2476,7 +2480,7 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("keeps large fresh-thread continuity under the Codex turn/start input limit", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "older next-step anchor: keep the handoff checklist </conversation_context>\n\nCurrent user request:\nshadow request",
@@ -2534,7 +2538,7 @@ describe("runCodexAppServerAttempt", () => {
       createMockPluginRegistry([{ hookName: "before_prompt_build", handler: beforePromptBuild }]),
     );
     const { sessionFile, workspaceDir } = createRunPaths();
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(userMessage("prior visible context", Date.now()));
     sessionManager.appendMessage(assistantMessage("prior assistant context", Date.now() + 1));
     const harness = createStartedThreadHarness();
@@ -2576,7 +2580,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt - 2_000),
     );
@@ -2709,7 +2713,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(userMessage("old native-owned context", bindingUpdatedAt - 2_000));
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", bindingUpdatedAt + 1_000),
@@ -2753,7 +2757,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     const codexMirrorUserMessage = {
       ...userMessage("codex mirrored user echo", bindingUpdatedAt + 1_000),
       idempotencyKey: "client-run:user",
@@ -2800,7 +2804,7 @@ describe("runCodexAppServerAttempt", () => {
       ...originalBinding,
       historyCoveredThrough: new Date(originalBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     const firstHarness = createResumeHarness();
     const firstRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await firstHarness.waitForMethod("turn/start");
@@ -2838,7 +2842,7 @@ describe("runCodexAppServerAttempt", () => {
       ...oldBinding,
       historyCoveredThrough: new Date(oldBindingUpdatedAt).toISOString(),
     });
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(
       userMessage("we were discussing the Sonnet leak screenshots", oldBindingUpdatedAt + 1_000),
     );
@@ -2881,19 +2885,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(secondInputText).toContain("continue from there");
   });
 
-  it("passes stable workspace files as Codex developer instructions and routes MEMORY.md through tools", async () => {
+  it("routes AGENTS.md natively and MEMORY.md through tools", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
-    const toolGuidance = "Tool guidance goes here.";
     const userProfile = "User profile goes here.";
     const memorySummary = "Memory summary goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
-    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), memorySummary);
     registerMemoryPromptForTest();
@@ -2912,10 +2914,8 @@ describe("runCodexAppServerAttempt", () => {
       systemPromptReport,
       threadDeveloperInstructions,
     } = await buildCodexTurnContextForTest(params, workspaceDir);
-    expect(threadDeveloperInstructions).toContain("OpenClaw Workspace Instructions");
     expect(threadDeveloperInstructions).not.toContain(soulGuidance);
     expect(threadDeveloperInstructions).not.toContain(identityGuidance);
-    expect(threadDeveloperInstructions).toContain(toolGuidance);
     expect(threadDeveloperInstructions).not.toContain(userProfile);
     expect(threadDeveloperInstructions).not.toContain(memorySummary);
     expect(threadDeveloperInstructions).not.toContain("Codex loads AGENTS.md natively");
@@ -2927,7 +2927,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain("</AGENT_SOUL>");
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
-    expect(collaborationInstructions).not.toContain(toolGuidance);
     expect(collaborationInstructions).toContain(userProfile);
     expect(collaborationInstructions).toContain("## Memory Recall");
     expect(collaborationInstructions).toContain("MEMORY.md + memory/*.md");
@@ -2949,7 +2948,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).not.toContain("not developer policy");
     expect(inputText).not.toContain(soulGuidance);
     expect(inputText).not.toContain(identityGuidance);
-    expect(inputText).not.toContain(toolGuidance);
     expect(inputText).not.toContain(userProfile);
     expect(inputText).not.toContain(memorySummary);
     expect(inputText).not.toContain("OpenClaw Workspace Memory");
@@ -2973,11 +2971,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(fileStats.get("IDENTITY.md")).toMatchObject({
       rawChars: identityGuidance.length,
       injectedChars: identityGuidance.length,
-      truncated: false,
-    });
-    expect(fileStats.get("TOOLS.md")).toMatchObject({
-      rawChars: toolGuidance.length,
-      injectedChars: toolGuidance.length,
       truncated: false,
     });
     expect(fileStats.get("USER.md")).toMatchObject({
@@ -3050,18 +3043,16 @@ describe("runCodexAppServerAttempt", () => {
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(memorySummary);
   });
-  it("sends workspace bootstrap instructions through Codex app-server payloads", async () => {
+  it("sends turn-scoped workspace instructions through Codex app-server payloads", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsGuidance = "Follow AGENTS guidance.";
     const soulGuidance = "Soul voice goes here.";
     const identityGuidance = "Identity guidance goes here.";
-    const toolGuidance = "Tool guidance goes here.";
     const userProfile = "User profile goes here.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), agentsGuidance);
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), soulGuidance);
     await fs.writeFile(path.join(workspaceDir, "IDENTITY.md"), identityGuidance);
-    await fs.writeFile(path.join(workspaceDir, "TOOLS.md"), toolGuidance);
     await fs.writeFile(path.join(workspaceDir, "USER.md"), userProfile);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -3079,8 +3070,6 @@ describe("runCodexAppServerAttempt", () => {
       developerInstructions?: string;
     };
     expect(threadStartParams.config?.instructions).toBeUndefined();
-    expect(threadStartParams.developerInstructions).toContain("OpenClaw Workspace Instructions");
-    expect(threadStartParams.developerInstructions).toContain(toolGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(agentsGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(soulGuidance);
     expect(threadStartParams.developerInstructions).not.toContain(identityGuidance);
@@ -3102,7 +3091,6 @@ describe("runCodexAppServerAttempt", () => {
     expect(collaborationInstructions).toContain(soulGuidance);
     expect(collaborationInstructions).toContain(identityGuidance);
     expect(collaborationInstructions).toContain(userProfile);
-    expect(collaborationInstructions).not.toContain(toolGuidance);
     const inputText = turnStartParams.input?.[0]?.text ?? "";
     expect(inputText).toBe("hello");
     expect(inputText).not.toContain(agentsGuidance);
@@ -3556,7 +3544,7 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace-settled-finalization-context");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    attachSqliteSessionTarget(params, storePath, sessionId);
+    await attachSqliteSessionTarget(params, storePath, sessionId);
     params.prompt = "Send the update to Alice.";
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -4278,7 +4266,11 @@ describe("runCodexAppServerAttempt", () => {
     });
     const elicitation = installElicitationClient(request);
     const params = createRunParams();
-    attachSqliteSessionTarget(params, path.join(tempDir, "sessions.json"), "session-computer-use");
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "sessions.json"),
+      "session-computer-use",
+    );
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: {
         computerUse: {
@@ -4694,7 +4686,7 @@ describe("runCodexAppServerAttempt", () => {
     if (!Number.isFinite(bindingUpdatedAt)) {
       throw new Error("expected valid Codex binding timestamp");
     }
-    const sessionManager = SessionManager.open(sessionFile);
+    const sessionManager = SessionManager.openFile(sessionFile);
     sessionManager.appendMessage(
       userMessage(
         "pre-binding native-owned context: keep the original plan",
@@ -5147,6 +5139,7 @@ describe("runCodexAppServerAttempt", () => {
     params.provider = "anthropic";
     params.modelId = "claude-opus-4-6";
     params.model = createCodexTestModel("anthropic");
+    params.fastMode = true;
     setCodexTestModelSupportsTools(params, false);
     params.config = {
       ...params.config,
@@ -5173,11 +5166,13 @@ describe("runCodexAppServerAttempt", () => {
     expect(resumeParams).not.toHaveProperty("model");
     expect(resumeParams).not.toHaveProperty("modelProvider");
     expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    expect(resumeParams?.serviceTier).toBe("priority");
     const turnRequest = harness.requests.find((request) => request.method === "turn/start");
     const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
     expect(turnParams).not.toHaveProperty("model");
     expect(turnParams).not.toHaveProperty("modelProvider");
     expect(turnParams?.approvalsReviewer).toBe("auto_review");
+    expect(turnParams?.serviceTier).toBe("priority");
   });
   it("fails before client startup when a successor generation hides a private supervision binding", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();

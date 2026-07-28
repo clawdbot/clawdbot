@@ -11,6 +11,7 @@ import {
 import {
   ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
   DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
+  DEFAULT_ACTIVE_MEMORY_MODE,
   DEFAULT_CACHE_TTL_MS,
   DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
   DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
@@ -229,6 +230,10 @@ function normalizePluginConfig(
     : [];
   return {
     enabled: raw.enabled !== false,
+    mode:
+      raw.mode === "always" || raw.mode === "off" || raw.mode === "escalate"
+        ? raw.mode
+        : DEFAULT_ACTIVE_MEMORY_MODE,
     agents: Array.isArray(raw.agents) ? normalizeStringEntries(raw.agents) : [],
     model: typeof raw.model === "string" && raw.model.trim() ? raw.model.trim() : undefined,
     modelFallback:

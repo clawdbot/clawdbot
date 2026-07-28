@@ -344,6 +344,7 @@ describe("browser plugin", () => {
           name: "browser",
           description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
           hasSubcommands: true,
+          machineOutput: expect.any(Function),
         },
       ],
     });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
@@ -60,6 +61,7 @@ import {
   scheduleRestartAbortedMainSessionRecoveryAfterOwnerRelease,
   scheduleRestartAbortedMainSessionRecovery as scheduleRestartAbortedMainSessionRecoveryBase,
 } from "./main-session-restart-recovery.js";
+import { AGENT_RUN_RESTART_ABORT_ERROR_CODE } from "./run-termination.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 import {
   createAssistantToolCallMessage,
@@ -784,28 +786,12 @@ describe("main-session-restart-recovery", () => {
 
   it.each([
     {
-      name: "marks a running main session whose cleaned transcript lock is topic-suffixed",
-      sessionKey: "agent:main:discord:channel:123:thread:1234567890",
-      sessionId: "main-session",
-      sessionFile: "main-session-topic-1234567890.jsonl",
-      lockKind: "session-file",
-      marked: 1,
-    },
-    {
       name: "does not mark a session for an unrelated topic lock that only shares its id prefix",
       sessionKey: "agent:main:main",
       sessionId: "main-session",
       sessionFile: "main-session.jsonl",
       lockKind: "unrelated",
       marked: 0,
-    },
-    {
-      name: "normalizes relative cleaned lock paths against the current working directory",
-      sessionKey: "agent:main:discord:channel:123:thread:1234567890",
-      sessionId: "main-session",
-      sessionFile: "main-session-topic-1234567890.jsonl",
-      lockKind: "relative-session-file",
-      marked: 1,
     },
     {
       name: "falls back to the session id transcript lock when persisted sessionFile is outside the sessions dir",
@@ -831,16 +817,12 @@ describe("main-session-restart-recovery", () => {
     const lockFile =
       lockKind === "unrelated"
         ? "main-session-topic-unrelated.jsonl.lock"
-        : lockKind === "session-id"
-          ? `${sessionId}.jsonl.lock`
-          : `${sessionFile}.lock`;
+        : `${sessionId}.jsonl.lock`;
     const lockPath = path.join(sessionsDir, lockFile);
-    const normalizedLockPath =
-      lockKind === "relative-session-file" ? path.relative(process.cwd(), lockPath) : lockPath;
 
     const result = await markRestartAbortedMainSessionsFromLocks({
       sessionsDir,
-      cleanedLocks: [cleanedLockForPath(normalizedLockPath)],
+      cleanedLocks: [cleanedLockForPath(lockPath)],
     });
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));
@@ -1685,7 +1667,7 @@ describe("main-session-restart-recovery", () => {
       "internal recovery detail",
       INTERNAL_RUNTIME_CONTEXT_END,
       "",
-      "Conversation info (untrusted metadata):",
+      markInboundContextLabel("Conversation info:"),
       "```json",
       '{"message_id":"msg-1"}',
       "```",
@@ -3897,6 +3879,16 @@ describe("main-session-restart-recovery", () => {
         stopReason: "error",
       },
     ],
+    [
+      "an errored tail carrying a non-restart abort code",
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "error",
+        errorMessage: "This operation was aborted",
+        errorCode: "OPENCLAW_FIRST_EVENT_TIMEOUT",
+      },
+    ],
   ])("does not resume %s at the transcript tail", async (_label, assistantMessage) => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, mainSessionStore());
@@ -3908,6 +3900,27 @@ describe("main-session-restart-recovery", () => {
     await expectRecovery({ recovered: 0, failed: 1, skipped: 0 });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["Request was aborted"],
+    ["This operation was aborted"],
+    ["agent run aborted for restart"],
+  ])(
+    "resumes a pre-upgrade errored tail persisted as %s without an abort code",
+    async (errorMessage) => {
+      // The process that wrote this tail predates errorCode propagation, and it
+      // can be the very process replaced by the upgrade running recovery now.
+      const sessionsDir = await makeSessionsDir();
+      await writeStore(sessionsDir, mainSessionStore());
+      await writeTranscript(sessionsDir, "main-session", [
+        { role: "user", content: "do the thing" },
+        { role: "assistant", content: [], stopReason: "error", errorMessage },
+      ]);
+
+      await expectRecovery({ recovered: 1, failed: 0, skipped: 0 });
+      expect(callGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     [
@@ -4536,6 +4549,7 @@ describe("main-session-restart-recovery", () => {
           content,
           stopReason: "error",
           errorMessage: "Request was aborted",
+          errorCode: AGENT_RUN_RESTART_ABORT_ERROR_CODE,
         },
       ]);
 

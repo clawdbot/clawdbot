@@ -21,7 +21,7 @@ import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-
 
 // ── Types ──────────────────────────────────────────────────────────────
 
-type SubagentSurface = {
+export type SubagentSurface = {
   run: (params: {
     idempotencyKey: string;
     sessionKey: string;

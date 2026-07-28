@@ -8344,6 +8344,31 @@
       "translated": "अधिकतम"
     },
     {
+      "id": "native.android.0ad9a3b0df19e18c",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.android.21915533b17bafea",
+      "source": "$running Running · $done Done · $failed Failed",
+      "translated": "$running चल रहे · $done पूर्ण · $failed विफल"
+    },
+    {
+      "id": "native.android.41ba16bea6545210",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.android.38327b46c006c14c",
+      "source": "1 more worker",
+      "translated": "1 और worker"
+    },
+    {
+      "id": "native.android.d7afc539a21261eb",
+      "source": "$count more workers",
+      "translated": "$count और workers"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "1 टोकन"
@@ -8709,11 +8734,6 @@
       "translated": "वाक् पहचानकर्ता उपलब्ध नहीं है"
     },
     {
-      "id": "native.android.47a59f8798682ea0",
-      "source": "Ready",
-      "translated": "तैयार"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "शुरू करना विफल रहा: $message"
@@ -8769,6 +8789,11 @@
       "translated": "बात करना विफल रहा: $message"
     },
     {
+      "id": "native.android.47a59f8798682ea0",
+      "source": "Ready",
+      "translated": "तैयार"
+    },
+    {
       "id": "native.android.bd863d5e8979cd79",
       "source": "Generating voice…",
       "translated": "आवाज़ जनरेट हो रही है…"
@@ -8782,11 +8807,6 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "बोल रहा है…"
-    },
-    {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "सुन रहा है (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -8814,6 +8834,16 @@
       "translated": "नेटवर्क समय-सीमा समाप्त"
     },
     {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "सुन रहा है"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "सुन रहा है (PTT)"
+    },
+    {
       "id": "native.android.a445b7696f9b431c",
       "source": "Recognizer busy",
       "translated": "पहचानकर्ता व्यस्त है"
@@ -8822,11 +8852,6 @@
       "id": "native.android.297438db6f5fe8d7",
       "source": "Server error",
       "translated": "सर्वर त्रुटि"
-    },
-    {
-      "id": "native.android.7b4dacae0686d138",
-      "source": "Listening",
-      "translated": "सुन रहा है"
     },
     {
       "id": "native.android.ea5d9621ef0f0482",
@@ -19724,6 +19749,36 @@
       "translated": "\\(toolBudget) टूल"
     },
     {
+      "id": "native.apple.905508b749e99f2a",
+      "source": "OpenClaw Not Configured",
+      "translated": "OpenClaw कॉन्फ़िगर नहीं किया गया"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "Remote OpenClaw सक्रिय"
+    },
+    {
+      "id": "native.apple.a7b0d4e6bf5796c0",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw सक्रिय"
+    },
+    {
+      "id": "native.apple.b36a54d8fef80333",
+      "source": "OpenClaw Not Configured — \\(primaryName)",
+      "translated": "OpenClaw कॉन्फ़िगर नहीं किया गया — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.adee4bfd71731d2d",
+      "source": "Remote OpenClaw Active — \\(primaryName)",
+      "translated": "Remote OpenClaw सक्रिय — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.2be6d3dd1a0d2699",
+      "source": "OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw सक्रिय — \\(primaryName)"
+    },
+    {
       "id": "native.apple.5eea57b14cab3876",
       "source": "Dashboard reconnecting",
       "translated": "डैशबोर्ड पुनः कनेक्ट हो रहा है"
@@ -19747,6 +19802,26 @@
       "id": "native.apple.3ed077c15e06c140",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "translated": "Settings → Connection जांचें या Debug → Reset Remote Tunnel का उपयोग करें, फिर पुनः प्रयास करें।"
+    },
+    {
+      "id": "native.apple.224e2db353f3a459",
+      "source": "Could Not Switch Gateway",
+      "translated": "Gateway स्विच नहीं किया जा सका"
+    },
+    {
+      "id": "native.apple.213d824f2205d071",
+      "source": "Could Not Open Gateway Window",
+      "translated": "Gateway विंडो नहीं खोली जा सकी"
+    },
+    {
+      "id": "native.apple.11ffe8832b728acd",
+      "source": "\\(base)-\\(UUID().uuidString)",
+      "translated": "\\(base)-\\(UUID().uuidString)"
+    },
+    {
+      "id": "native.apple.f821306f90ed7692",
+      "source": "Could Not Set Primary Gateway",
+      "translated": "प्राथमिक Gateway सेट नहीं किया जा सका"
     },
     {
       "id": "native.apple.226341f8c8b5d459",
@@ -21219,21 +21294,6 @@
       "translated": "छोड़ें"
     },
     {
-      "id": "native.apple.5021ed413c045620",
-      "source": "OpenClaw Not Configured",
-      "translated": "OpenClaw कॉन्फ़िगर नहीं किया गया"
-    },
-    {
-      "id": "native.apple.4d10ab5feb4add3f",
-      "source": "Remote OpenClaw Active",
-      "translated": "Remote OpenClaw सक्रिय"
-    },
-    {
-      "id": "native.apple.b49dea5c1fdb3dd3",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw सक्रिय"
-    },
-    {
       "id": "native.apple.1df24a30d7963640",
       "source": "Debug",
       "translated": "Debug"
@@ -21367,6 +21427,31 @@
       "id": "native.apple.3e248379359c7593",
       "source": "Disconnected (using System default)",
       "translated": "डिस्कनेक्टेड (System default का उपयोग कर रहा है)"
+    },
+    {
+      "id": "native.apple.ceb653c5fa582beb",
+      "source": "Gateways",
+      "translated": "Gateways"
+    },
+    {
+      "id": "native.apple.cce28f94dfe25e14",
+      "source": "Set \\(gateway.name) as Primary…",
+      "translated": "\\(gateway.name) को प्राथमिक के रूप में सेट करें…"
+    },
+    {
+      "id": "native.apple.86861746f8e1c38c",
+      "source": "\\(name), healthy",
+      "translated": "\\(name), स्वस्थ"
+    },
+    {
+      "id": "native.apple.184a5dddee2c5794",
+      "source": "\\(name), health error",
+      "translated": "\\(name), स्वास्थ्य त्रुटि"
+    },
+    {
+      "id": "native.apple.d34b1a73300c51f2",
+      "source": "\\(name), health unknown",
+      "translated": "\\(name), स्वास्थ्य अज्ञात"
     },
     {
       "id": "native.apple.5a99e1ae62fe0ab9",
@@ -22119,9 +22204,49 @@
       "translated": "उन्नत…"
     },
     {
-      "id": "native.apple.22947c17e44f76af",
-      "source": "Hide Advanced",
-      "translated": "उन्नत छिपाएँ"
+      "id": "native.apple.2e11404d7539301e",
+      "source": "Remote connection",
+      "translated": "रिमोट कनेक्शन"
+    },
+    {
+      "id": "native.apple.f6332654911cb2e2",
+      "source": "Verify OpenClaw can reach this gateway.",
+      "translated": "सत्यापित करें कि OpenClaw इस gateway तक पहुँच सकता है।"
+    },
+    {
+      "id": "native.apple.6e5d3a3c3022e8c8",
+      "source": "Check connection",
+      "translated": "कनेक्शन जाँचें"
+    },
+    {
+      "id": "native.apple.23254b5b9707c581",
+      "source": "Advanced options",
+      "translated": "उन्नत विकल्प"
+    },
+    {
+      "id": "native.apple.dfc5606a4813ecfc",
+      "source": "Hide advanced options",
+      "translated": "उन्नत विकल्प छिपाएँ"
+    },
+    {
+      "id": "native.apple.1907a86a6cc2165b",
+      "source": "Gateway token",
+      "translated": "Gateway token"
+    },
+    {
+      "id": "native.apple.14a6b8d735579fae",
+      "source": "Paste the token from your gateway",
+      "translated": "अपने gateway से टोकन पेस्ट करें"
+    },
+    {
+      "id": "native.apple.143603a153dd0100",
+      "source": "Only needed when the gateway requires token auth.",
+      "translated": "केवल तभी आवश्यक जब gateway को टोकन प्रमाणीकरण चाहिए।"
+    },
+    {
+      "id": "native.apple.2a50c3ee94dde35d",
+      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "वर्तमान gateway.remote.token मान प्लेन टेक्स्ट नहीं है। macOS के लिए OpenClaw इसे सीधे उपयोग नहीं कर सकता; इसे बदलने के लिए यहाँ एक प्लेनटेक्स्ट टोकन दर्ज करें।"
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -22192,41 +22317,6 @@
       "id": "native.apple.ab88df30f426b434",
       "source": "Tip: keep Tailscale enabled so your gateway stays reachable.",
       "translated": "सुझाव: Tailscale सक्षम रखें ताकि आपका gateway पहुँच योग्य बना रहे."
-    },
-    {
-      "id": "native.apple.2e11404d7539301e",
-      "source": "Remote connection",
-      "translated": "रिमोट कनेक्शन"
-    },
-    {
-      "id": "native.apple.bee162bb681696a3",
-      "source": "Checks the real remote websocket and auth handshake.",
-      "translated": "वास्तविक रिमोट websocket और auth handshake की जाँच करता है."
-    },
-    {
-      "id": "native.apple.6e5d3a3c3022e8c8",
-      "source": "Check connection",
-      "translated": "कनेक्शन जाँचें"
-    },
-    {
-      "id": "native.apple.1907a86a6cc2165b",
-      "source": "Gateway token",
-      "translated": "Gateway token"
-    },
-    {
-      "id": "native.apple.014d9fcbd97f6c48",
-      "source": "remote gateway auth token (gateway.remote.token)",
-      "translated": "remote gateway auth token (gateway.remote.token)"
-    },
-    {
-      "id": "native.apple.cc14b91d20cc33ba",
-      "source": "Used when the remote gateway requires token auth.",
-      "translated": "जब रिमोट Gateway को टोकन प्रमाणीकरण की आवश्यकता हो, तब उपयोग किया जाता है।"
-    },
-    {
-      "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "वर्तमान gateway.remote.token मान प्लेन टेक्स्ट नहीं है। macOS के लिए OpenClaw इसे सीधे उपयोग नहीं कर सकता; इसे बदलने के लिए यहाँ एक प्लेनटेक्स्ट टोकन दर्ज करें।"
     },
     {
       "id": "native.apple.ef011af3c0e22127",
@@ -26307,6 +26397,51 @@
       "id": "native.apple.f74d150ce05205dd",
       "source": "z",
       "translated": "z"
+    },
+    {
+      "id": "native.apple.d093ee119bfd5ab4",
+      "source": "Running",
+      "translated": "चल रहा है"
+    },
+    {
+      "id": "native.apple.b8a4e570b04c8a5f",
+      "source": "Queued",
+      "translated": "कतार में"
+    },
+    {
+      "id": "native.apple.caf64b5a59885ec0",
+      "source": "Failed",
+      "translated": "विफल"
+    },
+    {
+      "id": "native.apple.4819936ea780db96",
+      "source": "Done",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.1f8ce4f7dc387a62",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.apple.e8b9db6108d47853",
+      "source": "%1$lld Running · %2$lld Done · %3$lld Failed",
+      "translated": "%1$lld चल रहे · %2$lld पूर्ण · %3$lld विफल"
+    },
+    {
+      "id": "native.apple.966f8d2b0b475f7c",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.apple.3b5805940eb33a47",
+      "source": "1 more worker",
+      "translated": "1 और worker"
+    },
+    {
+      "id": "native.apple.4278155768134e27",
+      "source": "%1$lld more workers",
+      "translated": "%1$lld और workers"
     },
     {
       "id": "native.apple.71e0219d1501de06",

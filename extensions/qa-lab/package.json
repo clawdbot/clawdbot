@@ -6,7 +6,7 @@
   "type": "module",
   "dependencies": {
     "@copilotkit/aimock": "1.37.2",
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@openclaw/crabline": "0.1.11",
     "@openclaw/matrix": "workspace:*",
     "p-limit": "7.3.0",
@@ -14,6 +14,7 @@
     "playwright-core": "1.61.1",
     "pretty-ms": "9.3.0",
     "semver": "7.8.5",
+    "ws": "8.21.1",
     "yaml": "2.9.0",
     "zod": "4.4.3"
   },

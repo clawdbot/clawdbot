@@ -24,6 +24,7 @@ import type { CronServiceState, CronWakeMode } from "./state.js";
 import { emit } from "./state.js";
 import { ensureLoaded, persistOrRestore, snapshotStoreForRollback } from "./store.js";
 import { tryFinishCronTaskRunWithoutHistory } from "./task-runs.js";
+import { resolveCronRunScheduleOwnership } from "./timer-outcomes.js";
 import {
   applyJobResult,
   applyScriptRunResult,
@@ -82,7 +83,10 @@ async function finishPreparedManualRun(
       if (!tracker || tracker.emitted) {
         return;
       }
-      const job = state.store?.jobs.find((entry) => entry.id === jobId);
+      const job =
+        prepared.activeJobMarker?.jobRemoved === true
+          ? executionJob
+          : state.store?.jobs.find((entry) => entry.id === jobId);
       // enqueueRun acknowledges a concrete run id, so every accepted request
       // needs one terminal event even if the job or service owner changes mid-run.
       emitCronRunFinished(
@@ -139,7 +143,10 @@ async function finishPreparedManualRun(
     let notifySetupTimeout = coreResult.isolatedAgentSetupTimeout !== undefined;
     await locked(state, async () => {
       await ensureLoaded(state, { skipRecompute: true });
-      if (!isCronActiveJobMarkerCurrent(prepared.activeJobMarker)) {
+      if (
+        !isCronActiveJobMarkerCurrent(prepared.activeJobMarker) ||
+        prepared.activeJobMarker?.jobRemoved === true
+      ) {
         notifySetupTimeout = false;
         return;
       }
@@ -147,6 +154,18 @@ async function finishPreparedManualRun(
       if (!job) {
         return;
       }
+
+      const scheduleOwnership = resolveCronRunScheduleOwnership({
+        admittedJob: prepared.admittedJob,
+        currentJob: job,
+        activeJobMarker: prepared.activeJobMarker,
+      });
+      const scheduleMode =
+        scheduleOwnership === "stale"
+          ? "stale-preserve"
+          : mode === "force"
+            ? "force-preserve"
+            : "advance";
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -160,7 +179,7 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { scheduleMode },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -171,13 +190,23 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          {
+            // Stale edits are preserved by scheduleOwnership inside applyJobResult;
+            // only a real forced run may request a force-preserved cadence marker.
+            scheduleMode: scheduleMode === "force-preserve" ? "preserve" : "advance",
+            scheduleOwnership,
+            scheduleOwnershipAtMs: prepared.scheduleOwnershipAtMs,
+          },
         );
-        applyTriggerRunResult(job, {
-          status: coreResult.status,
-          endedAt,
-          triggerEval: coreResult.triggerEval,
-        });
+        applyTriggerRunResult(
+          job,
+          {
+            status: coreResult.status,
+            endedAt,
+            triggerEval: coreResult.triggerEval,
+          },
+          { scheduleOwnership },
+        );
         applyScriptRunResult(job, coreResult);
 
         // Stream payloads are event-owned by their batch. Generic recurring
@@ -339,7 +368,8 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
     return disposition;
   }
 
-  const runId = `manual:${id}:${state.deps.nowMs()}:${nextManualRunId++}`;
+  const scheduleOwnershipAtMs = state.deps.nowMs();
+  const runId = `manual:${id}:${scheduleOwnershipAtMs}:${nextManualRunId++}`;
   const terminalTracker: ManualRunTerminalTracker = { emitted: false };
   void runWithGatewayIndependentRootWorkContinuation(() =>
     enqueueCommandInLane(
@@ -347,6 +377,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
       async (owningCronLaneTaskMarker) => {
         const result = await run(state, id, mode, {
           runId,
+          scheduleOwnershipAtMs,
           terminalTracker,
           owningCronLaneTaskMarker,
         });

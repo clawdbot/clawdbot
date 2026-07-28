@@ -41,6 +41,7 @@ export const fr: TranslationMap = {
     unselect: "Désélectionner",
     enabled: "Activé",
     disabled: "Désactivé",
+    failed: "Échoué",
     none: "aucun",
     na: "n/d",
     never: "never",
@@ -247,11 +248,6 @@ export const fr: TranslationMap = {
       schemaUnavailable: "Schéma indisponible. Utilisez le mode brut.",
       channelSchemaUnavailable: "Schéma de configuration du canal indisponible.",
       loadingSchema: "Chargement du schéma de configuration…",
-    },
-    health: {
-      title: "Santé du canal",
-      subtitle: "Instantanés de l’état du canal depuis le gateway.",
-      noSnapshotYet: "Aucun instantané pour le moment.",
     },
     generic: {
       subtitle: "État et configuration du canal.",
@@ -608,7 +604,8 @@ export const fr: TranslationMap = {
       "Les noms de worktree utilisent des lettres minuscules, des chiffres et des tirets.",
     incognito: "Navigation privée",
     incognitoDescription: "Conserver ce fil uniquement jusqu'au redémarrage du Gateway",
-    startAsDraft: "Démarrer comme brouillon",
+    draft: "Brouillon",
+    draftDescription: "Gardez ce fil pour vous jusqu'à ce que vous le publiiez",
     messagePlaceholder: "Sur quoi cette session doit-elle travailler ?",
     readingAttachment: "Lecture de la pièce jointe",
     start: "Démarrer la session",
@@ -617,6 +614,11 @@ export const fr: TranslationMap = {
     createOutcomeUnknown:
       "Le Gateway a changé pendant le démarrage de cette session. Consultez les sessions récentes avant de relancer cette tâche.",
     catalogUnavailable: "La cible de cette session est indisponible.",
+  },
+  dashboardsPage: {
+    emptyTitle: "Aucun tableau de bord pour l'instant",
+    emptyDescription: "Ouvrez un fil et basculez sur la face Tableau de bord pour l'ajouter ici.",
+    loadError: "Impossible de charger les tableaux de bord : {error}",
   },
   sessionsView: {
     deletePreservedWorktrees:
@@ -741,6 +743,7 @@ export const fr: TranslationMap = {
     runErrorTimedOut: "Expiration du délai",
     runErrorUnknown: "Erreur inconnue",
     attentionRequired: "La session nécessite votre attention",
+    openSession: "Ouvrir le fil",
     model: "Modèle",
     provider: "Fournisseur",
     runtime: "Exécution",
@@ -1002,6 +1005,9 @@ export const fr: TranslationMap = {
       notCreatedYet: "Not Created Yet",
       updatedUnknown: "Updated Unknown",
       missingHint: "This file is missing. Saving will create it in the agent workspace.",
+      addFile: "Ajouter un fichier…",
+      createHint:
+        "Ce fichier n'existe pas encore. L'enregistrement le créera dans l'espace de travail de l'agent.",
       content: "Content",
       words: "{count} words",
       lines: "lines",
@@ -1143,9 +1149,9 @@ export const fr: TranslationMap = {
         label: "Diffusion",
         description: "Paramètres de diffusion et de notification",
       },
-      audio: {
-        label: "Audio",
-        description: "Paramètres d'entrée/sortie audio",
+      tts: {
+        label: "Voix",
+        description: "Sortie de synthèse vocale, voix et personas",
       },
       session: {
         label: "Session",
@@ -1155,17 +1161,9 @@ export const fr: TranslationMap = {
         label: "Cron",
         description: "Tâches planifiées et automatisation",
       },
-      web: {
-        label: "Web",
-        description: "Paramètres du serveur web et de l'API",
-      },
       discovery: {
         label: "Découverte",
         description: "Découverte de services et mise en réseau",
-      },
-      canvasHost: {
-        label: "Hôte Canvas",
-        description: "Rendu et affichage Canvas",
       },
       talk: {
         label: "Talk",
@@ -1230,6 +1228,8 @@ export const fr: TranslationMap = {
       lobsterdex: "Lobsterdex",
       lobsterdexSeen: "{seen}/{total} visités",
       lobsterdexFirstVisited: "{name} · première visite le {date}",
+      lobsterdexCardFirstVisited: "Première visite le {date}",
+      lobsterdexOpen: "Ouvrir Lobsterdex",
     },
     security: {
       title: "Sécurité",
@@ -1328,7 +1328,7 @@ export const fr: TranslationMap = {
       broadcast: "Diffusion",
       notifications: "Notifications",
       talk: "Discussion",
-      audio: "Audio",
+      tts: "Voix",
       commands: "Commandes",
       hooks: "Hooks",
       bindings: "Liaisons",
@@ -1337,12 +1337,9 @@ export const fr: TranslationMap = {
       security: "Politique de sécurité",
       plugins: "Plugins",
       gateway: "Gateway",
-      web: "Web",
       browser: "Navigateur",
       nodeHost: "Hôte Node",
-      canvasHost: "Hôte Canvas",
       discovery: "Découverte",
-      media: "Média",
       acp: "ACP",
       mcp: "MCP",
       theme: "Thème",
@@ -1476,7 +1473,6 @@ export const fr: TranslationMap = {
     open: "Ouverte",
     applying: "Application…",
     autoSaveSaving: "Enregistrement…",
-    autoSaveSaved: "Enregistré",
     autoSaveFailed: "Échec de l'enregistrement",
     autoSaveConflict: "Paramètres modifiés ailleurs",
     retry: "Réessayer",
@@ -1862,13 +1858,16 @@ export const fr: TranslationMap = {
     skillWorkshop: "Atelier Skills",
     nodes: "Nœuds",
     chat: "Chat",
+    dashboards: "Tableaux de bord",
     custodian: "OpenClaw",
     config: "Configuration",
     profile: "Profil",
     communications: "Communications",
     appearance: "Apparence",
+    lobsterdex: "Lobsterdex",
     automation: "Automatisation",
     mcp: "MCP",
+    memory: "Mémoire",
     infrastructure: "Infrastructure",
     labs: "Labs",
     about: "À propos",
@@ -1899,13 +1898,16 @@ export const fr: TranslationMap = {
       "Examinez, affinez et appliquez les propositions avant qu’elles ne deviennent des skills actives.",
     nodes: "Appareils appairés et commandes.",
     chat: "Chat Gateway pour les interventions rapides.",
+    dashboards: "Fils qui s'ouvrent sur leur face tableau de bord.",
     custodian: "Configuration et entretien du système.",
     config: "Modifier openclaw.json.",
     profile: "Les statistiques, les séries et la vie dans le récif de votre agent.",
     communications: "Canaux, messages et paramètres audio.",
     appearance: "Thème, UI et paramètres de l’assistant de configuration.",
+    lobsterdex: "Chaque palette de homard ayant visité ce navigateur.",
     automation: "Commandes, hooks, cron et plugins.",
     mcp: "Serveurs MCP, authentification, outils et diagnostics.",
+    memory: "Moteur de mémoire, backend, recherche et rêve.",
     infrastructure: "Paramètres Gateway, web, navigateur et médias.",
     labs: "Fonctionnalités expérimentales d'agent et d'outils.",
     about: "Le Control UI et le Gateway connecté définissent l’identité de build.",
@@ -2186,6 +2188,164 @@ export const fr: TranslationMap = {
     tlsVerifyOff: "vérification TLS désactivée",
     mtls: "mTLS",
   },
+  memoryPage: {
+    tablistLabel: "Sections de mémoire",
+    tabs: {
+      overview: "Aperçu",
+      search: "Recherche",
+      dreaming: "Rêve",
+    },
+    engine: {
+      title: "Moteur",
+      description:
+        "Exactement un plugin de mémoire occupe l'emplacement mémoire. Sélectionner un moteur l'active et désactive les autres.",
+      rowTitle: "Moteur de mémoire",
+      off: "Désactivée",
+      autoHint:
+        "Aucun moteur n'est épinglé dans la configuration, l'emplacement revient donc à son propriétaire par défaut.",
+      explicitHint: "Ce moteur est épinglé dans la configuration sous plugins.slots.memory.",
+      offHint:
+        "La mémoire est désactivée dans la configuration : plugins.slots.memory est défini sur none.",
+      catalogUnavailable: "Connectez-vous au gateway pour changer de moteur de mémoire.",
+      changeFailed: "Impossible de changer le moteur de mémoire",
+      disabledTitle: "Ce moteur est désactivé",
+      disabledHint:
+        "L'emplacement mémoire pointe vers ce plugin, mais le plugin lui-même est désactivé, la mémoire ne fonctionne donc pas.",
+      enable: "Activer",
+    },
+    backend: {
+      title: "Backend",
+      description: "Comment la mémoire est stockée et récupérée pour le moteur sélectionné.",
+      rowTitle: "Backend de récupération",
+      builtin: "Intégré",
+      qmd: "QMD",
+      builtinHint: "Les fichiers de mémoire sont indexés et recherchés par OpenClaw lui-même.",
+      qmdHint: "La récupération est déléguée à QMD. Ses paramètres apparaissent ci-dessous.",
+    },
+    addons: {
+      title: "Modules complémentaires",
+      description:
+        "Ces plugins se superposent au moteur au lieu de se disputer l'emplacement, de sorte que toute combinaison peut fonctionner en même temps.",
+      activeMemory: {
+        title: "Mémoire active",
+      },
+      memoryWiki: {
+        title: "Wiki de mémoire",
+      },
+      stateUnknown: "Inconnu",
+      manage: "Activer ou désactiver les modules complémentaires",
+      manageLink: "Ouvrir les plugins",
+    },
+    import: {
+      title: "Importer",
+      description:
+        "Importez la mémoire existante d'autres assistants dans un espace de travail d'agent.",
+      link: "Ouvrir l'import de mémoire",
+    },
+    search: {
+      intro:
+        "Paramètres d'embedding et de récupération par défaut partagés par chaque agent qui n'a pas de remplacement de mémoire.",
+    },
+    dreaming: {
+      intro:
+        "Le rêve s'exécute comme une seule tâche cron gérée sur tous les espaces de travail des agents, donc ces paramètres sont globaux. Ils sont gérés par le plugin {plugin}.",
+      schedule: {
+        title: "Planification",
+        description: "Quand le balayage complet s'exécute et quel modèle le narre.",
+      },
+      frequency: {
+        label: "Fréquence du rêve",
+        help: "Cadence cron pour le balayage complet du rêve (léger, paradoxal, puis profond). Laissez vide pour la valeur par défaut du plugin.",
+        placeholder: "0 3 * * *",
+      },
+      timezone: {
+        label: "Fuseau horaire",
+        help: "Fuseau horaire IANA utilisé pour interpréter la cadence cron.",
+        placeholder: "Europe/Vienna",
+      },
+      model: {
+        label: "Modèle de rêve",
+        help: "Remplacement du fournisseur/modèle pour la narration du journal de rêve. Nécessite que les remplacements de modèle des sous-agents soient autorisés.",
+        placeholder: "anthropic/claude-sonnet-4-6",
+      },
+      verboseLogging: {
+        label: "Journalisation détaillée",
+        help: "Journalise chaque phase du rêve en détail. Utile pour ajuster les seuils.",
+      },
+      storage: {
+        title: "Stockage",
+        description: "Où sont écrites les mémoires promues et les rapports de rêve.",
+        modeLabel: "Mode de stockage",
+        modeHelp:
+          "Inline écrit dans le fichier de mémoire ; separate conserve un fichier de rapport dédié.",
+        modes: {
+          inline: "Inline",
+          separate: "Séparé",
+          both: "Les deux",
+        },
+        separateReportsLabel: "Rapports séparés",
+        separateReportsHelp: "Garder les rapports de rêve hors du fichier de mémoire principal.",
+      },
+      phases: {
+        light: {
+          title: "Phase légère",
+          description:
+            "Passage économique sur l'activité récente qui prépare les candidats à la relecture.",
+        },
+        deep: {
+          title: "Phase profonde",
+          description:
+            "Passage de promotion noté qui fait passer les entrées à court terme en mémoire.",
+        },
+        rem: {
+          title: "Phase REM",
+          description:
+            "Passage sur les motifs qui recherche les thèmes récurrents dans la fenêtre d'analyse.",
+        },
+      },
+      phaseFields: {
+        enabled: "Activé",
+        enabledHelp: "Exécuter cette phase pendant le balayage.",
+        lookbackDays: "Jours d'analyse rétrospective",
+        lookbackDaysHelp:
+          "Jusqu'où cette phase lit en arrière. Laisser vide pour la valeur par défaut du plugin.",
+        limit: "Limite",
+        limitHelp: "Nombre maximal d'entrées traitées par cette phase à chaque exécution.",
+        dedupeSimilarity: "Similarité de déduplication",
+        dedupeSimilarityHelp:
+          "Similarité au-dessus de laquelle deux candidats sont considérés comme des doublons.",
+        minScore: "Score minimum",
+        minScoreHelp: "Score de promotion qu'une entrée doit atteindre.",
+        minRecallCount: "Rappels minimum",
+        minRecallCountHelp:
+          "Fréquence à laquelle une entrée doit être rappelée avant de pouvoir être promue.",
+        minUniqueQueries: "Nombre minimal de requêtes uniques",
+        minUniqueQueriesHelp: "Nombre de requêtes distinctes ayant fait remonter l'entrée.",
+        recencyHalfLifeDays: "Demi-vie de récence (jours)",
+        recencyHalfLifeDaysHelp:
+          "Rapidité avec laquelle les anciens signaux de rappel perdent en importance.",
+        maxAgeDays: "Âge maximal (jours)",
+        maxAgeDaysHelp: "Ignorer les entrées à court terme plus anciennes que cette valeur.",
+        maxPromotedSnippetTokens: "Nombre maximal de jetons par extrait promu",
+        maxPromotedSnippetTokensHelp:
+          "Budget de jetons pour chaque extrait promu. La provenance reste attachée.",
+        minPatternStrength: "Force minimale de motif",
+        minPatternStrengthHelp: "Force qu'un motif récurrent doit atteindre pour être signalé.",
+      },
+      agentScope: {
+        title: "Vue de l'agent",
+        description:
+          "Les paramètres ci-dessus sont globaux. Le journal de rêve, les décomptes à court terme et les actions de maintenance ci-dessous appartiennent à un seul agent.",
+        rowTitle: "Agent",
+      },
+      unsupported: {
+        title: "Paramètres de rêve",
+        rowTitle: "Non disponible pour ce moteur",
+        description:
+          "Le plugin {plugin} occupe l'emplacement de mémoire et son schéma de configuration ne comporte aucune section de rêve, ces paramètres ne peuvent donc pas être enregistrés. Changez de moteur dans l'onglet Aperçu pour les modifier.",
+      },
+    },
+  },
   sessionsPage: {
     hubTablistLabel: "Sections de fils",
   },
@@ -2361,6 +2521,21 @@ export const fr: TranslationMap = {
       description: "Permettez à Code Mode d'orchestrer des groupes de sous-agents en parallèle.",
       empty: "Aucun swarm actif.",
       defaultPhase: "Sans phase",
+    },
+    toolSearch: {
+      title: "Recherche d'outils",
+      description:
+        "Gardez visible un répertoire d'outils limité et différez le reste derrière une recherche, afin que les grands catalogues MCP et de plugins n'encombrent plus l'invite.",
+    },
+    localModelLean: {
+      title: "Outils allégés pour les modèles locaux",
+      description:
+        "Abandonnez les outils lourds par défaut que les petits modèles locaux gèrent mal, pour ne conserver qu'un ensemble réduit qu'ils peuvent utiliser de manière fiable.",
+    },
+    auditMessages: {
+      title: "Métadonnées d'audit des messages",
+      description:
+        "Enregistrez des métadonnées sans contenu pour les conversations directes dans le registre d'audit. Le contenu des messages n'est jamais stocké.",
     },
   },
   aboutPage: {
@@ -3149,7 +3324,6 @@ export const fr: TranslationMap = {
       title: "Instantané",
       subtitle: "Dernières informations de négociation du Gateway.",
       status: "Statut",
-      uptime: "Durée de fonctionnement",
       tickInterval: "Intervalle de rafraîchissement",
       lastChannelsRefresh: "Dernière actualisation des canaux",
       lastError: "Dernière erreur",
@@ -3166,6 +3340,7 @@ export const fr: TranslationMap = {
     },
   },
   attention: {
+    cronErrorUnknown: "Erreur inconnue",
     cronFailed: "Échec de {count} tâche(s) cron",
     cronOverdue: "{count} tâche(s) cron en retard",
     modelAuthExpired: "Authentification du modèle expirée : {providers}",
@@ -3262,14 +3437,19 @@ export const fr: TranslationMap = {
       on: "Rêverie activée",
       off: "Rêverie désactivée",
     },
-    restartConfirmation: {
-      title: "Restart Gateway to Apply Change",
-      subtitle: "Changing Dreaming mode restarts the gateway.",
-      warning:
-        "This action will restart the Gateway and may temporarily interrupt chats, automations, and connected channels.",
-      confirm: "Confirm Restart",
-      restarting: "Restarting…",
-      failed: "Could not apply change. Check your connection and try again.",
+    toggleConfirmation: {
+      subtitle:
+        "Le mode Dreaming est un paramètre global ; il ne s'applique pas uniquement à cet agent.",
+      enableTitle: "Activer le mode Dreaming pour tous les agents",
+      enableDetail:
+        "Le balayage nocturne de dreaming s'exécutera sur chaque espace de travail d'agent configuré, promouvant les rappels à court terme vers la mémoire à long terme. Ceci s'applique immédiatement.",
+      enableConfirm: "Activer le mode Dreaming",
+      disableTitle: "Désactiver le mode Dreaming pour tous les agents",
+      disableDetail:
+        "Le balayage nocturne de dreaming s'arrêtera pour chaque agent configuré, pas seulement celui-ci. Les souvenirs déjà enregistrés sont conservés ; rien de nouveau n'est promu. Ceci s'applique immédiatement.",
+      disableConfirm: "Désactiver le mode Dreaming",
+      saving: "Enregistrement…",
+      failed: "Impossible d'appliquer la modification. Vérifiez votre connexion et réessayez.",
     },
     status: {
       active: "Rêverie active",
@@ -3934,6 +4114,12 @@ export const fr: TranslationMap = {
     },
     outputTokens: "{count} jetons de sortie",
     archivedSessionDisabled: "Restaurez cette session pour envoyer des messages.",
+    sessionRoute: {
+      chooseTitle: "Choisir une session",
+      multipleMatches: "Plusieurs sessions correspondent à {shortId}.",
+      additionalMatches:
+        "Il reste des résultats de recherche. Utilisez un préfixe d'identifiant plus long.",
+    },
     sessionSharing: {
       menu: "Partage de conversation",
       current: "Visibilité de la conversation : {visibility}",
@@ -3988,6 +4174,15 @@ export const fr: TranslationMap = {
       oneMessage: "{count} message",
       messages: "{count} messages",
       activeBranch: "Branche active",
+      gatewayPicker: {
+        menuLabel: "Gateway : {gateway}",
+        primaryTag: "principal",
+        setPrimary: "Définir comme principal…",
+        openSettings: "Paramètres du Gateway…",
+        connected: "Connecté",
+        unreachable: "Inaccessible",
+        unknown: "Statut inconnu",
+      },
     },
     board: {
       faceLabel: "Face du fil",
@@ -4180,7 +4375,9 @@ export const fr: TranslationMap = {
       threads: "Fils",
       groups: "Groupes",
       coding: "Codage",
-      groupCatalogSessionsByProject: "Grouper par projet",
+      catalogViewOptions: "Options d'affichage",
+      catalogGroupByProject: "Projet",
+      catalogGroupByPerson: "Personne",
       openSessionMenu: "Open session menu",
       sortBy: "Trier par",
       sortCreated: "Créé",
@@ -4359,6 +4556,16 @@ export const fr: TranslationMap = {
       renderedMarkdownHint: "Aperçu en texte enrichi nettoyé pour une lecture rapide.",
       noPreviewableMarkdown: "Aucun contenu markdown à prévisualiser.",
       noContent: "Aucun contenu disponible",
+    },
+    sidebarColumns: {
+      chat: "Chat",
+      discussion: "Discussion",
+      detail: "Détails",
+      close: "Fermer {panel}",
+      drag: "Faire glisser {panel}",
+      dropOnEmptyLeft: "Déplacer {panel} vers la barre latérale gauche vide",
+      dropOnEmptyRight: "Déplacer {panel} vers la barre latérale droite vide",
+      resize: "Redimensionner {panel}",
     },
     thread: {
       search: "Rechercher des messages",

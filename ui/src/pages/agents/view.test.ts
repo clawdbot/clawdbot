@@ -544,6 +544,119 @@ describe("renderAgentFiles", () => {
     expect(onSelectFile).not.toHaveBeenCalled();
   });
 
+  // A missing SOUL.md is a normal workspace state, so it belongs in the add picker
+  // instead of a permanently-badged MISSING tab; a missing AGENTS.md is a real fault.
+  it("offers normally-absent files in the add picker and badges only real faults", () => {
+    const container = document.createElement("div");
+    const onSelectFile = vi.fn();
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            { name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: true },
+            {
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
+              missing: true,
+              expectedAbsent: true,
+            },
+            {
+              name: "MEMORY.md",
+              path: "/tmp/workspace/MEMORY.md",
+              missing: true,
+              expectedAbsent: true,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "AGENTS.md",
+        agentFileContents: { "AGENTS.md": "" },
+        agentFileDrafts: { "AGENTS.md": "" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+      (tab) => directText(tab),
+    );
+    expect(tabLabels).toStrictEqual(["AGENTS"]);
+    expect(container.querySelectorAll(".agent-tab--missing")).toHaveLength(1);
+
+    const picker = container.querySelector<HTMLSelectElement>(".agent-tab-add");
+    expect(picker).not.toBeNull();
+    expect(Array.from(picker?.options ?? []).map((option) => option.value)).toStrictEqual([
+      "",
+      "SOUL.md",
+      "MEMORY.md",
+    ]);
+
+    if (!picker) {
+      throw new Error("expected add picker");
+    }
+    picker.value = "SOUL.md";
+    picker.dispatchEvent(new Event("change"));
+    expect(onSelectFile).toHaveBeenCalledWith("SOUL.md");
+    // The picker is an action, not a selection: it resets so the same file can be
+    // re-picked after the operator switches tabs.
+    expect(picker.value).toBe("");
+  });
+
+  it("shows the picked file as a tab with a create hint", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentFiles({
+        agentId: "alpha",
+        agentFilesList: {
+          agentId: "alpha",
+          workspace: "/tmp/workspace",
+          files: [
+            { name: "AGENTS.md", path: "/tmp/workspace/AGENTS.md", missing: false },
+            {
+              name: "SOUL.md",
+              path: "/tmp/workspace/SOUL.md",
+              missing: true,
+              expectedAbsent: true,
+            },
+          ],
+        },
+        agentFilesLoading: false,
+        agentFilesError: null,
+        agentFileActive: "SOUL.md",
+        agentFileContents: { "SOUL.md": "" },
+        agentFileDrafts: { "SOUL.md": "" },
+        agentFileSaving: false,
+        onLoadFiles: () => undefined,
+        onSelectFile: () => undefined,
+        onFileDraftChange: () => undefined,
+        onFileReset: () => undefined,
+        onFileSave: () => undefined,
+      }),
+      container,
+    );
+
+    const tabLabels = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-tab")).map(
+      (tab) => directText(tab),
+    );
+    expect(tabLabels).toStrictEqual(["AGENTS", "SOUL"]);
+    expect(container.querySelector(".agent-tab-add")).toBeNull();
+    expect(container.querySelectorAll(".agent-tab--missing")).toHaveLength(0);
+    expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
+      "This file does not exist yet. Saving will create it in the agent workspace.",
+    );
+  });
+
   it("renders the upgraded markdown preview structure with file metadata", () => {
     const container = document.createElement("div");
 

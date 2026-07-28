@@ -121,9 +121,12 @@ export type {
 } from "./session-accessor.entry-mutation.js";
 export {
   clearPluginOwnedSessionState,
+  listSessionChildEntriesReadOnly,
   listSessionEntries,
   listSessionEntriesReadOnly,
+  listSessionEntryKeysReadOnly,
   loadExactSessionEntry,
+  loadExactSessionEntryReadOnly,
   loadSessionEntry,
   loadSessionEntryReadOnly,
   openSessionEntryReadView,
@@ -135,6 +138,7 @@ export {
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
+  resolveSessionEntrySelection,
   updateResolvedSessionEntry,
   upsertSessionEntry,
 } from "./session-accessor.entry.js";
@@ -188,6 +192,8 @@ export {
   loadTranscriptEventRowsAfterSeqSync,
   loadTranscriptEvents,
   loadTranscriptEventsSync,
+  loadTranscriptHeaderSync,
+  loadTranscriptTailEventsSync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,
   readLatestTranscriptAssistantText,
@@ -201,9 +207,15 @@ export {
   withTranscriptWriteLock,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
-export { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
+export {
+  appendTranscriptMessages,
+  persistSessionTranscriptTurn,
+} from "./session-accessor.transcript-turn.js";
 export {
   isSessionTranscriptProjectionUnavailableError,
+  readRecentSessionTranscriptActiveEvents,
+  readSessionTranscriptActiveStats,
+  readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActiveLeafEvents,
   readSessionTranscriptMessageAnchorPage,
@@ -213,13 +225,20 @@ export {
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDelta,
   SessionTranscriptProjectionUnavailableError,
+  waitForSessionTranscriptProjection,
 } from "./session-accessor.sqlite-active-events.js";
 export type {
+  SessionTranscriptBoundedMessageTailPage,
   SessionTranscriptMessageAnchorPage,
   SessionTranscriptMessageEvent,
   SessionTranscriptMessageEventPage,
 } from "./session-accessor.sqlite-active-events.js";
 export {
+  readSessionTranscriptWatermark,
+  type SessionTranscriptWatermark,
+} from "./session-accessor.sqlite-transcript-watermark.js";
+export {
+  resolveConcreteSessionStorePath,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,

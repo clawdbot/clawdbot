@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionPath,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -176,9 +177,10 @@ suite("Codex native session catalog", () => {
       await page.goto(`${server.baseUrl}chat`);
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       await expandCodingSection(page);
-      const workSection = page.locator('[data-session-section="work"]');
+      const sessionGroups = page.locator(".sidebar-recent-sessions");
+      const workSection = sessionGroups.locator(':scope > [data-session-section="work"]');
       const liveRows = workSection.locator(":scope > .sidebar-recent-sessions__list");
-      const catalog = workSection.locator(':scope > [data-session-section="catalog:codex"]');
+      const catalog = sessionGroups.locator(':scope > [data-session-section="catalog:codex"]');
       await catalog.waitFor({ state: "visible" });
       const [liveRowsBox, catalogBox] = await Promise.all([
         liveRows.boundingBox(),
@@ -189,7 +191,7 @@ suite("Codex native session catalog", () => {
       expect(Math.round(catalogBox!.y - (liveRowsBox!.y + liveRowsBox!.height))).toBe(10);
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
-        await workSection.screenshot({
+        await sessionGroups.screenshot({
           animations: "disabled",
           path: path.join(uiProofArtifactDir, "06-coding-catalog-spacing.png"),
         });
@@ -611,7 +613,7 @@ suite("Codex native session catalog", () => {
         });
       }
 
-      await page.goto(`${server.baseUrl}settings/automation?section=plugins`);
+      await page.goto(`${server.baseUrl}settings/automation?section=plugins&advanced=1`);
       const expandPluginSetting = async (pluginLabel: string) => {
         const pluginGroup = page
           .getByText(pluginLabel, { exact: true })
@@ -781,6 +783,28 @@ suite("Codex native session catalog", () => {
     await expect.poll(() => page.getByText("prepare release", { exact: true }).count()).toBe(1);
     const composer = page.locator(".agent-chat__composer-combobox > textarea");
     await composer.fill("continue with the final checks");
+    await gateway.setMethodResponse("sessions.list", {
+      count: 1,
+      defaults: {
+        contextTokens: null,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+      },
+      path: "",
+      sessions: [
+        {
+          contextTokens: null,
+          displayName: "Adopted Codex session",
+          key: "agent:main:adopted-codex",
+          kind: "direct",
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          totalTokens: 0,
+          updatedAt: Date.now(),
+        },
+      ],
+      ts: Date.now(),
+    });
     await composer.press("Enter");
     const continued = await gateway.waitForRequest("sessions.catalog.continue");
     expect(continued.params).toEqual({
@@ -793,7 +817,9 @@ suite("Codex native session catalog", () => {
       sessionKey: "agent:main:adopted-codex",
       message: "continue with the final checks",
     });
-    await expect.poll(() => page.url()).toMatch(/session=agent%3Amain%3Aadopted-codex/);
+    await expect
+      .poll(() => new URL(page.url()).pathname)
+      .toBe(controlUiSessionPath("agent:main:adopted-codex"));
     await page.close();
   });
 });

@@ -477,6 +477,8 @@ export const describe0BeforeEach0 = () => {
   );
   mocks.routeReply.mockReset();
   mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+  mocks.tryFastApproveFromMessage.mockReset();
+  mocks.tryFastApproveFromMessage.mockResolvedValue({ handled: false });
   acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
   diagnosticMocks.logMessageQueued.mockClear();
   diagnosticMocks.logMessageProcessed.mockClear();
@@ -594,6 +596,10 @@ export const describe1BeforeEach0 = () => {
 
 export const describe2BeforeEach0 = () => {
   resetInboundDedupe();
+  // Same routeReply reset as the sibling suite setups: queued once-values and
+  // persistent overrides must not leak between tests.
+  mocks.routeReply.mockReset();
+  mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
   sessionStoreMocks.currentEntry = undefined;
   sessionBindingMocks.resolveByConversation.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);

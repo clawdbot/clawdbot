@@ -6,11 +6,12 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import { buildAssistantMessage, createOllamaStreamFn, isOllamaCompatProvider } from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -37,6 +38,22 @@ function makeOllamaResponse(params: {
 }
 
 const MODEL_INFO = { api: "ollama", provider: "ollama", id: "qwen3.5" };
+
+describe("isOllamaCompatProvider", () => {
+  it.each([
+    ["http://localhost:11434", true],
+    ["http://127.0.0.1:11434", true],
+    ["http://127.0.0.2:11434", true],
+    ["http://127.255.255.254:11434", true],
+    ["http://[::1]:11434", true],
+    ["http://[::ffff:127.0.0.2]:11434", true],
+    ["http://128.0.0.1:11434", false],
+    ["http://10.0.0.1:11434", false],
+    ["http://127.0.0.1.evil.com:11434", false],
+  ] as const)("classifies %s as Ollama-compatible=%s", (baseUrl, expected) => {
+    expect(isOllamaCompatProvider({ provider: "custom", baseUrl })).toBe(expected);
+  });
+});
 
 describe("buildAssistantMessage", () => {
   it("includes thinking block when response has thinking field", () => {

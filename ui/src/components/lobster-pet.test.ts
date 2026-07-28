@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
+import { LOBSTER_PALETTE_LORE } from "./lobster-pet-lore.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
   pickLobsterEntrance,
@@ -15,6 +16,7 @@ import {
   LOBSTER_PET_PALETTES,
   createLobsterPetLook,
   lobsterPetSeed,
+  moonPhaseFraction,
   renderLobsterSvg,
   resolveLobsterPetMode,
   resolveLobsterRunOutcome,
@@ -31,12 +33,26 @@ const LOBSTER_PET_PALETTE_IDS: LobsterPetPaletteId[] = [
   "ink",
   "blue",
   "gold",
+  "tangerine",
   "calico",
   "abyss",
   "lumen",
+  "magma",
+  "oilslick",
+  "aurora",
+  "nebula",
+  "mood",
+  "clawtron",
+  "selene",
+  "geode",
   "ghost",
+  "glass",
   "split",
   "cottoncandy",
+  "pixel",
+  "blueprint",
+  "phosphor",
+  "heisenbug",
   "retro",
 ];
 
@@ -202,15 +218,59 @@ describe("lobster pet look", () => {
     for (const id of LOBSTER_PET_PALETTE_IDS) {
       expect(counts.get(id) ?? 0).toBeGreaterThan(0);
     }
-    // Grails stay grails: ghost/split ~1%, cottoncandy ~0.8%, retro ~0.5%;
-    // commons dominate.
-    for (const grail of ["ghost", "split", "cottoncandy", "retro"]) {
-      expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.03);
+    // Exact catalog weights total 123.5. Every one-point-or-lower palette is
+    // below 1%, with enough tolerance here for the deterministic sample.
+    for (const grail of [
+      "clawtron",
+      "selene",
+      "geode",
+      "ghost",
+      "glass",
+      "split",
+      "cottoncandy",
+      "pixel",
+      "blueprint",
+      "phosphor",
+      "heisenbug",
+      "retro",
+    ]) {
+      expect(counts.get(grail) ?? 0).toBeLessThan(total * 0.018);
+    }
+    const retroCount = counts.get("retro") ?? 0;
+    for (const paletteId of LOBSTER_PET_PALETTE_IDS.filter((candidate) => candidate !== "retro")) {
+      expect(retroCount).toBeLessThan(counts.get(paletteId) ?? 0);
     }
     expect((counts.get("crimson") ?? 0) + (counts.get("coral") ?? 0)).toBeGreaterThan(total * 0.4);
     // Shinies exist and stay near their 1-in-512 odds.
     expect(shinies).toBeGreaterThan(0);
     expect(shinies).toBeLessThan(total * 0.006);
+  });
+
+  it("keeps palette lore complete and exact", () => {
+    const paletteIds = LOBSTER_PET_PALETTES.map((palette) => palette.id).toSorted();
+    expect(Object.keys(LOBSTER_PALETTE_LORE).toSorted()).toEqual(paletteIds);
+    for (const id of paletteIds) {
+      expect(LOBSTER_PALETTE_LORE[id].flavor.trim()).not.toBe("");
+      expect(LOBSTER_PALETTE_LORE[id].hint.trim()).not.toBe("");
+    }
+  });
+
+  it("tracks known new and full moons", () => {
+    const newMoon = moonPhaseFraction(new Date("2024-01-11T11:57:00.000Z"));
+    const fullMoon = moonPhaseFraction(new Date("2024-01-25T17:54:00.000Z"));
+    expect(newMoon < 0.03 || newMoon >= 0.97).toBe(true);
+    expect(fullMoon).toBeGreaterThan(0.46);
+    expect(fullMoon).toBeLessThan(0.54);
+  });
+
+  it("keeps Clawtron's LED on the perky antenna", () => {
+    // Pinned date: on the anniversary every palette repaints retro and no
+    // Clawtron could ever be found.
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const clawtron = Array.from({ length: 20_000 }, (_, seed) =>
+      createLobsterPetLook(seed, neutralDate),
+    ).find((look) => look.palette.id === "clawtron");
+    expect(clawtron?.antennae).toBe("perky");
   });
 
   it("derives distinct salted seeds per session key, stable within a load", () => {
@@ -884,7 +944,7 @@ describe("lobster plans", () => {
 
 describe("rare lobster loads", () => {
   // Probe seeds (deterministic per stream): 644 hosts the Elder; 191 rolls
-  // an old-friend return plus a balloon entrance; 916 hatches a shiny lumen;
+  // an old-friend return plus a balloon entrance; 105715 hatches a shiny lumen;
   // 104 is a shy load that beaches a bottle at ~194s; 37 is a shy load with
   // a snail crossing at ~407s.
   it("hosts the Elder: barnacled, renamed, and never molting", async () => {
@@ -936,7 +996,7 @@ describe("rare lobster loads", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-09T12:00:00"));
     vi.stubGlobal("localStorage", window.localStorage);
-    const element = createPet(916);
+    const element = createPet(105_715);
     await arrive(element);
 
     expect(spriteClasses(element)).toContain("lobster-pet--shiny");

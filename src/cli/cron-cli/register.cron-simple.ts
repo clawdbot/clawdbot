@@ -10,6 +10,7 @@ import { sleep } from "../../utils/sleep.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
+import { parseTimeoutMs } from "../parse-timeout.js";
 import { findCronJobByIdOrName } from "./list-jobs.js";
 import {
   enrichCronJsonWithStatus,
@@ -62,8 +63,21 @@ async function waitForCronRunCompletion(params: {
 }): Promise<CronRunLogEntryResult> {
   // Poll the task ledger rather than cron.run because completion state is written asynchronously.
   const startedAt = Date.now();
+  let hasPolled = false;
   for (;;) {
-    const page = (await callGatewayFromCli("cron.runs", params.opts, {
+    const elapsedBeforePollMs = Date.now() - startedAt;
+    if (hasPolled && elapsedBeforePollMs >= params.timeoutMs) {
+      throw new Error(`timed out waiting for cron run ${params.runId}`);
+    }
+    const remainingMs = Math.max(1, params.timeoutMs - elapsedBeforePollMs);
+    const configuredTimeoutMs = parseTimeoutMs(params.opts.timeout);
+    const pollTimeoutMs =
+      configuredTimeoutMs === undefined ? remainingMs : Math.min(configuredTimeoutMs, remainingMs);
+    hasPolled = true;
+    // History reads share the wait deadline, but enqueue keeps its own RPC
+    // timeout and a zero-duration wait still gets one immediate ledger poll.
+    const pollOpts = { ...params.opts, timeout: String(pollTimeoutMs) };
+    const page = (await callGatewayFromCli("cron.runs", pollOpts, {
       id: params.jobId,
       runId: params.runId,
       limit: 1,

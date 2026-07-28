@@ -57,9 +57,10 @@ function runtimeHarness(options?: { tabOpen?: boolean }) {
           cameraOff: true,
           ...(sessionConflict && fn.includes("const allowSessionAdoption = false")
             ? {
-                manualActionRequired: true,
-                manualActionReason: "teams-session-conflict",
-                manualActionMessage: "This Teams tab is owned by another active meeting session.",
+                manualAction: {
+                  reason: "teams-session-conflict",
+                  message: "This Teams tab is owned by another active meeting session.",
+                },
               }
             : {}),
           url: tabUrl,

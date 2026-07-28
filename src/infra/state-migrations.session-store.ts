@@ -235,8 +235,11 @@ export function pickLatestLegacyDirectEntry(
   return best;
 }
 
-export function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const shaped = normalizePersistedSessionEntryShape(entry);
+export function normalizeSessionEntry(
+  entry: SessionEntryLike,
+  sessionKey?: string,
+): SessionEntry | null {
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
@@ -902,7 +905,7 @@ export async function migrateOrphanedSessionKeys(params: {
     }
     const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(working)) {
-      const ne = normalizeSessionEntry(entry);
+      const ne = normalizeSessionEntry(entry, key);
       if (ne) {
         normalized[key] = ne;
       }
@@ -1064,7 +1067,7 @@ export async function migrateLegacyAcpSessionMetadata(params: {
     let migrated = 0;
     let preserved = 0;
     for (const [sessionKey, entry] of Object.entries(parsed.store)) {
-      const normalizedEntry = normalizeSessionEntry(entry);
+      const normalizedEntry = normalizeSessionEntry(entry, sessionKey);
       if (!normalizedEntry) {
         continue;
       }

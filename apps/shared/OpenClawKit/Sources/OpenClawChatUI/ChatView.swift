@@ -544,6 +544,13 @@ public struct OpenClawChatView: View {
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)
+            },
+            imageArtifactResolverReady: self.viewModel.healthOK,
+            loadImageArtifact: { [weak viewModel] artifactId in
+                guard let viewModel else { return nil }
+                return try await viewModel.transport.loadImageArtifact(
+                    sessionKey: viewModel.sessionKey,
+                    artifactId: artifactId)
             })
             .frame(
                 maxWidth: .infinity,

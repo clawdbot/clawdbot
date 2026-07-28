@@ -22,6 +22,8 @@ export {
 } from "./session-work-admission-handoff.js";
 
 export const SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS = 15_000;
+/** Stable gateway error for an archive rejected by an admitted or projected run. */
+export const SESSION_ARCHIVE_ACTIVE_RUN_ERROR = "Cannot archive a session with an active run.";
 type SessionWorkAdmission = HandoffSessionWorkAdmission & {
   interrupt?: () => void;
   released: Promise<void>;
@@ -39,6 +41,18 @@ type SessionLifecycleAdmissionState = {
 };
 
 type SessionLifecycleMutationKind = "compaction";
+
+type SessionLifecycleMutationTarget = {
+  scope: string;
+  identities: Iterable<string | undefined>;
+};
+
+type SessionLifecycleMutationParams<T> = {
+  kind?: SessionLifecycleMutationKind;
+  prepare?: () => Promise<void>;
+  run: () => Promise<T>;
+  signal?: AbortSignal;
+} & (SessionLifecycleMutationTarget | { targets: Iterable<SessionLifecycleMutationTarget> });
 
 // Runtime chunks can load separate module instances while still coordinating
 // the same sessions. One shared state keeps every lock and admission visible.
@@ -72,35 +86,19 @@ async function runWithSessionIdentityLocks<T>(
   identities: readonly string[],
   index: number,
   run: () => Promise<T>,
+  kind: "lifecycle" | "mutation" = "lifecycle",
 ): Promise<T> {
   const identity = identities[index];
   if (!identity) {
     return await run();
   }
   return await runQueuedStoreWrite({
-    queues: SESSION_LIFECYCLE_QUEUES,
+    queues: kind === "mutation" ? SESSION_LIFECYCLE_MUTATION_QUEUES : SESSION_LIFECYCLE_QUEUES,
     storePath: identity,
-    label: "runExclusiveSessionLifecycle",
+    label:
+      kind === "mutation" ? "runExclusiveSessionLifecycleMutation" : "runExclusiveSessionLifecycle",
     reentrant: true,
-    fn: async () => await runWithSessionIdentityLocks(identities, index + 1, run),
-  });
-}
-
-async function runWithSessionMutationIdentityLocks<T>(
-  identities: readonly string[],
-  index: number,
-  run: () => Promise<T>,
-): Promise<T> {
-  const identity = identities[index];
-  if (!identity) {
-    return await run();
-  }
-  return await runQueuedStoreWrite({
-    queues: SESSION_LIFECYCLE_MUTATION_QUEUES,
-    storePath: identity,
-    label: "runExclusiveSessionLifecycleMutation",
-    reentrant: true,
-    fn: async () => await runWithSessionMutationIdentityLocks(identities, index + 1, run),
+    fn: async () => await runWithSessionIdentityLocks(identities, index + 1, run, kind),
   });
 }
 
@@ -195,22 +193,29 @@ async function runExclusiveSessionLifecycle<T>(params: {
   }
 }
 
-export async function runExclusiveSessionLifecycleMutation<T>(params: {
-  scope: string;
-  identities: Iterable<string | undefined>;
-  kind?: SessionLifecycleMutationKind;
-  prepare?: () => Promise<void>;
-  run: () => Promise<T>;
-  signal?: AbortSignal;
-}): Promise<T> {
-  const identities = normalizeSessionIdentities(params.scope, params.identities);
+export async function runExclusiveSessionLifecycleMutation<T>(
+  params: SessionLifecycleMutationParams<T>,
+): Promise<T> {
+  // Normalize every store and session into one globally ordered identity set.
+  // Cross-agent mutations then acquire one fence and count as one active run,
+  // instead of nesting store locks in caller-selected order.
+  const identities =
+    "targets" in params
+      ? Array.from(
+          new Set(
+            Array.from(params.targets, (target) =>
+              normalizeSessionIdentities(target.scope, target.identities),
+            ).flat(),
+          ),
+        ).toSorted()
+      : normalizeSessionIdentities(params.scope, params.identities);
   const signal = params.signal;
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
   const mutationRun = {};
   let mutationActivated = false;
   let removeAbortListener = () => {};
-  const mutation = runWithSessionMutationIdentityLocks(
+  const mutation = runWithSessionIdentityLocks(
     identities,
     0,
     async () =>
@@ -268,6 +273,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(params: {
           });
         }
       }),
+    "mutation",
   );
   if (!signal) {
     return await mutation;
@@ -338,6 +344,52 @@ export function isCompetingSessionWorkAdmissionActive(
       (admission) => !currentAdmissions?.has(admission),
     ).some(Boolean),
   );
+}
+
+type SessionWorkAdmissionReleaseParams = {
+  scope: string;
+  identities: Iterable<string | undefined>;
+};
+
+function resolveSessionWorkAdmissionRelease(
+  params: SessionWorkAdmissionReleaseParams,
+  ownedAdmissions?: ReadonlySet<SessionWorkAdmission>,
+): Promise<void> | undefined {
+  const matchingAdmissions = new Set<SessionWorkAdmission>();
+  for (const identity of normalizeSessionIdentities(params.scope, params.identities)) {
+    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
+      if (!ownedAdmissions || ownedAdmissions.has(admission)) {
+        matchingAdmissions.add(admission);
+      }
+    }
+  }
+  if (matchingAdmissions.size === 0) {
+    return undefined;
+  }
+
+  // A gateway turn can adopt an outer reply admission and open its own inner
+  // admission. Self-archive must wait for both owners to release the session.
+  return Promise.all(Array.from(matchingAdmissions, (admission) => admission.released)).then(
+    () => undefined,
+  );
+}
+
+/** Completion of this caller's admitted turn for the requested session identities. */
+export function getCurrentSessionWorkAdmissionRelease(
+  params: SessionWorkAdmissionReleaseParams,
+): Promise<void> | undefined {
+  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  if (!currentAdmissions?.size) {
+    return undefined;
+  }
+  return resolveSessionWorkAdmissionRelease(params, currentAdmissions);
+}
+
+/** Completion of the currently active turns that own a session. */
+export function getSessionWorkAdmissionRelease(
+  params: SessionWorkAdmissionReleaseParams,
+): Promise<void> | undefined {
+  return resolveSessionWorkAdmissionRelease(params);
 }
 
 /** Active session identities for one store/lifecycle scope. */

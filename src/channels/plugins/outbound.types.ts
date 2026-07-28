@@ -173,6 +173,8 @@ export type ChannelOutboundAdapter = {
   chunkedTextFormatting?: OutboundDeliveryFormattingOptions;
   /** Lift remote Markdown image syntax in text into outbound media attachments. */
   extractMarkdownImages?: boolean;
+  /** Preserve model-authored Markdown details blocks for a native channel renderer. */
+  preserveMarkdownDetails?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   textChunkLimit?: number;
   /**
    * Reserve the exact provider id used by the next single-message send.

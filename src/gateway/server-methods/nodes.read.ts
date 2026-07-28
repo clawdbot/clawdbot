@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing, resolveNodePairingState } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { listNodePairing } from "../../infra/node-pairing.js";
+import { projectNodePairing } from "../../infra/node-pairing.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { replaceRemoteNodeSkills } from "../../skills/runtime/remote-skills.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
@@ -58,8 +58,8 @@ function isVisibleNode(node: NodeListNode | null): node is NodeListNode {
 function listNodesForClient(params: {
   client: GatewayClient | null;
   pairedDevices: Awaited<ReturnType<typeof listDevicePairing>>["paired"];
-  pairedNodes: Awaited<ReturnType<typeof listNodePairing>>["paired"];
-  pendingNodes: Awaited<ReturnType<typeof listNodePairing>>["pending"];
+  pairedNodes: ReturnType<typeof projectNodePairing>["paired"];
+  pendingNodes: ReturnType<typeof projectNodePairing>["pending"];
   connectedNodes: readonly NodeSession[];
 }): NodeListNode[] {
   const catalog = createKnownNodeCatalog({
@@ -220,10 +220,8 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const [devicePairing, nodePairing] = await Promise.all([
-        listDevicePairing(),
-        listNodePairing(),
-      ]);
+      const devicePairing = await listDevicePairing();
+      const nodePairing = projectNodePairing(devicePairing.paired);
       const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
       const nodes = listNodesForClient({
         client,
@@ -255,10 +253,8 @@ export const nodeReadHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const [devicePairing, nodePairing] = await Promise.all([
-        listDevicePairing(),
-        listNodePairing(),
-      ]);
+      const devicePairing = await listDevicePairing();
+      const nodePairing = projectNodePairing(devicePairing.paired);
       const connectedNodes = listCurrentConnectedNodes(context, devicePairing.paired);
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,

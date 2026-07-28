@@ -6,6 +6,8 @@ import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
+import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
   createControlUiMockBootstrapConfig,
@@ -18,13 +20,18 @@ import {
   resolveTsconfigPathAliasesForVite,
 } from "../ui/vite.config.ts";
 import { buildBackgroundTasksMock } from "./control-ui-mock-background-tasks.ts";
-import { buildChannelsStatusMock, buildChannelWizardMocks } from "./control-ui-mock-channels.ts";
+import {
+  buildChannelsPairingMock,
+  buildChannelsStatusMock,
+  buildChannelWizardMocks,
+} from "./control-ui-mock-channels.ts";
+import { buildCronMocks } from "./control-ui-mock-cron.ts";
 import { buildPluginCatalogMock } from "./control-ui-mock-plugins.ts";
 import { buildSkillWorkshopMocks } from "./control-ui-mock-skill-workshop.js";
 
 type CliOptions = {
   allowedHosts: string[];
-  fixture?: "board" | "swarm";
+  fixture?: "approval" | "board" | "swarm";
   host: string;
   port: number;
 };
@@ -140,11 +147,11 @@ function parseArgs(args: string[]): CliOptions {
   return options;
 }
 
-function parseFixture(value: string | undefined): "board" | "swarm" | undefined {
+function parseFixture(value: string | undefined): CliOptions["fixture"] {
   if (!value) {
     return undefined;
   }
-  if (value !== "board" && value !== "swarm") {
+  if (value !== "approval" && value !== "board" && value !== "swarm") {
     throw new Error(`Unknown Control UI mock fixture: ${value}`);
   }
   return value;
@@ -636,6 +643,15 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     agents: { defaults: { thinkingDefault: "medium" } },
     models: { mode: "merge" },
     ...(options.swarmEnabled ? { tools: { swarm: true } } : {}),
+    channels: {
+      whatsapp: {
+        enabled: true,
+        allowFrom: ["+15551234567"],
+        dmPolicy: "pairing",
+        groupPolicy: "allowlist",
+        selfChatMode: "off",
+      },
+    },
     mcp: {
       servers: {
         context7: { url: "https://mcp.context7.com/mcp", transport: "streamable-http" },
@@ -722,6 +738,59 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
           },
         },
       },
+      // Channel settings are the one schema surface the channels page renders,
+      // so the fixture keeps both tiers represented.
+      channels: {
+        type: "object",
+        title: "Channels",
+        properties: {
+          whatsapp: {
+            type: "object",
+            title: "WhatsApp",
+            properties: {
+              enabled: { type: "boolean", title: "Enabled" },
+              allowFrom: { type: "array", title: "Allow from", items: { type: "string" } },
+              dmPolicy: { type: "string", title: "DM policy", enum: ["pairing", "open", "off"] },
+              groupPolicy: {
+                type: "string",
+                title: "Group policy",
+                enum: ["allowlist", "open", "off"],
+              },
+              // Channel-specific leaves carry their help from the plugin's own
+              // uiHints in production; the fixture uses schema descriptions,
+              // which resolve through the same field-meta fallback.
+              selfChatMode: {
+                type: "string",
+                title: "Self chat mode",
+                description: "Same-phone setup (bot uses your personal WhatsApp number).",
+                enum: ["off", "notes"],
+              },
+              configWrites: { type: "boolean", title: "Config writes" },
+              streaming: {
+                type: "object",
+                title: "Streaming",
+                properties: {
+                  progress: {
+                    type: "object",
+                    properties: {
+                      maxLines: { type: "integer", title: "Progress max lines" },
+                      toolProgress: { type: "boolean", title: "Progress tool lines" },
+                    },
+                  },
+                },
+              },
+              healthMonitor: {
+                type: "object",
+                title: "Health monitor",
+                properties: {
+                  enabled: { type: "boolean", title: "Enabled" },
+                },
+              },
+              mediaMaxMb: { type: "number", title: "Media max MB" },
+            },
+          },
+        },
+      },
     },
   };
   return {
@@ -737,7 +806,14 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
     },
     schema: {
       schema,
-      uiHints: {},
+      // Resolve tiers and shared channel help the way the gateway does so the
+      // mock reproduces the real split and subtext instead of bare labels.
+      uiHints: applySharedChannelFieldHelp(
+        applyResolvedConfigTierHints(
+          schema,
+          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+        ),
+      ),
       version: "mock-config-schema",
       generatedAt: new Date(0).toISOString(),
     },
@@ -843,6 +919,11 @@ async function createChatPickerScenario(
     "utf8",
   ).toString("base64url");
   const devicePairQrDataUrl = await qrcode.toDataURL(devicePairSetupCode, {
+    errorCorrectionLevel: "M",
+    margin: 2,
+    width: 360,
+  });
+  const whatsappLoginQrDataUrl = await qrcode.toDataURL("mock-whatsapp-login", {
     errorCorrectionLevel: "M",
     margin: 2,
     width: 360,
@@ -1259,6 +1340,7 @@ async function createChatPickerScenario(
   const profileUsage = buildProfileUsageMocks(Date.now());
   const modelProviders = buildModelProviderMocks(Date.now());
   const skillWorkshop = buildSkillWorkshopMocks(Date.now());
+  const cronMocks = buildCronMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
   return {
@@ -1288,6 +1370,7 @@ async function createChatPickerScenario(
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      ...cronMocks,
       "users.self": { profile: selfProfile },
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
@@ -1415,10 +1498,12 @@ async function createChatPickerScenario(
           },
         ],
       },
+      // Pending exec approvals reopen as a blocking modal on every page load
+      // (connect-time exec.approval.list recovery), so the demo approval is
+      // opt-in via --fixture=approval instead of polluting the default mock.
       "exec.approval.list":
-        fixture === "swarm"
-          ? []
-          : [
+        fixture === "approval"
+          ? [
               {
                 id: "mock-production-export-approval",
                 request: {
@@ -1428,7 +1513,8 @@ async function createChatPickerScenario(
                 createdAtMs: baseTime - 75_000,
                 expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
               },
-            ],
+            ]
+          : [],
       "plugin.approval.list": [],
       "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
@@ -1465,6 +1551,42 @@ async function createChatPickerScenario(
       },
       "plugins.list": buildPluginCatalogMock(),
       "channels.status": buildChannelsStatusMock(baseTime),
+      "channels.pairing.list": buildChannelsPairingMock(baseTime),
+      "channels.pairing.approve": {
+        cases: [
+          {
+            match: { requestId: "pairing-req-1" },
+            response: {
+              requestId: "pairing-req-1",
+              senderId: "552731142",
+              notification: "sent",
+              commandOwnerBootstrap: "not-requested",
+            },
+          },
+          {
+            response: {
+              requestId: "pairing-req-2",
+              senderId: "+1 555 0192",
+              notification: "unsupported",
+              commandOwnerBootstrap: "not-requested",
+            },
+          },
+        ],
+      },
+      "channels.pairing.dismiss": {
+        cases: [
+          {
+            match: { requestId: "pairing-req-1" },
+            response: { requestId: "pairing-req-1", senderId: "552731142" },
+          },
+          { response: { requestId: "pairing-req-2", senderId: "+1 555 0192" } },
+        ],
+      },
+      "web.login.start": {
+        message: "Scan the QR code with WhatsApp to link this device.",
+        qrDataUrl: whatsappLoginQrDataUrl,
+      },
+      "web.login.wait": { message: "Linked.", connected: true },
       "wizard.start": channelWizard.start,
       "wizard.next": channelWizard.next,
       "wizard.cancel": { status: "cancelled" },

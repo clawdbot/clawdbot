@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type * as LanceDB from "@lancedb/lancedb";
+import { Field, FixedSizeList, Float32, Float64, Schema, Utf8 } from "apache-arrow";
 import type { MemoryCategory } from "./config.js";
 import { loadLanceDbModule } from "./lancedb-runtime.js";
 import {
@@ -10,8 +12,8 @@ import {
   quoteLanceSqlString,
 } from "./lancedb-schema.js";
 
-const SCHEMA_SENTINEL_ID = "__schema__";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const TABLE_INITIALIZATION_ATTEMPTS = 3;
 
 export type MemoryEntry = {
   id: string;
@@ -50,6 +52,47 @@ type MemoryQueryOptions = {
 type StoredMemoryRow = MemoryEntry & {
   agentId: string;
 };
+
+function createMemoryTableSchema(vectorDim: number): Schema {
+  return new Schema([
+    new Field("id", new Utf8(), true),
+    new Field("text", new Utf8(), true),
+    new Field("vector", new FixedSizeList(vectorDim, new Field("item", new Float32(), true)), true),
+    new Field("importance", new Float64(), true),
+    new Field("category", new Utf8(), true),
+    new Field("createdAt", new Float64(), true),
+    new Field("agentId", new Utf8(), true),
+  ]);
+}
+
+async function openOrCreateMemoryTable(
+  db: LanceDB.Connection,
+  vectorDim: number,
+): Promise<LanceDB.Table> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= TABLE_INITIALIZATION_ATTEMPTS; attempt += 1) {
+    let table: LanceDB.Table | null = null;
+    try {
+      const tables = await db.tableNames();
+      table = tables.includes(MEMORY_TABLE_NAME)
+        ? await db.openTable(MEMORY_TABLE_NAME)
+        : await db.createEmptyTable(MEMORY_TABLE_NAME, createMemoryTableSchema(vectorDim), {
+            existOk: true,
+          });
+      // A concurrent create can expose the table name before its first version
+      // is readable. Probe the schema and retry the whole dependency boundary.
+      await table.schema();
+      return table;
+    } catch (error) {
+      table?.close();
+      lastError = error;
+      if (attempt < TABLE_INITIALIZATION_ATTEMPTS) {
+        await delay(attempt * 10);
+      }
+    }
+  }
+  throw lastError;
+}
 
 function formatQueryFilter(filter: MemoryQueryFilter): string {
   if (filter.operator === "LIKE" && typeof filter.value !== "string") {
@@ -102,26 +145,9 @@ export class MemoryDB {
     const db = await lancedb.connect(this.dbPath, connectionOptions);
     let table: LanceDB.Table | null = null;
     try {
-      const tables = await db.tableNames();
-
-      if (tables.includes(MEMORY_TABLE_NAME)) {
-        table = await db.openTable(MEMORY_TABLE_NAME);
-        if (!hasAgentScopeColumn(await table.schema())) {
-          throw legacyMemorySchemaError();
-        }
-      } else {
-        table = await db.createTable(MEMORY_TABLE_NAME, [
-          {
-            id: SCHEMA_SENTINEL_ID,
-            text: "",
-            vector: Array.from({ length: this.vectorDim }).fill(0),
-            importance: 0,
-            category: "other",
-            createdAt: 0,
-            agentId: SCHEMA_SENTINEL_ID,
-          },
-        ]);
-        await table.delete(`id = ${quoteLanceSqlString(SCHEMA_SENTINEL_ID)}`);
+      table = await openOrCreateMemoryTable(db, this.vectorDim);
+      if (!hasAgentScopeColumn(await table.schema())) {
+        throw legacyMemorySchemaError();
       }
 
       this.db = db;

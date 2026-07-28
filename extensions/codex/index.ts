@@ -81,7 +81,12 @@ export default definePluginEntry({
         origin: "bundled",
         config: normalizePluginsConfig(liveConfig.plugins),
         rootConfig: liveConfig,
-        enabledByDefault: readCodexPluginConfig(livePluginConfig).supervision?.enabled === true,
+        // Core auto-enables this bundled plugin whenever the operator declares a
+        // codex config block, so a live block is the plugin-side default. Gating
+        // on a feature flag (supervision) here would silently drop unrelated
+        // harness settings such as appServer.homeScope; feature gates belong in
+        // the feature's own surface (see requireSupervisionEnabled).
+        enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
       if (!enabled) {
         return undefined;
@@ -346,6 +351,11 @@ export default definePluginEntry({
       const endedSessionKey = sessionKey?.trim();
       const nextSessionKey = event.nextSessionKey?.trim();
       if (endedSessionKey && nextSessionKey && nextSessionKey !== endedSessionKey) {
+        return;
+      }
+      // Reset hooks already clear in-place lifecycle state before the next turn.
+      // A delayed session_end must not retire a replacement that reuses the id.
+      if (event.nextSessionId?.trim() === event.sessionId.trim()) {
         return;
       }
       const config = resolveCurrentConfig();

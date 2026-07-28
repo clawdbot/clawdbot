@@ -131,6 +131,16 @@ export async function runEmbeddedAgentAttempt(params: {
       })
     : undefined;
   params.trackInternalModelRunTarget(internalSessionTarget);
+  const attemptSessionTarget =
+    internalSessionTarget ??
+    (sessionKey && storePath
+      ? {
+          agentId: sessionAgentId,
+          sessionId,
+          sessionKey,
+          storePath,
+        }
+      : undefined);
   const attemptSessionFile = internalSessionTarget?.sessionFile ?? sessionFile;
 
   const startedAt = Date.now();
@@ -236,6 +246,7 @@ export async function runEmbeddedAgentAttempt(params: {
           cfg,
           provider,
           model,
+          requestedRouteResolution: params.modelSelection.requestedRouteResolution,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
           ...modelManifestContext,
@@ -381,7 +392,7 @@ export async function runEmbeddedAgentAttempt(params: {
             agentHarnessRuntimeOverride,
             sessionId,
             sessionKey,
-            ...(internalSessionTarget ? { sessionTarget: internalSessionTarget } : {}),
+            ...(attemptSessionTarget ? { sessionTarget: attemptSessionTarget } : {}),
             sessionAgentId,
             sessionFile: attemptSessionFile,
             workspaceDir,

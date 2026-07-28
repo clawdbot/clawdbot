@@ -43,6 +43,7 @@ import {
 import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
 import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import type { SessionRailMode } from "./components/chat-session-rail.ts";
 import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
@@ -120,6 +121,8 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
+  runId?: string | null;
   runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
@@ -174,9 +177,14 @@ export type ChatProps = {
   userAvatar?: string | null;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
+  pendingAttachmentReads?: number;
+  getPendingAttachmentReads?: () => number;
+  readSignal?: AbortSignal;
+  onPendingReadsChange?: (delta: 1 | -1) => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
   onRequestOpenImage?: () => number;
@@ -299,6 +307,7 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      runId: props.runId,
       runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,
@@ -324,6 +333,7 @@ export function renderChat(props: ChatProps) {
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
+      resolveArtifactDownload: props.resolveArtifactDownload,
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode,
       allowExternalEmbedUrls: props.allowExternalEmbedUrls,
@@ -389,6 +399,10 @@ export function renderChat(props: ChatProps) {
     followUpMode: props.followUpMode,
     attachments: props.attachments,
     getAttachments: props.getAttachments,
+    pendingAttachmentReads: props.pendingAttachmentReads,
+    getPendingAttachmentReads: props.getPendingAttachmentReads,
+    readSignal: props.readSignal,
+    onPendingReadsChange: props.onPendingReadsChange,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,

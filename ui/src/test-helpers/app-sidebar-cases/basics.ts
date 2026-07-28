@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
+import { sessionRefFromPath } from "../../app-session-route-paths.ts";
 import {
   clearSessionBoardAvailability,
   recordSessionBoardAvailability,
 } from "../../lib/board/provider.ts";
+import {
+  SESSION_FACE_PREFERENCE_PARAM,
+  SESSION_NAVIGATION_KEY_PARAM,
+} from "../../lib/sessions/route-navigation.ts";
 import {
   createGateway,
   createGatewayHarness,
@@ -377,14 +382,57 @@ describe("AppSidebar brand actions", () => {
 });
 
 describe("AppSidebar agent chip", () => {
+  it("qualifies unscoped session rows with the selected agent", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(
+      gateway,
+      createSessions("research", ["agent:research:main", "telegram:12345"]),
+      "panel",
+      { ...TWO_AGENTS, defaultId: "research" },
+    );
+    sidebar.sessionKey = "agent:research:main";
+    await sidebar.updateComplete;
+
+    const href = sidebar
+      .querySelector<HTMLAnchorElement>(
+        '[data-session-key="telegram:12345"] .sidebar-recent-session__link',
+      )
+      ?.getAttribute("href");
+    expect(href).toBe("/chat/research/telegram/12345");
+    expect(sessionRefFromPath(href ?? "")).toMatchObject({
+      kind: "literal",
+      sessionKey: "agent:research:telegram:12345",
+    });
+  });
+
+  it("opens an ambiguous one-segment literal session through its escaped path", async () => {
+    const sessionKey = "agent:main:release-deadbeef";
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
+    const onNavigate = vi.fn();
+    sidebar.onNavigate = onNavigate;
+    await sidebar.updateComplete;
+
+    sidebar
+      .querySelector<HTMLAnchorElement>(
+        `[data-session-key="${sessionKey}"] .sidebar-recent-session__link`,
+      )
+      ?.click();
+
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/~key/release-deadbeef",
+    });
+  });
+
   it("resumes the newest session when the menu switches to an agent with cached rows", async () => {
+    const taskKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
     const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
     const setSessionKey = vi.fn();
     (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
       setSessionKey;
     const { sidebar } = await mountSidebar(
       gatewayHarness.gateway,
-      createSessions("main", ["agent:main:main", "agent:main:task"]),
+      createSessions("main", ["agent:main:main", taskKey]),
       "panel",
       TWO_AGENTS,
     );
@@ -402,8 +450,11 @@ describe("AppSidebar agent chip", () => {
     ];
     rows.find((row) => row.textContent?.includes("Molty"))?.click();
     // createSessionState stamps ascending updatedAt, so the last key is newest.
-    expect(setSessionKey).toHaveBeenCalledWith("agent:main:task");
-    expect(onNavigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Atask" });
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/main/00000002",
+      search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(taskKey)}`,
+    });
   });
 
   it("keeps agent ids distinct from utility command values", async () => {
@@ -439,9 +490,12 @@ describe("AppSidebar agent chip", () => {
     );
     await sidebar.updateComplete;
 
+    // Uncached agent main session: the face is a guess, so the navigation carries the
+    // marker that lets the chat loader re-derive it from the gateway.
     expect(setSessionKey).toHaveBeenCalledWith("agent:settings:main");
     expect(onNavigate).toHaveBeenCalledWith("chat", {
-      search: "?session=agent%3Asettings%3Amain",
+      pathname: "/chat/settings",
+      search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
     expect(onNavigate).not.toHaveBeenCalledWith("config");
   });
@@ -621,7 +675,7 @@ describe("AppSidebar agent chip", () => {
 
     home?.click();
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:main");
-    expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Amain" });
+    expect(navigate).toHaveBeenCalledWith("chat", { pathname: "/chat/main" });
   });
 
   it("treats the global key as the main session under global scope", async () => {
