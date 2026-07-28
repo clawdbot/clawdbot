@@ -126,8 +126,10 @@ export function createApplicationOverlays(
   const initialAccess = readGatewayOperatorAccess(gateway.snapshot);
   let adminAccess = initialAccess.canAdmin;
   let approvalsAccess = initialAccess.canReviewApprovals;
+  let approvalGrantAccess = initialAccess.canGrantApprovals;
   let pairingAccess = initialAccess.canPair;
   let approvalAccessGeneration = 0;
+  let approvalGrantGeneration = 0;
   let pendingUpdateExpectedVersion: string | null = null;
   let pendingUpdateHandoff = false;
   let updateRunGeneration = 0;
@@ -138,6 +140,7 @@ export function createApplicationOverlays(
     client: NonNullable<typeof activeClient>;
     epoch: number;
     accessGeneration: number;
+    grantGeneration: number;
     id: string;
   } | null = null;
   const devicePairSetupState = createDevicePairSetupState({
@@ -383,9 +386,20 @@ export function createApplicationOverlays(
     const nextAccess = readGatewayOperatorAccess(next);
     const nextApprovalsAccess = nextAccess.canReviewApprovals;
     const approvalAccessChanged = approvalsAccess !== nextApprovalsAccess;
+    const approvalGrantAccessChanged = approvalGrantAccess !== nextAccess.canGrantApprovals;
     approvalsAccess = nextApprovalsAccess;
+    approvalGrantAccess = nextAccess.canGrantApprovals;
     if (approvalAccessChanged) {
       approvalAccessGeneration += 1;
+    }
+    if (approvalGrantAccessChanged) {
+      approvalGrantGeneration += 1;
+    }
+    if (approvalGrantAccessChanged && !approvalGrantAccess) {
+      // Review can remain available without a decision grant. Retire the
+      // in-flight owner without discarding the still-readable approval queue.
+      approvalDecision = null;
+      promptState.execApprovalBusy = false;
     }
     if (adminAccess !== nextAccess.canAdmin) {
       adminAccess = nextAccess.canAdmin;
@@ -626,7 +640,7 @@ export function createApplicationOverlays(
         promptState.execApprovalBusy ||
         disposed ||
         gateway.snapshot.phase !== "connected" ||
-        !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
+        !readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals
       ) {
         return;
       }
@@ -636,6 +650,7 @@ export function createApplicationOverlays(
         client,
         epoch: connectedEpoch,
         accessGeneration: approvalAccessGeneration,
+        grantGeneration: approvalGrantGeneration,
         id: active.id,
       };
       approvalDecision = operation;
@@ -643,7 +658,8 @@ export function createApplicationOverlays(
         approvalDecision === operation &&
         operation.epoch === connectedEpoch &&
         operation.accessGeneration === approvalAccessGeneration &&
-        readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
+        operation.grantGeneration === approvalGrantGeneration &&
+        readGatewayOperatorAccess(gateway.snapshot).canGrantApprovals &&
         isCurrentClient(operation.client);
       publish();
       try {

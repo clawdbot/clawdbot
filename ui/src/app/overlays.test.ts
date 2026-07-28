@@ -48,7 +48,7 @@ function createGatewayHarness(
     phase: initialConnected ? "connected" : "stopped",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: null,
+    hello: { auth: { role: "operator" } } as ApplicationGatewaySnapshot["hello"],
     lastError: null,
     lastErrorCode: null,
     sessionKey: "main",
@@ -363,6 +363,55 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it("keeps no-auth approvals readable without granting resolution authority", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({ hello: null });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+
+    harness.emitApproval("approval-review-only", 1_000);
+    await overlays.decideApproval("allow-once", "approval-review-only");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-review-only",
+    ]);
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(
+      request.mock.calls.some(
+        ([method]) => method === "exec.approval.resolve" || method === "approval.resolve",
+      ),
+    ).toBe(false);
+    overlays.dispose();
+  });
+
+  it.each([
+    { name: "reviewer", scopes: ["operator.approvals"] },
+    { name: "administrator", scopes: ["operator.admin"] },
+  ])("resolves a queued approval with an authenticated $name grant", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-authorized", 1_000);
+
+    await overlays.decideApproval("allow-once", "approval-authorized");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-authorized",
+      decision: "allow-once",
+    });
+    overlays.dispose();
+  });
+
   it.each([
     { name: "read-only", scopes: ["operator.read"] },
     { name: "write-only", scopes: ["operator.write"] },
@@ -542,6 +591,58 @@ describe("application approval overlays", () => {
     await currentDecision;
     expect(overlays.snapshot.approvalBusy).toBe(false);
     expect(overlays.snapshot.approvalQueue).toEqual([]);
+    overlays.dispose();
+  });
+
+  it("retires a grant-only downgrade without clearing the readable approval queue", async () => {
+    const staleResolution = deferred();
+    const currentResolution = deferred();
+    let resolutionCount = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolutionCount += 1;
+      return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale-grant", 1_000);
+    const staleDecision = overlays.decideApproval("allow-once", "approval-stale-grant");
+
+    harness.update({ hello: null });
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+    ]);
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.emitApproval("approval-current-grant", 2_000);
+    const currentDecision = overlays.decideApproval("deny", "approval-current-grant");
+
+    staleResolution.resolve({ ok: true });
+    await staleDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(true);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+      "approval-current-grant",
+    ]);
+
+    currentResolution.resolve({ ok: true });
+    await currentDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+    ]);
     overlays.dispose();
   });
 
