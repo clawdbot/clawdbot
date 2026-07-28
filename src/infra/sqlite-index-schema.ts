@@ -54,6 +54,8 @@ export function verifyAndRepairCanonicalSqliteIndexes(
     ...options,
     verifyPhysicalIntegrity: integrityFailure !== undefined,
   });
+  // A non-empty repair result already passed table and whole-file integrity
+  // checks inside the repair savepoint, so it supersedes the initial failure.
   if (integrityFailure && repairedIndexes.length === 0) {
     throw integrityFailure;
   }
