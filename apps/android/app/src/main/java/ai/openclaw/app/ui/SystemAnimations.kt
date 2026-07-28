@@ -1,43 +1,46 @@
 package ai.openclaw.app.ui
 
-import android.content.ContentResolver
-import android.database.ContentObserver
-import android.os.Handler
-import android.os.Looper
 import android.provider.Settings
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.flow.collect
+import kotlin.coroutines.coroutineContext
 
 /**
- * Reactive read of the OS "remove animations" accessibility setting.
+ * Reactive read of Compose's canonical Android motion-duration scale.
  *
- * Compose frame clocks ignore the system animator scale, so animated composables must honor it
- * explicitly. A one-shot `remember` read only samples the value at first composition and never
- * reacts when the user toggles the setting while the screen stays mounted; this observes
- * [Settings.Global.ANIMATOR_DURATION_SCALE] and recomposes on change, unregistering on dispose.
+ * Custom frame loops do not consume the duration scale automatically, so they must stop explicitly
+ * at zero. Compose owns the process-shared Android settings observer; reusing it avoids one observer
+ * per animated composable and keeps the phone and Wear implementations on the same contract.
  */
 @Composable
-internal fun rememberSystemAnimationsEnabled(): Boolean {
-  val context = LocalContext.current
-  val resolver = context.contentResolver
-  var scale by remember(resolver) { mutableFloatStateOf(readAnimatorDurationScale(resolver)) }
-  DisposableEffect(resolver) {
-    val observer =
-      object : ContentObserver(Handler(Looper.getMainLooper())) {
-        override fun onChange(selfChange: Boolean) {
-          scale = readAnimatorDurationScale(resolver)
-        }
-      }
-    resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
-    scale = readAnimatorDurationScale(resolver)
-    onDispose { resolver.unregisterContentObserver(observer) }
+internal fun rememberSystemAnimationsEnabled(
+  motionDurationScale: MotionDurationScale? = null,
+): Boolean {
+  val resolver = LocalContext.current.contentResolver
+  var scale by remember(resolver, motionDurationScale) {
+    val initialScale =
+      motionDurationScale?.scaleFactor
+        ?: Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    mutableFloatStateOf(initialScale.coerceAtLeast(0f))
+  }
+  LaunchedEffect(motionDurationScale) {
+    val composeScale = motionDurationScale ?: coroutineContext[MotionDurationScale]
+    if (composeScale == null) {
+      scale = 1f
+      return@LaunchedEffect
+    }
+    // This getter lazily starts Compose's shared Android settings observer.
+    scale = composeScale.scaleFactor.coerceAtLeast(0f)
+    snapshotFlow { composeScale.scaleFactor.coerceAtLeast(0f) }
+      .collect { updatedScale -> scale = updatedScale }
   }
   return scale > 0f
 }
-
-private fun readAnimatorDurationScale(resolver: ContentResolver): Float = Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
