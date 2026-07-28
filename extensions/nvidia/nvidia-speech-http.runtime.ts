@@ -16,6 +16,7 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
+import { ssrfPolicyFromHttpBaseUrlAllowedOrigin } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   NVIDIA_ASR_BASE_URL,
   NVIDIA_DEFAULT_ASR_MODEL,
@@ -143,6 +144,10 @@ function resolveAsrTranscriptionUrl(baseUrl: string): string {
     : `${baseUrl}/v1/audio/transcriptions`;
 }
 
+function resolveTtsSynthesisUrl(baseUrl: string): string {
+  return baseUrl.endsWith("/v1") ? `${baseUrl}/audio/synthesize` : `${baseUrl}/v1/audio/synthesize`;
+}
+
 function resolveAsrEndpoint(req: AudioTranscriptionRequest): AsrEndpoint {
   const requestBaseUrl = req.baseUrl ? normalizeNvidiaBaseUrl(req.baseUrl) : undefined;
   if (requestBaseUrl && requestBaseUrl !== NVIDIA_CHAT_BASE_URL) {
@@ -259,12 +264,14 @@ export async function magpieSynthesize(params: MagpieSynthesizeParams): Promise<
     form.append("custom_configuration", params.customConfiguration);
   }
 
+  const baseUrl = normalizeNvidiaBaseUrl(params.baseUrl);
   const { response, release } = await postMultipartRequest({
-    url: `${normalizeNvidiaBaseUrl(params.baseUrl)}/v1/audio/synthesize`,
+    url: resolveTtsSynthesisUrl(baseUrl),
     headers: new Headers({ Authorization: `Bearer ${params.apiKey}` }),
     body: form,
     timeoutMs: params.timeoutMs,
     fetchFn: fetch,
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     auditContext: "NVIDIA Magpie TTS",
   });
   try {

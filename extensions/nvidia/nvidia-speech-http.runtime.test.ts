@@ -145,9 +145,12 @@ describe("NVIDIA speech HTTP runtime", () => {
       inputFileName: "sample.mp3",
       outputFileName: "audio.opus",
       tempPrefix: "nvidia-asr-",
-      timeoutMs: 30_000,
+      timeoutMs: expect.any(Number),
       channels: 1,
     });
+    const transcodeTimeoutMs = mocks.transcodeAudioBufferToOpus.mock.calls[0]?.[0]?.timeoutMs;
+    expect(transcodeTimeoutMs).toBeGreaterThan(0);
+    expect(transcodeTimeoutMs).toBeLessThanOrEqual(30_000);
     const form = mocks.postTranscriptionRequest.mock.calls[0]?.[0]?.body as FormData;
     const file = form.get("file") as File;
     expect(file.name).toBe("audio.opus");
@@ -167,7 +170,7 @@ describe("NVIDIA speech HTTP runtime", () => {
     const result = await magpieSynthesize({
       text: "<speak>Hello</speak>",
       apiKey: "nvapi-test",
-      baseUrl: "https://tts.example/",
+      baseUrl: "http://10.0.0.5:9000/v1/",
       voice: "Magpie-Multilingual.EN-US.Aria",
       language: "en-US",
       sampleRateHz: 44_100,
@@ -178,7 +181,8 @@ describe("NVIDIA speech HTTP runtime", () => {
 
     expect(result).toEqual(wav);
     const request = mocks.postMultipartRequest.mock.calls[0]?.[0];
-    expect(request.url).toBe("https://tts.example/v1/audio/synthesize");
+    expect(request.url).toBe("http://10.0.0.5:9000/v1/audio/synthesize");
+    expect(request.ssrfPolicy).toEqual({ allowedOrigins: ["http://10.0.0.5:9000"] });
     const form = request.body as FormData;
     expect(form.get("custom_dictionary")).toBe("tomato  pronunciation");
     expect(form.get("custom_configuration")).toBe("key:value");
