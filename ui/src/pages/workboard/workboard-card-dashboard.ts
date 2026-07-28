@@ -155,8 +155,8 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
                     provider.widgetFrameUrl(name, revision)}
                   .callbacks=${callbacks}
                   .sessions=${[]}
-                  .canMutate=${provider.canMutate}
-                  .canGrant=${provider.canGrant}
+                  .canMutate=${this.canMutate}
+                  .canGrant=${this.canGrant}
                   .ticketRefreshEnabled=${this.expanded}
                 ></openclaw-board-view>
               `

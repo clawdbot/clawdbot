@@ -114,6 +114,59 @@ describe("Workboard card dashboard", () => {
     expect(element.querySelector("openclaw-board-view")).not.toBeNull();
   });
 
+  it("updates mounted dashboard controls immediately when gateway permissions change", async () => {
+    const { client, request } = createClient([
+      {
+        name: "pending-status",
+        tabId: "main",
+        title: "Pending status",
+        contentKind: "html",
+        sizeW: 12,
+        sizeH: 2,
+        position: 0,
+        grantState: "pending",
+        revision: 1,
+      },
+    ]);
+    const element = await mountDashboard("agent:main:workboard-live-scopes", client, {
+      canMutate: true,
+      canGrant: true,
+    });
+
+    await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
+    const board = element.querySelector("openclaw-board-view")!;
+    await board.updateComplete;
+    await vi.waitFor(() =>
+      expect(board.querySelector('[data-test-id="board-grant-allow"]')).not.toBeNull(),
+    );
+    const allow = board.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')!;
+
+    expect(board.canMutate).toBe(true);
+    expect(board.canGrant).toBe(true);
+    expect(allow.disabled).toBe(false);
+
+    element.canMutate = false;
+    element.canGrant = false;
+    await element.updateComplete;
+    await board.updateComplete;
+    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+
+    expect(board.canMutate).toBe(false);
+    expect(board.canGrant).toBe(false);
+    expect(allow.disabled).toBe(true);
+
+    element.canMutate = true;
+    element.canGrant = true;
+    await element.updateComplete;
+    await board.updateComplete;
+    await board.querySelector("openclaw-board-widget-cell")?.updateComplete;
+
+    expect(board.canMutate).toBe(true);
+    expect(board.canGrant).toBe(true);
+    expect(allow.disabled).toBe(false);
+    expect(request).toHaveBeenCalledOnce();
+  });
+
   it.each(["chat-first", "dashboard-first"] as const)(
     "shares gateway state without leaking dashboard capabilities in %s order",
     async (order) => {
