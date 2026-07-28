@@ -398,7 +398,10 @@ async function probeAnthropicUsageForCooldown(
     const now = Date.now();
     const resets = exhausted
       .map((window) => window.resetAt)
-      .filter((resetAt): resetAt is number => typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt > now)
+      .filter(
+        (resetAt): resetAt is number =>
+          typeof resetAt === "number" && Number.isFinite(resetAt) && resetAt > now,
+      )
       .toSorted((a, b) => a - b);
     if (resets.length === 0) {
       return { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS, reason: "claude_probe_failed" };

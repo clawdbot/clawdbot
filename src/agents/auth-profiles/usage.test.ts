@@ -1734,7 +1734,6 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-
 describe("markAuthProfileFailure — Anthropic OAuth usage-based cooldowns", () => {
   function makeAnthropicOAuthStore(): AuthProfileStore {
     return {

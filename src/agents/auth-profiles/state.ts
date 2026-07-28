@@ -36,7 +36,11 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
   "unknown",
 ]);
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
-const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham", "claude_usage"]);
+const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>([
+  "codex_rate_limits",
+  "wham",
+  "claude_usage",
+]);
 
 // Runtime auth state is operator-controlled durability. Coerce every persisted
 // field through closed enums/numbers so bad rows do not poison auth selection.
