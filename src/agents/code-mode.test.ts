@@ -439,6 +439,12 @@ describe("Code Mode", () => {
     expect(execTool.description).toContain('"javascript" or "typescript"');
     expect(execTool.description).toContain("never a shell command");
     expect(execTool.description).toContain("do not retry failed shell source");
+    const nodesGuidance =
+      "- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)";
+    expect(execTool.description).toContain(nodesGuidance);
+    expect(execTool.description.indexOf(nodesGuidance)).toBe(
+      execTool.description.lastIndexOf(nodesGuidance),
+    );
 
     expect(parameters.properties?.code?.description).toContain(
       "`tools.search` takes a query string, not an object",

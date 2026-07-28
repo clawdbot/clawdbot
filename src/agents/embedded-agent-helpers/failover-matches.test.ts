@@ -106,6 +106,28 @@ describe("Z.ai vendor error codes (#48988)", () => {
   });
 });
 
+describe("Google invalid API key errors (#114784)", () => {
+  it("classifies the Google Generative AI invalid-key response as auth", () => {
+    const raw =
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
+
+    expect(isAuthErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("auth");
+  });
+
+  it("classifies the structured API_KEY_INVALID variant as auth", () => {
+    expect(isAuthErrorMessage('{"code":"API_KEY_INVALID"}')).toBe(true);
+  });
+
+  it("does not treat unrelated Google invalid arguments as auth", () => {
+    const raw =
+      "Google Generative AI API error (400): Request contains an invalid argument. [code=INVALID_ARGUMENT]";
+
+    expect(isAuthErrorMessage(raw)).toBe(false);
+    expect(classifyFailoverReason(raw)).toBeNull();
+  });
+});
+
 describe("Chinese provider overload messages", () => {
   const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
 

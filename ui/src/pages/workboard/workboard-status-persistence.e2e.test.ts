@@ -58,6 +58,30 @@ const initialCard = {
   ],
 } satisfies WorkboardCard;
 
+const productRunningCard = {
+  id: "product-running-card",
+  title: "Product board running card",
+  status: "running",
+  priority: "normal",
+  labels: [],
+  position: 9_000,
+  createdAt: 900,
+  updatedAt: manualTodoAt,
+  metadata: { automation: { boardId: "product" } },
+} satisfies WorkboardCard;
+
+const archivedDefaultRunningCard = {
+  id: "archived-default-running-card",
+  title: "Archived default board running card",
+  status: "running",
+  priority: "normal",
+  labels: [],
+  position: 3_000,
+  createdAt: 900,
+  updatedAt: manualTodoAt,
+  metadata: { archivedAt: 1_000 },
+} satisfies WorkboardCard;
+
 const editedCard = {
   ...initialCard,
   title: "Persisted renamed card",
@@ -70,7 +94,7 @@ const editedCard = {
 const draggedRunningCard = {
   ...editedCard,
   status: "running",
-  position: 1_000,
+  position: 4_000,
   updatedAt: draggedRunningAt,
   events: [
     ...editedCard.events,
@@ -394,7 +418,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
           tasks: [],
         },
         "workboard.cards.list": {
-          cards: [initialCard],
+          cards: [initialCard, productRunningCard, archivedDefaultRunningCard],
           statuses: [
             "triage",
             "backlog",
@@ -443,6 +467,10 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       const response = await page.goto(`${server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await workboardCard(page, "Todo", "Persist queue status").waitFor({ timeout: 10_000 });
+      await workboardCard(page, "Running", productRunningCard.title).waitFor({
+        timeout: 10_000,
+      });
+      await expect.poll(() => page.getByText(archivedDefaultRunningCard.title).count()).toBe(0);
       await waitForRequestCount(gateway, "workboard.cards.update", 0);
 
       await workboardCard(page, "Todo", "Persist queue status")
@@ -505,7 +533,7 @@ describeControlUiE2e("Control UI Workboard status persistence E2E", () => {
       const moveRequest = await gateway.waitForRequest("workboard.cards.move");
       expect(requestParams(moveRequest)).toMatchObject({
         id: "card-1",
-        position: 1_000,
+        position: 4_000,
         status: "running",
       });
       await workboardCard(page, "Running", "Persisted renamed card").waitFor({

@@ -5,6 +5,10 @@ import { getCredentialUnavailableDiagnostics } from "../channels/account-snapsho
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import {
+  applyChannelAccountState,
+  resolveChannelAccountState,
+} from "../channels/status/account-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
@@ -32,7 +36,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   assertSecretOwnerAvailable,
   clearActiveCredentialDegradedOwner,
-  SecretSurfaceUnavailableError,
   setActiveCredentialDegradedOwner,
 } from "../secrets/runtime-degraded-state.js";
 import { isAccountEnabled } from "../shared/account-enabled.js";
@@ -161,25 +164,6 @@ async function waitForChannelStopGracefully(task: Promise<unknown> | undefined, 
     };
     void task.then(resolveSettled, resolveSettled);
   });
-}
-
-function applyDescribedAccountFields(
-  next: ChannelAccountSnapshot,
-  described: ChannelAccountSnapshot | undefined,
-) {
-  if (!described) {
-    next.configured ??= true;
-    return next;
-  }
-  if (typeof described.configured === "boolean") {
-    next.configured = described.configured;
-  } else {
-    next.configured ??= true;
-  }
-  if (described.mode !== undefined) {
-    next.mode = described.mode;
-  }
-  return next;
 }
 
 type ChannelManagerOptions = {
@@ -495,7 +479,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (ambientAutostartSuppressedChannelIds.has(channelId) && optsValue.manual !== true) {
       for (const id of accountIds) {
         setStoppedRuntime(channelId, id, {
-          configured: false,
           restartPending: false,
           lastError: "ambient channel credentials suppressed for dev gateway",
         });
@@ -594,6 +577,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           clearActiveCredentialDegradedOwner("account", secretOwnerId);
           assertSecretOwnerAvailable("account", secretOwnerId);
           const account = plugin.config.resolveAccount(cfg, id);
+          const described = plugin.config.describeAccount?.(account, cfg);
           const enabled = plugin.config.isEnabled
             ? plugin.config.isEnabled(account, cfg)
             : isAccountEnabled(account);
@@ -601,10 +585,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             setRuntime(channelId, id, {
               accountId: id,
               enabled: false,
-              configured: true,
               running: false,
               restartPending: false,
-              lastError: plugin.config.disabledReason?.(account, cfg) ?? "disabled",
             });
             return;
           }
@@ -633,9 +615,36 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               accountId: id,
               enabled: true,
               configured: false,
+              linked: undefined,
               running: false,
               restartPending: false,
-              lastError: plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured",
+            });
+            return;
+          }
+          setRuntime(channelId, id, {
+            accountId: id,
+            enabled: true,
+            configured: true,
+            ...(plugin.config.isLinked ? { linked: undefined } : {}),
+          });
+
+          const fallbackLinked = described?.linked ?? getRuntime(channelId, id).linked;
+          const linkState = plugin.config.isLinked
+            ? await measureStartup(`channels.${channelId}.is-linked`, () =>
+                plugin.config.isLinked!(account, cfg),
+              )
+            : fallbackLinked === true
+              ? "linked"
+              : fallbackLinked === false
+                ? "not-linked"
+                : undefined;
+          if (linkState === "not-linked" || linkState === "unknown") {
+            setRuntime(channelId, id, {
+              accountId: id,
+              enabled: true,
+              linked: linkState === "not-linked" ? false : undefined,
+              running: false,
+              restartPending: false,
             });
             return;
           }
@@ -682,7 +691,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           setRuntime(channelId, id, {
             accountId: id,
             enabled: true,
-            configured: true,
+            ...(linkState === "linked" ? { linked: true } : {}),
             running: true,
             restartPending: false,
             lastStartAt: Date.now(),
@@ -905,7 +914,6 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         } catch (error) {
           if (!handedOffTask) {
             setStoppedRuntime(channelId, id, {
-              ...(error instanceof SecretSurfaceUnavailableError ? { configured: true } : {}),
               restartPending: false,
               lastError: formatErrorMessage(error),
             });
@@ -1144,6 +1152,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const current = getRuntime(channelId, resolvedId);
     const next: ChannelAccountSnapshot = {
       accountId: resolvedId,
+      ...(cleared ? { linked: false } : {}),
       running: false,
       restartPending: false,
       lastError: cleared ? "logged out" : current.lastError,
@@ -1174,16 +1183,24 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           : isAccountEnabled(account);
         const described = plugin.config.describeAccount?.(account, cfg);
         const current = store.runtimes.get(id) ?? cloneDefaultRuntime(plugin.id, id);
-        const next = { ...current, accountId: id };
-        next.enabled = enabled;
-        applyDescribedAccountFields(next, described);
-        const configured = described?.configured;
-        if (!next.running) {
-          if (!enabled) {
-            next.lastError ??= plugin.config.disabledReason?.(account, cfg) ?? "disabled";
-          } else if (configured === false) {
-            next.lastError ??= plugin.config.unconfiguredReason?.(account, cfg) ?? "not configured";
-          }
+        const configured = described?.configured ?? current.configured ?? true;
+        const state = resolveChannelAccountState({
+          enabled,
+          configured,
+          linked: plugin.config.isLinked
+            ? current.linked
+            : typeof current.linked === "boolean"
+              ? current.linked
+              : described?.linked,
+          runtime: current,
+          disabledReason: plugin.config.disabledReason?.(account, cfg),
+          unconfiguredReason: plugin.config.unconfiguredReason?.(account, cfg),
+          unlinkedReason: plugin.config.unlinkedReason?.(account, cfg),
+        });
+        const next = { ...current, accountId: id, enabled };
+        applyChannelAccountState(next, state);
+        if (described?.mode !== undefined) {
+          next.mode = described.mode;
         }
         accounts[id] = next;
       }

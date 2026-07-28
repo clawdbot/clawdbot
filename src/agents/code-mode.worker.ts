@@ -188,6 +188,30 @@ const CONTROLLER_SOURCE = String.raw`
     return true;
   }
 
+  function nodeHandle(descriptor) {
+    const handle = Object.create(null);
+    Object.defineProperties(handle, {
+      id: { value: descriptor.id, enumerable: true },
+      name: { value: descriptor.name, enumerable: true },
+      invoke: {
+        value: (command, params) => request("nodes", ["invoke", descriptor.id, command, params]),
+        enumerable: true,
+      },
+    });
+    if (typeof descriptor.listDirCommand === "string") {
+      Object.defineProperty(handle, "listDir", {
+        value: (path) => request("nodes", ["invoke", descriptor.id, descriptor.listDirCommand, { path }]),
+        enumerable: true,
+      });
+    }
+    return Object.freeze(handle);
+  }
+
+  const nodes = Object.freeze({
+    list: () => request("nodes", ["list"]),
+    get: async (idOrName) => nodeHandle(await request("nodes", ["get", idOrName])),
+  });
+
   const baseTools = Object.create(null);
   Object.defineProperties(baseTools, {
     search: { value: (query, options) => request("search", [query, options]), enumerable: true },
@@ -291,6 +315,7 @@ const CONTROLLER_SOURCE = String.raw`
   Object.defineProperties(globalThis, {
     ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
     API: { value: api, enumerable: true },
+    nodes: { value: nodes, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
@@ -326,6 +351,7 @@ function createHostRequestHandler(params: {
       method !== "describe" &&
       method !== "call" &&
       method !== "callValue" &&
+      method !== "nodes" &&
       method !== "yield" &&
       method !== "namespace" &&
       method !== "agentSpawn" &&
