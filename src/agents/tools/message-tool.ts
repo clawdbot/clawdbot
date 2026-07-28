@@ -74,6 +74,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { getPreparedMessageToolCatalog } from "../../plugins/prepared-message-tool-catalog.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -1071,6 +1072,33 @@ type MessageToolOptions = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
 };
 
+// A live channel turn grants delegated use of that provider account, not a
+// model-selected sibling account. Keep cross-provider and source-less routing intact.
+function enforceTrustedTurnExplicitAccount(params: {
+  explicitAccountId?: string;
+  selectedChannels: Array<string | undefined>;
+  trustedCurrentChannel?: string;
+  trustedRequesterAccountId?: string;
+  hasTrustedTurnContext: boolean;
+}): void {
+  if (!params.explicitAccountId || !params.hasTrustedTurnContext) {
+    return;
+  }
+  const trustedCurrentChannel = normalizeMessageChannel(params.trustedCurrentChannel);
+  if (!trustedCurrentChannel) {
+    throw new Error("Trusted current account is missing its channel identity.");
+  }
+  const includesTrustedCurrentChannel = params.selectedChannels.some(
+    (channel) => normalizeMessageChannel(channel) === trustedCurrentChannel,
+  );
+  if (!includesTrustedCurrentChannel) {
+    return;
+  }
+  if (normalizeOptionalAccountId(params.trustedRequesterAccountId) !== params.explicitAccountId) {
+    throw new Error("Explicit account does not match the trusted current account.");
+  }
+}
+
 type MessageToolDiscoveryParams = {
   cfg: OpenClawConfig;
   currentChannelProvider?: string;
@@ -1583,10 +1611,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         accountId: requestedAccountId,
         checkResolvedAccount: false,
       });
-      if (explicitAccountId) {
-        scope.accountId = explicitAccountId;
-        params.accountId = explicitAccountId;
-      }
       const broadcastAccountPlan =
         unscopedExplicitBroadcast && explicitAccountId
           ? resolveMessageBroadcastAccountPlan({
@@ -1594,6 +1618,24 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               accountId: explicitAccountId,
             })
           : undefined;
+      enforceTrustedTurnExplicitAccount({
+        explicitAccountId,
+        selectedChannels: broadcastAccountPlan
+          ? broadcastAccountPlan.candidateChannels
+          : [
+              requestedScope.channel ??
+                (action === "broadcast"
+                  ? undefined
+                  : trustedTurnContext?.toolContext?.currentChannelProvider),
+            ],
+        trustedCurrentChannel: trustedTurnContext?.toolContext?.currentChannelProvider,
+        trustedRequesterAccountId: trustedTurnContext?.requesterAccountId,
+        hasTrustedTurnContext: trustedTurnContext !== undefined,
+      });
+      if (explicitAccountId) {
+        scope.accountId = explicitAccountId;
+        params.accountId = explicitAccountId;
+      }
       const scopedTargets = getScopedSecretTargetsForTool({
         config: rawConfig,
         channel: broadcastAccountPlan ? undefined : scope.channel,

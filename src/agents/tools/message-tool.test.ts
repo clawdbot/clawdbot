@@ -1662,6 +1662,189 @@ describe("message tool secret scoping", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "delegated same-provider alternate",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: true,
+    },
+    {
+      name: "delegated same-provider account with equivalent casing",
+      channel: "googlechat",
+      accountId: "CURRENT",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: false,
+    },
+    {
+      name: "direct same-provider alternate without a turn capability",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: undefined,
+      trusted: false,
+      origin: "direct-operator" as const,
+      rejected: false,
+    },
+    {
+      name: "delegated cross-provider alternate",
+      channel: "slack",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: false,
+    },
+    {
+      name: "source-less same-provider alternate",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: undefined,
+      trusted: false,
+      origin: undefined,
+      rejected: false,
+    },
+    {
+      name: "delegated same-provider account without trusted account identity",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: undefined,
+      trusted: true,
+      origin: undefined,
+      rejected: true,
+    },
+    {
+      name: "unknown-origin same-provider alternate",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: "future-origin" as never,
+      rejected: true,
+    },
+    {
+      name: "delegated unscoped broadcast including the current provider",
+      channel: "googlechat",
+      accountId: "alternate",
+      requesterAccountId: "current",
+      trusted: true,
+      origin: undefined,
+      rejected: true,
+      broadcast: true,
+    },
+  ])(
+    "$name respects trusted current-turn account isolation before secret resolution",
+    async (testCase) => {
+      const googleChatPlugin = createChannelPlugin({
+        id: "googlechat",
+        label: "Google Chat",
+        docsPath: "/channels/googlechat",
+        blurb: "test",
+        actions: ["send"],
+        config: {
+          listAccountIds: () => ["current", "alternate"],
+          resolveAccount: () => ({ enabled: true }),
+        },
+      });
+      const slackPlugin = createChannelPlugin({
+        id: "slack",
+        label: "Slack",
+        docsPath: "/channels/slack",
+        blurb: "test",
+        actions: ["send"],
+        config: {
+          listAccountIds: () => ["alternate"],
+          resolveAccount: () => ({ enabled: true }),
+        },
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "googlechat", source: "test", plugin: googleChatPlugin },
+          { pluginId: "slack", source: "test", plugin: slackPlugin },
+        ]),
+      );
+      const token = testCase.trusted
+        ? mintMessageActionTurnCapability({
+            agentId: "main",
+            runId: "run-1",
+            sessionKey: "agent:main:googlechat:current:space:current",
+            sessionId: "session-1",
+            requesterAccountId: testCase.requesterAccountId,
+            toolContext: {
+              currentChannelProvider: "googlechat",
+              currentChannelId: "spaces/current",
+            },
+          })
+        : undefined;
+      if (token) {
+        mintedTurnCapabilities.push(token);
+      }
+      mockSendResult({
+        channel: testCase.channel,
+        to: testCase.channel === "googlechat" ? "spaces/current" : "channel:other",
+      });
+
+      const tool = createMessageTool({
+        agentId: "main",
+        runId: "run-1",
+        agentSessionKey: "agent:main:googlechat:current:space:current",
+        sessionId: "session-1",
+        messageActionTurnCapability: token,
+        conversationReadOrigin: testCase.origin,
+        config: {
+          channels: {
+            googlechat: {
+              accounts: {
+                current: { serviceAccount: "current-credentials" },
+                alternate: { serviceAccount: "alternate-credentials" },
+              },
+            },
+            slack: {
+              accounts: {
+                alternate: { botToken: "alternate-token" },
+              },
+            },
+          },
+        } as never,
+        currentChannelProvider: "googlechat",
+        currentChannelId: "spaces/current",
+        agentAccountId: "current",
+        resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+        runMessageAction: mocks.runMessageAction as never,
+      });
+
+      const invocation = testCase.broadcast
+        ? tool.execute("1", {
+            action: "broadcast",
+            targets: ["googlechat:spaces/current", "slack:channel:other"],
+            accountId: testCase.accountId,
+            message: "hi",
+          })
+        : tool.execute("1", {
+            action: "send",
+            channel: testCase.channel,
+            target: testCase.channel === "googlechat" ? "spaces/current" : "channel:other",
+            accountId: testCase.accountId,
+            message: "hi",
+          });
+
+      if (testCase.rejected) {
+        await expect(invocation).rejects.toThrow("does not match the trusted current account");
+        expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+        expect(mocks.runMessageAction).not.toHaveBeenCalled();
+        return;
+      }
+
+      await expect(invocation).resolves.toBeDefined();
+      expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
+      expect(mocks.runMessageAction).toHaveBeenCalledOnce();
+    },
+  );
+
   it("does not resolve secrets for broadcast channels that reject the explicit account", async () => {
     const slackPlugin = createChannelPlugin({
       id: "slack",
