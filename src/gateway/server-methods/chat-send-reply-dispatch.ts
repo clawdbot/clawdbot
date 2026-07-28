@@ -346,13 +346,15 @@ export function createChatSendReplyDispatch(params: {
     admission: { run: (operation: () => Promise<T>) => Promise<T> },
     operation: () => Promise<T>,
   ): Promise<T> => {
-    try {
-      return await admission.run(operation);
-    } finally {
-      // Callers chain post-dispatch persistence from this Promise, so this runs first,
-      // after the runtime owner unwinds; caught finalizer errors cannot replace dispatch errors.
-      await finalizeAgentMediaTranscript();
-    }
+    return await admission.run(async () => {
+      try {
+        return await operation();
+      } finally {
+        // Stay inside the session admission after the runtime owner unwinds; callers chain
+        // post-dispatch persistence from this Promise, and finalizer errors stay best-effort.
+        await finalizeAgentMediaTranscript();
+      }
+    });
   };
   return {
     captureAgentTranscriptStart,
