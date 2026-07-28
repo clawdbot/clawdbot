@@ -599,6 +599,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         ? configuredFastMode
         : false;
     const update = this.context.overlays.snapshot;
+    // The overlay update states replace General's old configUpdating prop,
+    // which config-page derived from this same snapshot (isUpdateBusy); the
+    // busy gate is behavior-identical to the pre-move General controls.
     const configBusy =
       runtimeState.configLoading ||
       runtimeState.configSaving ||
