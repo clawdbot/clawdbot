@@ -96,6 +96,12 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     get snapshot() {
       return snapshot;
     },
+    connection: {
+      gatewayUrl: "ws://gateway.test",
+      token: "",
+      bootstrapToken: "",
+      password: "",
+    },
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       listeners.add(listener);
