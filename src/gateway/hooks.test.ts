@@ -15,6 +15,7 @@ import {
   normalizeAgentPayload,
   normalizeWakePayload,
   resolveHooksConfig,
+  getUnsupportedHookChannelIdError,
 } from "./hooks.js";
 
 const createDemoAliasPlugin = () => ({
@@ -204,8 +205,7 @@ describe("gateway hooks helpers", () => {
 
     expect(result).toEqual({
       ok: false,
-      error:
-        'channelId is not supported; use channel and to to deliver the final agent reply (for example, channel: "discord", to: "<channel-id>")',
+      error: getUnsupportedHookChannelIdError(),
     });
   });
 

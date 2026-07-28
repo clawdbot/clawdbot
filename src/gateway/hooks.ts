@@ -245,6 +245,10 @@ const getHookChannelSet = () => new Set<string>(listHookChannelValues());
 /** Render the current hook channel validation error from registered channel plugins. */
 export const getHookChannelError = () => `channel must be ${listHookChannelValues().join("|")}`;
 
+/** Reject Discord-style channelId payloads; hooks deliver via channel + to. */
+export const getUnsupportedHookChannelIdError = () =>
+  "channelId is not supported; use channel and to to deliver the final agent reply";
+
 /** Resolve a raw hook channel value, defaulting omitted values to `last`. */
 export function resolveHookChannel(raw: unknown): HookMessageChannel | null {
   if (raw === undefined) {
@@ -424,11 +428,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
     }
   | { ok: false; error: string } {
   if (Object.hasOwn(payload, "channelId")) {
-    return {
-      ok: false,
-      error:
-        'channelId is not supported; use channel and to to deliver the final agent reply (for example, channel: "discord", to: "<channel-id>")',
-    };
+    return { ok: false, error: getUnsupportedHookChannelIdError() };
   }
   const message = normalizeOptionalString(payload.message) ?? "";
   if (!message) {

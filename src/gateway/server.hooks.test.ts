@@ -9,6 +9,7 @@ import {
   peekSystemEventEntries,
   peekSystemEvents,
 } from "../infra/system-events.js";
+import { getUnsupportedHookChannelIdError } from "./hooks.js";
 import { DEDUPE_TTL_MS } from "./server-constants.js";
 import {
   cronIsolatedRun,
@@ -273,8 +274,7 @@ describe("gateway server hooks", () => {
       expect(resUnsupportedChannelId.status).toBe(400);
       await expect(resUnsupportedChannelId.json()).resolves.toEqual({
         ok: false,
-        error:
-          'channelId is not supported; use channel and to to deliver the final agent reply (for example, channel: "discord", to: "<channel-id>")',
+        error: getUnsupportedHookChannelIdError(),
       });
       expect(cronIsolatedRun).toHaveBeenCalledTimes(isolatedRunCount);
 
