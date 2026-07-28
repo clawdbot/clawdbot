@@ -140,7 +140,7 @@ export const memoryHandlers: GatewayRequestHandlers = {
       const dailyNames = dirents
         .filter((dirent) => dirent.isFile() && DAILY_MEMORY_FILE_PATTERN.test(dirent.name))
         .map((dirent) => dirent.name)
-        .sort(compareDailyFileNames);
+        .toSorted(compareDailyFileNames);
 
       const files: MemoryFileEntry[] = [];
 
