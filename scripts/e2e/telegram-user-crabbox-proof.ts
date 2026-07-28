@@ -1597,9 +1597,7 @@ type SutContainerCommandRunner = (
   options: {
     encoding: "utf8";
     env: NodeJS.ProcessEnv;
-    killSignal: NodeJS.Signals;
     stdio: "pipe";
-    timeout: number;
   },
 ) => {
   error?: Error;
@@ -1617,17 +1615,13 @@ export function runSutContainerAction(
   if (!containerName || !runtimeRoot) {
     return;
   }
-  // Bound privileged teardown so a stuck Docker cleanup cannot strand the
-  // Telegram credential lease or block the caller's remaining PID cleanup.
   const result = run(
     "sudo",
     ["-n", "/usr/local/sbin/openclaw-mantis-sut-container", action, containerName, runtimeRoot],
     {
       encoding: "utf8",
       env: childProcessBaseEnv(),
-      killSignal: "SIGKILL",
       stdio: "pipe",
-      timeout: 30_000,
     },
   );
   if (result.error) {

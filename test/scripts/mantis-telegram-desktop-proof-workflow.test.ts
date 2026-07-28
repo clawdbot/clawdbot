@@ -195,6 +195,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(returnArtifactsStep.run).toContain(
       'sudo chown -R "$(id -u):$(id -g)" "$MANTIS_OUTPUT_DIR"',
     );
+
+    const sutWrapper = readFileSync(SUT_CONTAINER_WRAPPER, "utf8");
+    expect(sutWrapper).toContain(
+      'exec "$timeout_bin" --signal=TERM --kill-after=5s 30s "$0" "__${action}" "$@"',
+    );
+    expect(sutWrapper).toContain('"$(readlink -f "/proc/$PPID/exe")" == "$timeout_bin"');
+    expect(sutWrapper).toContain("__stop)");
+    expect(sutWrapper).toContain("__destroy)");
   });
 
   it("cleans partially started proof daemons when local SUT startup fails", () => {
