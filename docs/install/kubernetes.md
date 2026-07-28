@@ -163,7 +163,18 @@ This applies all manifests and restarts the pod to pick up any config or secret 
 ./scripts/k8s/deploy.sh --delete
 ```
 
-This deletes the namespace and all resources in it, including the PVC.
+This deletes the selected namespace and everything in it, including the PVC.
+
+For a shared namespace where only OpenClaw resources should be removed:
+
+```bash
+./scripts/k8s/deploy.sh --delete-resources
+```
+
+This deletes the OpenClaw Deployment, Service, PVC, ConfigMap, and Secret in the selected namespace.
+It keeps the namespace itself so unrelated workloads are not removed.
+
+`--delete-namespace` is also available as an explicit full namespace teardown mode for dedicated OpenClaw namespaces.
 
 ## Architecture notes
 
