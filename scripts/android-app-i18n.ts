@@ -95,6 +95,7 @@ type ResourceString = {
 
 const GENERATED_TRANSLATION_LINT_IGNORE =
   'tools:ignore="Typos,TypographyDashes,TypographyEllipsis"';
+const GENERATED_TRANSLATION_LINT_CODES = ["Typos", "TypographyDashes", "TypographyEllipsis"];
 
 type TranslationContradiction = {
   locale: string;
@@ -1136,12 +1137,21 @@ function localizeManualStrings(
         ? selectExactArtifactTranslation(source, inventoryEntry.id, artifactEntries)
         : source;
     return {
-      attrs: translatable ? `${entry.attrs} ${GENERATED_TRANSLATION_LINT_IGNORE}` : entry.attrs,
+      attrs: translatable ? mergeTranslationLintIgnore(entry.attrs) : entry.attrs,
       key: entry.key,
       rawValue: `"${escapeAndroidResourceValue(value)}"`,
       value,
     };
   });
+}
+
+function mergeTranslationLintIgnore(attrs: string): string {
+  const existing = [...attrs.matchAll(/\btools:ignore="([^"]*)"/gu)].flatMap((match) =>
+    (match[1] ?? "").split(",").filter(Boolean),
+  );
+  const merged = [...new Set([...existing, ...GENERATED_TRANSLATION_LINT_CODES])];
+  const cleaned = attrs.replace(/\s*\btools:ignore="[^"]*"/gu, "");
+  return `${cleaned} tools:ignore="${merged.join(",")}"`;
 }
 
 function renderStringsXml(

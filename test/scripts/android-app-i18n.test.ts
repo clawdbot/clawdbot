@@ -77,7 +77,11 @@ describe("Android app i18n resources", () => {
       expect(content).toContain('<resources xmlns:tools="http://schemas.android.com/tools">');
       for (const tag of stringTags) {
         if (!tag.includes('translatable="false"')) {
-          expect(tag).toContain('tools:ignore="Typos,TypographyDashes,TypographyEllipsis"');
+          const ignoreAttributes = [...tag.matchAll(/\btools:ignore="([^"]*)"/gu)];
+          expect(ignoreAttributes).toHaveLength(1);
+          expect(ignoreAttributes[0]?.[1]?.split(",")).toEqual(
+            expect.arrayContaining(["Typos", "TypographyDashes", "TypographyEllipsis"]),
+          );
         }
       }
     }
