@@ -986,9 +986,6 @@ src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/api/types.ts
 ui/src/app/app-host.ts
-ui/src/e2e/chat-flow.e2e.test.ts
-ui/src/e2e/new-session-page.e2e.test.ts
-ui/src/e2e/session-management.e2e.test.ts
 ui/src/lib/config/index.test.ts
 ui/src/lib/config/index.ts
 ui/src/lib/cron/index.test.ts
