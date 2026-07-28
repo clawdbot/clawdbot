@@ -1,6 +1,5 @@
 // "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 // Status message helpers read and format stored status messages.
-import fs from "node:fs";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -44,8 +43,6 @@ import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
@@ -367,28 +364,13 @@ const readUsageFromSessionLog = (
   if (!sessionId) {
     return undefined;
   }
-  let logPath: string;
   try {
     const resolvedAgentId =
       agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
-    logPath = resolveSessionFilePath(
-      sessionId,
-      sessionEntry,
-      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
-    );
-  } catch {
-    return undefined;
-  }
-  if (!fs.existsSync(logPath)) {
-    return undefined;
-  }
-
-  try {
     const snapshot = readRecentSessionUsageFromTranscript(
       {
-        agentId: agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined),
+        agentId: resolvedAgentId,
         sessionEntry,
-        sessionFile: logPath,
         sessionId,
         sessionKey,
         storePath,
@@ -1001,6 +983,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const sessionStartedAt = resolveSessionLifecycleTimestamps({
     entry,
     agentId: args.agentId,
+    sessionKey: args.sessionKey,
     storePath: args.sessionStorePath,
   }).sessionStartedAt;
   const sessionDuration =

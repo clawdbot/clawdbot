@@ -31,6 +31,7 @@ describe("kimi provider catalog", () => {
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
       contextWindow: 1_048_576,
       maxTokens: 131_072,
+      compat: { codeMode: "preferred" },
     });
     expect(provider.models.find((model) => model.id === "k3-256k")).toMatchObject({
       name: "Kimi K3 (256k)",
@@ -47,6 +48,7 @@ describe("kimi provider catalog", () => {
       cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 0 },
       contextWindow: 262_144,
       maxTokens: 131_072,
+      compat: { codeMode: "preferred" },
     });
     expect(provider.models.find((model) => model.id === "kimi-for-coding-highspeed")).toMatchObject(
       {
@@ -56,6 +58,10 @@ describe("kimi provider catalog", () => {
         maxTokens: 32_768,
       },
     );
+    // K2.7 stays unflagged, matching the sibling `moonshot` catalog where only K3 is preferred.
+    for (const id of ["kimi-for-coding", "kimi-for-coding-highspeed"]) {
+      expect(provider.models.find((model) => model.id === id)?.compat?.codeMode).toBeUndefined();
+    }
   });
 
   it("normalizes legacy Kimi coding model ids to the stable API model id", () => {

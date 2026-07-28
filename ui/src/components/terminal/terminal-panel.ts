@@ -58,6 +58,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   @property({ attribute: false }) agentId: string | null = null;
   /** Whether the connected gateway advertises the terminal surface. */
   @property({ type: Boolean }) available = false;
+  /** Full-page route takeovers (settings) own the viewport; the dock hides while one renders. */
+  @property({ type: Boolean }) suppressed = false;
   /** Active Control UI color mode, mirrored into the terminal theme. */
   @property({ attribute: false }) themeMode: "dark" | "light" = "dark";
   /**
@@ -104,6 +106,9 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     this.terminalSessions.connectHost();
+    // A settings takeover can already own the viewport when the panel mounts.
+    // Suppress before the restored open state boots a session nobody can see.
+    this.dockLayout.setSuppressed(this.suppressed);
     if (!this.fullscreen) {
       window.addEventListener("keydown", this.onGlobalKeyDown);
       window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, this.onToggleRequest);
@@ -121,6 +126,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
+    if (changed.has("suppressed") && this.dockLayout.setSuppressed(this.suppressed)) {
+      // Restoring after a takeover: a reconnect during settings disposed the tabs
+      // without restoring them, so re-run the normal open path.
+      void this.terminalSessions.restoreSessions();
+    }
     if (changed.has("client") || changed.has("available")) {
       this.terminalSessions.scheduleLifecycleSync();
     }

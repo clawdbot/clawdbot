@@ -1,4 +1,4 @@
-// Pinned mutation helper tests cover the Python helper that performs sandbox
+// Pinned mutation helper tests cover the native helper that performs sandbox
 // filesystem mutations through directory file descriptors.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";

@@ -385,5 +385,5 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
 }
 
 function escapeTableCell(value: string): string {
-  return value.replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
+  return value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }

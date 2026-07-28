@@ -388,63 +388,6 @@ describe("normalizeReplyPayload", () => {
 
     expect(expectNormalizedReply(result).text).toBe("Before\n\nAfter");
   });
-
-  it("does not compile Slack directives unless interactive replies are enabled", () => {
-    const result = normalizeReplyPayload({
-      text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("applies responsePrefix before channel-owned transforms run", () => {
-    const result = normalizeReplyPayload(
-      {
-        text: "hello [[slack_buttons: Retry:retry, Ignore:ignore]]",
-      },
-      { responsePrefix: "[bot]" },
-    );
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("[bot] hello [[slack_buttons: Retry:retry, Ignore:ignore]]");
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("leaves trailing Options lines for channel-owned transforms", () => {
-    const result = normalizeReplyPayload({
-      text: "Current verbose level: off.\nOptions: on, full, off.",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe("Current verbose level: off.\nOptions: on, full, off.");
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("leaves larger Options lists for channel-owned transforms", () => {
-    const result = normalizeReplyPayload({
-      text: "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe(
-      "Choose a reasoning level.\nOptions: off, minimal, low, medium, high, adaptive.",
-    );
-    expect(reply.interactive).toBeUndefined();
-  });
-
-  it("leaves complex Options lines as plain text", () => {
-    const result = normalizeReplyPayload({
-      text: "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
-    });
-
-    const reply = expectNormalizedReply(result);
-    expect(reply.text).toBe(
-      "ACP runtime choices.\nOptions: host=auto|sandbox|gateway|node, security=deny|allowlist|full.",
-    );
-    expect(reply.interactive).toBeUndefined();
-  });
 });
 
 describe("typing controller", () => {

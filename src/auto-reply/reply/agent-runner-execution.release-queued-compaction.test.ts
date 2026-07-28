@@ -319,7 +319,7 @@ describe("releaseQueuedCompactionCompletion: happy-path dispatch (branch 4)", ()
     expect(incArg.cfg).toBe(followupRun.run.config);
     expect(incArg.compactionTokensAfter).toBe(5_000);
     expect(incArg.newSessionId).toBe("new-session-id");
-    expect(incArg.newSessionFile).toBe("/tmp/new-session.jsonl");
+    expect(incArg.agentId).toBe("agent");
 
     // 2. resolveSessionStoreEntry
     expect(state.resolveSessionStoreEntryMock).toHaveBeenCalledTimes(1);

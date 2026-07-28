@@ -178,6 +178,13 @@ describe("getSlashCommands", () => {
 });
 
 describe("helpText", () => {
+  it.each([{}, { local: true }])("documents multiline input shortcuts", (options) => {
+    const output = helpText(options);
+
+    expect(output).toContain("Enter: send message");
+    expect(output).toContain("Shift+Enter or Ctrl+J: insert a newline");
+  });
+
   it.each(["/verbose <on|off|full>", "/reasoning <on|off|stream>"])(
     "includes the full canonical directive levels for %s",
     (usage) => {

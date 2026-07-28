@@ -370,7 +370,6 @@ export async function prepareGatewayLifecycle(params: {
         await monitor?.waitForIdle();
       },
       stopReadinessEventLoopHealth: readinessEventLoopHealth.stop,
-      clearSecretsRuntimeSnapshot,
       closeMcpServer: closeMcpLoopbackServerOnDemand,
     });
   };
@@ -407,6 +406,7 @@ export async function prepareGatewayLifecycle(params: {
       bonjourStop: runtimeState.bonjourStop,
       tailscaleCleanup: runtimeState.tailscaleCleanup,
       releasePluginRouteRegistry,
+      clearSecretsRuntimeSnapshot,
       channelIds,
       stopChannel,
       pluginServices: runtimeState.pluginServices,

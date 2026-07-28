@@ -21,11 +21,31 @@ export type SshTunnel = {
   stop: () => Promise<void>;
 };
 
+function hasControlOrWhitespace(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f || /\s/.test(char)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isSafeSshTargetUser(user: string): boolean {
+  return !hasControlOrWhitespace(user) && !user.startsWith("-");
+}
+
 // Reject hosts that would corrupt the SSH HostName field or enable argument
-// injection: a leading '-' becomes an ssh option, and a stray leading/trailing
-// ':' (e.g. sliced from "host::22") produces an invalid HostName.
-function isMalformedHost(host: string): boolean {
-  return host.startsWith("-") || host.startsWith(":") || host.endsWith(":");
+// injection. Parsed targets are later interpolated into unquoted ssh_config
+// directives and argv, so each accepted user/host must stay one SSH token.
+function isSafeSshTargetHost(host: string): boolean {
+  return (
+    !hasControlOrWhitespace(host) &&
+    !host.startsWith("-") &&
+    !host.startsWith(":") &&
+    !host.endsWith(":") &&
+    !host.includes("@")
+  );
 }
 
 export function parseSshTarget(raw: string): SshParsedTarget | null {
@@ -51,7 +71,10 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
     if (!host || port === undefined || port > 65535) {
       return null;
     }
-    if (isMalformedHost(host)) {
+    if (!isSafeSshTargetHost(host)) {
+      return null;
+    }
+    if (userPart !== undefined && !isSafeSshTargetUser(userPart)) {
       return null;
     }
     return { user: userPart, host, port };
@@ -60,7 +83,10 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (!hostPart) {
     return null;
   }
-  if (isMalformedHost(hostPart)) {
+  if (!isSafeSshTargetHost(hostPart)) {
+    return null;
+  }
+  if (userPart !== undefined && !isSafeSshTargetUser(userPart)) {
     return null;
   }
   return { user: userPart, host: hostPart, port: 22 };

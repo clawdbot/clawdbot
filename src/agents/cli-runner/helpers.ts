@@ -409,7 +409,7 @@ export async function writeCliSystemPromptFile(params: {
   );
   return {
     filePath,
-    cleanup: async () => await workspace.cleanup(),
+    cleanup: () => workspace.cleanup().then(() => undefined),
   };
 }
 

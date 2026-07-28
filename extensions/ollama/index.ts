@@ -13,6 +13,7 @@ import {
   type ProviderAuthResult,
   type ProviderAugmentModelCatalogContext,
   type ProviderCatalogContext,
+  type ProviderPlugin,
   type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -28,7 +29,6 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildOpenAICompatibleReplayPolicy,
-  buildProviderReplayFamilyHooks,
   selectPreferredLocalModelId,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
@@ -712,6 +712,41 @@ async function augmentConfiguredOllamaCatalogModels(params: {
   return entries;
 }
 
+// Local and cloud own distinct auth/catalog policy but share native transport and replay rules.
+const OLLAMA_SHARED_PROVIDER_HOOKS = {
+  createStreamFn: ({ config, model, provider }) => {
+    if (model.api !== "ollama") {
+      return undefined;
+    }
+    return createConfiguredOllamaStreamFn({
+      model,
+      providerBaseUrl:
+        readProviderBaseUrl(
+          resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
+        ) ?? (provider === OLLAMA_CLOUD_PROVIDER_ID ? OLLAMA_CLOUD_BASE_URL : undefined),
+    });
+  },
+  buildReplayPolicy: ({ modelApi }) =>
+    modelApi === "ollama"
+      ? buildNativeOllamaReplayPolicy()
+      : buildOpenAICompatibleReplayPolicy(modelApi),
+  resolveReasoningOutputMode: () => "native",
+  resolveThinkingProfile: resolveOllamaThinkingProfile,
+  wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+  matchesContextOverflowError: ({ errorMessage }) =>
+    matchesOllamaContextOverflowError(errorMessage),
+  classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
+} satisfies Pick<
+  ProviderPlugin,
+  | "createStreamFn"
+  | "buildReplayPolicy"
+  | "resolveReasoningOutputMode"
+  | "resolveThinkingProfile"
+  | "wrapStreamFn"
+  | "matchesContextOverflowError"
+  | "classifyFailoverReason"
+>;
+
 export default definePluginEntry({
   id: "ollama",
   name: "Ollama Provider",
@@ -793,26 +828,7 @@ export default definePluginEntry({
           provider: buildStaticOllamaCloudProvider(),
         }),
       },
-      createStreamFn: ({ config, model, provider }) => {
-        if (model.api !== "ollama") {
-          return undefined;
-        }
-        return createConfiguredOllamaStreamFn({
-          model,
-          providerBaseUrl:
-            readProviderBaseUrl(
-              resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
-            ) ?? OLLAMA_CLOUD_BASE_URL,
-        });
-      },
-      ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
-      buildReplayPolicy: (ctx) =>
-        ctx.modelApi === "ollama"
-          ? buildNativeOllamaReplayPolicy()
-          : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
-      resolveReasoningOutputMode: () => "native",
-      resolveThinkingProfile: resolveOllamaThinkingProfile,
-      wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+      ...OLLAMA_SHARED_PROVIDER_HOOKS,
       resolveDynamicModel: ({ provider, modelId }) => {
         const cloudProvider = buildStaticOllamaCloudProvider();
         const model = cloudProvider.models?.find((entry) => entry.id === modelId);
@@ -829,9 +845,6 @@ export default definePluginEntry({
           entries: ctx.entries,
           resolveProviderApiKey: ctx.resolveProviderApiKey,
         }),
-      matchesContextOverflowError: ({ errorMessage }) =>
-        matchesOllamaContextOverflowError(errorMessage),
-      classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
       buildUnknownModelHint: () =>
         "Ollama Cloud requires an API key. " +
         'Set OLLAMA_API_KEY or run "openclaw onboard --auth-choice ollama-cloud". ' +
@@ -971,25 +984,7 @@ export default definePluginEntry({
         }
         await ensureOllamaModelPulled({ config, model, prompter });
       },
-      createStreamFn: ({ config, model, provider }) => {
-        if (model.api !== "ollama") {
-          return undefined;
-        }
-        return createConfiguredOllamaStreamFn({
-          model,
-          providerBaseUrl: readProviderBaseUrl(
-            resolveConfiguredOllamaProviderConfig({ config, providerId: provider }),
-          ),
-        });
-      },
-      ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
-      buildReplayPolicy: (ctx) =>
-        ctx.modelApi === "ollama"
-          ? buildNativeOllamaReplayPolicy()
-          : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
-      resolveReasoningOutputMode: () => "native",
-      resolveThinkingProfile: resolveOllamaThinkingProfile,
-      wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
+      ...OLLAMA_SHARED_PROVIDER_HOOKS,
       augmentModelCatalog: async (ctx) =>
         await augmentConfiguredOllamaCatalogModels({
           config: ctx.config,
@@ -1012,9 +1007,6 @@ export default definePluginEntry({
           client,
         };
       },
-      matchesContextOverflowError: ({ errorMessage }) =>
-        matchesOllamaContextOverflowError(errorMessage),
-      classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
       resolveSyntheticAuth: ({ provider, providerConfig }) => {
         if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
           return undefined;

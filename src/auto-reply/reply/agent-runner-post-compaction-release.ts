@@ -40,6 +40,7 @@ export async function releaseQueuedCompactionCompletion(params: {
 
   const { incrementRunCompactionCount } = await import("./session-run-accounting.js");
   const compactionId = await incrementRunCompactionCount({
+    agentId: params.followupRun.run.agentId,
     cfg: params.followupRun.run.config,
     sessionEntry,
     sessionStore: params.activeSessionStore,
@@ -48,7 +49,6 @@ export async function releaseQueuedCompactionCompletion(params: {
     amount: 1,
     compactionTokensAfter: params.compactionResult.result?.tokensAfter,
     newSessionId: params.compactionResult.result?.sessionId,
-    newSessionFile: params.compactionResult.result?.sessionFile,
   });
   const resolved = resolveSessionEntryFromStore({
     store: params.activeSessionStore,

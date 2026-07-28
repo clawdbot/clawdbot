@@ -25,10 +25,10 @@ import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
+  custodianChatParams,
   isCustodianSessionInvalidatedError,
   sessionVariant,
   type CustodianSessionVariant,
-  welcomeVariant,
 } from "./session-lifecycle.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 import {
@@ -152,7 +152,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionStarted = true;
     void this.initializeSession(
       client,
-      { sessionId: this.sessionId, ...welcomeVariant(variant) },
+      { sessionId: this.sessionId, ...custodianChatParams(variant) },
       loadTranscript,
     );
   }
@@ -523,8 +523,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     const reply = this.requestReply(client, {
       sessionId: this.sessionId,
-      ...welcomeVariant(sessionVariant(this.onboarding, this.newAgentIntent)),
-      message,
+      ...custodianChatParams(sessionVariant(this.onboarding, this.newAgentIntent), message),
     });
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;

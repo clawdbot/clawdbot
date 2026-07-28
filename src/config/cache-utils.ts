@@ -1,7 +1,7 @@
 // Provides small synchronous config cache helpers.
 
 /** Returns whether a TTL keeps cache reads and writes active. */
-export function isCacheEnabled(ttlMs: number): boolean {
+function isCacheEnabled(ttlMs: number): boolean {
   return ttlMs > 0;
 }
 

@@ -1727,8 +1727,13 @@ describe("scripts/test-projects changed-target routing", () => {
       ["scripts/gh-read", ["test/scripts/gh-read.test.ts"]],
       [
         "scripts/pr",
-        ["test/scripts/pr-operation-lock.test.ts", "test/scripts/pr-wrappers.test.ts"],
+        [
+          "test/scripts/pr-merge.test.ts",
+          "test/scripts/pr-operation-lock.test.ts",
+          "test/scripts/pr-wrappers.test.ts",
+        ],
       ],
+      ["scripts/pr-lib/merge.sh", ["test/scripts/pr-merge.test.ts"]],
       ["scripts/pr-lib/operation-lock.sh", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-lib/process-group-runner.mjs", ["test/scripts/pr-operation-lock.test.ts"]],
       ["scripts/pr-merge", ["test/scripts/pr-wrappers.test.ts"]],
@@ -2897,7 +2902,6 @@ describe("scripts/test-projects changed-target routing", () => {
       ["src/agents", "test/vitest/vitest.agents.config.ts"],
       ["src/auto-reply", "test/vitest/vitest.auto-reply.config.ts"],
       ["src/channels", "test/vitest/vitest.channels.config.ts"],
-      ["src/cli", "test/vitest/vitest.cli.config.ts"],
       ["src/config", "test/vitest/vitest.runtime-config.config.ts"],
       ["src/cron", "test/vitest/vitest.cron.config.ts"],
       ["src/daemon", "test/vitest/vitest.daemon.config.ts"],
@@ -2979,6 +2983,34 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("routes CLI process tests through their isolated project", () => {
+    expect(buildVitestRunPlans(["src/cli/help-exit.process.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.cli-process.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/cli/help-exit.process.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the CLI process project for broad CLI targets", () => {
+    const plans = buildVitestRunPlans(["src/cli"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.cli-process.config.ts",
+      "test/vitest/vitest.cli.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("src/cli/help-exit.process.test.ts");
+  });
+
+  it("rejects broad CLI watch targets that cross shared and process projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "src/cli"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
   });
 
   it("chunks broad shell helper globs after isolated targets", () => {
@@ -3095,6 +3127,9 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/vitest/vitest.agents-core.config.ts",
           "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
           "test/vitest/vitest.agents-support.config.ts",
           "test/vitest/vitest.agents-tools.config.ts",
         ],
@@ -3635,6 +3670,33 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
+  it("routes isolated ui test targets to the isolated project", () => {
+    expect(buildVitestRunPlans(["ui/src/pages/workboard/view.test.ts"])).toEqual([
+      {
+        config: "test/vitest/vitest.ui-isolated.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["ui/src/pages/workboard/view.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("adds the isolated project for broad ui targets", () => {
+    const plans = buildVitestRunPlans(["ui/src"]);
+
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
+    ]);
+    expect(plans[1]?.includePatterns).toContain("ui/src/pages/workboard/view.test.ts");
+  });
+
+  it("rejects broad ui watch targets that cross shared and isolated projects", () => {
+    expect(() => buildVitestRunPlans(["--watch", "ui/src"])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
+  });
+
   it("keeps explicit non-renderer ui test targets scoped", () => {
     expect(
       buildVitestRunPlans([
@@ -4156,6 +4218,9 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     "test/vitest/vitest.agents-core.config.ts",
     "test/vitest/vitest.agents-embedded-agent.config.ts",
+    "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+    "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+    "test/vitest/vitest.agents-embedded-agent-run.config.ts",
     "test/vitest/vitest.agents-support.config.ts",
     "test/vitest/vitest.agents-tools.config.ts",
   ])("routes split agents vitest config %s to itself", (target) => {
@@ -4348,6 +4413,15 @@ describe("scripts/test-projects full-suite sharding", () => {
   it("covers the fast TUI PTY lane in full-suite routing", () => {
     expect(fullSuiteMatches.get("src/tui/tui-pty-harness.e2e.test.ts")).toEqual([
       "test/vitest/vitest.tui-pty.config.ts",
+    ]);
+  });
+
+  it.each([
+    "extensions/codex/src/app-server/run-attempt-client-prewarm.test.ts",
+    "extensions/codex/src/app-server/run-attempt-connection.test.ts",
+  ])("covers Codex attempt lifecycle test %s in full-suite routing", (file) => {
+    expect(fullSuiteMatches.get(file)).toEqual([
+      "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts",
     ]);
   });
 
@@ -4737,12 +4811,16 @@ describe("scripts/test-projects full-suite sharding", () => {
       gatewayServerConfig,
       gatewayServerConfig,
       gatewayServerConfig,
+      "test/vitest/vitest.cli-process.config.ts",
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
       "test/vitest/vitest.agents-core-isolated.config.ts",
       ...agentsCorePlans.map(() => agentsCoreConfig),
       "test/vitest/vitest.agents-embedded-agent.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",
@@ -4862,6 +4940,9 @@ describe("scripts/test-projects full-suite sharding", () => {
     const args = [
       "test/vitest/vitest.agents-core.config.ts",
       "test/vitest/vitest.agents-embedded-agent.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
     ];

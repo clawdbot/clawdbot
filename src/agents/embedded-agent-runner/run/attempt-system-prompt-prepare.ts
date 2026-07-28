@@ -65,6 +65,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   sandboxSessionKey: string;
   sessionAgentId: string;
   skillsPrompt: string;
+  codeModeActive?: boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   toolSearchDirectoryEnabled: boolean;
   toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
@@ -266,6 +267,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reasoningTagHint,
       heartbeatPrompt,
       skillsPrompt: effectiveSkillsPrompt,
+      codeModeActive: params.codeModeActive,
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       workspaceNotes: params.bootstrap.workspaceNotes.length

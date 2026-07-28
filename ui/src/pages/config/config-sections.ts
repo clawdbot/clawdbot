@@ -11,13 +11,7 @@ export type ConfigPageId =
   | "ai-agents"
   | "advanced";
 
-export const COMMUNICATION_SECTION_KEYS = [
-  "messages",
-  "broadcast",
-  "talk",
-  "audio",
-  "channels",
-] as const;
+export const COMMUNICATION_SECTION_KEYS = ["messages", "talk", "tts"] as const;
 
 export const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 
@@ -37,12 +31,9 @@ export const AUTOMATION_SECTION_KEYS = [
 
 export const INFRASTRUCTURE_SECTION_KEYS = [
   "gateway",
-  "web",
   "browser",
   "nodeHost",
-  "canvasHost",
   "discovery",
-  "media",
   "acp",
 ] as const;
 

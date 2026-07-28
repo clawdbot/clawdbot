@@ -236,7 +236,6 @@ export async function enqueueSessionDelivery(
   upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
     ...(params.completionRetention === "permanent"
       ? { insertOnly: true }
@@ -282,7 +281,6 @@ export async function enqueueClaimedSessionDelivery(
   const claimed = upsertDeliveryQueueEntry({
     queueName: QUEUE_NAME,
     entry,
-    metadata: queuedSessionDeliveryMetadata(entry),
     stateDir,
     insertOnly: true,
   });
@@ -353,7 +351,6 @@ export async function markSessionDeliveryAttemptStarted(
         ...entry,
         deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
       } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
     });
@@ -391,7 +388,6 @@ export async function markSessionDeliverySettlement(
         settlementOutcome: outcome,
         ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
       } as QueuedSessionDelivery,
-      metadata: queuedSessionDeliveryMetadata(entry),
       stateDir,
       updatePendingOnly: true,
     });

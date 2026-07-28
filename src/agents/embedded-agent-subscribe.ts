@@ -178,6 +178,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     itemActiveIds: new Set(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
+    assistantTurnCount: 0,
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
@@ -1822,6 +1823,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+    getAssistantTurnCount: () => state.assistantTurnCount,
     waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,

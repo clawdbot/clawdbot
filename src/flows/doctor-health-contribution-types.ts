@@ -18,6 +18,7 @@ type DoctorConfigResult = {
   skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
   shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  retiredPhoneControlStateCleanupPending?: boolean;
   blockedCodexModelIdentities?: readonly string[];
 };
 
@@ -28,6 +29,10 @@ export type DoctorHealthFlowContext = {
   configResult: DoctorConfigResult;
   cfg: OpenClawConfig;
   cfgForPersistence: OpenClawConfig;
+  /** The finalized config-flow candidate crossed the atomic writer boundary. */
+  configResultWriteCommitted?: boolean;
+  /** One-shot repairs that require a durable config write have completed. */
+  postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
   configPath: string;
   env?: NodeJS.ProcessEnv;

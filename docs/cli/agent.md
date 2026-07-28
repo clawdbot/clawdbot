@@ -52,6 +52,10 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
   "final": "The focused tests pass.",
   "payloads": [{ "text": "The focused tests pass." }],
   "usage": { "input": 120, "output": 8, "total": 128 },
+  "costUsd": 0.0021,
+  "codeModeEngaged": false,
+  "assistantTurns": 2,
+  "bridgeCalls": { "search": 1, "describe": 0, "call": 3 },
   "model": "gpt-5.6-sol",
   "provider": "openai",
   "sessionId": "019..."
@@ -59,6 +63,15 @@ Plain output writes only the final assistant text to stdout. Diagnostics use std
 ```
 
 `status` is `ok`, `error`, or `timeout`. `usage` is omitted when unavailable. Failed envelopes add `error: { message, kind }`; `model` and `provider` are `null` when failure happens before model selection.
+
+Run-stat fields are additive and may be absent:
+
+- `costUsd`: estimated USD cost of the run's accumulated usage, including cache read/write pricing; omitted when the model has no cost data.
+- `codeModeEngaged`: `true` only when [code mode](/tools/code-mode) actually owned the model tool surface for the run. `tools.codeMode.enabled=true` alone does not guarantee engagement; models routed through a native harness surface can leave it `false`.
+- `assistantTurns`: completed assistant/provider round trips in the run; omitted when none completed.
+- `bridgeCalls`: inner tool-search/code-mode bridge call counts (`search`/`describe`/`call`). These are invisible to the provider; outer tool calls stay in `meta.toolSummary.calls` of the full run metadata.
+
+The same fields appear on `meta.agentMeta` in the `openclaw agent --json` response.
 
 ### `agent exec` options
 

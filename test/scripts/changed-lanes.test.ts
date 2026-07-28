@@ -653,6 +653,45 @@ describe("scripts/changed-lanes", () => {
     expectLanes(result.lanes, { liveDockerTooling: true });
   });
 
+  it.each([
+    "extensions/whatsapp/src/config-ui-hints.ts",
+    "extensions/mattermost/src/config-schema-core.ts",
+    "extensions/telegram/openclaw.plugin.json",
+    "extensions/discord/package.json",
+    "extensions/slack/security-contract-api.ts",
+    "src/config/zod-schema.core.ts",
+    "src/channels/plugins/config-schema.ts",
+    "scripts/load-channel-config-surface.ts",
+  ])("routes %s through the bundled channel config metadata lane", (changedPath) => {
+    const result = detectChangedLanes([changedPath]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.bundledChannelConfigMetadata).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
+  it("keeps unrelated plugin runtime changes out of the bundled channel metadata lane", () => {
+    const result = detectChangedLanes(["extensions/whatsapp/src/monitor.ts"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.bundledChannelConfigMetadata).toBe(false);
+    expect(plan.commands.map((command) => command.args[0])).not.toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
+  it("includes bundled channel metadata in the fail-safe all plan", () => {
+    const result = detectChangedLanes(["unknown-surface.foo"]);
+    const plan = createChangedCheckPlan(result);
+
+    expect(result.lanes.all).toBe(true);
+    expect(plan.commands.map((command) => command.args[0])).toContain(
+      "check:bundled-channel-config-metadata",
+    );
+  });
+
   it("exposes the shared changed-lane test path classifier", () => {
     expect(isChangedLaneTestPath("src/shared/string-normalization.test.ts")).toBe(true);
     expect(isChangedLaneTestPath("packages/foo/__tests__/helper.ts")).toBe(true);
@@ -2038,6 +2077,7 @@ describe("scripts/changed-lanes", () => {
       docs: false,
       tooling: false,
       liveDockerTooling: false,
+      bundledChannelConfigMetadata: false,
       releaseMetadata: false,
       all: false,
     });

@@ -106,6 +106,7 @@ export function inflateDeliveryQueueEntryResult(
 }
 
 export function extractDeliveryQueueMetadata(
+  queueName: string,
   entry: DeliveryQueueEntryState,
 ): DeliveryQueueRowMetadata {
   const item = entry as DeliveryQueueEntryState & {
@@ -119,7 +120,7 @@ export function extractDeliveryQueueMetadata(
     deliveryContext?: { channel?: string; to?: string; accountId?: string };
   };
   return {
-    entryKind: item.kind,
+    entryKind: item.kind ?? queueName,
     sessionKey: item.sessionKey ?? item.session?.key,
     channel: item.channel ?? item.route?.channel ?? item.deliveryContext?.channel,
     target: item.to ?? item.route?.to ?? item.deliveryContext?.to,

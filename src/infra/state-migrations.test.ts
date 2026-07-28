@@ -786,8 +786,8 @@ describe("state migrations", () => {
     expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
       "prototype-row",
     );
-    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionFile).toBe(
-      path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"),
+    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value).not.toHaveProperty(
+      "sessionFile",
     );
     expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 
@@ -1537,7 +1537,7 @@ describe("state migrations", () => {
     const acpWarningPrefix =
       "Preserved ACP metadata for 3 ambiguous session key(s) in potentially shared store ";
     expect(result.warnings.filter((warning) => warning.startsWith(acpWarningPrefix))).toHaveLength(
-      2,
+      1,
     );
   });
 
@@ -1582,7 +1582,48 @@ describe("state migrations", () => {
     );
   });
 
-  it("canonicalizes imported ACP aliases with their session row owner", async () => {
+  it("migrates standalone ACP metadata through the automatic fast path", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:existing": {
+          sessionId: "existing-main",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "existing-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = await autoMigrateLegacyState({
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      env,
+      homedir: () => root,
+    });
+
+    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: "agent:main:existing",
+        entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        env,
+      })?.runtimeSessionName,
+    ).toBe("existing-runtime");
+  });
+
+  it("migrates existing and imported ACP metadata in one canonical session phase", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -1597,7 +1638,24 @@ describe("state migrations", () => {
     );
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.writeFile(storePath, "{}\n", "utf8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:existing": {
+          sessionId: "existing-main",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "main",
+            runtimeSessionName: "existing-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
+      }),
+      "utf8",
+    );
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
     await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
     await fs.writeFile(
@@ -1627,6 +1685,13 @@ describe("state migrations", () => {
 
     expect(
       readAcpSessionMetaForEntry({
+        sessionKey: "agent:main:existing",
+        entry: { sessionId: "existing-main", lifecycleRevision: undefined },
+        env,
+      })?.runtimeSessionName,
+    ).toBe("existing-runtime");
+    expect(
+      readAcpSessionMetaForEntry({
         sessionKey: "agent:voice:desk",
         entry: { sessionId: "voice-main", lifecycleRevision: undefined },
         env,
@@ -1639,7 +1704,7 @@ describe("state migrations", () => {
         env,
       }),
     ).toBeUndefined();
-    expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
+    expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
   });
 
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
@@ -1995,6 +2060,52 @@ describe("state migrations", () => {
     expect(after.preview).not.toContain(
       "- Shared SQLite schema: audit event ledger → versioned message lifecycle schema",
     );
+  });
+
+  it("doctor discards worktree rows that predate the provisioned-file ledger", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const cfg = createConfig();
+    const db = openOpenClawStateDatabase({ env }).db;
+    db.prepare(
+      `INSERT INTO worktrees (
+        id, repo_fingerprint, repo_root, path, branch, base_ref, owner_kind,
+        created_at, last_active_at, provisioned_paths_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+    ).run(
+      "legacy-worktree",
+      "legacy-fingerprint",
+      path.join(root, "repo"),
+      path.join(stateDir, "worktrees", "legacy"),
+      "openclaw/legacy",
+      "HEAD",
+      "session",
+      1,
+      1,
+    );
+
+    const runtime = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(runtime.preview).not.toContain(
+      "- Managed worktrees: discard rows without provisioned-file ledgers",
+    );
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+    expect(detected.preview).toContain(
+      "- Managed worktrees: discard rows without provisioned-file ledgers",
+    );
+
+    const result = await runLegacyStateMigrations({ detected, config: cfg, env });
+    expect(result.changes).toContain(
+      "Discarded 1 legacy managed worktree row; affected worktrees will provision fresh on next use",
+    );
+    expect(
+      db.prepare("SELECT id FROM worktrees WHERE id = ?").get("legacy-worktree"),
+    ).toBeUndefined();
   });
 
   it("does not run plugin doctor migrations after shared state schema repair fails", async () => {

@@ -95,16 +95,8 @@ export async function handleEmbeddedAssistantFailure(input: {
   agentDir: string;
   isProbeSession: boolean;
 }): Promise<EmbeddedRunAssistantFailureOutcome> {
-  const {
-    aborted,
-    externalAbort,
-    idleTimedOut,
-    promptError,
-    timedOut,
-    timedOutByRunBudget,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
-  } = projectAgentRunAttemptTerminal(input.attempt.terminal);
+  const { aborted, idleTimedOut, promptError, timedOut, timedOutDuringCompaction } =
+    projectAgentRunAttemptTerminal(input.attempt.terminal);
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(input.terminalState.outcome);
   const { signalOwnedInterruption } = input.terminalState;
   const fallbackThinking = pickFallbackThinkingLevel({
@@ -240,31 +232,22 @@ export async function handleEmbeddedAssistantFailure(input: {
   const initialDecision = resolveRunFailoverDecision({
     stage: "assistant",
     allowFormatRetry: cloudCodeAssistFormatError,
-    aborted,
-    externalAbort: externalAbort || signalOwnedInterruption,
+    terminal: input.attempt.terminal,
+    signalOwnedInterruption,
     fallbackConfigured: input.fallbackConfigured,
     failoverFailure,
     failoverReason: assistantFailoverReason,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
     harnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    timedOutByRunBudget,
     profileRotated: false,
   });
   const outcome = await handleAssistantFailover({
     initialDecision,
-    aborted,
-    externalAbort: externalAbort || signalOwnedInterruption,
+    terminal: input.attempt.terminal,
+    signalOwnedInterruption,
     fallbackConfigured: input.fallbackConfigured,
     failoverFailure,
     failoverReason: assistantFailoverReason,
-    timedOut,
-    idleTimedOut,
-    timedOutDuringCompaction,
-    timedOutDuringToolExecution,
-    timedOutByRunBudget,
+    harnessOwnsTransport: input.pluginHarnessOwnsTransport,
     allowSameModelIdleTimeoutRetry:
       timedOut &&
       idleTimedOut &&

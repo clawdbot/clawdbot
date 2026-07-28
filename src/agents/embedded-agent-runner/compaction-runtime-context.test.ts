@@ -1,6 +1,9 @@
 // Coverage for building compaction runtime context from active runner state.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { addSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
@@ -10,6 +13,9 @@ import {
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
+
+const compactionTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveEmbeddedCompactionThinkingLevel", () => {
   it("lets the compaction override replace the inherited session level", () => {
@@ -743,5 +749,34 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "claude-opus-4-5",
     });
     expect(result.provider).toBe("anthropic");
+  });
+});
+
+describe("buildContextEngineCompactionSessionTarget", () => {
+  it("derives the agent from a scoped session key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        config: { session: { store: "/tmp/agents/{agentId}/sessions.json" } },
+        sessionFile: "agent:helper:main",
+        sessionId: "helper-session",
+        sessionKey: "agent:helper:main",
+      }),
+    ).toMatchObject({
+      agentId: "helper",
+      sessionKey: "agent:helper:main",
+      storePath: "/tmp/agents/helper/sessions.json",
+    });
+  });
+
+  it("uses the marker session id when its store has no mapped key yet", () => {
+    const storePath = path.join(compactionTempDirs.make("compaction-marker-"), "sessions.json");
+    const sessionId = "legacy-unmapped-session";
+
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+        sessionId,
+      }),
+    ).toMatchObject({ agentId: "main", sessionId, sessionKey: sessionId, storePath });
   });
 });

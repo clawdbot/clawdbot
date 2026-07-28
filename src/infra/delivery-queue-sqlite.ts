@@ -68,7 +68,7 @@ function upsertDeliveryQueueEntryInDatabase(
 ): boolean {
   const now = Date.now();
   const status = params.status ?? "pending";
-  const meta = params.metadata ?? extractDeliveryQueueMetadata(params.entry);
+  const meta = params.metadata ?? extractDeliveryQueueMetadata(params.queueName, params.entry);
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
   const insert = queueDb.insertInto("delivery_queue_entries").values({
     queue_name: params.queueName,

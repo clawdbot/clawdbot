@@ -699,6 +699,68 @@ describe("cron task run terminal records", () => {
     );
   });
 
+  it.each([
+    "cron: job execution timed out",
+    "cron: job execution timed out (last phase: model_call_started)",
+    "cron: isolated agent setup timed out before runner start",
+    "cron: isolated agent setup timed out before runner start (last phase: preparing)",
+    "cron: isolated agent run stalled before execution start",
+    "cron: isolated agent run stalled before execution start (last phase: preparing)",
+  ])("preserves %j as a provisional timed-out task", async (error) => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-cron-provisional-watchdog-timeout-" },
+      async () => {
+        resetTaskRegistryForTests();
+        const startedAt = 5_000;
+        const job: CronJob = {
+          id: "provisional-watchdog-timeout",
+          name: "provisional watchdog timeout",
+          enabled: true,
+          createdAtMs: 100,
+          updatedAtMs: 100,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: 100 },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "work" },
+          state: { nextRunAtMs: 60_000 },
+        };
+        const state = createCronServiceState({
+          storePath: "/tmp/jobs.json",
+          cronEnabled: true,
+          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          nowMs: () => startedAt + 100,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+        const taskRunId = tryCreateCronTaskRun({ state, job, startedAt });
+        if (!taskRunId) {
+          throw new Error("expected cron task run id");
+        }
+
+        tryFinishCronTaskRunWithoutHistory(state, {
+          taskRunId,
+          status: "error",
+          error,
+          endedAt: startedAt + 100,
+        });
+
+        expect(
+          listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
+            runtime: "cron",
+            sourceId: job.id,
+          }),
+        ).toEqual([
+          expect.objectContaining({
+            status: "timed_out",
+            error,
+            endedAt: startedAt + 100,
+          }),
+        ]);
+      },
+    );
+  });
+
   it("overwrites a provisional timeout with restart terminal history", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-task-timeout-recovery-" },

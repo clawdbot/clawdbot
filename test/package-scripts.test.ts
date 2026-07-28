@@ -163,6 +163,16 @@ describe("package scripts", () => {
     expect(script).not.toContain("name=iPhone");
   });
 
+  it("keeps the Wear app in the root Android contributor gates", () => {
+    const scripts = readPackageJson().scripts;
+
+    expect(scripts["android:assemble"]).toContain(":wear:assembleDebug");
+    expect(scripts["android:format"]).toContain(":wear:ktlintFormat");
+    expect(scripts["android:lint"]).toContain(":wear:ktlintCheck");
+    expect(scripts["android:lint:android"]).toContain(":wear:lintDebug");
+    expect(scripts["android:test"]).toContain(":wear:testDebugUnitTest");
+  });
+
   it("runs generated module formatting coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/format-generated-module.test.ts",

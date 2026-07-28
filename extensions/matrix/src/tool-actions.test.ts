@@ -399,7 +399,45 @@ describe("handleMatrixAction pollVote", () => {
       ok: true,
       roomId: "!room:example",
       threadId: "$thread",
-      messages: [{ eventId: "$message" }],
+      messages: [{ eventId: "$message", id: "$message" }],
+      nextBatch: "next",
+    });
+  });
+
+  it("projects Matrix message summaries for human-readable CLI output", async () => {
+    mocks.readMatrixMessages.mockResolvedValueOnce({
+      messages: [
+        {
+          eventId: "$message",
+          sender: "@alice:example.org",
+          body: "hello from Matrix",
+          msgtype: "m.text",
+          timestamp: 1_750_000_000_000,
+        },
+      ],
+      nextBatch: "next",
+    });
+
+    const result = await handleMatrixAction({ action: "readMessages", roomId: "!room:example" }, {
+      channels: { matrix: { actions: { messages: true } } },
+    } as CoreConfig);
+
+    expect(result.details).toEqual({
+      ok: true,
+      roomId: "!room:example",
+      messages: [
+        {
+          eventId: "$message",
+          sender: "@alice:example.org",
+          body: "hello from Matrix",
+          msgtype: "m.text",
+          timestamp: 1_750_000_000_000,
+          id: "$message",
+          authorTag: "@alice:example.org",
+          content: "hello from Matrix",
+          ts: "2025-06-15T15:06:40.000Z",
+        },
+      ],
       nextBatch: "next",
     });
   });
@@ -489,6 +527,35 @@ describe("handleMatrixAction pollVote", () => {
       cfg,
       accountId: "ops",
       client: mocks.matrixClient,
+    });
+  });
+
+  it("projects pinned Matrix events without removing their original event fields", async () => {
+    const event = {
+      eventId: "$pin",
+      sender: "@alice:example.org",
+      body: "pinned message",
+      timestamp: 1_750_000_000_000,
+    };
+    mocks.listMatrixPins.mockResolvedValueOnce({ pinned: ["$pin"], events: [event] });
+
+    const result = await handleMatrixAction({ action: "listPins", roomId: "!room:example" }, {
+      channels: { matrix: { actions: { pins: true } } },
+    } as CoreConfig);
+
+    expect(result.details).toEqual({
+      ok: true,
+      pinned: ["$pin"],
+      events: [event],
+      pins: [
+        {
+          ...event,
+          id: "$pin",
+          authorTag: "@alice:example.org",
+          content: "pinned message",
+          ts: "2025-06-15T15:06:40.000Z",
+        },
+      ],
     });
   });
 

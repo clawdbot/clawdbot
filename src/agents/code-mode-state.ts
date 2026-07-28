@@ -9,6 +9,7 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import {
   enforceSnapshotPayloadLimits,
   type CodeModeConfig,
+  type CodeModeSettlementMode,
   type PendingBridgeRequest,
   type SettledBridgeRequest,
 } from "./code-mode-runtime.js";
@@ -19,6 +20,7 @@ import { ToolInputError } from "./tools/common.js";
 export type PendingBridgeState = PendingBridgeRequest & {
   promise: Promise<SettledBridgeRequest>;
   settled?: SettledBridgeRequest;
+  settledSequence?: number;
   cancel?: () => void;
 };
 
@@ -30,6 +32,7 @@ type CodeModeRunState = {
   config: CodeModeConfig;
   snapshotBytes: Uint8Array;
   pending: PendingBridgeState[];
+  settlementMode: CodeModeSettlementMode;
   // True only when every future bridge call is enforced read-only before execution.
   replaySafe: boolean;
   output: unknown[];
@@ -46,6 +49,33 @@ const MAX_AGENT_WAIT_SNAPSHOT_TTL_WINDOWS = 4;
 export const activeRuns = new Map<string, CodeModeRunState>();
 export const resumingRunIds = new Set<string>();
 let activeRunReservations = 0;
+let nextPendingBridgeSettlementSequence = 0;
+let activeRunExpiryTimer: ReturnType<typeof setTimeout> | undefined;
+
+// One unreferenced timer owns parked snapshots even when no later exec or wait
+// arrives; otherwise expired runs keep their VM bytes and live tool calls.
+function scheduleActiveRunExpiry(): void {
+  if (activeRunExpiryTimer) {
+    clearTimeout(activeRunExpiryTimer);
+    activeRunExpiryTimer = undefined;
+  }
+  let nextExpiresAt = Number.POSITIVE_INFINITY;
+  for (const state of activeRuns.values()) {
+    nextExpiresAt = Math.min(nextExpiresAt, state.expiresAt);
+  }
+  if (!Number.isFinite(nextExpiresAt)) {
+    return;
+  }
+  activeRunExpiryTimer = setTimeout(
+    () => {
+      activeRunExpiryTimer = undefined;
+      removeExpiredRuns();
+      scheduleActiveRunExpiry();
+    },
+    Math.max(1, nextExpiresAt - Date.now()),
+  );
+  activeRunExpiryTimer.unref?.();
+}
 
 export function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
@@ -69,13 +99,66 @@ export function removeExpiredRuns(now = Date.now()): void {
 
 export function disposeCodeModeRun(runId: string): void {
   const state = activeRuns.get(runId);
-  for (const pending of state?.pending ?? []) {
-    if (!pending.settled) {
-      pending.cancel?.();
-    }
-  }
+  cancelPendingBridgeStates(state?.pending ?? []);
   activeRuns.delete(runId);
   resumingRunIds.delete(runId);
+  scheduleActiveRunExpiry();
+}
+
+/** Abort each bridge call whose result has not already reached its guest. */
+export function cancelPendingBridgeStates(pending: readonly PendingBridgeState[]): void {
+  for (const entry of pending) {
+    if (!entry.settled) {
+      entry.cancel?.();
+    }
+  }
+}
+
+/** Deliver bridge responses in actual settlement order, not request order. */
+export function settledBridgeRequestsInCompletionOrder(
+  pending: readonly PendingBridgeState[],
+): SettledBridgeRequest[] {
+  return pending
+    .filter((entry) => entry.settled !== undefined)
+    .toSorted((left, right) => (left.settledSequence ?? 0) - (right.settledSequence ?? 0))
+    .flatMap((entry) => (entry.settled ? [entry.settled] : []));
+}
+
+/** Keep every dispatched bridge call required until its guest has received the result. */
+export function pendingBridgeStatesForSettlement(
+  pending: readonly PendingBridgeState[],
+  settlementMode: CodeModeSettlementMode,
+): readonly PendingBridgeState[] {
+  if (settlementMode.kind === "awaiting") {
+    return pending;
+  }
+  const requiredRequestIds = new Set(settlementMode.requiredRequestIds);
+  return pending.filter((entry) => requiredRequestIds.has(entry.id));
+}
+
+/** Await the shared guest frontier without guessing native Promise ownership. */
+export function waitForPendingBridgeSettlement(
+  pending: readonly PendingBridgeState[],
+  settlementMode: CodeModeSettlementMode,
+): Promise<void> {
+  const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  // Workers reject hostless pending guests; headless execution also validates
+  // the frontier before reaching this shared settlement helper.
+  if (
+    required.length === 0 ||
+    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled))
+  ) {
+    return Promise.resolve();
+  }
+  const outstanding = required.filter((entry) => !entry.settled);
+  if (outstanding.length === 0) {
+    return Promise.resolve();
+  }
+  const settlement =
+    settlementMode.kind === "draining"
+      ? Promise.all(outstanding.map((entry) => entry.promise))
+      : Promise.race(outstanding.map((entry) => entry.promise));
+  return settlement.then(() => undefined);
 }
 
 function resolveCodeModeSnapshotExpiresAt(now: number, ttlSeconds: number): number | undefined {
@@ -113,23 +196,31 @@ export function snapshotState(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
   replaySafe: boolean;
+  settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
   enforceSnapshotStateLimits(params);
   const runId = `cm_${randomUUID()}`;
-  return storeSnapshotState({
+  const pending = createPendingBridgeStates({
     ...params,
-    runId,
-    replayId: params.codeModeReplayId,
-    pending: createPendingBridgeStates({
-      ...params,
-      activeRunId: runId,
-      codeModeRunId: params.codeModeReplayId,
-    }),
-    replaySafe:
-      params.replaySafe && pendingBridgeRequestsReplaySafe(params.pendingRequests, params.runtime),
+    activeRunId: runId,
+    codeModeRunId: params.codeModeReplayId,
   });
+  try {
+    return storeSnapshotState({
+      ...params,
+      runId,
+      replayId: params.codeModeReplayId,
+      pending,
+      replaySafe:
+        params.replaySafe &&
+        pendingBridgeRequestsReplaySafe(params.pendingRequests, params.runtime),
+    });
+  } catch (error) {
+    cancelPendingBridgeStates(pending);
+    throw error;
+  }
 }
 
 export function pendingBridgeRequestsReplaySafe(
@@ -142,7 +233,9 @@ export function pendingBridgeRequestsReplaySafe(
       request.method === "describe" ||
       request.method === "yield" ||
       request.method === "agentSpawn" ||
-      request.method === "agentWait"
+      request.method === "agentWait" ||
+      request.method === "skillsList" ||
+      request.method === "skillsRead"
     ) {
       return true;
     }
@@ -181,36 +274,37 @@ export function createPendingBridgeStates(params: {
     const signal = params.signal
       ? AbortSignal.any([params.signal, abortController.signal])
       : abortController.signal;
-    const promise = runBridgeRequest({
-      runtime: params.runtime,
-      namespaceRuntime: params.namespaceRuntime,
-      parentToolCallId: params.parentToolCallId,
-      codeModeRunId: params.codeModeRunId,
-      ctx: params.ctx,
-      request,
-      signal,
-      onUpdate: params.onUpdate,
-    });
     const state: PendingBridgeState = {
       ...request,
-      promise,
-      cancel: () => abortController.abort(),
-    };
-    void promise.then((settled) => {
-      state.settled = settled;
-      if (state.method === "agentWait" && params.activeRunId) {
-        const active = activeRuns.get(params.activeRunId);
-        if (active?.pending.includes(state)) {
-          const renewed = resolveCodeModeSnapshotExpiresAt(
-            Date.now(),
-            active.config.snapshotTtlSeconds,
-          );
-          if (renewed !== undefined) {
-            active.expiresAt = renewed;
+      promise: runBridgeRequest({
+        runtime: params.runtime,
+        namespaceRuntime: params.namespaceRuntime,
+        parentToolCallId: params.parentToolCallId,
+        codeModeRunId: params.codeModeRunId,
+        ctx: params.ctx,
+        request,
+        signal,
+        onUpdate: params.onUpdate,
+      }).then((settled) => {
+        state.settledSequence = ++nextPendingBridgeSettlementSequence;
+        state.settled = settled;
+        if (state.method === "agentWait" && params.activeRunId) {
+          const active = activeRuns.get(params.activeRunId);
+          if (active?.pending.includes(state)) {
+            const renewed = resolveCodeModeSnapshotExpiresAt(
+              Date.now(),
+              active.config.snapshotTtlSeconds,
+            );
+            if (renewed !== undefined) {
+              active.expiresAt = renewed;
+              scheduleActiveRunExpiry();
+            }
           }
         }
-      }
-    });
+        return settled;
+      }),
+      cancel: () => abortController.abort(),
+    };
     return state;
   });
 }
@@ -220,6 +314,7 @@ export function storeSnapshotState(params: {
   replayId: string;
   pending: PendingBridgeState[];
   replaySafe: boolean;
+  settlementMode: CodeModeSettlementMode;
   snapshotBytes: Uint8Array;
   parentToolCallId: string;
   ctx: ToolSearchToolContext;
@@ -250,6 +345,7 @@ export function storeSnapshotState(params: {
     config: params.config,
     snapshotBytes: params.snapshotBytes,
     pending: params.pending,
+    settlementMode: params.settlementMode,
     replaySafe: params.replaySafe,
     output: params.output,
     createdAt: now,
@@ -258,6 +354,7 @@ export function storeSnapshotState(params: {
     runtime: params.runtime,
     namespaceRuntime: params.namespaceRuntime,
   });
+  scheduleActiveRunExpiry();
   return {
     status: "waiting" as const,
     runId: params.runId,
@@ -278,7 +375,11 @@ export function codeModeWaitingReason(
 }
 
 export function pendingToolCalls(pending: readonly PendingBridgeState[]) {
-  return pending.map((entry) => ({ id: entry.id, method: entry.method }));
+  // Settled calls remain in snapshots until QuickJS consumes their response,
+  // but they must not be advertised as outstanding work to exec or wait.
+  return pending
+    .filter((entry) => !entry.settled)
+    .map((entry) => ({ id: entry.id, method: entry.method }));
 }
 
 export function telemetry(runtime: ToolSearchRuntime) {

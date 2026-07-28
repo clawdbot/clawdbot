@@ -232,7 +232,7 @@ describe("qa coverage report", () => {
     ).toContainEqual({
       coverageId: TEST_BROWSER_COVERAGE_ID,
       kind: "playwright",
-      path: "ui/src/e2e/chat-flow.e2e.test.ts",
+      path: "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
       role: "primary",
       scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
     });
@@ -389,22 +389,27 @@ describe("qa coverage report", () => {
       "- tools.tool-invocation-and-execution (tools / Tool Invocation and Execution; partial): profiles: all, release; coverage IDs:",
     );
     expect(report).toContain(
-      "primary:playwright:ui/src/e2e/chat-flow.e2e.test.ts (control-ui.gateway-hosted-ui-control)",
+      "primary:playwright:ui/src/e2e/chat-flow.messaging.e2e.test.ts (control-ui.gateway-hosted-ui-control)",
     );
     expect(report).not.toContain("### Unknown Scenario Coverage IDs");
   });
 
   it("renders Playwright matches as qa suite targets", () => {
-    const matches = findQaScenarioMatches(readQaScenarioPack().scenarios, "chat-flow.e2e");
+    const matches = findQaScenarioMatches(
+      readQaScenarioPack().scenarios,
+      "chat-flow.messaging.e2e",
+    );
     const report = renderQaScenarioMatchesMarkdownReport({
-      query: "chat-flow.e2e",
+      query: "chat-flow.messaging.e2e",
       matches,
     });
 
     expect(report).toContain(
       "- Suite command: `pnpm openclaw qa suite --scenario control-ui-chat-flow-playwright`",
     );
-    expect(report).toContain("  - execution: playwright ui/src/e2e/chat-flow.e2e.test.ts");
+    expect(report).toContain(
+      "  - execution: playwright ui/src/e2e/chat-flow.messaging.e2e.test.ts",
+    );
     expect(report).not.toContain("Native test refs");
   });
 
@@ -468,7 +473,7 @@ describe("qa coverage report", () => {
   });
 
   it("splits qa suite targets when matches mix execution kinds", () => {
-    const playwrightExecutionPath = "ui/src/e2e/chat-flow.e2e.test.ts";
+    const playwrightExecutionPath = "ui/src/e2e/chat-flow.messaging.e2e.test.ts";
     const flowScenario = scenarioWithCoverage({
       primary: [TEST_EXECUTABLE_COVERAGE_ID],
     });
@@ -552,7 +557,7 @@ describe("qa coverage report", () => {
           primary: [TEST_BROWSER_COVERAGE_ID],
           sourcePath: "qa/scenarios/ui/control-ui-chat-flow-playwright.yaml",
           executionKind: "playwright",
-          executionPath: "ui/src/e2e/chat-flow.e2e.test.ts",
+          executionPath: "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
         }),
       ],
     });
@@ -568,7 +573,7 @@ describe("qa coverage report", () => {
       {
         coverageId: TEST_BROWSER_COVERAGE_ID,
         kind: "playwright",
-        path: "ui/src/e2e/chat-flow.e2e.test.ts",
+        path: "ui/src/e2e/chat-flow.messaging.e2e.test.ts",
         role: "primary",
         scenarioRefs: ["qa/scenarios/ui/control-ui-chat-flow-playwright.yaml"],
       },

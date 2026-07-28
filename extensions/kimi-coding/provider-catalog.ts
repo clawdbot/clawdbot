@@ -38,6 +38,12 @@ const KIMI_K3_THINKING_LEVEL_MAP = {
   max: "max",
 } satisfies NonNullable<ModelDefinitionConfig["thinkingLevelMap"]>;
 const KIMI_CODING_INPUT = ["text", "image"] satisfies NonNullable<ModelDefinitionConfig["input"]>;
+// K3 is the same model the `moonshot` provider ships as `kimi-k3`, which declares
+// `codeMode: "preferred"`. Without this the subscription surface silently drops out of
+// `tools.codeMode: "auto"` while the API surface engages it.
+const KIMI_K3_COMPAT = {
+  codeMode: "preferred",
+} satisfies NonNullable<ModelDefinitionConfig["compat"]>;
 
 export function buildKimiCodingProvider(): ModelProviderConfig {
   return {
@@ -70,6 +76,7 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         name: id === "k3" ? "Kimi K3" : "Kimi K3 (256k)",
         reasoning: true,
         thinkingLevelMap: { ...KIMI_K3_THINKING_LEVEL_MAP },
+        compat: { ...KIMI_K3_COMPAT },
         input: [...KIMI_CODING_INPUT],
         cost: KIMI_K3_COST,
         contextWindow: id === "k3" ? KIMI_K3_CONTEXT_WINDOW : KIMI_CODING_DEFAULT_CONTEXT_WINDOW,

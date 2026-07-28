@@ -14,13 +14,13 @@ import {
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
 } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   applySessionPatchProjection,
   loadTranscriptEvents,
   preflightSessionTranscriptForManualCompact,
   trimSessionTranscriptForManualCompact,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -213,7 +213,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           sessionKey: compactTarget.primaryKey,
           agentId: target.agentId,
         },
-        { maxLines, sessionFile: entry.sessionFile },
+        { maxLines },
       );
       if (!trimPreflight.compacted) {
         respond(
@@ -390,7 +390,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 sessionKey: compactTarget.primaryKey,
                 agentId: target.agentId,
               },
-              { maxLines, sessionFile: latestEntry.sessionFile },
+              { maxLines },
             );
             respond(
               true,
