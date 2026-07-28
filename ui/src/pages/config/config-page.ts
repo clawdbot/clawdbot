@@ -83,6 +83,16 @@ type ConfigPageSetting =
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
+// Scroll targets relocated by the settings restructure, keyed by
+// "<oldPage>:<targetId>". Same rationale as MOVED_SECTION_ROUTES: generated
+// settings-search links predating the move must land on the new home.
+const MOVED_TARGET_ROUTES: Record<string, { routeId: RouteId; hash: string }> = {
+  "config:settings-general-model": {
+    routeId: "model-providers",
+    hash: "#settings-model-behavior",
+  },
+};
+
 const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
   "communications:__notifications__": { routeId: "notifications", keepSection: false },
   "communications:channels": { routeId: "channels", keepSection: false },
@@ -433,6 +443,15 @@ export class ConfigPage extends OpenClawLightDomElement {
           search: movedRoute.keepSection ? `?section=${encodeURIComponent(rawSection)}` : "",
           hash: globalThis.location?.hash ?? "",
         });
+        return;
+      }
+    }
+    const rawTargetId =
+      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    if (rawTargetId) {
+      const movedTarget = MOVED_TARGET_ROUTES[`${this.pageId}:${rawTargetId}`];
+      if (movedTarget) {
+        this.context?.navigate(movedTarget.routeId, { search: "", hash: movedTarget.hash });
         return;
       }
     }
