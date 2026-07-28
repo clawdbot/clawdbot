@@ -94,6 +94,10 @@ export async function execCommand(
   options?: ExecOptions,
 ): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
+    if (options?.signal?.aborted) {
+      reject(new Error("Operation aborted"));
+      return;
+    }
     const proc = spawnCommand([command, ...args], {
       buffer: false,
       cwd,
@@ -191,18 +195,14 @@ export async function execCommand(
       }
     };
 
-    // Handle abort signal
+    // Handle abort signal. Already-aborted signals are rejected before spawning
+    // (see top of this Promise executor), so by this point the signal, if any,
+    // is guaranteed not yet aborted -- only a later `abort` event can fire.
     const abortRequested = () => {
       abortedBySignal = true;
       killProcess();
     };
-    if (options?.signal) {
-      if (options.signal.aborted) {
-        abortRequested();
-      } else {
-        options.signal.addEventListener("abort", abortRequested, { once: true });
-      }
-    }
+    options?.signal?.addEventListener("abort", abortRequested, { once: true });
 
     // Handle timeout
     if (options?.timeout && options.timeout > 0) {

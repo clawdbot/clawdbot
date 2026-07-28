@@ -261,6 +261,20 @@ describe("execCommand", () => {
     await expect(resultPromise).rejects.toThrow("Operation aborted");
   });
 
+  it("rejects immediately without spawning when the signal is already aborted", async () => {
+    // Sibling session tools (find/grep) never spawn work for a signal that was
+    // already aborted before the call; execCommand must match that contract
+    // instead of spawning a process only to immediately kill it.
+    const controller = new AbortController();
+    controller.abort();
+    const { execCommand } = await import("./exec.js");
+
+    await expect(execCommand("cmd", [], "/tmp", { signal: controller.signal })).rejects.toThrow(
+      "Operation aborted",
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("still resolves a timeout-triggered kill (not treated as caller abort)", async () => {
     vi.useFakeTimers();
     const child = createStubChild();
