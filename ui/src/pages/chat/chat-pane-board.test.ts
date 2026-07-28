@@ -577,9 +577,10 @@ describe("chat pane board shell", () => {
     const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
     const removeListener = vi.fn();
     const request = vi.fn(async () => snapshot);
+    const addEventListener = vi.fn(() => removeListener);
     const client = {
       request,
-      addEventListener: vi.fn(() => removeListener),
+      addEventListener,
     } as unknown as GatewayBrowserClient;
     const features = {
       methods: ["board.get", "board.widget.appView", "board.widget.put"],
@@ -651,7 +652,7 @@ describe("chat pane board shell", () => {
       expect(approvals.provider.canGrant).toBe(true);
       expect(approvals.provider.canMutate).toBe(false);
       expect(request).toHaveBeenCalledOnce();
-      expect(client.addEventListener).toHaveBeenCalledOnce();
+      expect(addEventListener).toHaveBeenCalledOnce();
 
       approvals.release();
       expect(removeListener).not.toHaveBeenCalled();
