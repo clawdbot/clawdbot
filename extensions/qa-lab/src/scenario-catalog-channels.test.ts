@@ -86,6 +86,7 @@ describe("qa scenario catalog channel contracts", () => {
     );
     expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
     expect(flow).toContain("Fanout mock phase namespace: ${sessionKey}");
+    expect(flow).toContain("request.logicalPlannedToolName ?? request.plannedToolName");
     expect(flow).toContain('"call":"waitForAgentHistoryReply"');
     expect(flow).toContain('"ref":"sessionKey"');
     expect(flow).toContain('saveAs":"childEvidence');

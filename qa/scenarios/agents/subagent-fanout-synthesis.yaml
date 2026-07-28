@@ -161,7 +161,7 @@ flow:
                                 # both subagents.
                                 - set: fanoutSpawnRequests
                                   value:
-                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => { const input = String(request.allInputText ?? ''); return request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(input) && input.includes(`Fanout mock phase namespace: ${sessionKey}`); })"
+                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => { const input = String(request.allInputText ?? ''); return (request.logicalPlannedToolName ?? request.plannedToolName) === 'sessions_spawn' && /subagent fanout synthesis check/i.test(input) && input.includes(`Fanout mock phase namespace: ${sessionKey}`); })"
                                 - assert:
                                     expr: "fanoutSpawnRequests.length >= 2"
                                     message:
@@ -225,7 +225,7 @@ flow:
                                     then:
                                       - set: timeoutSpawnRequests
                                         value:
-                                          expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => { const input = String(request.allInputText ?? ''); return request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(input) && input.includes(`Fanout mock phase namespace: ${sessionKey}`); })"
+                                          expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => { const input = String(request.allInputText ?? ''); return (request.logicalPlannedToolName ?? request.plannedToolName) === 'sessions_spawn' && /subagent fanout synthesis check/i.test(input) && input.includes(`Fanout mock phase namespace: ${sessionKey}`); })"
                                       - if:
                                           expr: "Boolean(timeoutParentReply) && timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && timeoutSpawnRequests.length >= 2"
                                           then:

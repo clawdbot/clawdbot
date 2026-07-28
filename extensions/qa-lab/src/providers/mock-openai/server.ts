@@ -143,6 +143,7 @@ import {
   countImageInputs,
   hasCompletedWriteToolResult,
   hasSuccessfulWriteToolOutput,
+  hasSuccessfulSessionsSpawnToolResult,
   extractLatestImageUserTurn,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
@@ -1206,21 +1207,43 @@ async function buildResponsesPayload(
   if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
     const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
     const fanoutPhase = scenarioState.subagentFanoutPhaseByNamespace.get(fanoutNamespace) ?? 0;
-    if (!toolOutput && fanoutPhase === 0) {
-      scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 1);
-      return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
-        label: "qa-fanout-alpha",
+    const buildFanoutSpawn = (worker: "alpha" | "beta") => {
+      const args = {
+        task: subagentFanoutTaskForProvider(providerVariant, worker),
+        label: worker === "alpha" ? "qa-fanout-alpha" : "qa-fanout-beta",
+        mode: "run",
         thread: false,
-      });
+      };
+      if (hasDeclaredTool(body, "sessions_spawn")) {
+        return buildToolCallEventsWithArgs("sessions_spawn", args);
+      }
+      if (hasDeclaredTool(body, "exec")) {
+        return buildToolCallEventsWithArgs("exec", {
+          language: "javascript",
+          code: `return await tools.callValue("openclaw:core:sessions_spawn", ${JSON.stringify(args)});`,
+        });
+      }
+      return null;
+    };
+    if (fanoutPhase === 0) {
+      if (hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-alpha")) {
+        scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 1);
+        return buildFanoutSpawn("beta") ?? buildAssistantEvents("");
+      }
+      const alphaSpawn = buildFanoutSpawn("alpha");
+      if (alphaSpawn) {
+        return alphaSpawn;
+      }
     }
-    if (toolOutput && fanoutPhase === 1) {
-      scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 2);
-      return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: subagentFanoutTaskForProvider(providerVariant, "beta"),
-        label: "qa-fanout-beta",
-        thread: false,
-      });
+    if (fanoutPhase === 1) {
+      if (hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-beta")) {
+        scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 2);
+      } else {
+        const betaSpawn = buildFanoutSpawn("beta");
+        if (betaSpawn) {
+          return betaSpawn;
+        }
+      }
     }
   }
   const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);

@@ -1,6 +1,7 @@
 // Qa Lab tests cover server plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { readQaMockRequestCursor } from "../shared/debug-request-cursor.js";
+import { hasSuccessfulSessionsSpawnToolResult } from "./mock-openai-input.js";
 import { startQaMockOpenAiServer } from "./server.js";
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -122,6 +123,36 @@ function outputToolCall(payload: unknown, name: string) {
 
 function outputToolCallId(item: Record<string, unknown>, fallback: string) {
   return typeof item.call_id === "string" ? item.call_id : fallback;
+}
+
+function sseToolCall(body: string, name: string) {
+  for (const line of body.split("\n")) {
+    if (!line.startsWith("data: {") || line === "data: [DONE]") {
+      continue;
+    }
+    const event = requireRecord(JSON.parse(line.slice("data: ".length)) as unknown, "SSE event");
+    const item = event.type === "response.output_item.done" ? event.item : undefined;
+    if (item && typeof item === "object" && !Array.isArray(item) && item.name === name) {
+      return item as Record<string, unknown>;
+    }
+  }
+  throw new Error(`Expected ${name} SSE tool call`);
+}
+
+function completedSpawnInput(
+  prompt: string,
+  toolCall: Record<string, unknown>,
+  childSessionKey: string,
+) {
+  return [
+    makeUserInput(prompt),
+    toolCall,
+    {
+      type: "function_call_output" as const,
+      call_id: outputToolCallId(toolCall, "missing-spawn-call-id"),
+      output: JSON.stringify({ status: "accepted", childSessionKey }),
+    },
+  ];
 }
 
 function outputContentItem(payload: unknown, outputIndex = 0, contentIndex = 0) {
@@ -269,6 +300,61 @@ function explicitSessionsSpawnPrompt(token: string) {
 }
 
 describe("qa mock openai server", () => {
+  it("accepts a code-mode spawn after a later completed wait poll", () => {
+    const spawnArgs = {
+      task: "Fanout worker alpha",
+      label: "qa-fanout-alpha",
+      mode: "run",
+      thread: false,
+    };
+    const input = [
+      {
+        type: "function_call" as const,
+        call_id: "exec-alpha",
+        name: "exec",
+        arguments: JSON.stringify({
+          language: "javascript",
+          code: `return await tools.callValue("openclaw:core:sessions_spawn", ${JSON.stringify(spawnArgs)});`,
+        }),
+      },
+      {
+        type: "function_call_output" as const,
+        call_id: "exec-alpha",
+        output: JSON.stringify({ status: "waiting", runId: "run-alpha" }),
+      },
+      {
+        type: "function_call" as const,
+        call_id: "wait-alpha-1",
+        name: "wait",
+        arguments: JSON.stringify({ runId: "run-alpha" }),
+      },
+      {
+        type: "function_call_output" as const,
+        call_id: "wait-alpha-1",
+        output: JSON.stringify({ status: "waiting", runId: "run-alpha" }),
+      },
+      {
+        type: "function_call" as const,
+        call_id: "wait-alpha-2",
+        name: "wait",
+        arguments: JSON.stringify({ runId: "run-alpha" }),
+      },
+      {
+        type: "function_call_output" as const,
+        call_id: "wait-alpha-2",
+        output: JSON.stringify({
+          status: "completed",
+          value: {
+            status: "accepted",
+            childSessionKey: "agent:qa:subagent:alpha",
+          },
+        }),
+      },
+    ];
+
+    expect(hasSuccessfulSessionsSpawnToolResult(input, "qa-fanout-alpha")).toBe(true);
+  });
+
   it("returns HTTP 503 only after the provider failure fixture receives tool output", async () => {
     const server = await startMockServer();
     const prompt = "Provider HTTP 503 after tool QA check: read QA_KICKOFF_TASK.md, then reply.";
@@ -2905,70 +2991,34 @@ describe("qa mock openai server", () => {
       "lemon pepper wings with blue cheese",
     );
 
+    const fanoutPrompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
     const spawn = await postResponses(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
-            },
-          ],
-        },
-      ],
+      input: [makeUserInput(fanoutPrompt)],
     });
     expect(spawn.status).toBe(200);
     const spawnBody = await spawn.text();
     expect(spawnBody).toContain('"name":"sessions_spawn"');
     expect(spawnBody).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const alphaCall = sseToolCall(spawnBody, "sessions_spawn");
 
     const secondSpawn = await postResponses(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
-            },
-          ],
-        },
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        },
-      ],
+      input: completedSpawnInput(fanoutPrompt, alphaCall, "agent:qa:subagent:alpha"),
     });
     expect(secondSpawn.status).toBe(200);
     const secondSpawnBody = await secondSpawn.text();
     expect(secondSpawnBody).toContain('"name":"sessions_spawn"');
     expect(secondSpawnBody).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    const betaCall = sseToolCall(secondSpawnBody, "sessions_spawn");
 
     const final = await postResponses(server, {
       stream: false,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.",
-            },
-          ],
-        },
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta","note":"BETA-OK"}',
-        },
-      ],
+      input: completedSpawnInput(fanoutPrompt, betaCall, "agent:qa:subagent:beta"),
     });
     expect(final.status).toBe(200);
     expect(outputText(await final.json())).toBe("subagent-1: ok\nsubagent-2: ok");
@@ -2985,27 +3035,24 @@ describe("qa mock openai server", () => {
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
     });
     expect(spawn.status).toBe(200);
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const spawnBody = await spawn.text();
+    expect(spawnBody).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const alphaCall = sseToolCall(spawnBody, "sessions_spawn");
 
     const secondSpawn = await postResponses(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        { role: "user", content: [{ type: "input_text", text: prompt }] },
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        },
-      ],
+      input: completedSpawnInput(prompt, alphaCall, "agent:qa:subagent:alpha"),
     });
     expect(secondSpawn.status).toBe(200);
-    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    const secondSpawnBody = await secondSpawn.text();
+    expect(secondSpawnBody).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
     const phaseOnlyFinal = await postResponses(server, {
-      stream: false,
+      stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
+        makeUserInput(prompt),
         {
           role: "user",
           content: [
@@ -3018,7 +3065,7 @@ describe("qa mock openai server", () => {
       ],
     });
     expect(phaseOnlyFinal.status).toBe(200);
-    expect(outputText(await phaseOnlyFinal.json())).toBe("subagent-1: ok\nsubagent-2: ok");
+    expect(await phaseOnlyFinal.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
   });
 
   it("completes subagent fanout when beta completion arrives on a generic follow-up turn", async () => {
@@ -3032,34 +3079,28 @@ describe("qa mock openai server", () => {
       input: [makeUserInput(prompt)],
     });
     expect(spawn.status).toBe(200);
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const spawnBody = await spawn.text();
+    expect(spawnBody).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const alphaCall = sseToolCall(spawnBody, "sessions_spawn");
 
     const secondSpawn = await postResponses(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        makeUserInput(prompt),
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        },
-      ],
+      input: completedSpawnInput(prompt, alphaCall, "agent:qa:subagent:alpha"),
     });
     expect(secondSpawn.status).toBe(200);
-    expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    const secondSpawnBody = await secondSpawn.text();
+    expect(secondSpawnBody).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+    const betaCall = sseToolCall(secondSpawnBody, "sessions_spawn");
 
     const final = await postResponses(server, {
       stream: false,
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
+        ...completedSpawnInput(prompt, betaCall, "agent:qa:subagent:beta"),
         makeUserInput(
           "Continue with the QA scenario plan and report grouped into Worked, Failed, Blocked, and Follow-up.",
         ),
-        {
-          type: "function_call_output",
-          output: '{"status":"accepted","childSessionKey":"agent:qa:subagent:beta"}',
-        },
       ],
     });
     expect(final.status).toBe(200);
@@ -3111,6 +3152,7 @@ describe("qa mock openai server", () => {
       "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.";
     const appServerFanout = await postResponses(server, {
       stream: true,
+      tools: [SESSIONS_SPAWN_TOOL],
       input: [makeUserInput(fanoutPrompt), makeUserInput("Continue.")],
     });
     expect(appServerFanout.status).toBe(200);
@@ -3124,18 +3166,15 @@ describe("qa mock openai server", () => {
       input: [makeUserInput(fanoutPrompt)],
     });
     expect(firstFanout.status).toBe(200);
-    expect(await firstFanout.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const firstFanoutBody = await firstFanout.text();
+    expect(firstFanoutBody).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const alphaCall = sseToolCall(firstFanoutBody, "sessions_spawn");
 
     const secondFanout = await postResponses(fanoutServer, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
       input: [
-        makeUserInput(fanoutPrompt),
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        },
+        ...completedSpawnInput(fanoutPrompt, alphaCall, "agent:qa:subagent:alpha"),
         makeUserInput("Continue."),
       ],
     });
@@ -3198,19 +3237,14 @@ describe("qa mock openai server", () => {
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
     });
     expect(spawn.status).toBe(200);
-    expect(await spawn.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const spawnBody = await spawn.text();
+    expect(spawnBody).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    const alphaCall = sseToolCall(spawnBody, "sessions_spawn");
 
     const secondSpawn = await postResponses(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        { role: "user", content: [{ type: "input_text", text: prompt }] },
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha","note":"ALPHA-OK"}',
-        },
-      ],
+      input: completedSpawnInput(prompt, alphaCall, "agent:qa:subagent:alpha"),
     });
     expect(secondSpawn.status).toBe(200);
     expect(await secondSpawn.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
@@ -3261,35 +3295,35 @@ describe("qa mock openai server", () => {
     const server = await startMockServer();
     const promptFor = (sessionKey: string) =>
       `Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.\nFanout mock phase namespace: ${sessionKey}`;
-    const firstSpawn = async (sessionKey: string) =>
-      await postResponses(server, {
+    const firstSpawn = async (sessionKey: string) => {
+      const response = await postResponses(server, {
         stream: true,
         tools: [SESSIONS_SPAWN_TOOL],
         input: [makeUserInput(promptFor(sessionKey))],
       });
+      const body = await response.text();
+      return { body, call: sseToolCall(body, "sessions_spawn") };
+    };
 
     const firstA = await firstSpawn("agent:qa:fanout:1:session-a");
-    expect(await firstA.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    expect(firstA.body).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
     const firstB = await firstSpawn("agent:qa:fanout:1:session-b");
-    expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    expect(firstB.body).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
 
     const secondA = await postResponses(server, {
       stream: true,
       tools: [SESSIONS_SPAWN_TOOL],
-      input: [
-        makeUserInput(promptFor("agent:qa:fanout:1:session-a")),
-        {
-          type: "function_call_output",
-          output:
-            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha-a","note":"ALPHA-OK"}',
-        },
-      ],
+      input: completedSpawnInput(
+        promptFor("agent:qa:fanout:1:session-a"),
+        firstA.call,
+        "agent:qa:subagent:alpha-a",
+      ),
     });
     expect(await secondA.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
 
     const retry = await firstSpawn("agent:qa:fanout:2:session-retry");
-    expect(await retry.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+    expect(retry.body).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
   });
 
   it("answers heartbeat prompts without spawning extra subagents", async () => {
@@ -5286,6 +5320,95 @@ describe("qa mock openai server", () => {
     // tool-output evidence line, and a folded-back "Evidence" marker.
     expect(textBlock?.text).toContain("Delegated task");
     expect(textBlock?.text).toContain("Evidence");
+  });
+
+  it("runs Anthropic fanout through declared exec code mode", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.\nFanout mock phase namespace: agent:qa:fanout:anthropic";
+    const baseMessages: Array<Record<string, unknown>> = [
+      { role: "user", content: [{ type: "text", text: prompt }] },
+    ];
+    const send = async (messages: Array<Record<string, unknown>>) => {
+      const response = await postJson(server, "/v1/messages", {
+        model: "claude-opus-4-8",
+        max_tokens: 256,
+        tools: [
+          { name: "exec", input_schema: { type: "object", properties: {} } },
+          { name: "wait", input_schema: { type: "object", properties: {} } },
+        ],
+        messages,
+      });
+      expect(response.status).toBe(200);
+      return (await response.json()) as {
+        stop_reason: string;
+        content: Array<Record<string, unknown>>;
+      };
+    };
+    const requireExecSpawn = (body: Awaited<ReturnType<typeof send>>, expectedLabel: string) => {
+      const toolUse = requireRecord(
+        body.content.find((block) => block.type === "tool_use"),
+        `${expectedLabel} exec tool_use`,
+      );
+      expect(toolUse.name).toBe("exec");
+      const input = requireRecord(toolUse.input, `${expectedLabel} exec input`);
+      const match = /^return await tools\.callValue\(("(?:[^"\\]|\\.)*"), (\{.*\})\);$/su.exec(
+        String(input.code),
+      );
+      expect(JSON.parse(String(match?.[1]))).toBe("openclaw:core:sessions_spawn");
+      expect(JSON.parse(String(match?.[2]))).toMatchObject({
+        label: expectedLabel,
+        mode: "run",
+        thread: false,
+      });
+      return toolUse;
+    };
+    const completedSpawn = (childSessionKey: string) =>
+      JSON.stringify({
+        status: "completed",
+        value: { status: "accepted", childSessionKey },
+        output: [],
+        toolCallCount: 1,
+      });
+    const appendResult = (
+      messages: Array<Record<string, unknown>>,
+      toolUse: Record<string, unknown>,
+      content: string,
+      isError = false,
+    ) => [
+      ...messages,
+      { role: "assistant", content: [toolUse] },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: toolUse.id,
+            content,
+            ...(isError ? { is_error: true } : {}),
+          },
+        ],
+      },
+    ];
+
+    const alpha = requireExecSpawn(await send(baseMessages), "qa-fanout-alpha");
+    const alphaRetry = requireExecSpawn(
+      await send(appendResult(baseMessages, alpha, "spawn failed", true)),
+      "qa-fanout-alpha",
+    );
+    const afterAlpha = appendResult(
+      baseMessages,
+      alphaRetry,
+      completedSpawn("agent:qa:subagent:alpha"),
+    );
+    const beta = requireExecSpawn(await send(afterAlpha), "qa-fanout-beta");
+    const final = await send(
+      appendResult(afterAlpha, beta, completedSpawn("agent:qa:subagent:beta")),
+    );
+    expect(final.stop_reason).toBe("end_turn");
+    expect(final.content.find((block) => block.type === "text")?.text).toBe(
+      "subagent-1: ok\nsubagent-2: ok",
+    );
   });
 
   it("completes Anthropic repo-contract followthrough through a code-mode write result", async () => {
