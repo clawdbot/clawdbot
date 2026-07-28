@@ -359,56 +359,6 @@ function seedVersion1MemoryAgentDatabase(
   }
 }
 
-function recreatePreProvenanceMemoryIndexChunks(databasePath: string): void {
-  const { DatabaseSync } = requireNodeSqlite();
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      PRAGMA foreign_keys = OFF;
-      DROP TABLE memory_index_chunk_provenance;
-      DROP TABLE memory_index_chunks;
-      CREATE TABLE memory_index_chunks (
-        id TEXT PRIMARY KEY,
-        path TEXT NOT NULL,
-        source TEXT NOT NULL DEFAULT 'memory',
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        text TEXT NOT NULL,
-        embedding TEXT NOT NULL,
-        updated_at INTEGER NOT NULL
-      ) STRICT;
-      INSERT INTO memory_index_chunks VALUES (
-        'pre-provenance-sentinel', 'MEMORY.md', 'memory', 1, 2,
-        'sentinel-hash', 'sentinel-model', 'sentinel text', '[1,0]', 42
-      );
-      CREATE TRIGGER memory_index_chunks_revision_after_insert
-      AFTER INSERT ON memory_index_chunks
-      BEGIN
-        UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-      END;
-      CREATE TRIGGER memory_index_chunks_revision_after_update
-      AFTER UPDATE ON memory_index_chunks
-      BEGIN
-        UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-      END;
-      CREATE TRIGGER memory_index_chunks_revision_after_delete
-      AFTER DELETE ON memory_index_chunks
-      BEGIN
-        UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-      END;
-      CREATE INDEX idx_memory_index_chunks_path_source
-        ON memory_index_chunks(path, source);
-      CREATE INDEX idx_memory_index_chunks_path ON memory_index_chunks(path);
-      CREATE INDEX idx_memory_index_chunks_source ON memory_index_chunks(source);
-      PRAGMA foreign_keys = ON;
-    `);
-  } finally {
-    database.close();
-  }
-}
-
 function createUnsafeIndexDrift(databasePath: string): void {
   const { DatabaseSync } = requireNodeSqlite();
   const database = new DatabaseSync(databasePath);
@@ -2916,161 +2866,12 @@ describe("openclaw agent database", () => {
     ).toEqual([{ key: "key-a" }]);
   });
 
-  it("upgrades pre-provenance memory chunks before current-schema startup validation", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    recreatePreProvenanceMemoryIndexChunks(databasePath);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const before = new DatabaseSync(databasePath, { readOnly: true });
-    try {
-      expect(
-        before
-          .prepare("PRAGMA table_info(memory_index_chunks)")
-          .all()
-          .map((column) => (column as { name: string }).name),
-      ).toEqual([
-        "id",
-        "path",
-        "source",
-        "start_line",
-        "end_line",
-        "hash",
-        "model",
-        "text",
-        "embedding",
-        "updated_at",
-      ]);
-    } finally {
-      before.close();
-    }
-
-    const migrated = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(
-      migrated.db
-        .prepare("PRAGMA table_info(memory_index_chunks)")
-        .all()
-        .map((column) => (column as { name: string }).name),
-    ).toEqual([
-      "id",
-      "path",
-      "source",
-      "start_line",
-      "end_line",
-      "hash",
-      "model",
-      "text",
-      "embedding",
-      "updated_at",
-      "importance",
-      "triggers",
-    ]);
-    expect(
-      migrated.db.prepare("SELECT id, importance, triggers FROM memory_index_chunks").get(),
-    ).toEqual({ id: "pre-provenance-sentinel", importance: null, triggers: null });
-    expect(
-      migrated.db
-        .prepare(
-          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'memory_index_chunks'",
-        )
-        .get(),
-    ).toEqual({
-      sql: expect.stringContaining(
-        "importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10)",
-      ),
-    });
-    expect(() =>
-      assertOpenClawAgentDatabaseForMaintenance(migrated.db, {
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).not.toThrow();
-
-    closeOpenClawAgentDatabasesForTest();
-    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(
-      reopened.db.prepare("SELECT id, importance, triggers FROM memory_index_chunks").get(),
-    ).toEqual({ id: "pre-provenance-sentinel", importance: null, triggers: null });
-  });
-
-  it("lets doctor repair pre-provenance memory chunks and continue index maintenance", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    recreatePreProvenanceMemoryIndexChunks(databasePath);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const drifted = new DatabaseSync(databasePath);
-    drifted.exec("DROP INDEX idx_agent_cache_updated;");
-    drifted.close();
-
-    expect(() =>
-      migrateOpenClawAgentDatabaseForMaintenance({
-        agentId: "worker-1",
-        pathname: databasePath,
-      }),
-    ).not.toThrow();
-
-    const repaired = new DatabaseSync(databasePath);
-    try {
-      expect(
-        repaired.prepare("SELECT id, importance, triggers FROM memory_index_chunks").get(),
-      ).toEqual({ id: "pre-provenance-sentinel", importance: null, triggers: null });
-      expect(
-        repaired
-          .prepare(
-            "SELECT name FROM sqlite_schema WHERE type = 'index' AND name = 'idx_agent_cache_updated'",
-          )
-          .get(),
-      ).toEqual({ name: "idx_agent_cache_updated" });
-      expect(() =>
-        assertOpenClawAgentDatabaseForMaintenance(repaired, {
-          agentId: "worker-1",
-          pathname: databasePath,
-        }),
-      ).not.toThrow();
-    } finally {
-      repaired.close();
-    }
-  });
-
-  it("leaves fresh memory chunk schema unchanged across repeated ensures", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const created = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const canonicalSql = created.db
-      .prepare(
-        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'memory_index_chunks'",
-      )
-      .get();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-
-    const reopened = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    expect(
-      reopened.db
-        .prepare(
-          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'memory_index_chunks'",
-        )
-        .get(),
-    ).toEqual(canonicalSql);
-    expect(reopened.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
-      count: 0,
-    });
-  });
-
   it("rejects a missing current-schema table instead of recreating it empty", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = openOpenClawAgentDatabase({ agentId: "worker-1", env }).path;
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
-    recreatePreProvenanceMemoryIndexChunks(databasePath);
 
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
@@ -3096,12 +2897,6 @@ describe("openclaw agent database", () => {
           )
           .get(),
       ).toBeUndefined();
-      expect(
-        after
-          .prepare("PRAGMA table_info(memory_index_chunks)")
-          .all()
-          .map((column) => (column as { name: string }).name),
-      ).toHaveLength(10);
     } finally {
       after.close();
     }

@@ -271,12 +271,6 @@ function migrateSessionTranscriptActiveProjection(db: DatabaseSync, previousVers
   `);
 }
 
-function ensureCurrentAgentAdditiveColumns(db: DatabaseSync): void {
-  // Pre-#114819 agent DBs share the current schema version but lack these columns.
-  // Upgrade them in place before validation, or startup refuses the entire agent DB.
-  ensureMemoryRecallMetadataColumns(db);
-}
-
 function parseMigratedSessionEntry(value: unknown): MigratedSessionEntry | null {
   if (typeof value !== "string") {
     return null;
@@ -483,19 +477,18 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
     });
   }
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
-    const ensureAndAssertCurrentSchema = () => {
-      ensureCurrentAgentAdditiveColumns(database);
-      assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
-    };
     verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
       allowMissingColumns: true,
-      validateAfterRepair: ensureAndAssertCurrentSchema,
+      validateAfterRepair: () =>
+        assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
     });
-    runSqliteImmediateTransactionSync(database, ensureAndAssertCurrentSchema);
-    return;
+  } else {
+    // Every physical open proves the full file before schema mutation or exposure.
+    assertSqliteIntegrity(database, pathname);
   }
-  // Every physical open proves the full file before schema mutation or exposure.
-  assertSqliteIntegrity(database, pathname);
+  if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+    assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
+  }
 }
 
 function assertAgentSchemaVersion(
@@ -538,7 +531,6 @@ function ensureAgentSchema(
         );
       }
       if (previousVersion === targetVersion) {
-        ensureCurrentAgentAdditiveColumns(db);
         // Repeat index repair before the transactional schema assertion so a
         // concurrent opener cannot turn repairable drift into a hard refusal.
         repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
@@ -567,7 +559,7 @@ function ensureAgentSchema(
       backfillSessionEntryProvenance(db, previousVersion);
       migrateSessionNodesAndWindows(db, previousVersion);
       db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
-      ensureCurrentAgentAdditiveColumns(db);
+      ensureMemoryRecallMetadataColumns(db);
       if (previousVersion < targetVersion) {
         ensureOpenClawAgentBoardSchemaInTransaction(db);
       }
