@@ -45,10 +45,36 @@ vi.mock("./external-auth.js", () => ({
 
 import {
   isStoredCredentialCompatibleWithAuthProvider,
+  resolveAuthProfileEligibility,
   resolveAuthProfileOrder,
   resolveAuthProfileOrderWithMetadata,
 } from "./order.js";
 import { markAuthProfileSuccess } from "./profiles.js";
+
+function createMixedModeStore(): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "fixture-provider:oauth": {
+        type: "oauth",
+        provider: "fixture-provider",
+        access: "oauth-access",
+        refresh: "oauth-refresh",
+        expires: Date.now() + 60_000,
+      },
+      "fixture-provider:token": {
+        type: "token",
+        provider: "fixture-provider",
+        token: "bearer-token",
+      },
+      "fixture-provider:api-key": {
+        type: "api_key",
+        provider: "fixture-provider",
+        key: "api-key",
+      },
+    },
+  };
+}
 
 describe("resolveAuthProfileOrder", () => {
   beforeEach(() => {
@@ -75,6 +101,130 @@ describe("resolveAuthProfileOrder", () => {
     });
 
     expect(order).toEqual(["fixture-provider:default"]);
+  });
+
+  it.each([
+    ["api-key", ["fixture-provider:api-key"]],
+    ["oauth", ["fixture-provider:oauth", "fixture-provider:token"]],
+    ["token", ["fixture-provider:token"]],
+  ] as const)("honors the %s provider auth-mode pin", (auth, expected) => {
+    const cfg = {
+      models: {
+        providers: {
+          "fixture-provider": { auth, baseUrl: "https://example.invalid", models: [] },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const store = createMixedModeStore();
+
+    expect(resolveAuthProfileOrder({ cfg, store, provider: "fixture-provider" })).toEqual(expected);
+  });
+
+  it("reports credentials excluded by a provider auth-mode pin as mode mismatches", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "fixture-provider": {
+            auth: "api-key",
+            baseUrl: "https://example.invalid",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAuthProfileEligibility({
+        cfg,
+        store: createMixedModeStore(),
+        provider: "fixture-provider",
+        profileId: "fixture-provider:oauth",
+      }),
+    ).toEqual({ eligible: false, reasonCode: "mode_mismatch" });
+  });
+
+  it("keeps OAuth-preferred ordering when the provider has no auth-mode pin", () => {
+    expect(
+      resolveAuthProfileOrder({ store: createMixedModeStore(), provider: "fixture-provider" }),
+    ).toEqual(["fixture-provider:oauth", "fixture-provider:token", "fixture-provider:api-key"]);
+  });
+
+  it("fails closed when the provider auth-mode pin excludes every stored credential", () => {
+    const store = createMixedModeStore();
+    delete store.profiles["fixture-provider:token"];
+    delete store.profiles["fixture-provider:api-key"];
+
+    expect(
+      resolveAuthProfileOrder({
+        cfg: {
+          models: {
+            providers: {
+              "fixture-provider": {
+                auth: "api-key",
+                baseUrl: "https://example.invalid",
+                models: [],
+              },
+            },
+          },
+        },
+        store,
+        provider: "fixture-provider",
+      }),
+    ).toEqual([]);
+  });
+
+  it("keeps configured AWS SDK profiles eligible without stored credentials", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          "amazon-bedrock:default": { provider: "amazon-bedrock", mode: "aws-sdk" },
+        },
+      },
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            auth: "aws-sdk",
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    expect(
+      resolveAuthProfileEligibility({
+        cfg,
+        store,
+        provider: "amazon-bedrock",
+        profileId: "amazon-bedrock:default",
+      }),
+    ).toEqual({ eligible: true, reasonCode: "ok" });
+    expect(resolveAuthProfileOrder({ cfg, store, provider: "amazon-bedrock" })).toEqual([
+      "amazon-bedrock:default",
+    ]);
+  });
+
+  it("honors a normalized canonical auth-mode pin for an aliased provider", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "FIXTURE-PROVIDER": {
+            auth: "api-key",
+            baseUrl: "https://example.invalid",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      resolveAuthProfileOrder({
+        cfg,
+        store: createMixedModeStore(),
+        provider: "FIXTURE-PROVIDER-PLAN",
+      }),
+    ).toEqual(["fixture-provider:api-key"]);
   });
 
   it("uses canonical provider auth order for alias providers", async () => {

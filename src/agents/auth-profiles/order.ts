@@ -188,7 +188,7 @@ export function isConfiguredAwsSdkAuthProfileForProvider(params: {
   ) {
     return false;
   }
-  return providerAllowsAwsSdkAuth(params.cfg, params.provider);
+  return providerAllowsAwsSdkAuth(params.cfg, providerAuthKey);
 }
 
 /** Resolves whether a profile can be used for a provider right now. */
@@ -248,6 +248,20 @@ export function resolveAuthProfileEligibility(params: {
         return { eligible: false, reasonCode: "mode_mismatch" };
       }
     }
+  }
+  const providerAuthMode = resolveProviderAuthMode(params.cfg, providerAuthKey);
+  // The provider pin constrains credential class; ignoring it can pair a credential
+  // with the wrong transport selected from the same provider config.
+  const matchesProviderAuthMode =
+    providerAuthMode === "api-key"
+      ? cred.type === "api_key"
+      : providerAuthMode === "oauth"
+        ? cred.type === "oauth" || cred.type === "token"
+        : providerAuthMode === "token"
+          ? cred.type === "token"
+          : true;
+  if (!matchesProviderAuthMode) {
+    return { eligible: false, reasonCode: "mode_mismatch" };
   }
   const credentialEligibility = evaluateStoredCredentialEligibility({
     credential: cred,
