@@ -81,7 +81,8 @@ CLI command docs: [`openclaw onboard`](/cli/onboard)
 
 ## macOS app onboarding
 
-Download the macOS app from the [macOS app download page](/platforms/macos#download), then open it. If its configured local or remote Gateway is reachable
+[Download the macOS app](/platforms/macos#download), then open it. If its
+configured local or remote Gateway is reachable
 and the default agent already has a configured model, the app skips onboarding
 and OpenClaw and opens the normal agent UI immediately.
 

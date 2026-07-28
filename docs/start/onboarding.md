@@ -13,9 +13,8 @@ bootstrap ritual.
 For CLI onboarding and a comparison of both paths, see [Onboarding Overview](/start/onboarding-overview).
 
 <Tip>
-Don't have the app yet? Follow the
-[macOS app download instructions](/platforms/macos#download), then return here
-for first-run setup.
+Need the app first? [Download OpenClaw for macOS](/platforms/macos#download),
+then return here for first-run setup.
 </Tip>
 
 <Steps>
