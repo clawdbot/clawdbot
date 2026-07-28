@@ -277,7 +277,10 @@ export class SessionDataController implements ReactiveController, SessionCatalog
   synchronizeSessionScope(): void {
     const context = this.context;
     const nextAgentId = context ? normalizeAgentId(this.host.expandedAgentId()) : null;
-    const nextCatalogAgentId = resolveSessionCatalogAgentId(this);
+    // A reconnect cannot revoke ownership until its replacement hello is authoritative.
+    const nextCatalogAgentId =
+      resolveSessionCatalogAgentId(this) ??
+      (context?.gateway.snapshot.phase !== "connected" ? this.sessionCatalogAgentId : null);
     if (
       nextAgentId === this.sessionScopeAgentId &&
       nextCatalogAgentId === this.sessionCatalogAgentId
@@ -289,9 +292,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     const previousCatalogAgentId = this.sessionCatalogAgentId;
     const agentChanged = previousAgentId !== null && previousAgentId !== nextAgentId;
     const catalogAgentChanged =
-      previousCatalogAgentId !== null &&
-      nextCatalogAgentId !== null &&
-      previousCatalogAgentId !== nextCatalogAgentId;
+      previousCatalogAgentId !== null && previousCatalogAgentId !== nextCatalogAgentId;
     const currentCanonicalAgentId = this.sessionsAgentId;
     const ownsCurrentCanonicalList =
       this.host.sidebarSessionStatusFilter() === "active" &&

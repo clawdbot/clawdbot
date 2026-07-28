@@ -364,7 +364,9 @@ export function createApplicationOverlays(
       }
     }
     if (accessTransition.pairingChanged) {
-      pairingPendingCount.invalidate({ clear: !operatorAccess.canPair });
+      pairingPendingCount.invalidate({
+        clear: !operatorAccess.canAdmin && !operatorAccess.canPair,
+      });
     }
     activeClient = next.client;
     connectedSource = nextConnectedSource;
@@ -413,6 +415,13 @@ export function createApplicationOverlays(
         : snapshot.controlUiRefreshRequired,
     };
     publish();
+    if (
+      accessTransition.pairingChanged &&
+      devicePairSetupState.devicePairSetupOpen &&
+      (operatorAccess.canAdmin || operatorAccess.canPair)
+    ) {
+      void pairingPendingCount.refresh();
+    }
     if (connectedSourceChanged) {
       connectedEpoch += 1;
       if (operatorAccess.canReviewApprovals) {

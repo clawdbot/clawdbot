@@ -132,6 +132,63 @@ export async function flushMicrotasks() {
 
 export function registerOverlayPairingAccessTests() {
   describe("application pairing setup permissions", () => {
+    it.each([
+      {
+        name: "pairing-only to legacy administrator",
+        previousAuth: { role: "operator", scopes: ["operator.pairing"] },
+        nextAuth: null,
+      },
+      {
+        name: "legacy administrator to scoped administrator",
+        previousAuth: null,
+        nextAuth: { role: "operator", scopes: ["operator.admin"] },
+      },
+    ])("refreshes an open pairing dialog after $name", async ({ previousAuth, nextAuth }) => {
+      const stalePending = deferred<{ pending: Array<{ id: string }> }>();
+      const freshPending = [{ id: "current-first" }, { id: "current-second" }];
+      let pairingRequests = 0;
+      const request = vi.fn<RequestFn>((method) => {
+        if (method !== "device.pair.list") {
+          return Promise.resolve([]);
+        }
+        pairingRequests += 1;
+        return pairingRequests === 1
+          ? stalePending.promise
+          : Promise.resolve({ pending: freshPending });
+      });
+      const harness = createGatewayHarness(client(request));
+      harness.update({
+        hello: previousAuth
+          ? ({ auth: previousAuth } as ApplicationGatewaySnapshot["hello"])
+          : null,
+      });
+      const overlays = createApplicationOverlays(harness.gateway);
+
+      try {
+        await overlays.openDevicePairSetup();
+        expect(overlays.snapshot.devicePairSetupOpen).toBe(true);
+        expect(pairingRequests).toBe(1);
+
+        harness.update({
+          hello: nextAuth ? ({ auth: nextAuth } as ApplicationGatewaySnapshot["hello"]) : null,
+        });
+        await flushMicrotasks();
+
+        expect(overlays.snapshot.devicePairSetupOpen).toBe(true);
+        expect(pairingRequests).toBe(2);
+        expect(overlays.snapshot.devicePairPendingCount).toBe(2);
+
+        stalePending.resolve({ pending: [{ id: "retired" }] });
+        await flushMicrotasks();
+
+        expect(overlays.snapshot.devicePairPendingCount).toBe(2);
+        expect(request).not.toHaveBeenCalledWith("device.pair.setupCode", {});
+      } finally {
+        stalePending.resolve({ pending: [] });
+        overlays.dispose();
+      }
+    });
+
     it("refreshes legacy admin pairing counts when device-pair events arrive", async () => {
       let pending = [{ id: "first-pending" }];
       const request = vi.fn<RequestFn>((method) =>
