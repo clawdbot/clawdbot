@@ -401,6 +401,7 @@ describe("executeAgentTurn: terminal failures", () => {
         staleReasons: ["lease-lost"],
       }),
     );
+    const confirmRestartRecoveryArmedAfterLeaseLoss = vi.fn(async () => true);
 
     const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
@@ -425,11 +426,13 @@ describe("executeAgentTurn: terminal failures", () => {
       sessionKey: "main",
       getActiveSessionEntry: () => undefined,
       resolvedVerboseLevel: "off",
-      isRestartRecoveryArmed: () => true,
+      confirmRestartRecoveryArmedAfterLeaseLoss,
+      isRestartRecoveryArmed: () => false,
     });
 
     expect(result).toEqual({ kind: "final", payload: { text: SILENT_REPLY_TOKEN } });
     expect(abortForRestart).toHaveBeenCalledOnce();
+    expect(confirmRestartRecoveryArmedAfterLeaseLoss).toHaveBeenCalledOnce();
     expect(failMock).not.toHaveBeenCalled();
     expect(
       emitAgentEvent.mock.calls.filter(

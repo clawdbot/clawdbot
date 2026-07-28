@@ -253,16 +253,17 @@ export async function handleAgentExecutionError(params: {
   if (replyOperationAbortAction) {
     return replyOperationAbortAction;
   }
-  if (isSessionLeaseLoss(err) && turn.isRestartRecoveryArmed?.() === true) {
+  if (
+    isSessionLeaseLoss(err) &&
+    (await turn.confirmRestartRecoveryArmedAfterLeaseLoss?.()) === true
+  ) {
     // Shutdown durably hands the turn to restart recovery before the old
     // process is aborted. If the replacement wins the SQLite lease first,
     // converge the old owner onto the same interruption path: no fallback
     // delivery, and claim cleanup remains owned by the replacement process.
     turn.replyOperation?.abortForRestart();
-    const handoffAction = resolveReplyOperationAbortAction(err);
-    if (handoffAction) {
-      return handoffAction;
-    }
+    takePendingLifecycleTerminal()?.emit("end", err);
+    return { kind: "final", payload: { text: SILENT_REPLY_TOKEN } };
   }
   const restartLifecycleError = resolveRestartLifecycleError(err);
   if (
