@@ -379,13 +379,18 @@ describe("monitorLineProvider lifecycle", () => {
   });
 
   it("redacts structured admission failures from signed HTTP webhook requests", async () => {
-    const runtimeError = vi.fn<(value: unknown) => void>();
+    const runtimeError = vi.fn<(...args: unknown[]) => void>();
+    const runtime: RuntimeEnv = {
+      log: vi.fn<(...args: unknown[]) => void>(),
+      error: runtimeError,
+      exit: vi.fn<(code: number) => void>(),
+    };
     const monitor = await monitorLineProvider({
       channelAccessToken: "token",
       channelSecret: "secret", // pragma: allowlist secret
       accountId: "default",
       config: {} as OpenClawConfig,
-      runtime: { error: runtimeError } as RuntimeEnv,
+      runtime,
     });
     const route = requireRegisteredRoute();
     const server = createServer((req, res) => {
