@@ -112,6 +112,7 @@ import type {
   TuiSessionList,
   TuiSessionCreateOptions,
 } from "./tui-backend.js";
+import { formatTuiErrorMessage } from "./tui-formatters.js";
 
 type LocalRunState = {
   sessionKey: string;
@@ -203,7 +204,7 @@ function ensureEmbeddedHistoryRuntimePluginsLoaded(params: {
     });
     return { status: "warmed" };
   } catch (err) {
-    return { status: "failed", error: String(err) };
+    return { status: "failed", error: formatTuiErrorMessage(err) };
   }
 }
 

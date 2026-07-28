@@ -1538,9 +1538,25 @@ describe("tui command handlers", () => {
 
     await handleCommand("/context detail");
 
-    expect(addSystem).toHaveBeenCalledWith("send failed: Error: gateway down");
+    expect(addSystem).toHaveBeenCalledWith("send failed: gateway down");
     expect(setActivityStatus).toHaveBeenLastCalledWith("error");
     expect(state.pendingSubmit).toBeNull();
+  });
+
+  it("redacts secrets and preserves nested causes in displayed send failures", async () => {
+    const secret = "sk-abcdefghijklmnopqrstuv";
+    const cause = new Error(`\u001b[31mAuthorization: Bearer ${secret}\u001b[0m`);
+    const { handleCommand, addSystem } = createHarness({
+      sendChat: vi.fn().mockRejectedValue(new Error("gateway down", { cause })),
+    });
+
+    await handleCommand("/context detail");
+
+    const message = addSystem.mock.calls.at(-1)?.[0];
+    expect(message).toContain("send failed: gateway down");
+    expect(message).toContain("Authorization: Bearer");
+    expect(message).not.toContain(secret);
+    expect(message).not.toContain("\u001b");
   });
 
   it("sanitizes control sequences in /new and /reset failures", async () => {
@@ -1554,8 +1570,8 @@ describe("tui command handlers", () => {
     await handleCommand("/new");
     await handleCommand("/reset");
 
-    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: Error: boom");
-    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: Error: boom");
+    expect(addSystem).toHaveBeenNthCalledWith(1, "new session failed: boom");
+    expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: boom");
   });
 
   it("reports disconnected status and skips gateway send when offline", async () => {

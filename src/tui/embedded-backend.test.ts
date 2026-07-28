@@ -1007,7 +1007,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       messages: [],
-      runtimePluginsPrewarm: { status: "failed", error: "Error: runtime unavailable" },
+      runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
     });
   });
 
