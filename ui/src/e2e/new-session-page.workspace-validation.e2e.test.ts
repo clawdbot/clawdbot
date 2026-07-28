@@ -142,7 +142,7 @@ suite.define(() => {
     }
   });
 
-  it("blocks a custom worktree when Git rediscovery is unavailable", async () => {
+  it("allows clearing a custom worktree when Git rediscovery is unavailable", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -155,6 +155,7 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
+        "sessions.create": { key: "agent:main:custom-worktree-cleared" },
       },
     });
 
@@ -192,11 +193,23 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
       const worktree = place.getByRole("button", { name: "Worktree" });
-      expect(await worktree.isDisabled()).toBe(true);
+      expect(await worktree.isEnabled()).toBe(true);
       expect(await worktree.getAttribute("title")).toBe(
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
-      expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+      await worktree.click();
+      await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("false");
+      await expect.poll(() => start.isEnabled()).toBe(true);
+      await page.keyboard.press("Escape");
+
+      await start.click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        agentId: "main",
+        cwd: TARGET_REPO,
+        message: "do not run directly",
+      });
+      expect(create.params).not.toHaveProperty("worktree");
     } finally {
       await context.close();
     }
@@ -258,10 +271,13 @@ suite.define(() => {
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
       const cloud = place.getByRole("button", { name: "Cloud · aws" });
+      const worktree = place.getByRole("button", { name: "Worktree" });
       expect(await cloud.isDisabled()).toBe(true);
       expect(await cloud.getAttribute("title")).toBe(
         "Couldn't verify Git for this folder. Choose it again to retry.",
       );
+      expect(await worktree.getAttribute("aria-pressed")).toBe("true");
+      expect(await worktree.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
     } finally {
       await context.close();

@@ -8,6 +8,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
 import { formatGatewayChannelsStatusLines } from "../commands/channels/status.js";
+import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import {
   createSubsystemLogger,
   type SubsystemLogger,
@@ -23,6 +24,7 @@ import {
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { evaluateChannelHealth } from "./channel-health-policy.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -80,6 +82,9 @@ type TestAccount = {
     reason: string;
   }>;
 };
+
+const CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY = "approval.gateway";
+type ApprovalGatewayRequestRuntime = Pick<GatewayNativeApprovalRuntime, "request">;
 
 const createdManagers: Array<{ manager: ChannelManager; channelIds: ChannelId[] }> = [];
 
@@ -234,6 +239,7 @@ function createManager(options?: {
   deferStartupAccountStartsUntil?: Promise<void>;
   fillChannelDependencies?: boolean;
   ambientAutostartSuppressedChannelIds?: ReadonlySet<string>;
+  getNativeApprovalRuntime?: () => GatewayNativeApprovalRuntime | undefined;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
@@ -260,6 +266,9 @@ function createManager(options?: {
       : {}),
     ...(options?.ambientAutostartSuppressedChannelIds
       ? { ambientAutostartSuppressedChannelIds: options.ambientAutostartSuppressedChannelIds }
+      : {}),
+    ...(options?.getNativeApprovalRuntime
+      ? { getNativeApprovalRuntime: options.getNativeApprovalRuntime }
       : {}),
   });
   createdManagers.push({ channelIds, manager });
@@ -481,6 +490,35 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
     expect(account?.lastError).toBeNull();
+  });
+
+  it("keeps a running channel without transport reporting free of a synthetic disconnect", async () => {
+    // Socketless channels (imessage, signal, sms, ...) never publish `connected`.
+    // Projecting a synthetic `false` made the health monitor read them as
+    // disconnected and restart them once per cooldown window forever.
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, running: true });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await flushMicrotasks();
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account).not.toHaveProperty("connected");
+    expect(
+      evaluateChannelHealth(account ?? {}, {
+        channelId: "discord",
+        now: Date.now() + 60 * 60_000,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      }),
+    ).toEqual({ healthy: true, reason: "healthy" });
   });
 
   it("settles every account before surfacing a stop hook failure", async () => {
@@ -1706,6 +1744,54 @@ describe("server-channels auto restart", () => {
     );
     await expect(manager.startChannel("discord", DEFAULT_ACCOUNT_ID)).rejects.toThrow(
       "channelRuntime must provide runtimeContexts.register/get/watch; pass createPluginRuntime().channel or omit channelRuntime.",
+    );
+  });
+
+  it("injects a narrow Gateway approval resolver into the channel task runtime", async () => {
+    const request = vi.fn(async () => ({ applied: true, approval: {} }));
+    let releaseAccountStart = () => {};
+    const accountStartReady = new Promise<void>((resolve) => {
+      releaseAccountStart = resolve;
+    });
+    const nativeApprovalRuntime = {
+      current: undefined as GatewayNativeApprovalRuntime | undefined,
+    };
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      const approvalRuntime =
+        ctx.channelRuntime?.runtimeContexts.get<ApprovalGatewayRequestRuntime>({
+          channelId: "discord",
+          accountId: DEFAULT_ACCOUNT_ID,
+          capability: CHANNEL_APPROVAL_GATEWAY_RUNTIME_CONTEXT_CAPABILITY,
+        });
+      await approvalRuntime?.request(
+        "approval.resolve",
+        { id: "approval-1", kind: "exec", decision: "deny" },
+        { clientDisplayName: "Discord approval" },
+      );
+      await expect(approvalRuntime?.request("config.get" as never, {})).rejects.toThrow(
+        "channel approval runtime cannot dispatch config.get",
+      );
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager({
+      channelRuntime: createRuntimeChannel(),
+      deferStartupAccountStartsUntil: accountStartReady,
+      getNativeApprovalRuntime: () => nativeApprovalRuntime.current,
+    });
+
+    await manager.startChannels();
+    expect(startAccount).not.toHaveBeenCalled();
+    nativeApprovalRuntime.current = { request } as unknown as GatewayNativeApprovalRuntime;
+    releaseAccountStart();
+    await flushMicrotasks();
+
+    expect(request).toHaveBeenCalledWith(
+      "approval.resolve",
+      { id: "approval-1", kind: "exec", decision: "deny" },
+      { clientDisplayName: "Discord approval" },
     );
   });
 

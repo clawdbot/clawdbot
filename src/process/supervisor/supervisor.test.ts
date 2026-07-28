@@ -389,17 +389,9 @@ describe("process supervisor", () => {
         current.settle(null, signal ?? "SIGTERM");
       },
     });
-    const replacement = createStubChildAdapter({
-      onKill: (signal, current) => {
-        current.settle(null, signal ?? "SIGTERM");
-      },
-    });
     const later = createStubChildAdapter();
     const firstStartup = createDeferred<StubChildAdapter>();
-    createChildAdapterMock
-      .mockReturnValueOnce(firstStartup.promise)
-      .mockResolvedValueOnce(replacement)
-      .mockResolvedValueOnce(later);
+    createChildAdapterMock.mockReturnValueOnce(firstStartup.promise).mockResolvedValueOnce(later);
 
     const supervisor = createProcessSupervisor();
     const firstRunPromise = spawnChild(supervisor, {
@@ -432,8 +424,9 @@ describe("process supervisor", () => {
       replacementPromise,
       laterPromise,
     ]);
+    expect(createChildAdapterMock).toHaveBeenCalledTimes(2);
     expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
-    expect(replacement.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(replacementRun.pid).toBeUndefined();
     expect(later.killMock).not.toHaveBeenCalled();
 
     later.settle(0);
