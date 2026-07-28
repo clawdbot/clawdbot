@@ -148,6 +148,7 @@ The Gateway is the single source of truth for sessions, routing, and channel con
 
     npm 11+ requires explicit package-script approval for global installs. See
     [Install](/install#npm-pnpm-or-bun) for package-manager notes.
+
   </Step>
   <Step title="Onboard and install the service">
     ```bash
