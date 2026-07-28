@@ -172,6 +172,82 @@ describe("SessionManager user-turn event identity", () => {
     }
   });
 
+  it("adopts a loaded pre-persisted turn onto the active path when the leaf moved elsewhere", async () => {
+    const dir = await makeTempDir();
+    const idempotencyKey =
+      "channel-user:v1:c94030e1c94030e1c94030e1c94030e1c94030e1c94030e1c94030e1c94030e1";
+    const sessionId = "user-turn-identity-session";
+    const sessionKey = "agent:main:whatsapp:user-turn-identity";
+    const storePath = path.join(dir, "sessions.json");
+    const marker = formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionFile: marker, sessionId, updatedAt: 10 },
+    );
+    const target = parseSqliteSessionFileMarker(marker);
+    if (!target) {
+      throw new Error("expected SQLite transcript marker fixture");
+    }
+
+    // A manager opened before enrollment: its in-memory leaf will diverge from
+    // the recorder's row, putting the pre-persisted turn on a sibling branch.
+    const earlierManager = SessionManager.open({ ...target, sessionKey }, dir);
+    earlierManager.appendMessage({ role: "user", content: "earlier turn", timestamp: Date.now() });
+    earlierManager.appendMessage(buildAssistantMessage("earlier reply"));
+
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "keep the active turn", timestamp: 456, idempotencyKey },
+      target: {
+        agentId: "main",
+        cwd: dir,
+        sessionEntry: undefined,
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+    });
+    const prePersisted = await recorder.persistApproved();
+    if (!prePersisted?.appended) {
+      throw new Error("expected the recorder to pre-persist the user turn");
+    }
+    // The stale manager appends after enrollment: the store's newest event is now
+    // a sibling of the recorder's row, so a fresh open lands its leaf there.
+    earlierManager.appendMessage(buildAssistantMessage("sibling branch tip"));
+
+    const sessionManager = guardSessionManager(
+      SessionManager.open({ ...target, sessionKey }, dir),
+      {
+        agentId: "main",
+        sessionKey,
+        preparedUserTurnMessage: await recorder.resolveMessage(),
+      },
+    );
+    const entryId = sessionManager.appendMessage({
+      role: "user",
+      content: "keep the active turn",
+      timestamp: Date.now(),
+    });
+    expect(entryId).toBe(prePersisted.messageId);
+
+    // The short-circuit must adopt the loaded row as the leaf: the turn has to be
+    // in the prompt path, and the next assistant event must parent off it.
+    const contextTexts = sessionManager
+      .buildSessionContext()
+      .messages.map((message) =>
+        typeof message.content === "string"
+          ? message.content
+          : message.content?.map((block: { text?: string }) => block.text ?? "").join(" "),
+      );
+    expect(contextTexts.some((text) => text?.includes("keep the active turn"))).toBe(true);
+    const assistantEntryId = sessionManager.appendMessage(buildAssistantMessage("adopted reply"));
+    const events = (
+      await loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath })
+    ).filter(isTranscriptMessageEvent);
+    expect(events.find((event) => event.id === assistantEntryId)?.parentId).toBe(
+      prePersisted.messageId,
+    );
+  });
+
   it("persists the user entry before the first assistant event parents off it", async () => {
     const dir = await makeTempDir();
     const idempotencyKey =
