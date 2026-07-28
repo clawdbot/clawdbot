@@ -11,6 +11,7 @@ import {
   verifyRecoveryPointManifest,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
+  type RecoveryPointOwnerInventory,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
 import type { SnapshotManifest, SnapshotRef, SqliteSnapshotProvider } from "./snapshot-provider.js";
@@ -54,21 +55,32 @@ describe("recovery point composition", () => {
 
     const first: RecoveryPointManifest = await createRecoveryPointManifest({
       snapshots: [agent.snapshot, global.snapshot],
-      expectedAgentIds: ["main"],
+      ownerInventory: stateOwnerInventory(["main"]),
       obligations,
       now,
     });
     const second = await createRecoveryPointManifest({
       snapshots: [global.snapshot, agent.snapshot],
-      expectedAgentIds: ["main"],
+      ownerInventory: stateOwnerInventory(["main"]),
+      obligations,
+      now,
+    });
+
+    const revised = await createRecoveryPointManifest({
+      snapshots: [global.snapshot, agent.snapshot],
+      ownerInventory: stateOwnerInventory(["main"], { revision: "inventory-revision-2" }),
       obligations,
       now,
     });
 
     expect(first).toEqual(second);
+    expect(revised.recoveryPointId).not.toBe(first.recoveryPointId);
     expect(first.recoveryPointId).toMatch(/^[a-f0-9]{64}$/u);
     expect(first.inventory).toEqual({
       version: "openclaw-runtime-sqlite-inventory/v1",
+      owner: "openclaw-state",
+      sourceRuntimeGeneration: "runtime-generation-1",
+      revision: "inventory-revision-1",
       requiredComponentIds: ["sqlite/global", "sqlite/agent/main"],
     });
     expect(first.protection).toEqual({ mode: "host-protected" });
@@ -80,8 +92,8 @@ describe("recovery point composition", () => {
     expect(first.components.every((component) => component.ownerManifestSizeBytes > 0)).toBe(true);
     const firstAcceptance: RecoveryPointAcceptance = createRecoveryPointAcceptance(first);
     expect(firstAcceptance).toEqual(createRecoveryPointAcceptance(second));
-    expect(global.verify).toHaveBeenCalledTimes(4);
-    expect(agent.verify).toHaveBeenCalledTimes(4);
+    expect(global.verify).toHaveBeenCalledTimes(6);
+    expect(agent.verify).toHaveBeenCalledTimes(6);
   });
 
   it("re-verifies every owner snapshot against the aggregate manifest", async () => {
@@ -94,7 +106,7 @@ describe("recovery point composition", () => {
     });
     const manifest = await createRecoveryPointManifest({
       snapshots: [global.snapshot, agent.snapshot],
-      expectedAgentIds: ["main"],
+      ownerInventory: stateOwnerInventory(["main"]),
       now: () => new Date("2026-07-21T16:00:00.000Z"),
     });
 
@@ -102,7 +114,7 @@ describe("recovery point composition", () => {
       verifyRecoveryPoint({
         manifest,
         snapshots: [agent.snapshot, global.snapshot],
-        expectedAgentIds: ["main"],
+        ownerInventory: stateOwnerInventory(["main"]),
       }),
     ).resolves.toEqual({ manifest, acceptance: createRecoveryPointAcceptance(manifest) });
 
@@ -113,7 +125,7 @@ describe("recovery point composition", () => {
       verifyRecoveryPoint({
         manifest: mismatched,
         snapshots: [global.snapshot, agent.snapshot],
-        expectedAgentIds: ["main"],
+        ownerInventory: stateOwnerInventory(["main"]),
       }),
     ).rejects.toThrow("do not match the verified owner snapshots");
   });
@@ -128,7 +140,7 @@ describe("recovery point composition", () => {
     });
     const manifest = await createRecoveryPointManifest({
       snapshots: [global.snapshot, agent.snapshot],
-      expectedAgentIds: ["main"],
+      ownerInventory: stateOwnerInventory(["main"]),
       obligations: {
         external: [
           { id: "secret/z", kind: "secret-ref", owner: "secrets", readinessRequired: true },
@@ -208,7 +220,7 @@ describe("recovery point composition", () => {
     await expect(
       createRecoveryPointManifest({
         snapshots: [global.snapshot, agent.snapshot],
-        expectedAgentIds: ["main"],
+        ownerInventory: stateOwnerInventory(["main"]),
       }),
     ).rejects.toThrow("changed during recovery-point composition");
   });
@@ -221,13 +233,29 @@ describe("recovery point composition", () => {
       byte: "a",
     });
     await expect(
-      createRecoveryPointManifest({ snapshots: [generic.snapshot], expectedAgentIds: ["main"] }),
+      createRecoveryPointManifest({
+        snapshots: [generic.snapshot],
+        ownerInventory: stateOwnerInventory(["main"]),
+      }),
     ).rejects.toThrow("Generic SQLite snapshots are not eligible");
 
     const global = await createSnapshotFixture({ role: "global", userVersion: 7, byte: "b" });
     await expect(
-      createRecoveryPointManifest({ snapshots: [global.snapshot], expectedAgentIds: ["main"] }),
+      createRecoveryPointManifest({
+        snapshots: [global.snapshot],
+        ownerInventory: stateOwnerInventory(["main"]),
+      }),
     ).rejects.toThrow("do not match the required inventory");
+
+    await expect(
+      createRecoveryPointManifest({
+        snapshots: [global.snapshot],
+        ownerInventory: {
+          ...stateOwnerInventory(["main"]),
+          owner: "host",
+        } as unknown as RecoveryPointOwnerInventory,
+      }),
+    ).rejects.toThrow();
   });
 
   it("rejects incomplete, extra, and self-consistent but owner-mismatched inventories", async () => {
@@ -248,27 +276,35 @@ describe("recovery point composition", () => {
     await expect(
       createRecoveryPointManifest({
         snapshots: [global.snapshot, main.snapshot],
-        expectedAgentIds: ["main", "research"],
+        ownerInventory: stateOwnerInventory(["main", "research"]),
       }),
     ).rejects.toThrow("do not match the required inventory");
     await expect(
       createRecoveryPointManifest({
         snapshots: [global.snapshot, main.snapshot, research.snapshot],
-        expectedAgentIds: ["main"],
+        ownerInventory: stateOwnerInventory(["main"]),
       }),
     ).rejects.toThrow("do not match the required inventory");
 
     const manifest = await createRecoveryPointManifest({
       snapshots: [global.snapshot, main.snapshot],
-      expectedAgentIds: ["main"],
+      ownerInventory: stateOwnerInventory(["main"]),
     });
     await expect(
       verifyRecoveryPoint({
         manifest,
         snapshots: [global.snapshot, main.snapshot],
-        expectedAgentIds: ["main", "research"],
+        ownerInventory: stateOwnerInventory(["main", "research"]),
       }),
-    ).rejects.toThrow("does not match the state owner's expected agents");
+    ).rejects.toThrow("does not match the state owner's inventory receipt");
+
+    await expect(
+      verifyRecoveryPoint({
+        manifest,
+        snapshots: [global.snapshot, main.snapshot],
+        ownerInventory: stateOwnerInventory(["main"], { revision: "inventory-revision-2" }),
+      }),
+    ).rejects.toThrow("does not match the state owner's inventory receipt");
   });
 
   it("rejects non-canonical dependency ordering", async () => {
@@ -287,7 +323,7 @@ describe("recovery point composition", () => {
     });
     const manifest = await createRecoveryPointManifest({
       snapshots: [global.snapshot, main.snapshot, research.snapshot],
-      expectedAgentIds: ["main", "research"],
+      ownerInventory: stateOwnerInventory(["main", "research"]),
       now: () => new Date("2026-07-21T16:00:00.000Z"),
     });
     manifest.components[2]!.dependsOn = ["sqlite/global", "sqlite/agent/main"];
@@ -309,7 +345,7 @@ describe("recovery point composition", () => {
     await expect(
       createRecoveryPointManifest({
         snapshots: [global.snapshot, agent.snapshot],
-        expectedAgentIds: ["main"],
+        ownerInventory: stateOwnerInventory(["main"]),
         obligations: {
           reconstructed: [
             {
@@ -324,6 +360,19 @@ describe("recovery point composition", () => {
     ).rejects.toThrow("unsupported treatment, kind, or owner");
   });
 });
+
+function stateOwnerInventory(
+  agentIds: string[],
+  overrides: { sourceRuntimeGeneration?: string; revision?: string } = {},
+): RecoveryPointOwnerInventory {
+  return {
+    version: "openclaw-runtime-sqlite-inventory/v1",
+    owner: "openclaw-state",
+    sourceRuntimeGeneration: overrides.sourceRuntimeGeneration ?? "runtime-generation-1",
+    revision: overrides.revision ?? "inventory-revision-1",
+    agentIds,
+  };
+}
 
 type SnapshotFixtureOptions =
   | { role: "global"; userVersion: number; byte: string }

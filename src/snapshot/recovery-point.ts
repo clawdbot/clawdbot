@@ -20,6 +20,16 @@ const MAX_OWNER_MANIFEST_BYTES = 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,254}$/u;
 
+const stateOwnerInventorySchema = z
+  .object({
+    version: z.literal(RECOVERY_POINT_INVENTORY_VERSION),
+    owner: z.literal("openclaw-state"),
+    sourceRuntimeGeneration: z.string().regex(SAFE_ID_PATTERN),
+    revision: z.string().regex(SAFE_ID_PATTERN),
+    agentIds: z.array(z.string().min(1).max(64)).min(1),
+  })
+  .strict();
+
 const obligationSchema = z
   .object({
     id: z.string().regex(SAFE_ID_PATTERN),
@@ -68,6 +78,9 @@ const recoveryPointManifestSchema = z
     inventory: z
       .object({
         version: z.literal(RECOVERY_POINT_INVENTORY_VERSION),
+        owner: z.literal("openclaw-state"),
+        sourceRuntimeGeneration: z.string().regex(SAFE_ID_PATTERN),
+        revision: z.string().regex(SAFE_ID_PATTERN),
         requiredComponentIds: z.array(z.string().regex(SAFE_ID_PATTERN)).min(2),
       })
       .strict(),
@@ -108,6 +121,7 @@ type RecoveryPointObligation = z.infer<typeof obligationSchema>;
 type RecoveryPointComponent = z.infer<typeof recoveryPointComponentSchema>;
 export type RecoveryPointManifest = z.infer<typeof recoveryPointManifestSchema>;
 export type RecoveryPointAcceptance = z.infer<typeof recoveryPointAcceptanceSchema>;
+export type RecoveryPointOwnerInventory = z.input<typeof stateOwnerInventorySchema>;
 
 export type RecoveryPointSqliteSnapshot = {
   readonly provider: SqliteSnapshotProvider;
@@ -122,7 +136,7 @@ type RecoveryPointObligations = {
 
 export async function createRecoveryPointManifest(params: {
   snapshots: readonly RecoveryPointSqliteSnapshot[];
-  expectedAgentIds: readonly string[];
+  ownerInventory: RecoveryPointOwnerInventory;
   obligations?: RecoveryPointObligations;
   now?: () => Date;
 }): Promise<RecoveryPointManifest> {
@@ -133,16 +147,13 @@ export async function createRecoveryPointManifest(params: {
 
   const components = await Promise.all(params.snapshots.map(buildVerifiedComponent));
   components.sort(compareComponents);
-  const requiredComponentIds = normalizeRequiredComponentIds(params.expectedAgentIds);
-  assertRequiredSqliteInventory(components, requiredComponentIds);
+  const inventory = normalizeOwnerInventory(params.ownerInventory);
+  assertRequiredSqliteInventory(components, inventory.requiredComponentIds);
 
   const manifestWithoutId = {
     version: RECOVERY_POINT_VERSION,
     createdAt: now.toISOString(),
-    inventory: {
-      version: RECOVERY_POINT_INVENTORY_VERSION,
-      requiredComponentIds,
-    },
+    inventory,
     protection: { mode: "host-protected" },
     components,
     obligations: normalizeObligations(params.obligations),
@@ -195,16 +206,16 @@ export function verifyRecoveryPointManifest(value: unknown): RecoveryPointManife
 export async function verifyRecoveryPoint(params: {
   manifest: unknown;
   snapshots: readonly RecoveryPointSqliteSnapshot[];
-  expectedAgentIds: readonly string[];
+  ownerInventory: RecoveryPointOwnerInventory;
 }): Promise<{ manifest: RecoveryPointManifest; acceptance: RecoveryPointAcceptance }> {
   const manifest = verifyRecoveryPointManifest(params.manifest);
-  const requiredComponentIds = normalizeRequiredComponentIds(params.expectedAgentIds);
-  if (!isDeepStrictEqual(manifest.inventory.requiredComponentIds, requiredComponentIds)) {
-    throw new Error("Recovery point inventory does not match the state owner's expected agents.");
+  const ownerInventory = normalizeOwnerInventory(params.ownerInventory);
+  if (!isDeepStrictEqual(manifest.inventory, ownerInventory)) {
+    throw new Error("Recovery point inventory does not match the state owner's inventory receipt.");
   }
   const actualComponents = await Promise.all(params.snapshots.map(buildVerifiedComponent));
   actualComponents.sort(compareComponents);
-  assertRequiredSqliteInventory(actualComponents, requiredComponentIds);
+  assertRequiredSqliteInventory(actualComponents, ownerInventory.requiredComponentIds);
   if (!isDeepStrictEqual(actualComponents, manifest.components)) {
     throw new Error("Recovery point SQLite components do not match the verified owner snapshots.");
   }
@@ -347,6 +358,17 @@ function normalizeRequiredComponentIds(expectedAgentIds: readonly string[]): str
     "sqlite/global",
     ...normalizedAgentIds.toSorted(compareCodeUnits).map((agentId) => `sqlite/agent/${agentId}`),
   ];
+}
+
+function normalizeOwnerInventory(value: RecoveryPointOwnerInventory) {
+  const inventory = stateOwnerInventorySchema.parse(value);
+  return {
+    version: inventory.version,
+    owner: inventory.owner,
+    sourceRuntimeGeneration: inventory.sourceRuntimeGeneration,
+    revision: inventory.revision,
+    requiredComponentIds: normalizeRequiredComponentIds(inventory.agentIds),
+  };
 }
 
 function assertCanonicalRequiredInventory(requiredComponentIds: readonly string[]): void {
