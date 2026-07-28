@@ -129,7 +129,7 @@ function renderStatusRow(props: TalkViewProps) {
       : t("talkPage.status.noProvider"),
     control: catalog.ready
       ? renderSettingsStatus({ kind: "ok", label: t("talkPage.status.ready") })
-      : renderSettingsStatus({ kind: "warning", label: t("talkPage.status.notReady") }),
+      : renderSettingsStatus({ kind: "warn", label: t("talkPage.status.notReady") }),
   });
 }
 
@@ -235,12 +235,15 @@ function renderGptLiveRow(props: TalkViewProps) {
   if (provider?.id !== "openai" || !isTalkGptLiveModel(props.selection.model)) {
     return nothing;
   }
+  // `configured` is a generic readiness boolean: false can also mean a broken
+  // configured API key or an unavailable broker, so the badge stays neutral and
+  // the description carries the sign-in guidance.
   return renderSettingsRow({
     title: t("talkPage.gptLive.title"),
     description: t("talkPage.gptLive.hint"),
     control: provider.configured
       ? renderSettingsStatus({ kind: "ok", label: t("talkPage.gptLive.ready") })
-      : renderSettingsStatus({ kind: "warning", label: t("talkPage.gptLive.needsAuth") }),
+      : renderSettingsStatus({ kind: "warn", label: t("talkPage.status.notReady") }),
   });
 }
 

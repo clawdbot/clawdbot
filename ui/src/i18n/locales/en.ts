@@ -2185,7 +2185,6 @@ export const en: TranslationMap = {
       title: "GPT-Live",
       hint: "GPT-Live works with a ChatGPT subscription: sign in once with “openclaw models auth login --provider openai”. No Platform API key needed. Browser Talk only.",
       ready: "Ready",
-      needsAuth: "Sign-in required",
     },
   },
   memoryPage: {

@@ -53,11 +53,20 @@ class TalkSettingsPage extends OpenClawLightDomElement {
   @state() private catalog: TalkCatalogState = { kind: "unavailable" };
 
   private connection: CatalogConnection | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-    (gateway) => this.syncCatalog(gateway.snapshot.client, gateway.snapshot.phase === "connected"),
-  );
+  /** `undefined` = baseline not yet observed; `null` = no snapshot hash. */
+  private lastCatalogConfigHash: string | null | undefined;
+  private readonly subscriptions = new SubscriptionsController(this)
+    .watch(
+      () => this.context?.gateway,
+      (gateway, notify) => gateway.subscribe(notify),
+      (gateway) =>
+        this.syncCatalog(gateway.snapshot.client, gateway.snapshot.phase === "connected"),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      (runtimeConfig) => this.refreshCatalogOnConfigChange(runtimeConfig.state),
+    );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
@@ -103,6 +112,31 @@ class TalkSettingsPage extends OpenClawLightDomElement {
       return;
     }
     this.catalog = catalog;
+  }
+
+  /**
+   * Readiness can change on the same connection when a config write lands (the
+   * gateway may hot-apply talk config without dropping the socket), so the
+   * catalog re-reads whenever the config snapshot hash advances. The hash is
+   * the durable ack signal; transient saving flags can be skipped entirely by
+   * a fast save.
+   */
+  private refreshCatalogOnConfigChange(state: {
+    configSnapshot?: { hash?: string | null } | null;
+  }) {
+    const hash = state.configSnapshot?.hash ?? null;
+    if (this.lastCatalogConfigHash === undefined) {
+      this.lastCatalogConfigHash = hash;
+      return;
+    }
+    if (hash === null || hash === this.lastCatalogConfigHash) {
+      return;
+    }
+    this.lastCatalogConfigHash = hash;
+    const connection = this.connection;
+    if (connection?.client && connection.connected) {
+      void this.loadCatalog(connection.client, connection);
+    }
   }
 
   private patchRealtimeValue(key: "provider" | "model" | "speakerVoice", value: string | null) {
