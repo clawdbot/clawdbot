@@ -119,6 +119,8 @@ function createQaReplyPreview(params: {
 }) {
   let messageId: string | null = null;
   let currentText = "";
+  let lastDurableText = "";
+  let lastDurableToolCallCount = 0;
   let pending = Promise.resolve();
 
   const write = (text: string) => {
@@ -181,12 +183,24 @@ function createQaReplyPreview(params: {
       replyToId: params.inbound.id,
       toolCalls: params.toolCalls,
     });
+    lastDurableText = text;
+    lastDurableToolCallCount = params.toolCalls.length;
   };
 
   return {
     clear,
     async deliver(text: string, kind: string) {
       await pending;
+      // Core may close a streamed block with an identical final payload.
+      // The block is already durable, so posting the final again duplicates the reply.
+      if (
+        kind === "final" &&
+        text === lastDurableText &&
+        params.toolCalls.length === lastDurableToolCallCount
+      ) {
+        await clear();
+        return;
+      }
       if (kind === "final" && messageId && params.toolCalls.length === 0) {
         await write(text);
         return;

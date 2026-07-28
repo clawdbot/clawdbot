@@ -162,6 +162,58 @@ describe("handleQaInbound", () => {
     );
   });
 
+  it("delivers identical block and final replies exactly once", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "single answer" }),
+    );
+  });
+
+  it("delivers an identical final when it adds tool-call trace data", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "search" });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(sendQaBusMessage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "single answer", toolCalls: [{ name: "search" }] }),
+    );
+  });
+
+  it("clears an active preview before suppressing an identical final", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(createQaInboundParams());
+
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
+    await assembled.replyOptions?.onPartialReply?.({ text: "new preview" });
+    await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
+
+    expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
+    expect(deleteQaBusMessage).toHaveBeenCalledOnce();
+    expect(deleteQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: "preview-1" }),
+    );
+  });
+
   it("deletes an active preview when reply dispatch fails", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
