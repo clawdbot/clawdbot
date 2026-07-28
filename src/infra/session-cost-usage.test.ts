@@ -23,6 +23,7 @@ import * as formatDatetime from "./format-time/format-datetime.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import {
   acquireSessionCostUsageRefreshLock,
+  readSessionCostUsageRollupPricingFingerprint,
   readSessionCostUsageRollupRows,
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
@@ -727,9 +728,9 @@ describe("session cost usage", () => {
         );
         expect(row).toBeDefined();
         expect(Buffer.byteLength(row?.valueJson ?? "")).toBeLessThan(32 * 1024);
-        expect(JSON.parse(row?.valueJson ?? "null")).toMatchObject({
-          pricingFingerprint,
-        });
+        // The fingerprint is stored once in the scope meta row, never per row.
+        expect(row?.valueJson ?? "").not.toContain(pricingFingerprint);
+        expect(readSessionCostUsageRollupPricingFingerprint("main")).toBe(pricingFingerprint);
       });
     } finally {
       setRemoteModelCatalogOverlaySourcesForTest();
@@ -1195,7 +1196,7 @@ describe("session cost usage", () => {
         version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
-      expect(appendedRollup.version).toBe(2);
+      expect(appendedRollup.version).toBe(3);
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
 
       const allTime = await loadSessionCostSummariesFromCache({

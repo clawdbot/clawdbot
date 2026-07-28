@@ -19,7 +19,9 @@ import { resolveModelCostConfigFingerprint } from "../utils/usage-format.js";
 import {
   acquireSessionCostUsageRefreshLock,
   deleteSessionCostUsageRollupsExcept,
+  readSessionCostUsageRollupPricingFingerprint,
   readSessionCostUsageRollupRows,
+  resetSessionCostUsageRollupScope,
   writeSessionCostUsageRollup,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
@@ -46,7 +48,8 @@ import type { CostUsageTotals, ParsedTranscriptEntry } from "./session-cost-usag
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-const USAGE_COST_ROLLUP_VERSION = 2;
+// v3 drops the per-row pricingFingerprint (now stored once per rollup scope).
+const USAGE_COST_ROLLUP_VERSION = 3;
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
 type UsageCostJsonlCheckpoint = {
@@ -71,7 +74,6 @@ type UsageCostSqliteCheckpoint = {
 
 type UsageCostRollupEntry = {
   version: number;
-  pricingFingerprint: string;
   checkpoint: UsageCostJsonlCheckpoint | UsageCostSqliteCheckpoint;
   scannedAt: number;
   parsedRecords: number;
@@ -104,17 +106,13 @@ export function resolveUsageCostPricingFingerprint(
   return resolveModelCostConfigFingerprint(config, agentDir);
 }
 
-function normalizeUsageCostRollup(
-  raw: unknown,
-  pricingFingerprint: string,
-): UsageCostRollupEntry | undefined {
+function normalizeUsageCostRollup(raw: unknown): UsageCostRollupEntry | undefined {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
   const record = raw as Partial<UsageCostRollupEntry>;
   if (
     record.version !== USAGE_COST_ROLLUP_VERSION ||
-    record.pricingFingerprint !== pricingFingerprint ||
     !record.checkpoint ||
     !record.rollup ||
     typeof record.scannedAt !== "number" ||
@@ -130,12 +128,17 @@ export function readUsageCostRollups(
   agentId: string,
   pricingFingerprint: string,
   databasePath?: string,
-  rows = readSessionCostUsageRollupRows(agentId, databasePath),
+  rows?: ReturnType<typeof readSessionCostUsageRollupRows>,
 ): Map<string, UsageCostStoredRollup> {
   const result = new Map<string, UsageCostStoredRollup>();
-  for (const row of rows) {
+  // The pricing fingerprint is stored once per scope. A mismatch invalidates
+  // every rollup row without materializing their JSON payloads.
+  if (readSessionCostUsageRollupPricingFingerprint(agentId, databasePath) !== pricingFingerprint) {
+    return result;
+  }
+  for (const row of rows ?? readSessionCostUsageRollupRows(agentId, databasePath)) {
     try {
-      const entry = normalizeUsageCostRollup(JSON.parse(row.valueJson), pricingFingerprint);
+      const entry = normalizeUsageCostRollup(JSON.parse(row.valueJson));
       if (entry) {
         result.set(row.key, { entry, valueJson: row.valueJson });
       }
@@ -355,7 +358,6 @@ function scanRecordsIntoRollup(params: {
 async function scanJsonlUsageRollup(params: {
   file: UsageCostTranscriptFile;
   previous?: UsageCostStoredRollup;
-  pricingFingerprint: string;
   resolveCost: UsageCostResolver;
 }): Promise<UsageCostRollupEntry> {
   const previousCheckpoint =
@@ -409,7 +411,6 @@ async function scanJsonlUsageRollup(params: {
   }
   return {
     version: USAGE_COST_ROLLUP_VERSION,
-    pricingFingerprint: params.pricingFingerprint,
     checkpoint: {
       kind: "jsonl",
       parsedOffset: processedOffset,
@@ -463,7 +464,6 @@ function sqliteCheckpointAnchorHash(event: unknown): string {
 async function scanSqliteUsageRollup(params: {
   file: UsageCostTranscriptFile;
   previous?: UsageCostStoredRollup;
-  pricingFingerprint: string;
   resolveCost: UsageCostResolver;
 }): Promise<UsageCostRollupEntry> {
   const marker = parseSqliteSessionFileMarker(params.file.filePath);
@@ -546,7 +546,6 @@ async function scanSqliteUsageRollup(params: {
     : (scanSessionTranscriptTree(allRows.map((row) => row.event)).leafId ?? undefined);
   return {
     version: USAGE_COST_ROLLUP_VERSION,
-    pricingFingerprint: params.pricingFingerprint,
     checkpoint: {
       kind: "sqlite",
       maxSeq,
@@ -568,7 +567,6 @@ async function scanSqliteUsageRollup(params: {
 async function scanUsageFileForRollup(params: {
   file: UsageCostTranscriptFile;
   previous?: UsageCostStoredRollup;
-  pricingFingerprint: string;
   resolveCost: UsageCostResolver;
 }): Promise<UsageCostRollupEntry> {
   return params.file.kind === "sqlite"
@@ -594,6 +592,20 @@ export async function refreshCostUsageCacheForAgent(params: {
   try {
     const agentDir = params.agentDir ?? resolveUsageCostAgentDir(params.config, params.agentId);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config, agentDir);
+    // Pricing metadata lives once per scope. When it changes, drop the
+    // rebuildable rollup rows (including pre-v2 rows that embedded the full
+    // fingerprint per session) instead of reading them back.
+    if (
+      readSessionCostUsageRollupPricingFingerprint(params.agentId, databasePath) !==
+      pricingFingerprint
+    ) {
+      resetSessionCostUsageRollupScope({
+        agentId: params.agentId,
+        databasePath,
+        pricingFingerprint,
+        updatedAt: Date.now(),
+      });
+    }
     const rows = readSessionCostUsageRollupRows(params.agentId, databasePath);
     const rawValues = new Map(rows.map((row) => [row.key, row.valueJson]));
     const rollups = readUsageCostRollups(params.agentId, pricingFingerprint, databasePath, rows);
@@ -644,7 +656,6 @@ export async function refreshCostUsageCacheForAgent(params: {
       const entry = await scanUsageFileForRollup({
         file,
         previous,
-        pricingFingerprint,
         resolveCost,
       });
       const valueJson = JSON.stringify(entry);

@@ -10,8 +10,15 @@ import { isTransientSqliteError } from "./unhandled-rejections.js";
 const LEGACY_CACHE_SCOPE = "session-cost-usage";
 const LEGACY_CACHE_KEY = "cache";
 const REFRESH_LOCK_KEY = "refresh-lock";
-const RETIRED_ROLLUP_SCOPE = "session-cost-usage-rollup-v1";
+// v2 stores the pricing fingerprint once per scope instead of inside every
+// per-session rollup row. The hosted catalog fingerprint can be megabytes, so
+// duplicating it per row made the aggregate read large enough to OOM the
+// Gateway (openclaw/openclaw#115282).
 const ROLLUP_SCOPE = "session-cost-usage-rollup-v2";
+const LEGACY_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1"];
+// Reserved key holding the scope-level pricing fingerprint. Rollup row keys
+// are absolute transcript paths, so this can never collide with a real row.
+const ROLLUP_META_KEY = "__usage_cost_rollup_meta__";
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
@@ -109,13 +116,76 @@ export function readSessionCostUsageRollupRows(
         kysely
           .selectFrom("cache_entries")
           .select(["key", "value_json", "updated_at"])
-          .where("scope", "=", ROLLUP_SCOPE),
+          .where("scope", "=", ROLLUP_SCOPE)
+          .where("key", "!=", ROLLUP_META_KEY),
       ).rows.flatMap((row) =>
         row.value_json === null
           ? []
           : [{ key: row.key, valueJson: row.value_json, updatedAt: row.updated_at }],
       );
     }) ?? []
+  );
+}
+
+/** Reads the scope-level pricing fingerprint stored once for all rollup rows. */
+export function readSessionCostUsageRollupPricingFingerprint(
+  agentId?: string,
+  databasePath?: string,
+): string | null {
+  return readCacheValue(agentId, ROLLUP_SCOPE, ROLLUP_META_KEY, databasePath);
+}
+
+/**
+ * Rotates the rebuildable rollup scope to a new pricing fingerprint: drops
+ * every persisted rollup row (current and legacy scopes) and records the new
+ * fingerprint once. Callers must hold the refresh lock.
+ */
+export function resetSessionCostUsageRollupScope(params: {
+  agentId?: string;
+  databasePath?: string;
+  pricingFingerprint: string;
+  updatedAt: number;
+}): void {
+  runOpenClawAgentWriteTransaction(
+    (database) => {
+      const kysely = getNodeSqliteKysely<AgentCacheDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        kysely.deleteFrom("cache_entries").where("scope", "=", ROLLUP_SCOPE),
+      );
+      for (const legacyScope of LEGACY_ROLLUP_SCOPES) {
+        executeSqliteQuerySync(
+          database.db,
+          kysely.deleteFrom("cache_entries").where("scope", "=", legacyScope),
+        );
+      }
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .insertInto("cache_entries")
+          .values({
+            scope: ROLLUP_SCOPE,
+            key: ROLLUP_META_KEY,
+            value_json: params.pricingFingerprint,
+            blob: null,
+            expires_at: null,
+            updated_at: params.updatedAt,
+          })
+          .onConflict((conflict) =>
+            conflict.columns(["scope", "key"]).doUpdateSet({
+              value_json: params.pricingFingerprint,
+              blob: null,
+              expires_at: null,
+              updated_at: params.updatedAt,
+            }),
+          ),
+      );
+    },
+    {
+      agentId: normalizeAgentId(params.agentId),
+      ...(params.databasePath ? { path: params.databasePath } : {}),
+    },
+    { operationLabel: "session-cost-usage.rollup.reset-scope" },
   );
 }
 
@@ -203,11 +273,14 @@ export function deleteSessionCostUsageRollupsExcept(params: {
           .where("key", "=", LEGACY_CACHE_KEY),
       );
       // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
-      // Delete by scope so those values are never materialized during cleanup.
-      executeSqliteQuerySync(
-        database.db,
-        kysely.deleteFrom("cache_entries").where("scope", "=", RETIRED_ROLLUP_SCOPE),
-      );
+      // Delete by scope so those values are never materialized during cleanup
+      // and upgraded Gateways reclaim the disk.
+      for (const legacyScope of LEGACY_ROLLUP_SCOPES) {
+        executeSqliteQuerySync(
+          database.db,
+          kysely.deleteFrom("cache_entries").where("scope", "=", legacyScope),
+        );
+      }
     },
     {
       agentId: normalizeAgentId(params.agentId),
