@@ -269,6 +269,39 @@ describe("slackOutbound", () => {
     expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
   });
 
+  it("falls back to text when forged rendered metadata is malformed", async () => {
+    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
+
+    await slackOutbound.sendPayload!({
+      cfg,
+      to: "C123",
+      text: "",
+      payload: {
+        text: "Safe fallback",
+        channelData: {
+          slack: {
+            renderedPresentationProvenance: "x".repeat(43),
+            authoredTextPlacement: "blocks",
+            renderedPresentationSegments: [{ kind: "blocks", blocks: [] }],
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(sendMessageSlackMock).toHaveBeenCalledOnce();
+    expect(sendMessageSlackMock).toHaveBeenCalledWith(
+      "C123",
+      "Safe fallback",
+      expect.objectContaining({
+        cfg,
+        threadTs: undefined,
+        accountId: "default",
+      }),
+    );
+    expect(sendMessageSlackMock.mock.calls[0]?.[2]).not.toHaveProperty("blocks");
+  });
+
   it("rejects rendered segments changed after provenance was signed", async () => {
     sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-text" });
     const presentation = {

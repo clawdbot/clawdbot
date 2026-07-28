@@ -62,12 +62,9 @@ function createSlackRenderedPresentationProvenance(resolution: SlackReplyBlockRe
 }
 
 function hasValidSlackRenderedPresentationProvenance(params: {
-  provenance: unknown;
+  provenance: string;
   resolution: SlackReplyBlockResolution;
 }): boolean {
-  if (typeof params.provenance !== "string") {
-    return false;
-  }
   const expected = createSlackRenderedPresentationProvenance(params.resolution);
   const actualBuffer = Buffer.from(params.provenance);
   const expectedBuffer = Buffer.from(expected);
@@ -79,18 +76,25 @@ function hasValidSlackRenderedPresentationProvenance(params: {
 function readSlackRenderedPresentation(
   slackData: SlackOutboundChannelData | undefined,
 ): SlackReplyBlockResolution | undefined {
-  const segments = parseSlackReplyBlockSegments(slackData?.renderedPresentationSegments);
-  const authoredTextPlacement = readSlackAuthoredTextPlacement(slackData?.authoredTextPlacement);
-  if (!segments || !authoredTextPlacement) {
+  const provenance = slackData?.renderedPresentationProvenance;
+  if (typeof provenance !== "string") {
     return undefined;
   }
-  const resolution = { authoredTextPlacement, segments };
-  return hasValidSlackRenderedPresentationProvenance({
-    provenance: slackData?.renderedPresentationProvenance,
-    resolution,
-  })
-    ? resolution
-    : undefined;
+  try {
+    const segments = parseSlackReplyBlockSegments(slackData?.renderedPresentationSegments);
+    const authoredTextPlacement = readSlackAuthoredTextPlacement(slackData?.authoredTextPlacement);
+    if (!segments || !authoredTextPlacement) {
+      return undefined;
+    }
+    const resolution = { authoredTextPlacement, segments };
+    return hasValidSlackRenderedPresentationProvenance({ provenance, resolution })
+      ? resolution
+      : undefined;
+  } catch {
+    // Private renderer metadata is untrusted until its signature verifies.
+    // Invalid caller-authored shapes must use the public fallback, not abort delivery.
+    return undefined;
+  }
 }
 
 const loadSlackSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));

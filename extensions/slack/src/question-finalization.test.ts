@@ -32,10 +32,17 @@ function jsonRoundTrip<T>(value: T): T {
 describe("Slack question finalization", () => {
   it("removes action blocks and appends terminal context", async () => {
     const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const headers = Array.from({ length: 21 }, (_value, index) => `Column ${String(index)}`);
     const payload = {
       channelData: { askUser: { questionId } },
       presentation: {
         blocks: [
+          {
+            type: "table" as const,
+            caption: "Option metadata",
+            headers,
+            rows: [headers.map((_header, index) => `Value ${String(index)}`)],
+          },
           { type: "text" as const, text: "Pick one" },
           {
             type: "buttons" as const,
@@ -54,18 +61,30 @@ describe("Slack question finalization", () => {
     });
     expect(rendered).not.toBeNull();
     const renderedAfterTransport = jsonRoundTrip(rendered);
+    const renderedSegments = (
+      renderedAfterTransport?.channelData?.slack as
+        | { renderedPresentationSegments?: unknown[] }
+        | undefined
+    )?.renderedPresentationSegments;
+    expect(renderedSegments?.map((segment) => (segment as { kind?: unknown }).kind)).toEqual([
+      "text",
+      "blocks",
+    ]);
     await slackOutbound.afterDeliverPayload?.({
       cfg: {},
       target: { channel: "slack", to: "C123", accountId: "default" },
       payload: renderedAfterTransport!,
-      results: [{ channel: "slack", messageId: "44", channelId: "C123" }],
+      results: [
+        { channel: "slack", messageId: "44", channelId: "C123" },
+        { channel: "slack", messageId: "55", channelId: "C123" },
+      ],
     });
 
     await hoisted.registration?.finalize("Answered: <!channel>");
     expect(hoisted.update).toHaveBeenCalledWith(
       expect.objectContaining({
         channelId: "C123",
-        messageTs: "44",
+        messageTs: "55",
         text: expect.stringContaining("Answered: &lt;!channel&gt;"),
         blocks: expect.arrayContaining([
           {
