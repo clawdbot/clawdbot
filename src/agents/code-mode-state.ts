@@ -142,6 +142,8 @@ export function waitForPendingBridgeSettlement(
   settlementMode: CodeModeSettlementMode,
 ): Promise<void> {
   const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  // Workers reject hostless pending guests; headless execution also validates
+  // the frontier before reaching this shared settlement helper.
   if (
     required.length === 0 ||
     (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled))

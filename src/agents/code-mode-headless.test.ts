@@ -622,6 +622,20 @@ describe("headless Code Mode", () => {
     expect(nodesTool.execute).toHaveBeenCalledOnce();
   });
 
+  it("fails an awaiting promise without bridge work before resuming a worker", async () => {
+    const result = expectFailed(
+      await runCodeModeScriptHeadless({
+        ctx: createHeadlessHarness(),
+        code: "await new Promise(() => {}); return true;",
+        wallClockMs: 5_000,
+      }),
+    );
+
+    expect(result.code).toBe("internal_error");
+    expect(result.error).toContain("pending without host work");
+    expect(result.toolCallCount).toBe(0);
+  });
+
   it("bounds output and returned values across separate worker legs", async () => {
     const tool = fakeTool("output_boundary", async () => jsonResult({ ok: true }));
 
