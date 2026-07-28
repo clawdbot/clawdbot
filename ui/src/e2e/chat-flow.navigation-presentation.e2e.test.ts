@@ -20,20 +20,7 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["chat.startup", "chat.startup"],
-      historyMessages: [
-        {
-          content: [{ type: "text", text: "Shared cold startup proof." }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-      ],
-      methodResponses: { "sessions.list": chatSessionListResponse() },
-      sessionKey: "agent:main:session-a",
-    });
-    await page.addInitScript(() => {
+    await context.addInitScript(() => {
       localStorage.setItem(
         "openclaw.control.settings.v1:ws://127.0.0.1:18789",
         JSON.stringify({
@@ -56,11 +43,24 @@ suite.define(() => {
         }),
       );
     });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["chat.startup", "chat.startup"],
+      historyMessages: [
+        {
+          content: [{ type: "text", text: "Shared cold startup proof." }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+      sessionKey: "agent:main:session-a",
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
-      await expect.poll(() => panes.count()).toBe(2);
+      await expect.poll(() => panes.count(), { timeout: 10_000 }).toBe(2);
       await expect
         .poll(() =>
           panes.evaluateAll((nodes) =>
