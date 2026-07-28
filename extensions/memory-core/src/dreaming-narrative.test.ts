@@ -19,10 +19,8 @@ import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/s
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   dedupeDreamDiaryEntries,
-  generateAndAppendDreamNarrative,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
-  runDetachedDreamNarrative,
   runDreamNarrative,
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
@@ -385,7 +383,7 @@ describe("dream diary file behavior", () => {
   });
 });
 
-describe("generateAndAppendDreamNarrative", () => {
+describe("runDreamNarrative", () => {
   function createMockSubagent(responseText: string) {
     return {
       run: vi.fn().mockResolvedValue({ runId: "run-123" }),
@@ -417,7 +415,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const expectedRunKey = `dreaming-narrative-light-${workspaceHash}`;
     const expectedSessionKey = `agent:main:${expectedRunKey}`;
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -459,7 +457,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
     const runKey = `dreaming-narrative-rem-${workspaceHash}`;
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "researcher",
       subagent,
       workspaceDir,
@@ -500,7 +498,7 @@ describe("generateAndAppendDreamNarrative", () => {
         });
       const logger = createMockLogger();
 
-      const operation = generateAndAppendDreamNarrative({
+      const operation = runDreamNarrative({
         agentId: "main",
         subagent,
         workspaceDir,
@@ -539,7 +537,7 @@ describe("generateAndAppendDreamNarrative", () => {
       const subagent = createMockSubagent("");
       const logger = createMockLogger();
 
-      const operation = generateAndAppendDreamNarrative({
+      const operation = runDreamNarrative({
         agentId: "main",
         subagent,
         workspaceDir,
@@ -574,7 +572,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
     const retrySessionKey = `${expectedSessionKey}-retry-1`;
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -627,7 +625,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const expectedSessionKey = `agent:main:dreaming-narrative-rem-${workspaceHash}`;
     const retrySessionKey = `${expectedSessionKey}-retry-1`;
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -670,7 +668,7 @@ describe("generateAndAppendDreamNarrative", () => {
     );
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -693,7 +691,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const subagent = createMockSubagent("Should not appear.");
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -715,7 +713,7 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.waitForRun.mockResolvedValue({ status: "timeout" });
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -747,7 +745,7 @@ describe("generateAndAppendDreamNarrative", () => {
       "Session: 2026-05-22 00:02:16 GMT+1: Session Key: agent:main:dashboard:secret",
     ];
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -771,7 +769,7 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.deleteSession.mockRejectedValue(new Error("still active"));
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -794,7 +792,7 @@ describe("generateAndAppendDreamNarrative", () => {
     );
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -817,7 +815,7 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -850,7 +848,7 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.run.mockRejectedValue(crossBoundaryError);
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -879,7 +877,7 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -902,7 +900,7 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.getSessionMessages.mockRejectedValue(new Error("fetch failed"));
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -975,7 +973,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -1061,7 +1059,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir,
@@ -1096,7 +1094,7 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir: firstWorkspaceDir,
@@ -1104,7 +1102,7 @@ describe("generateAndAppendDreamNarrative", () => {
       nowMs,
       logger,
     });
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
       agentId: "main",
       subagent,
       workspaceDir: secondWorkspaceDir,
@@ -1128,7 +1126,7 @@ describe("generateAndAppendDreamNarrative", () => {
   });
 });
 
-describe("runDreamNarrative", () => {
+describe("runDreamNarrative ownership gate", () => {
   it("keeps the sweep alive with a local fallback when no owning agent is known", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = {
@@ -1158,7 +1156,7 @@ describe("runDreamNarrative", () => {
   });
 });
 
-describe("runDetachedDreamNarrative", () => {
+describe("runDreamNarrative detached dispatch", () => {
   type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
   function deferred<T>(): Deferred<T> {
     let resolve: ((v: T) => void) | undefined;
@@ -1206,13 +1204,14 @@ describe("runDetachedDreamNarrative", () => {
     const logger = createMockLogger();
 
     for (const [i, workspaceDir] of workspaceDirs.entries()) {
-      runDetachedDreamNarrative({
+      void runDreamNarrative({
         agentId: "main",
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: [`fragment-${i}`] },
         nowMs: Date.parse("2026-04-28T03:00:00Z"),
         logger,
+        detached: true,
       });
     }
 
@@ -1266,13 +1265,14 @@ describe("runDetachedDreamNarrative", () => {
     const logger = createMockLogger();
 
     for (let i = 0; i < 5; i += 1) {
-      runDetachedDreamNarrative({
+      void runDreamNarrative({
         agentId: "main",
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: [`fragment-${i}`] },
         nowMs: Date.parse("2026-04-28T03:00:00Z"),
         logger,
+        detached: true,
       });
     }
 
@@ -1319,13 +1319,14 @@ describe("runDetachedDreamNarrative", () => {
     process.on("unhandledRejection", unhandled);
 
     try {
-      runDetachedDreamNarrative({
+      void runDreamNarrative({
         agentId: "main",
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: ["fragment"] },
         nowMs: Date.parse("2026-04-28T03:00:00Z"),
         logger,
+        detached: true,
       });
 
       await drainMicrotasks();

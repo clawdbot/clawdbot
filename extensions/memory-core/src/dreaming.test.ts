@@ -26,7 +26,9 @@ import {
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 // `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
-const runDreamingSweepPhasesMock = vi.hoisted(() => vi.fn(async () => {}));
+const runDreamingSweepPhasesMock = vi.hoisted(() =>
+  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => {}),
+);
 vi.mock("./dreaming-phases.js", () => ({
   runDreamingSweepPhases: runDreamingSweepPhasesMock,
 }));
@@ -1974,7 +1976,7 @@ describe("gateway startup reconciliation", () => {
       const sweepArgs = expectDefined(
         runDreamingSweepPhasesMock.mock.calls[0],
         "dreaming sweep call",
-      )[0] as { agentId: string; workspaceDir: string };
+      )[0];
       expect(sweepArgs.agentId).toBe("researcher");
       expect(sweepArgs.workspaceDir).toBe(workspaceDir);
     } finally {

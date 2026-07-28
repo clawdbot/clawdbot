@@ -843,9 +843,7 @@ export type DreamNarrativeRequest = {
   logger: Logger;
 };
 
-export async function generateAndAppendDreamNarrative(
-  params: DreamNarrativeRequest,
-): Promise<void> {
+async function generateAndAppendDreamNarrative(params: DreamNarrativeRequest): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
 
   if (params.data.snippets.length === 0 && !params.data.promotions?.length) {
@@ -1044,7 +1042,7 @@ export async function generateAndAppendDreamNarrative(
 const DETACHED_NARRATIVE_CONCURRENCY = 3;
 const detachedNarrativeLimit = pLimit(DETACHED_NARRATIVE_CONCURRENCY);
 
-export function runDetachedDreamNarrative(params: DreamNarrativeRequest): void {
+function runDetachedDreamNarrative(params: DreamNarrativeRequest): void {
   queueMicrotask(() => {
     void detachedNarrativeLimit(() => generateAndAppendDreamNarrative(params)).catch(() => {
       // Detached narratives intentionally swallow errors — callers (cron
