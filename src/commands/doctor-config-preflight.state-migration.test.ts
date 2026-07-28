@@ -121,9 +121,6 @@ const makeStartupConvergenceResult = vi.hoisted(
       ...overrides,
     }),
 );
-const collectCronCodexRuntimePolicyTargetsReadOnly = vi.hoisted(() =>
-  vi.fn(async () => ({ targets: [], warnings: [] })),
-);
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn(async () => ({
     exists: true,
@@ -148,7 +145,6 @@ vi.mock("./doctor-state-migrations.js", () => ({
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
   collectCronCodexRuntimePolicyTargetsReadOnly,
   repairLegacyCronStoreWithoutPrompt,
-  collectCronCodexRuntimePolicyTargetsReadOnly,
 }));
 
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
