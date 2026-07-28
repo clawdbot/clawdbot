@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../../agents/agent-scope-config.js";
+import { hasEnvVarRef } from "../../../config/env-preserve.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeRouteBindingChannelId } from "../../../routing/binding-scope.js";
@@ -52,6 +53,31 @@ function isChannelWideBinding(binding: AgentRouteBinding, channelId: string): bo
   );
 }
 
+function valueContainsEnvVarRef(value: unknown): boolean {
+  if (typeof value === "string") {
+    return hasEnvVarRef(value);
+  }
+  if (Array.isArray(value)) {
+    return value.some(valueContainsEnvVarRef);
+  }
+  if (isRecord(value)) {
+    return Object.values(value).some(valueContainsEnvVarRef);
+  }
+  return false;
+}
+
+function bindingMatchesChannel(binding: AgentRouteBinding, channelId: string): boolean {
+  const match = binding.match;
+  if (!isRecord(match)) {
+    return false;
+  }
+  return (
+    normalizeRouteBindingChannelId(
+      typeof match.channel === "string" ? match.channel : undefined,
+    ) === channelId
+  );
+}
+
 /**
  * Materialize only ambient roles that currently fall through to a multi-agent default.
  * The marker remains authoritative in H2-0; these explicit targets are preparation for H2-1.
@@ -70,25 +96,65 @@ export function materializeDefaultAgentRoles(cfg: OpenClawConfig): DefaultAgentR
         (binding): binding is AgentRouteBinding => isRecord(binding) && binding.type !== "acp",
       )
     : [];
-  const missingChannelBindings = canMaterializeBindings
-    ? listAmbientConfiguredChannelIds(cfg).filter(
-        (channelId) => !bindings.some((binding) => isChannelWideBinding(binding, channelId)),
-      )
-    : [];
-  if (missingChannelBindings.length > 0) {
+  // Two reasons to leave a channel alone instead of appending a sibling
+  // `agentId: defaultAgentId` channel-wide binding:
+  // 1. Another binding already routes to the default agent — appending a
+  //    literal "main" sibling collides on `agentId` identity and trips
+  //    `EnvRefArrayMutationError` in `restoreEnvVarRefs`
+  //    (`src/config/env-preserve.ts:472`). Once any `defaultAgentId`
+  //    binding exists we refuse to materialize additional ones across any
+  //    channel: the matcher would find multiple `incoming` entries that
+  //    resolve the same identity and reject the write.
+  // 2. Existing bindings carry `${VAR}` references — appending a literal
+  //    sibling would let the env-preserve matcher align the literal entry
+  //    with the env-bearing one and silently drop the user's authored ref.
+  const defaultAgentAlreadyRouted = bindings.some((binding) => binding.agentId === defaultAgentId);
+  const materializableChannelBindings: string[] = [];
+  const defaultAgentSkippedChannels: string[] = [];
+  const envRefSkippedChannels: string[] = [];
+  if (canMaterializeBindings) {
+    for (const channelId of listAmbientConfiguredChannelIds(cfg)) {
+      const channelBindings = bindings.filter((binding) =>
+        bindingMatchesChannel(binding, channelId),
+      );
+      if (channelBindings.some((binding) => isChannelWideBinding(binding, channelId))) {
+        continue;
+      }
+      if (defaultAgentAlreadyRouted) {
+        defaultAgentSkippedChannels.push(channelId);
+        continue;
+      }
+      if (channelBindings.some(valueContainsEnvVarRef)) {
+        envRefSkippedChannels.push(channelId);
+        continue;
+      }
+      materializableChannelBindings.push(channelId);
+    }
+  }
+  if (materializableChannelBindings.length > 0) {
     next = {
       ...next,
       bindings: [
         ...(Array.isArray(next.bindings) ? next.bindings : []),
-        ...missingChannelBindings.map((channel) => ({
+        ...materializableChannelBindings.map((channel) => ({
           agentId: defaultAgentId,
           match: { channel, accountId: "*" },
         })),
       ],
     };
     changes.push(
-      `Bound ${missingChannelBindings.join(", ")} unbound account routing to agent "${defaultAgentId}".`,
+      `Bound ${materializableChannelBindings.join(", ")} unbound account routing to agent "${defaultAgentId}".`,
     );
+    if (defaultAgentSkippedChannels.length > 0) {
+      changes.push(
+        `Skipped ${defaultAgentSkippedChannels.join(", ")}: existing binding already routes to agent "${defaultAgentId}".`,
+      );
+    }
+    if (envRefSkippedChannels.length > 0) {
+      changes.push(
+        `Skipped ${envRefSkippedChannels.join(", ")}: existing binding uses an environment reference.`,
+      );
+    }
   }
 
   const rawDefaults = (cfg.agents as { defaults?: unknown } | undefined)?.defaults;

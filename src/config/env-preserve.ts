@@ -33,7 +33,7 @@ export class EnvRefArrayMutationError extends Error {
 /**
  * Check if a string contains any `${VAR}` env var references.
  */
-function hasEnvVarRef(value: string): boolean {
+export function hasEnvVarRef(value: string): boolean {
   return ENV_VAR_PATTERN.test(value);
 }
 
