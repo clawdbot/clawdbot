@@ -313,8 +313,9 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   }
 
   const abortController = new AbortController();
+  const deliveryTimeoutError = new Error("cron: failure alert announcement timed out");
   const deliveryTimeout = setTimeout(() => {
-    abortController.abort(new Error("cron: failure alert announcement timed out"));
+    abortController.abort(deliveryTimeoutError);
   }, CRON_WEBHOOK_TIMEOUT_MS);
 
   try {
@@ -335,11 +336,9 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         abortSignal: abortController.signal,
       }),
       new Promise<never>((_resolve, reject) => {
-        abortController.signal.addEventListener(
-          "abort",
-          () => reject(abortController.signal.reason),
-          { once: true },
-        );
+        abortController.signal.addEventListener("abort", () => reject(deliveryTimeoutError), {
+          once: true,
+        });
       }),
     ]);
   } finally {

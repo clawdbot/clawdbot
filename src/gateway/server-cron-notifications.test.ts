@@ -349,9 +349,16 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
             new Promise<void>((_resolve, reject) => {
               deliverySignal = abortSignal;
               if (honorsCancellation) {
-                abortSignal.addEventListener("abort", () => reject(abortSignal.reason), {
-                  once: true,
-                });
+                abortSignal.addEventListener(
+                  "abort",
+                  () =>
+                    reject(
+                      abortSignal.reason instanceof Error
+                        ? abortSignal.reason
+                        : new Error("cron: failure alert announcement timed out"),
+                    ),
+                  { once: true },
+                );
               }
             }),
         );
