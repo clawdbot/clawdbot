@@ -60,7 +60,7 @@ export async function enforceTelegramDmAccess(params: {
   if (dmPolicy === "disabled") {
     return false;
   }
-  if (dmPolicy === "open") {
+  if (dmPolicy === "open" || dmPolicy === "pairing") {
     return true;
   }
 
