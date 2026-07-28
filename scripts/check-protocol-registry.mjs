@@ -7,7 +7,9 @@ const schemaDir = path.join(repoRoot, "packages/gateway-protocol/src/schema");
 const failures = [];
 const read = (relativePath) => fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 const check = (condition, message) => {
-  if (!condition) failures.push(message);
+  if (!condition) {
+    failures.push(message);
+  }
 };
 
 const registryPath = "packages/gateway-protocol/src/schema/protocol-schemas.ts";
@@ -66,11 +68,15 @@ const seenKeys = new Set();
 const orderedKeys = [];
 for (const binding of composedBindings) {
   const { specifier } = importsByBinding.get(binding) ?? {};
-  if (!specifier) continue;
+  if (!specifier) {
+    continue;
+  }
   const moduleUrl = new URL(specifier.replace(/\.js$/u, ".ts"), pathToFileURL(registryPath));
   const fragment = (await import(moduleUrl.href))[binding];
   check(fragment && typeof fragment === "object", `${specifier} must export object ${binding}`);
-  if (!fragment || typeof fragment !== "object") continue;
+  if (!fragment || typeof fragment !== "object") {
+    continue;
+  }
   for (const key of Object.keys(fragment)) {
     check(!seenKeys.has(key), `duplicate protocol schema key ${key}`);
     seenKeys.add(key);
