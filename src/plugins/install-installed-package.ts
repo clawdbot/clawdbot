@@ -12,6 +12,7 @@ import {
   formatUnresolvedOpenClawPeerLinkError,
   hasPackageRuntimeDependencies,
   loadPluginInstallRuntime,
+  readOptionalPackageManifest,
   runInstallSourceScan,
   sourceFamilyForInstallPolicyKind,
   sourceFamilyForInstallPolicySource,
@@ -42,6 +43,7 @@ type ValidatedPackagePlugin = {
 export async function validatePackagePluginInstallSource(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   packageDir: string;
+  manifest?: PackageManifest;
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
   allowSourceTypeScriptEntries?: boolean;
@@ -59,16 +61,15 @@ export async function validatePackagePluginInstallSource(params: {
     }
   | PluginInstallFailureResult
 > {
-  const manifestPath = path.join(params.packageDir, "package.json");
-  if (!(await params.runtime.fileExists(manifestPath))) {
-    return { ok: false, error: "extracted package missing package.json" };
+  const manifestResult = params.manifest
+    ? ({ ok: true, manifest: params.manifest } as const)
+    : await readOptionalPackageManifest({ runtime: params.runtime, packageDir: params.packageDir });
+  if (!manifestResult.ok) {
+    return manifestResult;
   }
-
-  let manifest: PackageManifest;
-  try {
-    manifest = await params.runtime.readJsonFile<PackageManifest>(manifestPath);
-  } catch (err) {
-    return { ok: false, error: `invalid package.json: ${String(err)}` };
+  const manifest = manifestResult.manifest;
+  if (!manifest) {
+    return { ok: false, error: "extracted package missing package.json" };
   }
 
   const pkgName = normalizeOptionalString(manifest.name) ?? "";

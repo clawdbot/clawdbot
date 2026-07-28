@@ -135,6 +135,25 @@ function resolvePathBootstrapBrewDirs(params: {
   );
 }
 
+function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform }): string {
+  const miseDataDir = process.env.MISE_DATA_DIR;
+  if (miseDataDir !== undefined) {
+    return miseDataDir;
+  }
+
+  // Match mise's override/XDG/platform order; candidate validation and PATH
+  // placement remain owned by the existing bootstrap policy below.
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  if (xdgDataHome !== undefined) {
+    return path.join(xdgDataHome, "mise");
+  }
+  if (params.platform === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? path.join(params.homeDir, "AppData", "Local");
+    return path.join(localAppData, "mise");
+  }
+  return path.join(params.homeDir, ".local", "share", "mise");
+}
+
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
   return normalizeUniqueStringEntries([
     ...(params.prepend ?? []),
@@ -215,7 +234,7 @@ function candidateBinDirs(
   if (npmPrefix) {
     append.push(path.join(npmPrefix, "bin"));
   }
-  const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
+  const miseDataDir = resolveMiseDataDir({ homeDir, platform });
   const miseShims = path.join(miseDataDir, "shims");
   if (isKnownPathDir(existingPathParts, miseShims)) {
     append.push(miseShims);

@@ -1,4 +1,4 @@
-// Fetches the gateway signals behind the Model Providers settings page.
+// Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: a missing usage hook or an older
 // gateway must not blank the provider list.
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
@@ -57,7 +57,7 @@ function errorMessage(error: unknown): string {
 
 export async function loadModelProvidersData(
   client: GatewayBrowserClient,
-  opts?: { refresh?: boolean },
+  opts?: { refresh?: boolean; agentId?: string },
 ): Promise<ModelProvidersData> {
   const [authStatus, models, catalogModels, config, providerUsage, costByProvider] =
     await Promise.all([
@@ -88,7 +88,8 @@ export async function loadModelProvidersData(
         .catch(() => null),
     ]);
   return {
-    authStatus: authStatus.ok ? authStatus.result : null,
+    authStatus:
+      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
     models,
     catalogModels,
     config,

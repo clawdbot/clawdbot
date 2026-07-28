@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { validateQaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
+import { dockerE2eLaneName } from "./test-file-scenario-docker-batch.js";
 import {
   qaTestFileScenarioRunnerTesting,
   runQaTestFileScenarios,
@@ -60,10 +61,7 @@ function makeTestFileScenario(
     id: `scenario-${executionKind}`,
     title: `${executionKind} scenario`,
     surface: executionKind === "playwright" ? "control-ui" : "qa-lab",
-    category:
-      executionKind === "playwright"
-        ? "browser-control-ui-and-webchat.browser-ui"
-        : "qa-lab.coverage",
+    category: executionKind === "playwright" ? "control-ui.browser-ui" : "qa-lab.coverage",
     coverage: {
       primary: [executionKind === "playwright" ? "ui.control" : "qa.coverage"],
       secondary: [executionKind === "playwright" ? "ui.streaming" : "qa.reporting"],
@@ -83,6 +81,35 @@ function makeTestFileScenario(
     },
   };
 }
+
+function makeDockerE2eScenario(id: string, lane: string): QaSeedScenarioWithSource {
+  const scenario = makeTestFileScenario("script", "test/e2e/qa-lab/runtime/docker-e2e-lane.ts");
+  if (scenario.execution.kind !== "script") {
+    throw new Error("expected script scenario");
+  }
+  return {
+    ...scenario,
+    id,
+    execution: {
+      ...scenario.execution,
+      args: ["--lane", lane],
+    },
+  };
+}
+
+it("only batches the canonical Docker lane argument shape", () => {
+  const scenario = makeDockerE2eScenario("docker-lane", "gateway-network");
+  if (scenario.execution.kind !== "script") {
+    throw new Error("expected script scenario");
+  }
+  expect(dockerE2eLaneName(scenario)).toBe("gateway-network");
+  expect(
+    dockerE2eLaneName({
+      ...scenario,
+      execution: { ...scenario.execution, args: ["--lane", "gateway-network", "--extra"] },
+    }),
+  ).toBeUndefined();
+});
 
 async function makeTempRepo(prefix: string) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
@@ -340,6 +367,51 @@ describe("qa test file scenario runner", () => {
     });
   });
 
+  it.each([
+    { failFast: true, expectedScenarioIds: ["first-native-scenario"] },
+    {
+      failFast: false,
+      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
+    },
+    {
+      failFast: undefined,
+      expectedScenarioIds: ["first-native-scenario", "later-native-scenario"],
+    },
+  ])(
+    "honors native scenario fail-fast mode ($failFast)",
+    async ({ failFast, expectedScenarioIds }) => {
+      const repoRoot = await makeTempRepo("qa-vitest-fail-fast-");
+      const runCommand = vi.fn(async () => ({
+        exitCode: 1,
+        stdout: "",
+        stderr: "native scenario failed\n",
+      }));
+      const firstScenario = {
+        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/coverage-report.test.ts"),
+        id: "first-native-scenario",
+      };
+      const laterScenario = {
+        ...makeTestFileScenario("vitest", "extensions/qa-lab/src/cli.test.ts"),
+        id: "later-native-scenario",
+      };
+
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir: path.join(repoRoot, ".artifacts", "qa-e2e", "native-fail-fast"),
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        failFast,
+        scenarios: [firstScenario, laterScenario],
+        runCommand,
+      });
+
+      expect(runCommand).toHaveBeenCalledTimes(expectedScenarioIds.length);
+      expect(result.results.map((scenario) => scenario.scenario.id)).toEqual(expectedScenarioIds);
+      expect(result.results.every((scenario) => scenario.status === "fail")).toBe(true);
+      expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(expectedScenarioIds);
+    },
+  );
+
   it("runs script scenarios and imports producer QA evidence artifacts", async () => {
     const repoRoot = await makeTempRepo("qa-script-scenario-");
     const commands: QaScenarioCommandExecution[] = [];
@@ -448,8 +520,12 @@ describe("qa test file scenario runner", () => {
       },
       coverage: [
         {
-          id: "ui.control",
+          id: "qa.coverage",
           role: "primary",
+        },
+        {
+          id: "qa.reporting",
+          role: "secondary",
         },
       ],
       execution: {
@@ -466,6 +542,79 @@ describe("qa test file scenario runner", () => {
         status: "pass",
       },
     });
+  });
+
+  it("runs Docker script scenarios through one aggregate scheduler invocation", async () => {
+    const repoRoot = await makeTempRepo("qa-script-docker-batch-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "docker-batch");
+    const staleSummaryPath = path.join(outputDir, "docker-e2e-1800000ms", "summary.json");
+    await fs.mkdir(path.dirname(staleSummaryPath), { recursive: true });
+    await fs.writeFile(staleSummaryPath, '{"status":"passed"}\n', "utf8");
+    const commands: QaScenarioCommandExecution[] = [];
+    const scenarios = [
+      makeDockerE2eScenario("openai-tools", "openai-chat-tools"),
+      makeDockerE2eScenario("bundled-plugins", "bundled-plugin-install-uninstall"),
+      makeDockerE2eScenario("prefix-lane", "gateway"),
+      makeDockerE2eScenario("failing-lane", "gateway-network"),
+    ];
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      scenarios,
+      runCommand: async (command) => {
+        commands.push(command);
+        await expect(fs.access(staleSummaryPath)).rejects.toThrow();
+        const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
+        if (!logDir) {
+          throw new Error("missing Docker scheduler log dir");
+        }
+        await fs.mkdir(logDir, { recursive: true });
+        const failedLane = { elapsedSeconds: 2, name: "gateway-network", status: 1 };
+        await fs.writeFile(
+          path.join(logDir, "summary.json"),
+          `${JSON.stringify({
+            failures: [failedLane],
+            lanes: [
+              { elapsedSeconds: 4, name: "openai-chat-tools", status: 0 },
+              { elapsedSeconds: 7, name: "bundled-plugin-install-uninstall-0", status: 0 },
+              { elapsedSeconds: 6, name: "bundled-plugin-install-uninstall-1", status: 0 },
+              { elapsedSeconds: 1, name: "gateway", status: 0 },
+              failedLane,
+            ],
+            selectedLanes: [
+              "openai-chat-tools",
+              "bundled-plugin-install-uninstall-0",
+              "bundled-plugin-install-uninstall-1",
+              "gateway",
+              "gateway-network",
+            ],
+          })}\n`,
+          "utf8",
+        );
+        return { exitCode: 1, stdout: "", stderr: "scheduler failed\n" };
+      },
+    });
+
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({
+      args: ["scripts/test-docker-all.mjs"],
+      command: process.execPath,
+      env: {
+        OPENCLAW_DOCKER_ALL_FAIL_FAST: "0",
+        OPENCLAW_DOCKER_ALL_LANES:
+          "openai-chat-tools,bundled-plugin-install-uninstall,gateway,gateway-network",
+        OPENCLAW_DOCKER_ALL_LANE_TIMEOUT_MS: "1800000",
+      },
+    });
+    expect(result.results).toMatchObject([
+      { scenario: { id: "openai-tools" }, status: "pass" },
+      { scenario: { id: "bundled-plugins" }, status: "pass" },
+      { scenario: { id: "prefix-lane" }, status: "pass" },
+      { scenario: { id: "failing-lane" }, status: "fail" },
+    ]);
+    expect(result.results[3]?.failureMessage).toBe("gateway-network exited with 1");
   });
 
   it("uses script scenario timeout overrides when running producer commands", async () => {
@@ -742,6 +891,10 @@ describe("qa test file scenario runner", () => {
         kind: "script-producer-check",
         id: "script-producer.web-ui.smoke",
       },
+      coverage: [
+        { id: "qa.coverage", role: "primary" },
+        { id: "qa.reporting", role: "secondary" },
+      ],
       result: {
         status: "fail",
         failure: {

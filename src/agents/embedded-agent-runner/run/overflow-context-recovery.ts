@@ -1,7 +1,10 @@
+import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { buildContextEngineRuntimeSettings } from "../../../context-engine/runtime-settings.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import type { AssistantMessage } from "../../../llm/types.js";
+import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -17,6 +20,10 @@ import {
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { log } from "../logger.js";
+import {
+  getProviderPromptState,
+  markLastProviderPromptContextRejected,
+} from "../provider-prompt-state.js";
 import {
   resolveLiveToolResultMaxChars,
   sessionLikelyHasOversizedToolResults,
@@ -62,6 +69,7 @@ export async function recoverEmbeddedRunOverflow(input: {
   signalOwnedInterruption: boolean;
   promptError: unknown;
   assistantErrorText?: string;
+  assistantOverflowCandidate?: AssistantMessage;
   attempt: EmbeddedRunAttemptResult;
   attemptCompactionCount: number;
   runtimeAuthPlan: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["runtimeAuthPlan"];
@@ -108,6 +116,17 @@ export async function recoverEmbeddedRunOverflow(input: {
             // error from the previous transcript leaf.
             return null;
           }
+          if (
+            input.assistantOverflowCandidate &&
+            input.contextTokenBudget !== undefined &&
+            isContextOverflow(input.assistantOverflowCandidate, input.contextTokenBudget)
+          ) {
+            return {
+              text:
+                input.assistantOverflowCandidate.errorMessage?.trim() || "Context window exceeded",
+              source: "assistantError" as const,
+            };
+          }
           if (input.assistantErrorText && isLikelyContextOverflowError(input.assistantErrorText)) {
             return { text: input.assistantErrorText, source: "assistantError" as const };
           }
@@ -121,6 +140,12 @@ export async function recoverEmbeddedRunOverflow(input: {
   ) {
     return { action: "none" };
   }
+
+  const providerPromptRejection =
+    contextOverflowError.source === "assistantError" ||
+    projectAgentRunAttemptTerminal(input.attempt.terminal).promptErrorSource === "prompt"
+      ? markLastProviderPromptContextRejected(getProviderPromptState(input.runParams.runId))
+      : undefined;
 
   const runParams = input.runParams;
   const overflowDiagId = createCompactionDiagId();
@@ -146,6 +171,7 @@ export async function recoverEmbeddedRunOverflow(input: {
       `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
       `preflightEstimatedTokens=${preflightEstimatedPromptTokens ?? "unknown"} ` +
       `compactionTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
+      `providerPayloadBytes=${providerPromptRejection?.byteWeight ?? "unknown"} ` +
       `error=${truncateUtf16Safe(errorText, 200)}`,
   );
 
@@ -332,8 +358,6 @@ export async function recoverEmbeddedRunOverflow(input: {
           contextWindowTokens: input.contextTokenBudget,
           maxCharsOverride: resolveLiveToolResultMaxChars({
             contextWindowTokens: input.contextTokenBudget,
-            cfg: runParams.config,
-            agentId: input.sessionAgentId,
           }),
           config: runParams.config,
           protectTrailingToolResults: true,
@@ -366,8 +390,6 @@ export async function recoverEmbeddedRunOverflow(input: {
   if (!input.state.toolResultTruncationAttempted) {
     const toolResultMaxChars = resolveLiveToolResultMaxChars({
       contextWindowTokens: input.contextTokenBudget,
-      cfg: runParams.config,
-      agentId: input.sessionAgentId,
     });
     const hasOversized = input.attempt.messagesSnapshot
       ? sessionLikelyHasOversizedToolResults({

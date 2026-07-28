@@ -7,7 +7,13 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  deliveryContextFromSession,
+  getSessionEntry,
+  normalizeSessionDeliveryState,
+  sessionDeliveryOrigin,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
@@ -87,22 +93,22 @@ async function writeMatrixSessionMeta(
     sessionId: `sess-${sessionKey}`,
     updatedAt: Date.now(),
   };
-  const existingOrigin =
-    typeof existing.origin === "object" && existing.origin !== null
-      ? (existing.origin as Record<string, unknown>)
-      : {};
+  const existingOrigin = sessionDeliveryOrigin(existing) ?? {};
   await upsertSessionEntry({
     storePath,
     sessionKey,
     entry: {
       ...existing,
-      origin: {
-        ...existingOrigin,
-        provider: "matrix",
-        surface: "matrix",
-        accountId: "ops",
-        ...origin,
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: deliveryContextFromSession(existing),
+        origin: {
+          ...existingOrigin,
+          provider: "matrix",
+          surface: "matrix",
+          accountId: "ops",
+          ...origin,
+        },
+      }),
     },
   });
 }
@@ -865,8 +871,8 @@ describe("matrix monitor handler pairing account scope", () => {
     const hasControlCommand = vi.fn((text?: string) => text === "/new");
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
-        cfg: { commands: { useAccessGroups: false } },
         isDirectMessage: false,
+        groupAllowFrom: ["@user:example.org"],
         mentionRegexes: [],
         shouldHandleTextCommands: () => true,
         hasControlCommand,
@@ -878,20 +884,14 @@ describe("matrix monitor handler pairing account scope", () => {
       createMatrixTextMessageEvent({
         eventId: "$mxid-command",
         body: "@bot:example.org /new",
+        mentions: { user_ids: ["@bot:example.org"] },
       }),
     );
 
     expect(callArg(hasControlCommand, 0, 0, "control command")).toBe("/new");
     requireRecord(callArg(hasControlCommand, 0, 1, "control command"), "control command context");
-    const context = requireRecord(
-      callArg(finalizeInboundContext, 0, 0, "finalized context"),
-      "finalized context",
-    );
-    expect(context.RawBody).toBe("@bot:example.org /new");
-    expect(context.CommandBody).toBe("/new");
-    expect(context.BodyForAgent).toBe("@bot:example.org /new");
-    expect(context.BodyForCommands).toBe("/new");
-    expect(recordInboundSession).toHaveBeenCalled();
+    expect(finalizeInboundContext).not.toHaveBeenCalled();
+    expect(recordInboundSession).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -901,8 +901,9 @@ describe("matrix monitor handler pairing account scope", () => {
     "keeps require-mention decision for unmentioned room text $body",
     async ({ body, isControlCommand, expectedDispatches }) => {
       const { handler, finalizeInboundContext } = createMatrixHandlerTestHarness({
-        cfg: { commands: { useAccessGroups: false } },
+        cfg: { channels: { matrix: { groupAllowFrom: ["@user:example.org"] } } },
         isDirectMessage: false,
+        groupAllowFrom: ["@user:example.org"],
         mentionRegexes: [],
         shouldHandleTextCommands: () => true,
         hasControlCommand: (text?: string) => isControlCommand && text === body,
@@ -1511,11 +1512,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-main",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");
@@ -1556,11 +1559,13 @@ describe("matrix monitor handler pairing account scope", () => {
       entry: {
         sessionId: "sess-bound",
         updatedAt: Date.now(),
-        deliveryContext: {
-          channel: "matrix",
-          to: "room:!other:example.org",
-          accountId: "ops",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: "matrix",
+            to: "room:!other:example.org",
+            accountId: "ops",
+          },
+        }),
       },
     });
     const sendNotice = vi.fn(async () => "$notice");

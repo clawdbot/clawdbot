@@ -8,7 +8,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import { dispatchInboundMessageWithProjectedDispatcher } from "../../auto-reply/dispatch.js";
 import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
@@ -52,7 +52,7 @@ import { createChatSendReplyDispatch } from "./chat-send-reply-dispatch.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { prepareChatSendSession } from "./chat-send-session.js";
 import { finalizeChatSendSourceReplies } from "./chat-send-source-finalization.js";
-import { applyChatSendManagedMediaFields, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
+import { applyChatSendManagedMedia, prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import {
   chatSendAckServerTimingAttributes,
   emitOperatorChatSendServerTiming,
@@ -302,9 +302,10 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       accountId,
       ctx,
       isInternalTextSlashCommandTurn,
-      pluginBoundMediaFieldsPromise,
+      pluginBoundMediaPromise,
       queuedFollowupOwnerKey,
       replyOptionImages,
+      replyOptionMedia,
     } = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -332,7 +333,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       : undefined;
 
     let agentRunStarted = false;
-    const { deliveredReplies, dispatcher, hasAppendedWebchatAgentMedia, onModelSelected } =
+    const { deliveredReplies, dispatcherOptions, hasAppendedWebchatAgentMedia, onModelSelected } =
       createChatSendReplyDispatch({
         accountId,
         isAgentRunStarted: () => agentRunStarted,
@@ -392,14 +393,14 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
         measureDiagnosticsTimelineSpan(
           "gateway.chat_send.dispatch_inbound",
           async () => {
-            applyChatSendManagedMediaFields(ctx, await pluginBoundMediaFieldsPromise);
+            applyChatSendManagedMedia(ctx, await pluginBoundMediaPromise);
             if (replyContextFieldsPromise) {
               applyChatSendReplyContextFields(ctx, await replyContextFieldsPromise);
             }
-            const dispatchResult = await dispatchInboundMessage({
+            const dispatchResult = await dispatchInboundMessageWithProjectedDispatcher({
               ctx,
               cfg,
-              dispatcher,
+              dispatcherOptions,
               onSessionMetadataChanges: (changes) => {
                 for (const change of changes) {
                   emitSessionsChanged(context, change);
@@ -473,6 +474,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 },
                 images: replyOptionImages,
                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+                media: replyOptionMedia,
                 thinkingLevelOverride: p.thinking,
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,
@@ -623,7 +625,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 errorMessage: returnedAgentErrorMessage,
               });
             }
-            if (!context.chatAbortedRuns.has(clientRunId)) {
+            if (!context.chatRunState.hasAbortMarker(clientRunId)) {
               const returnedAgentError = shouldBroadcastAgentError
                 ? errorShape(
                     ErrorCodes.UNAVAILABLE,
@@ -661,7 +663,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
           },
           dispatchStartedAtMs,
         );
-        if (queuedFollowupEnqueued && !context.chatAbortedRuns.has(clientRunId)) {
+        if (queuedFollowupEnqueued && !context.chatRunState.hasAbortMarker(clientRunId)) {
           // Successful queue admission ends this client run. The later
           // aggregate/followup owns its own run id.
           broadcastChatFinal({

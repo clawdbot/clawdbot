@@ -39,6 +39,8 @@ import { withTimeout } from "./timeout.js";
 
 export type { CodexAppServerPreparedAuth } from "./auth-bridge.js";
 
+const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE = "codex app-server initialize timed out";
+
 type SharedCodexAppServerClientEntry = {
   client?: CodexAppServerClient;
   startup?: SharedCodexAppServerClientStartup;
@@ -298,6 +300,9 @@ async function resolveCodexAppServerClientStartContext(
     throw new Error("Prepared Codex API-key auth is missing its resolved key.");
   }
   if (preparedAuth && requestedStartOptions.homeScope === "user") {
+    // Backstop for the auth-bridge handoff: an app-server on the operator's native
+    // home persists api-key logins into CODEX_HOME/auth.json and replaces the live
+    // ChatGPT account for token logins, so prepared auth must never reach it.
     throw new Error("Prepared Codex auth requires an isolated app-server home.");
   }
   const preparedAuthRequirement = inferAuthRequirement(preparedAuth);
@@ -616,6 +621,8 @@ async function acquireSharedCodexAppServerClient(
       remainingTimeoutMs,
       startup.initialized,
       options?.abandonSignal,
+      CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+      () => buildCodexAppServerInitializeTimeoutError(entry.client),
     );
     const client = await withCodexAppServerAcquireDeadline(
       timeoutMs,
@@ -654,7 +661,8 @@ async function withCodexAppServerAcquireDeadline<T>(
   timeoutMs: number, // First: fail before the caller starts its promise argument.
   promise: Promise<T>,
   signal?: AbortSignal,
-  timeoutMessage = "codex app-server initialize timed out",
+  timeoutMessage = CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+  timeoutErrorFactory?: () => CodexAppServerStartupError,
 ): Promise<T> {
   if (signal?.aborted) {
     throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
@@ -663,7 +671,7 @@ async function withCodexAppServerAcquireDeadline<T>(
     promise,
     timeoutMs,
     timeoutMessage,
-    () => new CodexAppServerStartupError("timed_out", timeoutMessage),
+    () => timeoutErrorFactory?.() ?? new CodexAppServerStartupError("timed_out", timeoutMessage),
   );
   if (!signal) {
     return await timed;
@@ -674,6 +682,18 @@ async function withCodexAppServerAcquireDeadline<T>(
     signal.addEventListener("abort", onAbort, { once: true });
     timed.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
+}
+
+function buildCodexAppServerInitializeTimeoutError(
+  client: CodexAppServerClient | undefined,
+): CodexAppServerStartupError {
+  const stderr = client?.getStderrDiagnostic();
+  return new CodexAppServerStartupError(
+    "timed_out",
+    stderr
+      ? `${CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE}; stderr=${JSON.stringify(stderr)}`
+      : CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+  );
 }
 
 function resolveRemainingAcquireTimeout(timeoutMs: number, startedAt: number): number {
@@ -844,6 +864,8 @@ async function startInitializedCodexAppServerClient(params: {
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         (initialize = client.initialize()),
         params.abandonSignal,
+        CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE,
+        () => buildCodexAppServerInitializeTimeoutError(client),
       );
     } catch (error) {
       client.close();

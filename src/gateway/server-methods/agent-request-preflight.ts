@@ -3,9 +3,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateAgentParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { parseExecApprovalFollowupApprovalId } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { normalizeSpawnedRunMetadata } from "../../agents/spawned-context.js";
 import {
@@ -39,6 +39,7 @@ import {
 } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 type AgentRequestPreflight = {
   request: AgentRunRequest;
@@ -68,15 +69,7 @@ type AgentRequestPreflight = {
 export function prepareAgentRequestPreflight(
   params: Pick<GatewayRequestHandlerOptions, "params" | "respond" | "context" | "client">,
 ): AgentRequestPreflight | undefined {
-  if (!validateAgentParams(params.params)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid agent params: ${formatValidationErrors(validateAgentParams.errors)}`,
-      ),
-    );
+  if (!assertValidParams(params.params, validateAgentParams, "agent", params.respond)) {
     return undefined;
   }
   const request = params.params as AgentRunRequest;
@@ -91,7 +84,7 @@ export function prepareAgentRequestPreflight(
     !collectorSession && requestSessionKey && isSubagentSessionKey(requestSessionKey)
       ? loadSessionEntry({
           storePath: resolveStorePath(cfg.session?.store, {
-            agentId: resolveAgentIdFromSessionKey(requestSessionKey),
+            agentId: resolveAgentIdFromSessionKey(requestSessionKey, resolveDefaultAgentId(cfg)),
           }),
           sessionKey: requestSessionKey,
         })?.swarmCollector === true
@@ -131,7 +124,7 @@ export function prepareAgentRequestPreflight(
       cfg,
       registeredCollector?.requesterAgentId ??
         (swarmRequesterSessionKey
-          ? resolveAgentIdFromSessionKey(swarmRequesterSessionKey)
+          ? resolveAgentIdFromSessionKey(swarmRequesterSessionKey, resolveDefaultAgentId(cfg))
           : undefined),
     ).enabled;
     const pendingCollectorLaunch =

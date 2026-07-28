@@ -1,0 +1,150 @@
+title: Issue 109025 completion handoff sender-policy live probe
+
+scenario:
+  id: issue-109025-completion-policy-live
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+      - agent-runtime.subagent-turns-delivery
+  gatewayConfigPatch:
+    tools:
+      toolsBySender:
+        "*":
+          deny:
+            - exec
+            - process
+            - nodes
+            - gateway
+            - write
+        "id:alice":
+          deny:
+            - write
+  objective: Prove a dormant requester-agent completion handoff retains the original requester's exact sender tool policy instead of reapplying the wildcard deny.
+  successCriteria:
+    - An exact-sender parent spawns a child and yields before the child completes.
+    - The child follows a serial filesystem-read chain that remains allowed by the wildcard policy.
+    - The child completion wakes the requester agent without a new external sender turn.
+    - The requester-agent continuation uses exec, which the wildcard policy denies, to generate a fresh marker while write remains denied.
+    - The QA runner reads the exec-created proof file and finds the exact same unpredictable marker in Gateway output.
+  docsRefs:
+    - docs/gateway/config-tools.md
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/requester-tool-policy.ts
+    - src/agents/subagent-announce-delivery.ts
+    - src/agents/subagent-capabilities.ts
+    - src/agents/tools/sessions-yield-tool.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Mutates sender tool policy and exercises a yielded parent with a live child completion.
+    channel: qa-channel
+    retryCount: 0
+    summary: Exercise exact sender policy through a real inbound turn, dormant requester-agent completion, and restricted exec call.
+    config:
+      requiredProviderMode: live-frontier
+      childLabelPrefix: issue-109025-completion-child
+      chainFilePrefix: issue-109025-completion-chain
+      completionPrefix: ISSUE109025_COMPLETION_EXEC_OK
+
+flow:
+  steps:
+    - name: dormant requester completion retains exact-sender exec authority
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForTransportReady
+          args:
+            - ref: env
+            - 120000
+        - resetTransport: true
+        - set: parentSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: 'qa-channel', accountId: 'default', peer: { kind: 'direct', id: 'alice' }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
+        - set: childLabel
+          value:
+            expr: "`${config.childLabelPrefix}-${randomUUID().slice(0, 8)}`"
+        - set: chainNonce
+          value:
+            expr: randomUUID().slice(0, 8)
+        - set: chainFiles
+          value:
+            expr: "[1, 2, 3, 4].map((index) => `${config.chainFilePrefix}-${chainNonce}-${index}.txt`)"
+        - set: proofFile
+          value:
+            expr: "`issue-109025-exec-proof-${randomUUID()}.txt`"
+        - set: proofPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, proofFile)
+        - set: execCommand
+          value:
+            expr: |-
+              `node -e ${JSON.stringify(`const fs=require("node:fs");const crypto=require("node:crypto");const marker="${config.completionPrefix}:"+crypto.randomUUID();fs.writeFileSync(${JSON.stringify(proofFile)},marker+"\n");process.stdout.write(marker+"\n");`)}`
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, chainFiles[0])
+            - expr: "`${chainFiles[1]}\n`"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, chainFiles[1])
+            - expr: "`${chainFiles[2]}\n`"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, chainFiles[2])
+            - expr: "`${chainFiles[3]}\n`"
+            - utf8
+        - call: fs.writeFile
+          args:
+            - expr: path.join(env.gateway.workspaceDir, chainFiles[3])
+            - CHILD_READY
+            - utf8
+        - sendInbound:
+            conversation:
+              id: issue-109025-completion
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: |-
+                `Issue 109025 dormant completion probe. Follow these steps exactly.
+                1. Call sessions_spawn exactly once with runtime subagent, label ${childLabel}, and this task: "Use only the filesystem read tool. Start by reading ${chainFiles[0]}. Its trimmed contents name the next workspace file to read. Continue following one filename at a time until a file contains CHILD_READY. You must perform each read serially because later filenames are not in this task. Then reply exactly CHILD_DONE and nothing else. Do not use exec or process."
+                2. Immediately after sessions_spawn succeeds, call sessions_yield. Do not wait for the child and do not send a normal final reply.
+                3. When the CHILD_DONE completion event later resumes you, use the exec tool to run this exact command: ${execCommand}
+                Do not use read or write for this step. Then reply with exactly the command's trimmed stdout.`
+        - call: waitForCondition
+          saveAs: expectedFinalMarker
+          args:
+            - lambda:
+                async: true
+                expr: "fs.readFile(proofPath, 'utf8').then((text) => { const marker = text.trim(); return marker.startsWith(`${config.completionPrefix}:`) && readGatewayLogs().includes(marker) ? marker : undefined; }).catch(() => undefined)"
+            - 60000
+            - 250
+        - call: readSessionTranscriptSummary
+          saveAs: parentTranscript
+          args:
+            - ref: env
+            - ref: parentSessionKey
+        - set: gatewayLogs
+          value:
+            expr: readGatewayLogs()
+        - assert:
+            expr: "(parentTranscript.assistantToolCallCounts.sessions_yield ?? 0) >= 1"
+            message:
+              expr: "`parent did not yield before completion; parentTools=${JSON.stringify(parentTranscript.assistantToolCallCounts ?? {})}`"
+        - assert:
+            expr: gatewayLogs.includes(expectedFinalMarker)
+            message:
+              expr: "`completion continuation did not produce the exec-created marker; marker=${String(expectedFinalMarker ?? '')}`"
+        - assert:
+            expr: "gatewayLogs.indexOf('CHILD_DONE') >= 0 && gatewayLogs.indexOf(expectedFinalMarker) > gatewayLogs.indexOf('CHILD_DONE')"
+            message: child completion did not precede the exec-created continuation marker
+      detailsExpr: "`parentSession=${parentSessionKey} parentTools=${JSON.stringify(parentTranscript.assistantToolCallCounts ?? {})} execMarker=${String(expectedFinalMarker ?? '')}`"

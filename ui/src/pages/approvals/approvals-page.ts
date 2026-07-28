@@ -18,6 +18,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -25,6 +26,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
+const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 
 function formatResolvedAt(timestampMs: number): string {
   return new Intl.DateTimeFormat(i18n.getLocale(), {
@@ -123,6 +125,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   @state() private loadingMore = false;
   @state() private error: string | null = null;
   @state() private connected = false;
+  @state() private approvalsAccess = true;
 
   private client: GatewayBrowserClient | null = null;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
@@ -163,9 +166,13 @@ class ApprovalsPage extends OpenClawLightDomElement {
 
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.connected;
-    this.connected = snapshot.connected;
-    if (clientChanged) {
+    const connectionChanged = (snapshot.phase === "connected") !== this.connected;
+    const auth = snapshot.hello?.auth;
+    const nextApprovalsAccess = !auth || hasOperatorApprovalsAccess(auth);
+    const approvalAccessChanged = nextApprovalsAccess !== this.approvalsAccess;
+    this.connected = snapshot.phase === "connected";
+    this.approvalsAccess = nextApprovalsAccess;
+    if (clientChanged || approvalAccessChanged) {
       this.client = snapshot.client;
       this.requestGeneration += 1;
       this.items = [];
@@ -178,11 +185,17 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.requestGeneration += 1;
       this.loading = false;
       this.loadingMore = false;
-      if (snapshot.connected) {
+      if (snapshot.phase === "connected") {
         this.hasLoaded = false;
       }
     }
-    if (snapshot.connected && snapshot.client && !this.hasLoaded && !this.loading) {
+    if (
+      snapshot.phase === "connected" &&
+      snapshot.client &&
+      this.approvalsAccess &&
+      !this.hasLoaded &&
+      !this.loading
+    ) {
       void this.loadPage(true);
     }
   }
@@ -190,7 +203,14 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private async loadPage(reset: boolean): Promise<void> {
     const client = this.client;
     const gateway = this.gatewaySource;
-    if (!client || !gateway || !this.connected || this.loading || this.loadingMore) {
+    if (
+      !client ||
+      !gateway ||
+      !this.connected ||
+      !this.approvalsAccess ||
+      this.loading ||
+      this.loadingMore
+    ) {
       return;
     }
     const generation = this.requestGeneration;
@@ -207,9 +227,10 @@ class ApprovalsPage extends OpenClawLightDomElement {
     const isCurrent = () =>
       this.isConnected &&
       this.connected &&
+      this.approvalsAccess &&
       this.gatewaySource === gateway &&
       this.context.gateway === gateway &&
-      gateway.snapshot.connected &&
+      gateway.snapshot.phase === "connected" &&
       this.client === client &&
       this.requestGeneration === generation;
     try {
@@ -312,7 +333,14 @@ class ApprovalsPage extends OpenClawLightDomElement {
         ${!this.connected
           ? html`<div class="callout warn">${t("approvalHistory.offline")}</div>`
           : nothing}
-        ${this.error
+        ${this.connected && !this.approvalsAccess
+          ? html`
+              <div class="callout warn" role="status">
+                ${t("common.disabled")} · <code>${APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
+              </div>
+            `
+          : nothing}
+        ${this.approvalsAccess && this.error
           ? html`
               <div class="callout danger">
                 ${this.error}
@@ -322,7 +350,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
               </div>
             `
           : nothing}
-        ${this.renderTable()}
+        ${this.approvalsAccess ? this.renderTable() : nothing}
       `,
       { wide: true },
     );

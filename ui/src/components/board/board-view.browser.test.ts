@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BOARD_GRID_GAP, BOARD_GRID_ROW_HEIGHT } from "../../lib/board/grid.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
+import "../../styles/base.css";
 import "./board-view.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
@@ -88,6 +89,140 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(Math.round(first?.height ?? 0)).toBe(BOARD_GRID_ROW_HEIGHT * 3 + BOARD_GRID_GAP * 2);
   });
 
+  it("hides widget chrome by default on fine-pointer devices", async () => {
+    const view = await mount();
+    const bar = view.querySelector<HTMLElement>(".board-widget__bar");
+    const handle = view.querySelector<HTMLElement>(".board-widget__resize-handle");
+    expect(getComputedStyle(bar!).visibility).toBe("hidden");
+    expect(getComputedStyle(handle!).visibility).toBe("hidden");
+  });
+
+  // Chrome must stay revealed while focus is anywhere inside the cell (menu
+  // close restores focus to its trigger), so hiding is proven by moving focus
+  // to an outside sink rather than blur(), which leaves focus placement to the
+  // platform and flakes on Linux.
+  function focusSink(): HTMLButtonElement {
+    const sink = document.createElement("button");
+    sink.type = "button";
+    document.body.append(sink);
+    return sink;
+  }
+
+  // Headless CI renderers can stall the animation timeline, leaving the 120ms
+  // hide transition permanently mid-flight; finishing transitions asserts the
+  // target visibility state instead of the renderer's clock. A genuinely
+  // matching reveal selector still fails: its finished end state is visible.
+  function expectChromeHidden(widget: HTMLElement, bar: HTMLElement): void {
+    for (const animation of document.getAnimations()) {
+      animation.finish();
+    }
+    const revealState = JSON.stringify({
+      hover: widget.matches(":hover"),
+      focusWithin: widget.matches(":focus-within"),
+      dragging: widget.classList.contains("board-widget--dragging"),
+      menuOpen: widget.querySelector(".board-widget__menu[open]") !== null,
+    });
+    expect(getComputedStyle(bar).visibility, revealState).toBe("hidden");
+  }
+
+  it("reveals widget chrome while the widget has focus", async () => {
+    const view = await mount();
+    const sink = focusSink();
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // Chrome is a compact top-left pill, not a full-width strip: it must not
+    // stretch across the card, so widget-owned top-right actions stay clear.
+    const barBounds = bar!.getBoundingClientRect();
+    const widgetBounds = widget!.getBoundingClientRect();
+    expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
+    expect(barBounds.left - widgetBounds.left).toBeLessThan(widgetBounds.right - barBounds.right);
+
+    sink.focus();
+    expect(widget!.matches(":focus-within")).toBe(false);
+    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+  });
+
+  it("reserves the top-right action corner even for narrow long-titled widgets", async () => {
+    const view = await mount();
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        {
+          ...source.widgets[0]!,
+          sizeW: 6,
+          title: "An extremely long widget title that wants the whole bar",
+          grantState: "granted",
+        },
+      ],
+    };
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    await cell?.updateComplete;
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // The interactive pill reserves a widget-owned right-hand region and none
+    // of its children may overflow the capped box into that corner.
+    const widgetBounds = widget!.getBoundingClientRect();
+    expect(widgetBounds.right - bar!.getBoundingClientRect().right).toBeGreaterThanOrEqual(88);
+    for (const child of bar!.children) {
+      expect(child.getBoundingClientRect().right).toBeLessThanOrEqual(
+        bar!.getBoundingClientRect().right + 1,
+      );
+    }
+  });
+
+  it("strips the pill to move + menu on widgets too narrow for the reservation", async () => {
+    const view = await mount();
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        {
+          ...source.widgets[0]!,
+          sizeW: 3,
+          title: "An extremely long widget title that wants the whole bar",
+          grantState: "granted",
+        },
+      ],
+    };
+    await view.updateComplete;
+    const cell = view.querySelector("openclaw-board-widget-cell");
+    await cell?.updateComplete;
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    widget!.focus();
+    expect(getComputedStyle(bar!).visibility).toBe("visible");
+    // Below the 184px container threshold the display-only pieces disappear so
+    // the pill is the irreducible move + menu pair and the rest of the card
+    // stays widget-owned.
+    expect(widget!.getBoundingClientRect().width).toBeLessThan(184);
+    const title = bar!.querySelector<HTMLElement>(".board-widget__title");
+    const kind = bar!.querySelector<HTMLElement>(".board-widget__kind");
+    expect(getComputedStyle(title!).display).toBe("none");
+    expect(getComputedStyle(kind!).display).toBe("none");
+    expect(bar!.getBoundingClientRect().width).toBeLessThanOrEqual(76);
+  });
+
+  it("keeps widget chrome visible while its menu is open", async () => {
+    const view = await mount();
+    const sink = focusSink();
+    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+    const menu = widget!.querySelector<HTMLElement & { open: boolean }>(".board-widget__menu");
+
+    menu!.open = true;
+    await vi.waitFor(() => expect(getComputedStyle(bar!).visibility).toBe("visible"));
+
+    menu!.open = false;
+    sink.focus();
+    expect(widget!.matches(":focus-within")).toBe(false);
+    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+  });
+
   it("snaps pointer resize to columns and rows before committing", async () => {
     const applyOps = vi.fn(async () => undefined);
     const view = await mount(applyOps);
@@ -115,7 +250,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
 
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_resize", name: "first", sizeW: 8, sizeH: 5 },
+        { kind: "widget_resize", name: "first", sizeW: 8, sizeH: 5, heightMode: "fixed" },
       ]),
     );
   });
@@ -168,9 +303,49 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     );
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([
-        { kind: "widget_resize", name: "first", sizeW: 7, sizeH: 4 },
+        { kind: "widget_resize", name: "first", sizeW: 7, sizeH: 4, heightMode: "fixed" },
       ]),
     );
+  });
+
+  it("grows an auto-height card from its frame message and reflows its neighbor", async () => {
+    const view = await mount();
+    view.snapshot = {
+      ...structuredClone(source),
+      widgets: [
+        { ...source.widgets[0]!, sizeW: 8 },
+        { ...source.widgets[1]!, sizeW: 6, presentation: "frameless" },
+      ],
+    };
+    await view.updateComplete;
+    await Promise.all(
+      [...view.querySelectorAll("openclaw-board-widget-cell")].map((cell) => cell.updateComplete),
+    );
+    const cells = [...view.querySelectorAll<HTMLElement>('[data-test-id="board-widget"]')];
+    const first = cells[0]!;
+    const second = cells[1]!;
+    const frame = first.querySelector<HTMLIFrameElement>("iframe")!;
+    const secondTopBefore = second.getBoundingClientRect().top;
+
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: frame.contentWindow,
+        data: { type: "openclaw:widget-size", height: 300 },
+      }),
+    );
+    // The card hugs its exact content height (300px + 2x12px card inset); the
+    // ceil-to-row slack stays outside the card as grid background.
+    await vi.waitFor(() => expect(Math.round(first.getBoundingClientRect().height)).toBe(324));
+    expect(second.getBoundingClientRect().top).toBeGreaterThan(secondTopBefore);
+
+    const cardBody = first.querySelector<HTMLElement>(".board-widget__body");
+    expect(first.classList.contains("board-widget--card")).toBe(true);
+    expect(getComputedStyle(cardBody!).paddingTop).toBe("12px");
+    expect(second.classList.contains("board-widget--frameless")).toBe(true);
+    expect(getComputedStyle(second).backgroundColor).toBe("rgba(0, 0, 0, 0)");
+    expect(getComputedStyle(second).borderTopColor).toBe("rgba(0, 0, 0, 0)");
+    second.focus();
+    expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
 
   it("rejects tab drop targets owned by another board", async () => {

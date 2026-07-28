@@ -5,10 +5,7 @@ import {
 } from "../../agents/agent-run-terminal-outcome.js";
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery-store.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-} from "../../agents/run-timeout-attribution.js";
+import { normalizeAgentRunTimeoutPhase } from "../../agents/run-timeout-attribution.js";
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-events.js";
@@ -25,17 +22,6 @@ import {
   type GatewayAgentTaskTrackingMode,
 } from "./agent-task-tracking.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
-
-function readAgentRunTimeoutAttribution(meta: unknown) {
-  const record =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as Record<string, unknown>)
-      : undefined;
-  return {
-    timeoutPhase: normalizeAgentRunTimeoutPhase(record?.timeoutPhase),
-    providerStarted: normalizeProviderStarted(record?.providerStarted),
-  };
-}
 
 function isGatewayAbortSignalReason(reason: unknown): boolean {
   return reason === undefined || isAbortError(reason) || readErrorName(reason) === "TimeoutError";
@@ -66,12 +52,6 @@ function resolveGatewayAgentAbortStopReason(signal: AbortSignal): "restart" | "r
 
 function resolveAbortedAgentTaskStatus(stopReason: string | undefined): "cancelled" | "timed_out" {
   return stopReason === "timeout" ? "timed_out" : "cancelled";
-}
-
-function resolveGatewayAgentAbortTimeoutPhase(
-  stopReason: "restart" | "rpc" | "timeout",
-): "gateway_draining" | undefined {
-  return stopReason === "restart" ? "gateway_draining" : undefined;
 }
 
 export function resolveAbortedAgentStopReason(entry?: ChatAbortControllerEntry): string {
@@ -157,7 +137,20 @@ export function dispatchAgentRunFromGateway(params: {
     .then(async (result) => {
       const aborted = result?.meta?.aborted === true;
       const stopReason = aborted ? (result?.meta?.stopReason ?? "rpc") : undefined;
-      const timeoutAttribution = readAgentRunTimeoutAttribution(result?.meta);
+      const timeoutPhase = normalizeAgentRunTimeoutPhase(result?.meta?.timeoutPhase);
+      const terminalOutcome = buildAgentRunTerminalOutcome({
+        status:
+          aborted || result?.meta?.stopReason === "timeout" || timeoutPhase
+            ? "timeout"
+            : result?.meta?.error || result?.meta?.stopReason === "error"
+              ? "error"
+              : "ok",
+        error: result?.meta?.error,
+        stopReason: result?.meta?.stopReason,
+        livenessState: result?.meta?.livenessState,
+        timeoutPhase,
+        providerStarted: result?.meta?.providerStarted,
+      });
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
@@ -171,27 +164,14 @@ export function dispatchAgentRunFromGateway(params: {
         status: aborted ? ("timeout" as const) : ("ok" as const),
         summary: aborted ? "aborted" : "completed",
         ...(aborted ? { stopReason } : {}),
-        ...(aborted && timeoutAttribution.timeoutPhase
-          ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+        ...(aborted && terminalOutcome.timeoutPhase
+          ? { timeoutPhase: terminalOutcome.timeoutPhase }
           : {}),
-        ...(aborted && timeoutAttribution.providerStarted !== undefined
-          ? { providerStarted: timeoutAttribution.providerStarted }
+        ...(aborted && terminalOutcome.providerStarted !== undefined
+          ? { providerStarted: terminalOutcome.providerStarted }
           : {}),
         result,
       };
-      const terminalOutcome = buildAgentRunTerminalOutcome({
-        status:
-          aborted || result?.meta?.stopReason === "timeout" || timeoutAttribution.timeoutPhase
-            ? "timeout"
-            : result?.meta?.error || result?.meta?.stopReason === "error"
-              ? "error"
-              : "ok",
-        error: result?.meta?.error,
-        stopReason: result?.meta?.stopReason,
-        livenessState: result?.meta?.livenessState,
-        timeoutPhase: timeoutAttribution.timeoutPhase,
-        providerStarted: timeoutAttribution.providerStarted,
-      });
       const persistTerminalDedupe = () => {
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
@@ -227,9 +207,12 @@ export function dispatchAgentRunFromGateway(params: {
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : undefined;
-      const timeoutPhase = stopReason
-        ? resolveGatewayAgentAbortTimeoutPhase(stopReason)
-        : undefined;
+      const terminalOutcome = buildAgentRunTerminalOutcome({
+        status: aborted ? "timeout" : "error",
+        error: renderedErr,
+        stopReason,
+        timeoutPhase: stopReason === "restart" ? "gateway_draining" : undefined,
+      });
       if (taskTracked) {
         tryFinalizeTrackedAgentTask({
           runId: params.runId,
@@ -242,17 +225,18 @@ export function dispatchAgentRunFromGateway(params: {
         });
       }
       const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
-      const terminalOutcome = buildAgentRunTerminalOutcome({
-        status: aborted ? "timeout" : "error",
-        error: renderedErr,
-        stopReason,
-        timeoutPhase,
-      });
       const payload = {
         runId: params.runId,
         status: aborted ? ("timeout" as const) : ("error" as const),
         summary: aborted ? "aborted" : renderedErr,
-        ...(aborted ? { stopReason, ...(timeoutPhase ? { timeoutPhase } : {}) } : {}),
+        ...(aborted
+          ? {
+              stopReason,
+              ...(terminalOutcome.timeoutPhase
+                ? { timeoutPhase: terminalOutcome.timeoutPhase }
+                : {}),
+            }
+          : {}),
       };
       const persistTerminalDedupe = (settlementPersisted: boolean) => {
         setGatewayDedupeEntries({

@@ -389,6 +389,42 @@ describe("createCodexDynamicToolBridge", () => {
     );
   });
 
+  it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
+    const mcpAppPreview = {
+      kind: "canvas",
+      view: { id: "mcp-app-view-1", title: "Nearby food" },
+      presentation: { target: "assistant_message", sandbox: "scripts" },
+      mcpApp: {
+        viewId: "mcp-app-view-1",
+        serverName: "sample",
+        toolName: "show_options",
+        uiResourceUri: "ui://sample/options.html",
+        toolCallId: "call-options",
+      },
+    };
+    const bridge = createBridgeWithToolResult(
+      "sample__show_options",
+      textToolResult("Found four nearby restaurants.", {
+        mcpAppPreview,
+        structuredContent: { privateModelPayload: true },
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-options",
+      namespace: null,
+      tool: "sample__show_options",
+      arguments: { limit: 4 },
+    });
+
+    expect(result.transcriptDetails).toEqual({ mcpAppPreview });
+    expect(Object.keys(result)).not.toContain("transcriptDetails");
+    expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
+    expect(JSON.stringify(result)).not.toContain("privateModelPayload");
+  });
+
   it("still reports a forbidden sessions_spawn result as a failed dynamic tool call", async () => {
     // Deny symmetry: a genuinely rejected spawn (status "forbidden") must stay an
     // error so the accepted-status allowlist entry does not over-correct.
@@ -802,8 +838,8 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(bridge.specs[1]);
   });
 
-  it("truncates configured text tool results before returning them to Codex", async () => {
-    const longText = "x".repeat(400);
+  it("scales oversized text tool results to the effective context window", async () => {
+    const longText = "x".repeat(40_000);
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({
@@ -812,18 +848,7 @@ describe("createCodexDynamicToolBridge", () => {
         }),
       ],
       signal: new AbortController().signal,
-      hookContext: {
-        agentId: "main",
-        config: {
-          agents: {
-            defaults: {
-              contextLimits: {
-                toolResultMaxChars: 180,
-              },
-            },
-          },
-        } as never,
-      },
+      hookContext: { contextWindowTokens: 128_000 },
     });
 
     const result = await bridge.handleToolCall({
@@ -841,15 +866,43 @@ describe("createCodexDynamicToolBridge", () => {
       throw new Error("expected inputText tool result");
     }
     const text = firstItem.text;
-    expect(text.length).toBeLessThanOrEqual(180);
+    expect(text.length).toBeLessThanOrEqual(32_000);
     expect(text).toContain("OpenClaw truncated dynamic tool result");
-    expect(text).toContain("original 400 chars");
+    expect(text).toContain("original 40000 chars");
     expect(text).toContain("rerun with narrower args");
   });
 
-  it("keeps a whole code point when dynamic tool text crosses the configured boundary", async () => {
-    const maxChars = 180;
-    const totalChars = 400;
+  it("applies the context-share ceiling for small effective windows", async () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "small_context_lookup",
+          execute: vi.fn(async () => textToolResult("x".repeat(20_000))),
+        }),
+      ],
+      signal: new AbortController().signal,
+      hookContext: { contextWindowTokens: 8_000 },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-small-context",
+      namespace: null,
+      tool: "small_context_lookup",
+      arguments: {},
+    });
+    const firstItem = result.contentItems[0];
+    if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
+      throw new Error("expected inputText tool result");
+    }
+    expect(firstItem.text.length).toBeLessThanOrEqual(9_600);
+    expect(firstItem.text).toContain("OpenClaw truncated dynamic tool result");
+  });
+
+  it("keeps a whole code point when dynamic tool text crosses the automatic boundary", async () => {
+    const maxChars = 16_000;
+    const totalChars = 20_000;
     const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalChars} chars, showing ${maxChars}; rerun with narrower args.)`;
     const textBudget = maxChars - noticeText.length - 1;
     const prefix = "a".repeat(textBudget - 1);
@@ -862,12 +915,6 @@ describe("createCodexDynamicToolBridge", () => {
         }),
       ],
       signal: new AbortController().signal,
-      hookContext: {
-        agentId: "main",
-        config: {
-          agents: { defaults: { contextLimits: { toolResultMaxChars: maxChars } } },
-        } as never,
-      },
     });
 
     const result = await bridge.handleToolCall({
@@ -882,123 +929,21 @@ describe("createCodexDynamicToolBridge", () => {
     expect(result.contentItems).toEqual([{ type: "inputText", text: `${prefix}\n${noticeText}` }]);
   });
 
-  it("honors normalized per-agent dynamic tool result caps", async () => {
-    const bridge = createCodexDynamicToolBridge({
-      tools: [
-        createTool({
-          name: "large_lookup",
-          execute: vi.fn(async () => textToolResult("x".repeat(400))),
-        }),
-      ],
-      signal: new AbortController().signal,
-      hookContext: {
-        agentId: "research-bot",
-        config: {
-          agents: {
-            defaults: {
-              contextLimits: {
-                toolResultMaxChars: 1_000,
-              },
-            },
-            list: [
-              {
-                id: "Research Bot",
-                contextLimits: {
-                  toolResultMaxChars: 180,
-                },
-              },
-            ],
-          },
-        } as never,
-      },
-    });
-
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "large_lookup",
-      arguments: {},
-    });
-
-    expect(result.success).toBe(true);
-    const firstItem = result.contentItems[0];
-    if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
-      throw new Error("expected inputText tool result");
-    }
-    expect(firstItem.text.length).toBeLessThanOrEqual(180);
-    expect(firstItem.text).toContain("OpenClaw truncated dynamic tool result");
-  });
-
-  it("keeps truncation notices within tiny configured caps", async () => {
-    const bridge = createCodexDynamicToolBridge({
-      tools: [
-        createTool({
-          name: "large_lookup",
-          execute: vi.fn(async () => textToolResult("x".repeat(400))),
-        }),
-      ],
-      signal: new AbortController().signal,
-      hookContext: {
-        agentId: "main",
-        config: {
-          agents: {
-            defaults: {
-              contextLimits: {
-                toolResultMaxChars: 32,
-              },
-            },
-          },
-        } as never,
-      },
-    });
-
-    const result = await bridge.handleToolCall({
-      threadId: "thread-1",
-      turnId: "turn-1",
-      callId: "call-1",
-      namespace: null,
-      tool: "large_lookup",
-      arguments: {},
-    });
-
-    expect(result.success).toBe(true);
-    const firstItem = result.contentItems[0];
-    if (firstItem?.type !== "inputText" || typeof firstItem.text !== "string") {
-      throw new Error("expected inputText tool result");
-    }
-    expect(firstItem.text.length).toBeLessThanOrEqual(32);
-    expect(firstItem.text).toBe("...(OpenClaw truncated dynamic tool".slice(0, 32));
-  });
-
-  it("budgets configured truncation across all text result blocks", async () => {
+  it("budgets automatic truncation across all text result blocks", async () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [
         createTool({
           name: "large_lookup",
           execute: vi.fn(async () => ({
             content: [
-              { type: "text" as const, text: "a".repeat(200) },
-              { type: "text" as const, text: "b".repeat(200) },
+              { type: "text" as const, text: "a".repeat(10_000) },
+              { type: "text" as const, text: "b".repeat(10_000) },
             ],
             details: {},
           })),
         }),
       ],
       signal: new AbortController().signal,
-      hookContext: {
-        agentId: "main",
-        config: {
-          agents: {
-            defaults: {
-              contextLimits: {
-                toolResultMaxChars: 180,
-              },
-            },
-          },
-        } as never,
-      },
     });
 
     const result = await bridge.handleToolCall({
@@ -1014,10 +959,10 @@ describe("createCodexDynamicToolBridge", () => {
     const text = result.contentItems
       .map((item) => (item.type === "inputText" && typeof item.text === "string" ? item.text : ""))
       .join("");
-    expect(text.length).toBeLessThanOrEqual(180);
+    expect(text.length).toBeLessThanOrEqual(16_000);
     expect(text).toContain("OpenClaw truncated dynamic tool result");
-    expect(text).toContain("original 400 chars");
-    expect(text).not.toContain("b".repeat(100));
+    expect(text).toContain("original 20000 chars");
+    expect(text).not.toContain("b".repeat(10_000));
   });
 
   it.each([

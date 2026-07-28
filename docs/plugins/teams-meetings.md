@@ -6,7 +6,7 @@ read_when:
 title: "Microsoft Teams meetings plugin"
 ---
 
-The `teams-meetings` plugin joins Microsoft Teams links as a guest in the OpenClaw Chrome profile. It accepts work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...`. It does not create meetings, dial in, call Microsoft Graph, or record meetings.
+The `teams-meetings` plugin joins Microsoft Teams links as a guest in the OpenClaw Chrome profile. It accepts work links under `teams.microsoft.com/l/meetup-join/...` and consumer links under `teams.live.com/meet/...`. It does not create meetings, dial in, call Microsoft Graph, or capture audio/video recordings.
 
 ## Setup
 
@@ -19,14 +19,13 @@ system_profiler SPAudioDataType | grep -i BlackHole
 command -v sox
 ```
 
-Enable the plugin, then check setup:
+The plugin is included and enabled by default. Add an entry only to customize it, then check setup:
 
 ```json5
 {
   plugins: {
     entries: {
       "teams-meetings": {
-        enabled: true,
         config: {
           defaultMode: "agent",
           chrome: { guestName: "OpenClaw Agent" },
@@ -36,6 +35,8 @@ Enable the plugin, then check setup:
   },
 }
 ```
+
+Run `openclaw plugins disable teams-meetings` if you do not want the plugin active.
 
 ```bash
 openclaw teamsmeetings setup
@@ -52,7 +53,15 @@ Use `chromeNode.node` to run Chrome, BlackHole, and SoX on a paired macOS node. 
 | `bidi`       | A realtime voice model listens and replies directly.                        |
 | `transcribe` | Observe-only join with live-caption transcript snapshots.                   |
 
-Transcribe mode enables Teams live captions after admission and captures speaker-attributed caption rows. The `transcript` action returns the bounded caption buffer for the active OpenClaw meeting session.
+Teams live captions are enabled after admission in every mode so OpenClaw can
+persist speaker-attributed notes. The `transcript` action still returns the
+bounded live buffer only for `transcribe` sessions. On leave, OpenClaw stores
+the durable transcript and derived summary in the shared state database; list
+or export them with [`openclaw transcripts`](/cli/transcripts).
+
+Automatic notes are enabled by default. Set `transcripts.enabled: false` to
+disable durable notes globally; explicit `transcribe` mode still exposes only
+its bounded live tail.
 
 ## Guest join limits
 

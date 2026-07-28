@@ -93,8 +93,8 @@ type PluginControlUiTabGroup = "control" | "agent";
 
 export type PluginControlUiDescriptor = {
   id: string;
-  /** "tab" adds a Control UI sidebar tab; other surfaces attach to existing views. */
-  surface: "session" | "tool" | "run" | "settings" | "tab";
+  /** "tab" adds a sidebar tab; "widget" advertises a trusted dashboard renderer. */
+  surface: "session" | "tool" | "run" | "settings" | "tab" | "widget";
   label: string;
   description?: string;
   placement?: string;

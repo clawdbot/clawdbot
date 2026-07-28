@@ -111,17 +111,16 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
   it("keeps the web expand/collapse controls in plain browsers", async () => {
     const page = await openPage({ nativeNav: false });
 
-    const collapse = page.locator(".sidebar-brand__collapse");
-    await expect.poll(() => collapse.isVisible()).toBe(true);
-    await collapse.click();
-
-    const expand = page.locator(".shell-nav-expand");
-    await expect.poll(() => expand.isVisible()).toBe(true);
-    await expand.click();
-    await expect.poll(() => collapse.isVisible()).toBe(true);
+    const toggle = page.locator(".shell-chrome-controls__nav-toggle");
+    await expect.poll(() => toggle.isVisible()).toBe(true);
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
+    await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Expand sidebar");
+    await toggle.click();
+    await expect.poll(() => toggle.getAttribute("aria-label")).toBe("Collapse sidebar");
   });
 
-  it("hides both web toggles when the native titlebar toggle is present", async () => {
+  it("hides the web chrome cluster when the native titlebar toggle is present", async () => {
     const page = await openPage({ nativeNav: true });
 
     await expect
@@ -150,10 +149,15 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     });
     expect(initialWidth).toBeGreaterThan(0);
 
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
+    // Expanded native-nav hosts keep the cluster's search (no native search
+    // control exists while the rail is open) but hide the duplicate nav toggle.
+    await expect.poll(() => page.locator(".shell-chrome-controls__search").isVisible()).toBe(true);
+    await expect
+      .poll(() => page.locator(".shell-chrome-controls__nav-toggle").isVisible())
+      .toBe(false);
 
-    // Collapse through the native titlebar path; the floating expand control
-    // must stay hidden (the titlebar button is the only expand affordance).
+    // Collapse through the native titlebar path; the whole web chrome cluster
+    // hides (native titlebar provides search and new-thread while collapsed).
     await page.evaluate(() => {
       window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
     });
@@ -169,7 +173,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         ),
       )
       .toBe(true);
-    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
     // With the in-page expand control hidden, collapse anchors keyboard focus
     // on the content column instead of stranding it on the body.
     await expect
@@ -191,8 +195,7 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     const page = await openPage({ webChrome: true });
     const toolbar = page.locator(".macos-titlebar-controls");
     await expect.poll(() => toolbar.isVisible()).toBe(true);
-    await expect.poll(() => page.locator(".sidebar-brand__collapse").isVisible()).toBe(false);
-    await expect.poll(() => page.locator(".shell-nav-expand").isVisible()).toBe(false);
+    await expect.poll(() => page.locator(".shell-chrome-controls").isVisible()).toBe(false);
 
     const back = toolbar.getByRole("button", { name: "Back" });
     const forward = toolbar.getByRole("button", { name: "Forward" });
@@ -298,6 +301,53 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     await expect
       .poll(() => header.getByRole("button", { name: "Open command palette" }).isVisible())
       .toBe(true);
+  });
+
+  it("keeps the mobile drawer inert while closed and announces its expanded state", async () => {
+    const page = await openPage({ nativeNav: false, width: 900 });
+    const navigation = page.locator(".shell-nav");
+    const backdrop = page.locator(".shell-nav-backdrop");
+    const trigger = page.locator(".chat-pane__nav-toggle").first();
+
+    await expect.poll(() => navigation.getAttribute("inert")).toBe("");
+    await expect.poll(() => backdrop.getAttribute("inert")).toBe("");
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          backdrop: document.activeElement?.matches(".shell-nav-backdrop") ?? false,
+          navigation: document.activeElement?.closest(".shell-nav") !== null,
+        })),
+      )
+      .toEqual({ backdrop: false, navigation: false });
+
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--nav-drawer-open");
+    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await expect.poll(() => backdrop.getAttribute("inert")).toBeNull();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
+
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--nav-drawer-open");
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => trigger.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await expect.poll(() => backdrop.getAttribute("inert")).toBe("");
   });
 
   it("keeps the sidebar rail beside a half-width native link browser", async () => {

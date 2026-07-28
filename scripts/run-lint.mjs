@@ -31,9 +31,25 @@ const uiI18nStatus = run(
 if (uiI18nStatus !== 0) {
   process.exitCode = uiI18nStatus;
 } else {
-  process.exitCode = run(
+  const oxlintStatus = run(
     process.execPath,
     [path.resolve("scripts", "run-oxlint-shards.mjs"), ...process.argv.slice(2)],
     { env: process.env, stdio: "inherit" },
   );
+  if (oxlintStatus !== 0) {
+    process.exitCode = oxlintStatus;
+  } else {
+    // Control UI CSS hygiene: plain stylesheets plus css`` templates in Lit
+    // components. oxlint cannot see inside tagged CSS templates.
+    process.exitCode = run(
+      resolveRepoToolBinPath("stylelint"),
+      [
+        "--config",
+        path.resolve("config", "stylelint.config.mjs"),
+        "ui/src/**/*.css",
+        "ui/src/**/*.ts",
+      ],
+      { env: process.env, stdio: "inherit" },
+    );
+  }
 }

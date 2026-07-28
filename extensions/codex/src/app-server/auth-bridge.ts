@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
   findPersistedAuthProfileCredential,
@@ -21,12 +22,15 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { hasUsableOAuthCredential } from "openclaw/plugin-sdk/provider-auth";
+import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { resolveCodexAppServerHomeDir, withEphemeralCodexAuthStore } from "./auth-start-options.js";
 import type { CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import { ensureCodexComputerUseServiceApp } from "./computer-use-service.js";
 import {
   resolveCodexAppServerUserHomeDir,
   resolveCodexComputerUseConfig,
+  type CodexAppServerHomeScope,
   type CodexAppServerStartOptions,
 } from "./config.js";
 import {
@@ -257,11 +261,18 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
   authProfileId?: string;
   authProfileStore: AuthProfileStore;
   agentDir?: string;
+  /** Required: an omitted scope would silently reintroduce prepared logins on native homes. */
+  homeScope: CodexAppServerHomeScope;
   config?: AuthProfileOrderConfig;
   subscriptionProfileRequiredError: string;
   subscriptionProfileUnusableError: string;
 }) {
-  if (params.authRequirement === "api-key") {
+  // A user-home app-server owns the operator's native Codex account. Codex persists
+  // api-key logins into CODEX_HOME/auth.json and swaps the live account for external
+  // token logins, so a prepared OpenClaw handoff here would rewrite the account that
+  // Codex CLI and Desktop share. Native homes are verified, never logged into.
+  const usesNativeHome = params.homeScope === "user";
+  if (params.authRequirement === "api-key" && !usesNativeHome) {
     const apiKey = params.resolvedApiKey?.trim();
     if (!apiKey) {
       throw new Error("Prepared Codex API-key route is missing its resolved API key.");
@@ -279,7 +290,7 @@ export async function resolveCodexAppServerPreparedAuthHandoff(params: {
     agentDir: params.agentDir,
     config: params.config,
   });
-  if (params.authRequirement !== "subscription") {
+  if (usesNativeHome || params.authRequirement !== "subscription") {
     return { authProfileId, nativeAuthProfile };
   }
   if (!authProfileId || !nativeAuthProfile) {
@@ -437,10 +448,23 @@ async function withCodexHomeEnvironment(
     ? startOptions.env[HOME_ENV_VAR]
     : undefined;
   await fs.mkdir(codexHome, { recursive: true });
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   await ensureCodexComputerUseSharedPluginCache({
     codexHome,
-    config: resolveCodexComputerUseConfig({ pluginConfig }),
+    config: computerUseConfig,
   });
+  if (computerUseConfig.enabled && computerUseConfig.autoInstall) {
+    try {
+      await ensureCodexComputerUseServiceApp({
+        codexHome,
+        appServerCommand: startOptions.command,
+      });
+    } catch (error) {
+      throw new AgentHarnessPreflightError("Codex Computer Use client provisioning failed.", {
+        cause: error,
+      });
+    }
+  }
   if (nativeHome) {
     await fs.mkdir(nativeHome, { recursive: true });
   }
@@ -492,16 +516,7 @@ export async function applyCodexAppServerAuthProfile(params: {
     return;
   }
   if (params.authProfileId === null) {
-    if (params.authRequirement === "subscription") {
-      const response = await params.client.request<CodexGetAccountResponse>("account/read", {
-        refreshToken: false,
-      });
-      if (!isJsonObject(response.account) || response.account.type !== "chatgpt") {
-        throw createCodexAppServerAuthError(
-          "Codex subscription auth profile could not produce login credentials.",
-        );
-      }
-    }
+    await assertNativeCodexAccountMatchesRoute(params.client, params.authRequirement);
     return;
   }
   let loginParams: CodexLoginAccountParams | undefined;
@@ -552,6 +567,39 @@ export async function applyCodexAppServerAuthProfile(params: {
     return;
   }
   await params.client.request("account/login/start", loginParams);
+}
+
+/**
+ * Native-home connections are verified, never logged into. Both directions of the
+ * check protect the same billing boundary: a subscription route cannot run without
+ * ChatGPT tokens, and a Platform route must not silently spend the operator's
+ * ChatGPT plan. An absent account is left alone because the native home may serve a
+ * custom model provider that reports no OpenAI account at all.
+ */
+async function assertNativeCodexAccountMatchesRoute(
+  client: CodexAppServerClient,
+  authRequirement: CodexAppServerAuthRequirement | undefined,
+): Promise<void> {
+  if (!authRequirement) {
+    return;
+  }
+  const response = await client.request<CodexGetAccountResponse>("account/read", {
+    refreshToken: false,
+  });
+  const accountType = isJsonObject(response.account) ? response.account.type : undefined;
+  if (authRequirement === "subscription") {
+    if (accountType !== "chatgpt") {
+      throw createCodexAppServerAuthError(
+        "Codex subscription auth profile could not produce login credentials.",
+      );
+    }
+    return;
+  }
+  if (accountType === "chatgpt") {
+    throw createCodexAppServerAuthError(
+      'Codex Platform route requires an API-key account, but the native Codex home is signed in with a ChatGPT subscription. Sign that home in with `codex login --with-api-key`, or set appServer.homeScope="agent" so OpenClaw can inject its own key.',
+    );
+  }
 }
 
 function createCodexAppServerAuthError(message: string, cause?: unknown): Error & { status: 401 } {
@@ -708,7 +756,9 @@ function parseCodexCliAuthFileApiKey(raw: string): string | undefined {
 
 async function readCodexCliAuthFileApiKey(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   try {
-    return parseCodexCliAuthFileApiKey(await fs.readFile(resolveCodexCliAuthFilePath(env), "utf8"));
+    return parseCodexCliAuthFileApiKey(
+      await readSecretFile(resolveCodexCliAuthFilePath(env), "Codex CLI auth file"),
+    );
   } catch {
     return undefined;
   }

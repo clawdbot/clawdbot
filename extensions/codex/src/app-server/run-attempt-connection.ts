@@ -27,6 +27,7 @@ import { resolveCodexBindingAppServerConnection } from "./binding-connection.js"
 import {
   isCodexAppServerApprovalPolicyAllowedByRequirements,
   readCodexPluginConfig,
+  resolveCodexAppServerHomeScope,
   resolveCodexComputerUseConfig,
   resolveCodexModelBackedReviewerPolicyContext,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -201,6 +202,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
         authProfileId: resolvedStartupAuthProfileId,
         authProfileStore: params.authProfileStore,
         agentDir,
+        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
         config: params.config,
         subscriptionProfileRequiredError:
           "Prepared Codex subscription route requires a forwarded OpenAI OAuth or token profile.",
@@ -243,20 +245,25 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     );
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
-  await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
+  if (effectiveWorkspace !== resolvedWorkspace) {
+    await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
+  }
   preDynamicStartupStages.mark("effective-workspace");
+  const shouldPromoteApprovalPolicy =
+    beforeToolCallPolicy.hasBeforeToolCallHook ||
+    beforeToolCallPolicy.trustedToolPolicies.length > 0;
   const resolvePolicyAppServer = () =>
     resolveCodexAppServerForOpenClawToolPolicy({
       appServer: configuredAppServer,
       pluginConfig,
       env: process.env,
-      shouldPromote:
-        beforeToolCallPolicy.hasBeforeToolCallHook ||
-        beforeToolCallPolicy.trustedToolPolicies.length > 0,
+      shouldPromote: shouldPromoteApprovalPolicy,
       execPolicy,
       canUseUntrustedApprovalPolicy:
-        configuredAppServer.start.transport !== "stdio" ||
-        isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+        shouldPromoteApprovalPolicy &&
+        configuredAppServer.approvalPolicy === "never" &&
+        (configuredAppServer.start.transport !== "stdio" ||
+          isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted")),
     });
   let policyAppServer = resolvePolicyAppServer();
   let appServer = resolveCodexAppServerForModelProvider({
@@ -278,6 +285,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   preDynamicStartupStages.mark("app-server-policy");
   preDynamicStartupStages.mark("native-hook-relay");
   const terminalState = {
+    turnSucceeded: false,
     explicitCancellationObserved: false,
     explicitCancellationReason: undefined as unknown,
     terminalOutcomeFrozen: false,
@@ -312,6 +320,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   } else {
     params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
   }
+  const startupBindingBeforeRotation = startupBinding;
   startupBinding = await rotateOversizedCodexAppServerStartupBinding({
     binding: startupBinding,
     bindingStore,
@@ -325,20 +334,24 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   const initialInactiveThreadBootstrapBindingForcedFreshStart =
     initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
   preDynamicStartupStages.mark("rotate-binding");
-  reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-  configuredAppServer = resolveRuntimeOptionsForBinding({
-    modelProvider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-  });
-  policyAppServer = resolvePolicyAppServer();
-  appServer = resolveCodexAppServerForModelProvider({
-    appServer: policyAppServer,
-    provider: reviewerPolicyContext.modelProvider,
-    model: reviewerPolicyContext.model,
-    config: params.config,
-    env: process.env,
-    agentDir,
-  });
+  // Rotation returns the original binding on the common resume path; only a
+  // cleared or replaced native thread changes its model, policy, or connection.
+  if (startupBinding !== startupBindingBeforeRotation) {
+    reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
+    configuredAppServer = resolveRuntimeOptionsForBinding({
+      modelProvider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+    });
+    policyAppServer = resolvePolicyAppServer();
+    appServer = resolveCodexAppServerForModelProvider({
+      appServer: policyAppServer,
+      provider: reviewerPolicyContext.modelProvider,
+      model: reviewerPolicyContext.model,
+      config: params.config,
+      env: process.env,
+      agentDir,
+    });
+  }
   const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
     configuredEvents: options.nativeHookRelay?.events,
     appServer,

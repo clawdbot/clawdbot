@@ -258,11 +258,11 @@ export function registerDnsCli(program: Command) {
         inherit: true,
       });
 
-      if (cfg.discovery?.wideArea?.enabled !== true) {
+      if (!cfg.discovery?.wideArea?.domain?.trim()) {
         defaultRuntime.log("");
         defaultRuntime.log(
           theme.muted(
-            "Note: enable discovery.wideArea.enabled in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
+            "Note: set discovery.wideArea.domain in the active OpenClaw config ($OPENCLAW_CONFIG_PATH, default ~/.openclaw/openclaw.json) on the gateway and restart the gateway so it writes the DNS-SD zone.",
           ),
         );
       }

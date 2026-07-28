@@ -2,18 +2,25 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
-import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionSharingRole,
+  SessionSuggestion,
+  SessionSuggestionResolution,
+  TaskSuggestion,
+} from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -22,44 +29,36 @@ import type {
   ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
-import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-result.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
-import {
-  handleChatAttachmentDrop,
-  isEditableDropTarget,
-  isFileDrag,
-} from "./components/chat-attachments.ts";
+import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
+import type { ChatSessionCompanionThread } from "./chat-session-companion.ts";
+import { renderChatViewNotices } from "./chat-view-notices.ts";
+import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
-import {
-  isChatRunWorking,
-  renderChatComposer,
-  resetChatComposerState,
-} from "./components/chat-composer.ts";
+import type { ChatComposerDisabledBanner } from "./components/chat-composer-types.ts";
+import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import { inlineChatImageFromEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import type { ArtifactDownloadResolver } from "./components/chat-message-media.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
+import type { SessionRailMode } from "./components/chat-session-rail.ts";
+import { renderChatSessionSuggestions } from "./components/chat-session-suggestions.ts";
 import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
-import "./components/chat-sidebar.ts";
-import type {
-  DetailFullMessageResult,
-  SidebarContent,
-  SidebarFullMessageRequest,
-} from "./components/chat-sidebar.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
+import { renderChatSwarmProgress } from "./components/chat-swarm-progress.ts";
 import { renderChatTaskSuggestions } from "./components/chat-task-suggestions.ts";
 import {
   type ChatTranscriptController,
-  isChatThreadSearchOpen,
   renderChatPinnedMessages,
   renderChatSearchBar,
   renderChatThread,
-  resetChatThreadPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
@@ -69,7 +68,15 @@ import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
+import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
+
+type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
+};
 
 export type ChatProps = {
   transcript: ChatTranscriptController;
@@ -85,28 +92,42 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
+  observerDigest?: SessionObserverDigest | null;
+  sessionRailReady?: boolean;
+  observerRunId?: string | null;
+  observerStartedAt?: number;
+  observerLastReadAt?: number;
+  onObserverVisibilityChange?: (visible: boolean) => void;
+  sessionRailCompanion?: ChatSessionCompanionThread;
+  sessionRailOpenRequest?: number;
+  sessionRailMode?: SessionRailMode;
+  sessionRailDocked?: boolean;
+  onSessionRailSubmit?: (question: string) => void;
+  onSessionRailDraftChange?: (draft: string) => void;
+  onSessionRailClear?: () => void;
+  onSessionRailModeChange?: (mode: SessionRailMode) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
-  historyPagination?: {
-    loading: boolean;
-  };
-  sideChatTurns?: ChatSideResult[];
-  sideChatPending?: ChatSideResultPending | null;
-  sideChatHidden?: boolean;
+  historyPagination?: { loading: boolean };
   toolMessages: unknown[];
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  /** Browser-local active run identity, retained across transient disconnects. */
+  runId?: string | null;
+  runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
+  queuedOutboxCount?: number;
   realtimeTalkActive?: boolean;
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
@@ -118,12 +139,15 @@ export type ChatProps = {
   realtimeTalkVideoPending?: boolean;
   realtimeTalkCameraError?: boolean;
   connected: boolean;
+  offline?: boolean;
   gatewayClient?: GatewayBrowserClient | null;
   composerHoldToRecord?: boolean;
+  suggestionComposer?: boolean;
+  typingLabel?: string | null;
+  onTypingChange?: (typing: boolean) => void;
   canSend: boolean;
   disabledReason: string | null;
-  disabledActionLabel?: string | null;
-  onDisabledAction?: (() => void) | null;
+  disabledBanner?: ChatComposerDisabledBanner;
   error: string | null;
   runError?: { summary: string } | null;
   inlineApproval?: ExecApprovalRequest | null;
@@ -131,20 +155,14 @@ export type ChatProps = {
   approvalErrors?: ReadonlyMap<string, string>;
   approvalNowMs?: number;
   onApprovalDecision?: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
+  workspaceConflict?: WorkspaceResultConflict;
+  onDismissWorkspaceConflict?: () => void;
   sessions: SessionsListResult | null;
+  swarmSessions?: readonly GatewaySessionRow[];
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
   providerUsage?: ProviderUsageDisplayProps;
   focusMode?: boolean;
-  onLoadSidebarFullMessage?: (
-    request: SidebarFullMessageRequest,
-  ) => Promise<DetailFullMessageResult | null | undefined>;
-  sidebarOpen?: boolean;
-  sidebarContent?: SidebarContent | null;
-  /** Pane too narrow for side-by-side chat + detail panel: stack them
-   * vertically instead (the divider flips to a horizontal handle). */
-  sidebarStacked?: boolean;
-  splitRatio?: number;
   canvasPluginSurfaceUrl?: string | null;
   boardProvider?: BoardProvider;
   embedSandboxMode?: EmbedSandboxMode;
@@ -154,16 +172,23 @@ export type ChatProps = {
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   assistantAvatar: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  attributedIdentity?: boolean;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
+  resolveArtifactDownload?: ArtifactDownloadResolver;
   autoExpandToolCalls?: boolean;
   attachments?: ChatAttachment[];
   getAttachments?: () => ChatAttachment[];
+  pendingAttachmentReads?: number;
+  getPendingAttachmentReads?: () => number;
+  readSignal?: AbortSignal;
+  onPendingReadsChange?: (delta: 1 | -1) => void;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
   showNewMessages?: boolean;
   onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
@@ -188,15 +213,8 @@ export type ChatProps = {
   onQueueSteer?: (id: string) => void;
   onGoalCommand?: (command: string) => void;
   onHistoryIntent?: (event: Event) => void;
-  /** Sends a detached /btw side question (selection popup or side-chat
-   * follow-up). `displayQuestion` overrides the pending-turn display when the
-   * command embeds carried follow-up context; `onSendRejected` lets the panel
-   * restore its typed follow-up when the detached send is not accepted. */
-  onSideQuestion?: (command: string, displayQuestion?: string, onSendRejected?: () => void) => void;
-  /** Hides the side-chat panel; the conversation (and a pending run) survives. */
-  onSideChatClose?: () => void;
-  /** Discards the side-chat conversation and retires any pending run. */
-  onSideChatClear?: () => void;
+  onCompanionQuestion?: (question: string) => void;
+  onCompanionPrefill?: (question: string) => void;
   onNewSession: () => void;
   onClearHistory?: () => void;
   agentsList: {
@@ -211,25 +229,13 @@ export type ChatProps = {
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   onRevealWorkspaceFile?: (path: string) => void;
-  onCloseSidebar?: () => void;
-  onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   gatewayUrl?: string;
   composerControls?: TemplateResult | typeof nothing;
-  replyTarget?: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  } | null;
+  replyTarget?: ChatReplyTarget | null;
   onClearReply?: () => void;
-  onSetReply?: (target: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  }) => void;
+  onSetReply?: (target: ChatReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
@@ -240,6 +246,15 @@ export type ChatProps = {
   canDismissTaskSuggestions?: boolean;
   onAcceptTaskSuggestion?: (suggestion: TaskSuggestion) => void;
   onDismissTaskSuggestion?: (suggestion: TaskSuggestion) => void;
+  sessionSuggestions?: readonly SessionSuggestion[];
+  sessionSuggestionRole?: SessionSharingRole;
+  sessionSuggestionBusyIds?: ReadonlySet<string>;
+  sessionSuggestionsArchived?: boolean;
+  canResolveSessionSuggestions?: boolean;
+  onResolveSessionSuggestion?: (
+    suggestion: SessionSuggestion,
+    resolution: SessionSuggestionResolution,
+  ) => void;
   pullRequests?: ControlUiSessionPullRequest[];
   pullRequestsBranch?: ControlUiSessionBranch;
   pullRequestsRateLimited?: boolean;
@@ -248,38 +263,16 @@ export type ChatProps = {
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
-export function resetChatViewState(paneId?: string) {
-  resetChatComposerState(paneId);
-  resetChatThreadPresentationState(paneId);
-}
-
-export function renderChatResizableDivider(props: {
-  className?: string;
-  label: string;
-  maxRatio?: number;
-  minRatio?: number;
-  onElement?: (element: Element | undefined) => void;
-  onResize: (event: CustomEvent<{ splitRatio: number }>) => void;
-  orientation: "horizontal" | "vertical";
-  splitRatio: number;
-}) {
-  return html`<resizable-divider
-    ${ref(props.onElement ?? (() => {}))}
-    class=${props.className ?? nothing}
-    .splitRatio=${props.splitRatio}
-    .minRatio=${props.minRatio ?? 0.4}
-    .maxRatio=${props.maxRatio ?? 0.7}
-    .label=${props.label}
-    .orientation=${props.orientation}
-    @resize=${props.onResize}
-  ></resizable-divider>`;
+function isImageLightboxEvent(event: Event): boolean {
+  return event
+    .composedPath()
+    .some(
+      (target) => target instanceof HTMLElement && target.localName === "openclaw-image-lightbox",
+    );
 }
 
 export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
-  const splitRatio = props.splitRatio ?? 0.6;
-  const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
-  const sidebarStacked = props.sidebarStacked === true;
   const workspaceCollapsed = props.sessionWorkspace?.collapsed !== false;
   const workspaceDockBottom = Boolean(
     props.sessionWorkspace &&
@@ -288,39 +281,20 @@ export function renderChat(props: ChatProps) {
   const tasksOpen = props.backgroundTasks?.collapsed === false;
   const tasksDockBottom = tasksOpen && props.backgroundTasks?.narrowLayout === true;
   const canCompose = props.canSend;
-  const sideChatProps = {
-    turns: props.sideChatTurns ?? [],
-    pending: props.sideChatPending ?? null,
-    hidden: props.sideChatHidden === true,
-  };
-  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
-  let chatSection: HTMLElement | null = null;
-  // Nested dragenter/dragleave events must stay balanced so crossing transcript
-  // children does not flicker the pane-level file drop affordance.
-  let attachmentDragDepth = 0;
-  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (active) {
-      if (!canCompose || !isFileDrag(event.dataTransfer)) {
-        return;
+  const openImage = props.onOpenImage
+    ? (item: ImageLightboxItem, requestVersion?: number) => {
+        if (requestVersion === undefined) {
+          props.onOpenImage?.(item);
+        } else {
+          props.onOpenImage?.(item, requestVersion);
+        }
       }
-      attachmentDragDepth += 1;
-    } else {
-      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
-    }
-    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
-  };
-  const clearAttachmentDropActive = (event: DragEvent) => {
-    attachmentDragDepth = 0;
-    const target = event.currentTarget;
-    if (target instanceof HTMLElement) {
-      target.removeAttribute("data-attachment-drop-active");
-    }
-  };
-
+    : undefined;
+  const openImmediateImage = props.onOpenImage
+    ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
+    : undefined;
+  const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
+  let chatSection: HTMLElement | null = null;
   const thread = renderChatThread(
     {
       paneId: props.paneId,
@@ -333,12 +307,15 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      runId: props.runId,
+      runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
       persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      startupStatus: props.startupStatus,
       waitingApproval: props.waitingApproval,
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
@@ -349,13 +326,14 @@ export function renderChat(props: ChatProps) {
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,
+      userId: props.userId,
       userName: props.userName,
       userAvatar: props.userAvatar,
-      attributedIdentity: props.attributedIdentity,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
       assistantAttachmentAuthToken: props.assistantAttachmentAuthToken,
+      resolveArtifactDownload: props.resolveArtifactDownload,
       canvasPluginSurfaceUrl: props.canvasPluginSurfaceUrl,
       embedSandboxMode: props.embedSandboxMode,
       allowExternalEmbedUrls: props.allowExternalEmbedUrls,
@@ -365,18 +343,22 @@ export function renderChat(props: ChatProps) {
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: openImage,
       onRequestUpdate: requestUpdate,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
       onDraftChange: props.onDraftChange,
-      getDraft: props.getDraft,
       onSend: props.onSend,
       onSetReply: props.onSetReply,
       onRewindMessage: props.onRewindMessage,
       onForkMessage: props.onForkMessage,
       // Archived/non-composable sessions must not offer selection actions:
       // withholding the callback keeps the popup from rendering at all.
-      onSideQuestion: props.canSend ? props.onSideQuestion : undefined,
+      onCompanionQuestion:
+        props.canSend && !props.suggestionComposer ? props.onCompanionQuestion : undefined,
+      onCompanionPrefill:
+        props.canSend && !props.suggestionComposer ? props.onCompanionPrefill : undefined,
       onOpenSession: props.onSessionSelect,
       backgroundTasks: props.backgroundTasks,
       onFocusComposer: () =>
@@ -392,10 +374,11 @@ export function renderChat(props: ChatProps) {
     sessionKey: props.sessionKey,
     currentAgentId: props.currentAgentId,
     connected: props.connected,
+    offline: props.offline,
+    queuedOutboxCount: props.queuedOutboxCount,
     canSend: props.canSend,
     disabledReason: props.disabledReason,
-    disabledActionLabel: props.disabledActionLabel,
-    onDisabledAction: props.onDisabledAction,
+    disabledBanner: props.disabledBanner,
     runError: props.runError,
     sending: props.sending,
     canAbort: props.canAbort,
@@ -416,6 +399,10 @@ export function renderChat(props: ChatProps) {
     followUpMode: props.followUpMode,
     attachments: props.attachments,
     getAttachments: props.getAttachments,
+    pendingAttachmentReads: props.pendingAttachmentReads,
+    getPendingAttachmentReads: props.getPendingAttachmentReads,
+    readSignal: props.readSignal,
+    onPendingReadsChange: props.onPendingReadsChange,
     replyTarget: props.replyTarget,
     realtimeTalkActive: props.realtimeTalkActive,
     realtimeTalkStatus: props.realtimeTalkStatus,
@@ -429,6 +416,9 @@ export function renderChat(props: ChatProps) {
     realtimeTalkCameraError: props.realtimeTalkCameraError,
     gatewayClient: props.gatewayClient,
     composerHoldToRecord: props.composerHoldToRecord,
+    suggestionComposer: props.suggestionComposer,
+    typingLabel: props.typingLabel,
+    onTypingChange: props.onTypingChange,
     composerControls: props.composerControls,
     getDraft: props.getDraft,
     onDraftChange: props.onDraftChange,
@@ -436,8 +426,8 @@ export function renderChat(props: ChatProps) {
     onHistoryKeydown: props.onHistoryKeydown,
     onSlashIntent: props.onSlashIntent,
     onSend: props.onSend,
-    onCompact: props.onCompact,
-    onToggleRealtimeTalk: props.onToggleRealtimeTalk,
+    onCompact: props.suggestionComposer ? undefined : props.onCompact,
+    onToggleRealtimeTalk: props.suggestionComposer ? undefined : props.onToggleRealtimeTalk,
     onToggleRealtimeCamera: props.onToggleRealtimeCamera,
     onSwitchRealtimeCamera: props.onSwitchRealtimeCamera,
     onDismissRealtimeTalkError: props.onDismissRealtimeTalkError,
@@ -484,48 +474,22 @@ export function renderChat(props: ChatProps) {
             }
           : {},
       )}
-      @drop=${(event: DragEvent) => {
-        // Text/URL drops stay native only inside editable controls; anywhere
-        // else they are cancelled so a dropped link cannot navigate the app
-        // away. Session drags are handled by the parent chat page either way.
-        if (!isFileDrag(event.dataTransfer)) {
-          if (!isEditableDropTarget(event)) {
-            event.preventDefault();
-          }
-          return;
-        }
-        event.preventDefault();
-        clearAttachmentDropActive(event);
-        if (canCompose) {
-          handleChatAttachmentDrop(event, props);
-        }
-      }}
-      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
-      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
-      @dragover=${(event: DragEvent) => {
-        if (!isFileDrag(event.dataTransfer)) {
-          if (!isEditableDropTarget(event)) {
-            event.preventDefault();
-            if (event.dataTransfer) {
-              event.dataTransfer.dropEffect = "none";
-            }
-          }
-          return;
-        }
-        event.preventDefault();
-        if (event.dataTransfer) {
-          event.dataTransfer.dropEffect = canCompose ? "copy" : "none";
-        }
-      }}
+      @drop=${attachmentDropHandlers.onDrop}
+      @dragenter=${attachmentDropHandlers.onDragenter}
+      @dragleave=${attachmentDropHandlers.onDragleave}
+      @click=${(event: Event) => openInlineChatImage(event, openImmediateImage)}
+      @dragover=${attachmentDropHandlers.onDragover}
       @keydown=${(event: KeyboardEvent) => {
+        if (isImageLightboxEvent(event)) {
+          return;
+        }
+        if ((event.key === "Enter" || event.key === " ") && inlineChatImageFromEvent(event)) {
+          openInlineChatImage(event, openImmediateImage);
+          return;
+        }
         if (event.key === "Escape" && props.replyTarget && !event.defaultPrevented) {
           event.preventDefault();
           props.onClearReply?.();
-          return;
-        }
-        if (event.key === "Escape" && sideChatVisible && !isChatThreadSearchOpen(props.paneId)) {
-          event.preventDefault();
-          props.onSideChatClose?.();
           return;
         }
         if ((event.metaKey || event.ctrlKey) && !event.shiftKey && event.key === "f") {
@@ -534,43 +498,7 @@ export function renderChat(props: ChatProps) {
         }
       }}
     >
-      ${props.error
-        ? html`
-            <div class="chat-error" role="alert">
-              <span class="chat-error__dot" aria-hidden="true"></span>
-              <span class="chat-error__content">${props.error}</span>
-              ${props.onDismissError
-                ? html`
-                    <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
-                      <button
-                        class="chat-error__dismiss"
-                        type="button"
-                        @click=${props.onDismissError}
-                        aria-label=${t("chat.actions.dismissError")}
-                      >
-                        ${icons.x}
-                      </button>
-                    </openclaw-tooltip>
-                  `
-                : nothing}
-            </div>
-          `
-        : nothing}
-      ${props.focusMode && props.onToggleFocusMode
-        ? html`
-            <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>
-              <button
-                class="chat-focus-exit"
-                type="button"
-                @click=${props.onToggleFocusMode}
-                aria-label=${t("chat.actions.exitFocusMode")}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>
-          `
-        : nothing}
-      ${renderChatSearchBar(props.paneId, requestUpdate)}
+      ${renderChatViewNotices(props)} ${renderChatSearchBar(props.paneId, requestUpdate)}
       ${renderChatPinnedMessages(
         {
           paneId: props.paneId,
@@ -614,76 +542,81 @@ export function renderChat(props: ChatProps) {
             `
           : nothing}
         <div class="chat-workbench__main">
-          <div
-            class="chat-split-container ${sidebarOpen
-              ? "chat-split-container--open"
-              : ""} ${sidebarOpen && sidebarStacked ? "chat-split-container--stacked" : ""}"
-          >
+          <div class="chat-split-container">
             <div
-              class="chat-main"
-              style="flex: ${sidebarOpen ? `0 1 ${splitRatio * 100}%` : "1 1 100%"}"
+              class="chat-main ${props.sessionRailDocked && props.sessionRailMode === "expanded"
+                ? "chat-main--rail-docked"
+                : ""}"
             >
-              ${thread}
-              ${props.inlineApproval && props.onApprovalDecision
-                ? html`<div class="chat-inline-approval">
-                    ${renderExecApprovalCard({
-                      approval: props.inlineApproval,
-                      busy: props.approvalBusy === true,
-                      error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
-                      nowMs: props.approvalNowMs ?? Date.now(),
-                      variant: "inline",
-                      onDecision: props.onApprovalDecision,
-                    })}
-                  </div>`
+              <div class="chat-main__conversation">
+                ${thread}
+                ${props.inlineApproval && props.onApprovalDecision
+                  ? html`<div class="chat-inline-approval">
+                      ${renderExecApprovalCard({
+                        approval: props.inlineApproval,
+                        busy: props.approvalBusy === true,
+                        error: props.approvalErrors?.get(props.inlineApproval.id) ?? null,
+                        nowMs: props.approvalNowMs ?? Date.now(),
+                        variant: "inline",
+                        onDecision: props.onApprovalDecision,
+                      })}
+                    </div>`
+                  : nothing}
+                ${renderChatTaskSuggestions({
+                  suggestions: props.taskSuggestions ?? [],
+                  busyIds: props.taskSuggestionBusyIds ?? new Set(),
+                  canAccept: props.canAcceptTaskSuggestions === true,
+                  canDismiss: props.canDismissTaskSuggestions === true,
+                  onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
+                  onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
+                })}
+                ${renderChatPullRequests({
+                  pullRequests: props.pullRequests ?? [],
+                  branch: props.pullRequestsBranch,
+                  rateLimited: props.pullRequestsRateLimited === true,
+                  expanded: props.pullRequestsExpanded === true,
+                  onExpand: () => props.onExpandPullRequests?.(),
+                  onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
+                })}
+                ${renderChatSessionSuggestions({
+                  suggestions: props.sessionSuggestions ?? [],
+                  role: props.sessionSuggestionRole,
+                  busyIds: props.sessionSuggestionBusyIds ?? new Set(),
+                  archived: props.sessionSuggestionsArchived === true,
+                  canResolve: props.canResolveSessionSuggestions === true,
+                  onResolve: (suggestion, resolution) =>
+                    props.onResolveSessionSuggestion?.(suggestion, resolution),
+                })}
+                ${scrollToBottomButton}
+                ${renderChatSwarmProgress({
+                  sessions: props.swarmSessions ?? [],
+                  sessionKey: props.sessionKey,
+                })}
+                ${chatColumnFooter}
+              </div>
+              ${props.sessionRailReady
+                ? html`
+                    <openclaw-chat-session-rail
+                      .sessionKey=${props.sessionKey}
+                      .digest=${props.observerDigest ?? null}
+                      .running=${Boolean(props.observerRunId)}
+                      .activeRunId=${props.observerRunId ?? null}
+                      .startedAt=${props.observerStartedAt}
+                      .lastReadAt=${props.observerLastReadAt}
+                      .planStatus=${props.planStatus ?? null}
+                      .pullRequests=${props.pullRequests ?? []}
+                      .companion=${props.sessionRailCompanion}
+                      .connected=${props.connected}
+                      .openRequest=${props.sessionRailOpenRequest ?? 0}
+                      .onSubmit=${props.onSessionRailSubmit}
+                      .onDraftChange=${props.onSessionRailDraftChange}
+                      .onClear=${props.onSessionRailClear}
+                      .onModeChange=${props.onSessionRailModeChange}
+                      .onVisibilityChange=${props.onObserverVisibilityChange}
+                    ></openclaw-chat-session-rail>
+                  `
                 : nothing}
-              ${renderChatTaskSuggestions({
-                suggestions: props.taskSuggestions ?? [],
-                busyIds: props.taskSuggestionBusyIds ?? new Set(),
-                canAccept: props.canAcceptTaskSuggestions === true,
-                canDismiss: props.canDismissTaskSuggestions === true,
-                onAccept: (suggestion) => props.onAcceptTaskSuggestion?.(suggestion),
-                onDismiss: (suggestion) => props.onDismissTaskSuggestion?.(suggestion),
-              })}
-              ${renderChatPullRequests({
-                pullRequests: props.pullRequests ?? [],
-                branch: props.pullRequestsBranch,
-                rateLimited: props.pullRequestsRateLimited === true,
-                expanded: props.pullRequestsExpanded === true,
-                onExpand: () => props.onExpandPullRequests?.(),
-                onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
-              })}
-              ${scrollToBottomButton} ${chatColumnFooter}
-              ${renderSideChatPanel({
-                ...sideChatProps,
-                // Detached slash sends are refused while disconnected (see
-                // canSubmitDraft); hide the input instead of eating drafts.
-                canFollowUp:
-                  canCompose && props.connected && typeof props.onSideQuestion === "function",
-                onFollowUp: props.onSideQuestion,
-                onClose: props.onSideChatClose,
-                onClear: props.onSideChatClear,
-              })}
             </div>
-
-            ${sidebarOpen
-              ? html`${renderChatResizableDivider({
-                    label: t("nav.resize"),
-                    orientation: sidebarStacked ? "horizontal" : "vertical",
-                    splitRatio,
-                    onResize: (event) => props.onSplitRatioChange?.(event.detail.splitRatio),
-                  })}
-                  <openclaw-chat-detail-panel
-                    class="chat-sidebar"
-                    .content=${props.sidebarContent ?? null}
-                    .loadFullMessage=${props.onLoadSidebarFullMessage ?? null}
-                    .canvasPluginSurfaceUrl=${props.canvasPluginSurfaceUrl ?? null}
-                    .embedSandboxMode=${props.embedSandboxMode ?? "scripts"}
-                    .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
-                    .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
-                    .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
-                    @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
-                  ></openclaw-chat-detail-panel> `
-              : nothing}
           </div>
         </div>
       </div>

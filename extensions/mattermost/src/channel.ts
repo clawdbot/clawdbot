@@ -1,3 +1,4 @@
+import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
 // Mattermost plugin module implements channel behavior.
 import type {
   ChannelMessageActionAdapter,
@@ -54,6 +55,7 @@ import { MattermostChannelConfigSchema } from "./config-surface.js";
 import { mattermostDoctor } from "./doctor.js";
 import { resolveMattermostGroupRequireMention } from "./group-mentions.js";
 import {
+  inspectMattermostAccount,
   listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
@@ -63,7 +65,7 @@ import {
 import { looksLikeMattermostTargetId, normalizeMattermostMessagingTarget } from "./normalize.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveMattermostOutboundSessionRoute } from "./session-route.js";
-import { mattermostSetupAdapter } from "./setup-core.js";
+import { mattermostSetupAdapter, mattermostSetupContract } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
@@ -153,9 +155,9 @@ function describeMattermostMessageTool({
 >[0]): ChannelMessageToolDiscovery {
   const enabledAccounts = (
     accountId
-      ? [resolveMattermostAccount({ cfg, accountId })]
+      ? [inspectMattermostAccount({ cfg, accountId })]
       : listMattermostAccountIds(cfg).map((listedAccountId) =>
-          resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+          inspectMattermostAccount({ cfg, accountId: listedAccountId }),
         )
   )
     .filter((account) => account.enabled)
@@ -188,9 +190,9 @@ function hasConfiguredMattermostDirectoryAccount({
   accountId,
 }: Pick<MattermostDirectoryListParams, "cfg" | "accountId">): boolean {
   const accounts = accountId
-    ? [resolveMattermostAccount({ cfg, accountId })]
+    ? [inspectMattermostAccount({ cfg, accountId })]
     : listMattermostAccountIds(cfg).map((listedAccountId) =>
-        resolveMattermostAccount({ cfg, accountId: listedAccountId }),
+        inspectMattermostAccount({ cfg, accountId: listedAccountId }),
       );
   return accounts.some((account) =>
     Boolean(account.enabled && account.botToken?.trim() && account.baseUrl?.trim()),
@@ -787,6 +789,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
       ...meta,
     },
     setup: mattermostSetupAdapter,
+    setupContract: mattermostSetupContract,
     setupWizard: mattermostSetupWizard,
     capabilities: {
       chatTypes: ["direct", "channel", "group", "thread"],
@@ -809,6 +812,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     configSchema: MattermostChannelConfigSchema,
     config: {
       ...mattermostConfigAdapter,
+      inspectAccount: adaptScopedAccountAccessor(inspectMattermostAccount),
       isConfigured: isMattermostConfigured,
       describeAccount: describeMattermostAccount,
     },
@@ -894,6 +898,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         configured: Boolean(account.botToken && account.baseUrl),
         extra: {
           botTokenSource: account.botTokenSource,
+          botTokenStatus: account.botTokenStatus,
           baseUrl: account.baseUrl,
           dmPolicy: account.config.dmPolicy ?? "pairing",
           connected: runtime?.connected ?? false,

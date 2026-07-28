@@ -92,7 +92,8 @@ export function createWebSearchTool(options?: {
   return {
     label: "Web Search",
     name: "web_search",
-    description: "Search current web; normalized provider results.",
+    description:
+      "Search current web; normalized provider results. Supports freshness and date-range filters (freshness, date_after/date_before) and domain filtering (domain_filter).",
     parameters: WebSearchSchema,
     outputSchema: WebSearchOutputSchema,
     execute: async (_toolCallId, args, signal) => {

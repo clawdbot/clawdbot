@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
+  applySessionEntryLifecycleMutation,
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
@@ -114,10 +115,10 @@ function requireStoredSessionEntry(storePath: string, sessionKey = "main"): Sess
   return entry;
 }
 
-async function createSessionStoreFile(entry: SessionEntry): Promise<string> {
+async function createSessionStoreFile(entry: SessionEntry, sessionKey = "main"): Promise<string> {
   const dir = tempDirs.make("openclaw-agent-runner-");
   const storePath = join(dir, "sessions.json");
-  await replaceSessionEntry({ storePath, sessionKey: "main" }, entry);
+  await replaceSessionEntry({ storePath, sessionKey }, entry);
   return storePath;
 }
 
@@ -125,7 +126,7 @@ async function readStoredMainSession(storePath: string): Promise<SessionEntry> {
   return requireStoredSessionEntry(storePath);
 }
 
-let modelFallbackModule: typeof import("../../agents/model-fallback.js");
+let modelFallbackModule: typeof import("../../agents/model-fallback-runner.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
 
 let runReplyAgentPromise:
@@ -139,7 +140,7 @@ async function getRunReplyAgent() {
   return await runReplyAgentPromise;
 }
 
-vi.mock("../../agents/model-fallback.js", () => ({
+vi.mock("../../agents/model-fallback-runner.js", () => ({
   runWithModelFallback: async ({
     provider,
     model,
@@ -155,6 +156,9 @@ vi.mock("../../agents/model-fallback.js", () => ({
     model,
     attempts: [],
   }),
+}));
+
+vi.mock("../../agents/model-fallback-attempt.js", () => ({
   isFallbackSummaryError: (err: unknown) =>
     err instanceof Error &&
     err.name === "FallbackSummaryError" &&
@@ -221,7 +225,7 @@ vi.mock("./queue.js", async (importOriginal) => ({
 
 beforeAll(async () => {
   // Avoid attributing the initial agent-runner import cost to the first test case.
-  modelFallbackModule = await import("../../agents/model-fallback.js");
+  modelFallbackModule = await import("../../agents/model-fallback-runner.js");
   ({ onAgentEvent } = await import("../../infra/agent-events.js"));
   await getRunReplyAgent();
 });
@@ -1159,6 +1163,108 @@ describe("runReplyAgent pending final delivery capture", () => {
       pendingFinalDeliveryIntentId: stored.pendingFinalDeliveryIntentId,
       pendingFinalDeliveryRetryText: "visible final",
     });
+  });
+
+  it("persists canonical SQLite pending final delivery after its intent commits", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "visible canonical final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    const result = await run();
+    const stored = loadSessionEntry({ sessionKey, storePath });
+    expect(stored).toMatchObject({
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryIntentId: expect.any(String),
+      pendingFinalDeliveryText: "visible canonical final",
+      sessionId: "session",
+    });
+    const visiblePayload = Array.isArray(result) ? result[0] : result;
+    expect(getReplyPayloadMetadata(visiblePayload ?? {})).toMatchObject({
+      pendingFinalDeliveryIntentId: stored?.pendingFinalDeliveryIntentId,
+      pendingFinalDeliveryRetryText: "visible canonical final",
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("rejects canonical SQLite pending final delivery when its session is deleted", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      await applySessionEntryLifecycleMutation({
+        removals: [{ sessionKey }],
+        skipMaintenance: true,
+        storePath,
+      });
+      return {
+        payloads: [{ text: "final from deleted session" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not persist canonical SQLite pending final delivery on a reset session", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry, sessionKey);
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        { sessionId: "session-after-reset", updatedAt: Date.now() },
+      );
+      return {
+        payloads: [{ text: "final from previous session" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+    });
+
+    await expect(run()).rejects.toThrow("pending final delivery session changed or was deleted");
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "session-after-reset",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })?.pendingFinalDelivery).toBeUndefined();
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("persists auto-reply delivery context for restart recovery", async () => {
@@ -4477,15 +4583,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runOverrides: {
         provider: "anthropic",
         model: "claude-opus-4-7",
-        config: {
-          agents: {
-            defaults: {
-              cliBackends: {
-                "claude-cli": { command: "claude" },
-              },
-            },
-          },
-        },
+        config: {},
       },
     });
     await run();

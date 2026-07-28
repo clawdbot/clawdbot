@@ -138,6 +138,11 @@ ClawHub, or hook-pack install, use `openclaw plugins update` instead. With
 `--link`, `--force` only confirms the source; the linked directory is not
 copied or overwritten.
 
+If a newly installed plugin requires configuration that is not present yet,
+OpenClaw records the install but leaves the plugin disabled. Configure
+`plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an
+existing config entry is present but invalid, install fails without rewriting it.
+
 ## Restart and inspect
 
 A running managed Gateway with config reload enabled restarts automatically

@@ -11,6 +11,7 @@ import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
 import { SLACK_EDIT_TEXT_LIMIT } from "./limits.js";
+import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
@@ -24,6 +25,7 @@ import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
+import type { SlackAttachment } from "./types.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
@@ -37,6 +39,8 @@ export type SlackMessageSummary = {
   text?: string;
   user?: string;
   thread_ts?: string;
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
   reply_count?: number;
   reactions?: Array<{
     name?: string;
@@ -50,6 +54,14 @@ export type SlackMessageSummary = {
     mimetype?: string;
   }>;
 };
+
+function renderSlackReadMessageText(message: SlackMessageSummary): SlackMessageSummary {
+  if (!hasSlackMessageTableBlock(message)) {
+    return message;
+  }
+  const text = resolveSlackMessageText(message, { preserveMessageTextWhitespace: true });
+  return text && text !== message.text ? { ...message, text } : message;
+}
 
 export type SlackPin = {
   type?: string;
@@ -478,13 +490,15 @@ export async function readSlackMessages(
       limit: readLimit,
       ...exactBounds,
     });
-    const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter((message) => {
-      if (exactMessageId) {
-        return message.ts === exactMessageId;
-      }
-      // conversations.replies includes the parent message; drop it for replies-only reads.
-      return message.ts !== opts.threadId;
-    });
+    const messages = ((result.messages ?? []) as SlackMessageSummary[])
+      .filter((message) => {
+        if (exactMessageId) {
+          return message.ts === exactMessageId;
+        }
+        // conversations.replies includes the parent message; drop it for replies-only reads.
+        return message.ts !== opts.threadId;
+      })
+      .map(renderSlackReadMessageText);
     return {
       messages,
       hasMore: exactMessageId ? false : Boolean(result.has_more),
@@ -496,9 +510,9 @@ export async function readSlackMessages(
     limit: readLimit,
     ...exactBounds,
   });
-  const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter(
-    (message) => !exactMessageId || message.ts === exactMessageId,
-  );
+  const messages = ((result.messages ?? []) as SlackMessageSummary[])
+    .filter((message) => !exactMessageId || message.ts === exactMessageId)
+    .map(renderSlackReadMessageText);
   return {
     messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),

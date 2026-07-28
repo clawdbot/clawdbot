@@ -41,9 +41,213 @@ function assembleChatDelta(currentText, payload) {
   return snapshot;
 }
 
+const INLINE_WIDGET_DOCUMENTS_PATH = "/__openclaw__/canvas/documents";
+const INLINE_WIDGET_MIN_HEIGHT = 160;
+const INLINE_WIDGET_MAX_HEIGHT = 1200;
+const INLINE_WIDGET_VIEWPORT_MAX_HEIGHT = 160;
+const CANVAS_SURFACE_REFRESH_INTERVAL_MS = 8 * 60 * 1_000;
+const CANVAS_SURFACE_REFRESH_RETRY_MS = 5_000;
+
+function decodeRepeatedly(raw) {
+  let value = raw;
+  for (let index = 0; index < 8; index += 1) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      return null;
+    }
+    if (decoded === value) {
+      return decoded;
+    }
+    value = decoded;
+  }
+  return null;
+}
+
+function canonicalInlineWidgetTarget(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const target = raw.trim();
+  if (!target.startsWith("/") || target.startsWith("//") || target.includes("\\")) {
+    return null;
+  }
+  const suffixIndex = [target.indexOf("?"), target.indexOf("#")]
+    .filter((index) => index >= 0)
+    .reduce((lowest, index) => Math.min(lowest, index), target.length);
+  const path = target.slice(0, suffixIndex);
+  if (!path.startsWith(`${INLINE_WIDGET_DOCUMENTS_PATH}/`)) {
+    return null;
+  }
+  const segments = path.split("/");
+  if (
+    segments[0] !== "" ||
+    segments.slice(1).some((segment) => {
+      if (!segment) {
+        return true;
+      }
+      const decoded = decodeRepeatedly(segment);
+      return (
+        decoded === null ||
+        decoded === "." ||
+        decoded === ".." ||
+        decoded.includes("/") ||
+        decoded.includes("\\")
+      );
+    })
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(target, "http://openclaw.invalid");
+    return parsed.origin === "http://openclaw.invalid" && parsed.pathname === path ? target : null;
+  } catch {
+    return null;
+  }
+}
+
+function boundedWidgetKey(raw) {
+  if (new TextEncoder().encode(raw).length <= 200) {
+    return raw;
+  }
+  let hash = 2166136261;
+  for (const character of raw) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return `widget-${hash.toString(16).padStart(8, "0")}`;
+}
+
+function coerceInlineWidgetPreview(block) {
+  const preview = block?.type === "canvas" ? block.preview : null;
+  if (
+    !preview ||
+    preview.kind !== "canvas" ||
+    preview.surface !== "assistant_message" ||
+    preview.render !== "url" ||
+    !["scripts", "strict"].includes(preview.sandbox)
+  ) {
+    return null;
+  }
+  const target = canonicalInlineWidgetTarget(preview.url);
+  if (!target) {
+    return null;
+  }
+  const preferredHeight = Number.isFinite(preview.preferredHeight)
+    ? Math.min(
+        Math.max(Math.trunc(preview.preferredHeight), INLINE_WIDGET_MIN_HEIGHT),
+        INLINE_WIDGET_MAX_HEIGHT,
+      )
+    : 320;
+  return {
+    key: boundedWidgetKey(
+      typeof preview.viewId === "string" && preview.viewId.trim() ? preview.viewId.trim() : target,
+    ),
+    title: typeof preview.title === "string" && preview.title.trim() ? preview.title.trim() : "Widget",
+    target,
+    preferredHeight,
+    sandbox: preview.sandbox,
+  };
+}
+
+function chatMessageWidgets(message) {
+  const role = typeof message?.role === "string" ? message.role.trim().toLowerCase() : null;
+  if (role !== "assistant" || !Array.isArray(message?.content)) {
+    return [];
+  }
+  const emitted = new Set();
+  return message.content
+    .map(coerceInlineWidgetPreview)
+    .filter(Boolean)
+    .map((widget) => {
+      const base = widget.key.slice(0, 240);
+      let key = widget.key;
+      let suffix = 2;
+      while (emitted.has(key)) {
+        key = `${base}-${suffix}`;
+        suffix += 1;
+      }
+      emitted.add(key);
+      return key === widget.key ? widget : { ...widget, key };
+    });
+}
+
+function isLoopbackHostname(rawHostname) {
+  const hostname = rawHostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "::1") {
+    return true;
+  }
+  const octets = hostname.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255)
+  );
+}
+
+function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
+  const target = canonicalInlineWidgetTarget(rawTarget);
+  if (!target || typeof rawSurfaceUrl !== "string") {
+    return null;
+  }
+  let surface;
+  try {
+    surface = new URL(rawSurfaceUrl.trim());
+  } catch {
+    return null;
+  }
+  const secureTransport =
+    surface.protocol === "https:" ||
+    (surface.protocol === "http:" && isLoopbackHostname(surface.hostname));
+  if (
+    !secureTransport ||
+    surface.username ||
+    surface.password ||
+    surface.search ||
+    surface.hash
+  ) {
+    return null;
+  }
+  const encodedSegments = surface.pathname.split("/");
+  if (encodedSegments[0] !== "" || encodedSegments.slice(1).some((segment) => !segment)) {
+    return null;
+  }
+  const segments = [];
+  for (const encoded of encodedSegments.slice(1)) {
+    const decoded = decodeRepeatedly(encoded);
+    if (
+      decoded === null ||
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\")
+    ) {
+      return null;
+    }
+    segments.push(decoded);
+  }
+  if (
+    segments.length < 3 ||
+    segments.at(-3) !== "__openclaw__" ||
+    segments.at(-2) !== "cap" ||
+    !segments.at(-1)
+  ) {
+    return null;
+  }
+  const prefix = surface.pathname.replace(/\/+$/u, "");
+  return `${surface.origin}${prefix}${target}`;
+}
+
 const tauri = window["__TAURI__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
+const rendererSessionId =
+  globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+const rendererEpoch = Math.max(
+  1,
+  Math.trunc((globalThis.performance?.timeOrigin ?? Date.now()) * 1_000),
+);
 
 const elements = {
   agentAvatar: document.querySelector("#agent-avatar"),
@@ -60,6 +264,7 @@ const elements = {
   replyState: document.querySelector("#reply-state"),
   replyText: document.querySelector("#reply-text"),
   replyThinking: document.querySelector("#reply-thinking"),
+  replyWidgets: document.querySelector("#reply-widgets"),
   send: document.querySelector("#send"),
   sendIcon: document.querySelector("#send-icon"),
   shortcutCapture: document.querySelector("#shortcut-capture"),
@@ -82,9 +287,20 @@ let hideTimer = null;
 let acceptedTimer = null;
 let visibilitySequence = 0;
 let popoverSequence = 0;
+
+function nextVisibilityOperation() {
+  visibilitySequence += 1;
+  return visibilitySequence;
+}
 let sendError = "";
 let gatewayState = "down";
 let gatewayNotice = "";
+let canvasSurfaceUrl = null;
+let canvasSurfaceObservedUrl = null;
+let canvasSurfaceRefreshedAt = 0;
+let canvasSurfaceRetryAt = 0;
+let canvasSurfaceRefreshPromise = null;
+let canvasSurfaceRetryTimer = null;
 let gatewayDisconnectSequence = 0;
 let openPopover = null;
 let menuIndex = 0;
@@ -130,12 +346,30 @@ function setGatewayState(payload) {
   const wasUp = gatewayState === "up";
   gatewayState = payload?.state || "down";
   gatewayNotice = typeof payload?.notice === "string" ? payload.notice : "";
+  const nextCanvasSurfaceUrl =
+    gatewayState === "up" && typeof payload?.canvasSurfaceUrl === "string"
+      ? payload.canvasSurfaceUrl
+      : null;
+  if (nextCanvasSurfaceUrl !== canvasSurfaceObservedUrl) {
+    canvasSurfaceObservedUrl = nextCanvasSurfaceUrl;
+    canvasSurfaceUrl = nextCanvasSurfaceUrl;
+    canvasSurfaceRefreshedAt = nextCanvasSurfaceUrl ? Date.now() : 0;
+    canvasSurfaceRetryAt = 0;
+    window.clearTimeout(canvasSurfaceRetryTimer);
+    canvasSurfaceRetryTimer = null;
+    if (!nextCanvasSurfaceUrl) {
+      canvasSurfaceRefreshPromise = null;
+    }
+  }
   if (gatewayState !== "up") {
     gatewayDisconnectSequence += 1;
     terminalizeDisconnectedReply();
   }
   renderStatus();
   updateSendButton();
+  if (activeReply?.widgets.length) {
+    renderReplyWidgets();
+  }
   if (gatewayState === "up" && !wasUp) {
     void refreshAgents();
   }
@@ -195,11 +429,14 @@ function resetAccepted() {
 function clearReply() {
   activeReply = null;
   elements.reply.hidden = true;
-  elements.reply.classList.remove("has-error", "is-terminal");
+  elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
   elements.replyError.textContent = "";
   elements.replyState.textContent = "";
   elements.replyText.textContent = "";
+  elements.replyWidgets.replaceChildren();
+  elements.replyWidgets.hidden = true;
   elements.replyThinking.hidden = true;
+  scheduleWidgetSync();
 }
 
 function scrollReplyToEnd() {
@@ -212,7 +449,223 @@ function renderReplyText() {
   // Deliberately plain text: this small native surface avoids a Markdown dependency and preserves
   // whitespace, leaving Markdown punctuation visible instead of interpreting agent output.
   elements.replyText.textContent = activeReply?.text || "";
+  if (activeReply?.widgets.length) {
+    scheduleWidgetSync();
+  }
   scrollReplyToEnd();
+}
+
+function canvasSurfaceNeedsRefresh() {
+  const now = Date.now();
+  return (
+    Boolean(canvasSurfaceObservedUrl) &&
+    now >= canvasSurfaceRetryAt &&
+    (!canvasSurfaceUrl || now - canvasSurfaceRefreshedAt >= CANVAS_SURFACE_REFRESH_INTERVAL_MS)
+  );
+}
+
+function scheduleCanvasSurfaceRetry() {
+  window.clearTimeout(canvasSurfaceRetryTimer);
+  if (!activeReply?.widgets.length || !canvasSurfaceObservedUrl) {
+    canvasSurfaceRetryTimer = null;
+    return;
+  }
+  const delay = Math.max(0, canvasSurfaceRetryAt - Date.now());
+  canvasSurfaceRetryTimer = window.setTimeout(() => {
+    canvasSurfaceRetryTimer = null;
+    if (canvasSurfaceNeedsRefresh()) {
+      void refreshCanvasSurface();
+    }
+  }, delay);
+}
+
+function refreshCanvasSurface() {
+  if (canvasSurfaceRefreshPromise) {
+    return canvasSurfaceRefreshPromise;
+  }
+  const requestedObservedUrl = canvasSurfaceObservedUrl;
+  if (!requestedObservedUrl || Date.now() < canvasSurfaceRetryAt) {
+    return Promise.resolve(canvasSurfaceUrl);
+  }
+  canvasSurfaceRefreshPromise = invoke("quickchat_refresh_widget_surface")
+    .then((refreshed) => {
+      if (canvasSurfaceObservedUrl !== requestedObservedUrl) {
+        return canvasSurfaceUrl;
+      }
+      const next = typeof refreshed === "string" && refreshed.trim() ? refreshed : null;
+      if (next) {
+        canvasSurfaceObservedUrl = next;
+        canvasSurfaceUrl = next;
+        canvasSurfaceRefreshedAt = Date.now();
+        canvasSurfaceRetryAt = 0;
+      } else {
+        canvasSurfaceUrl = null;
+        canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
+      }
+      return canvasSurfaceUrl;
+    })
+    .catch(() => {
+      if (canvasSurfaceObservedUrl === requestedObservedUrl) {
+        canvasSurfaceUrl = null;
+        canvasSurfaceRetryAt = Date.now() + CANVAS_SURFACE_REFRESH_RETRY_MS;
+      }
+      return canvasSurfaceUrl;
+    })
+    .finally(() => {
+      canvasSurfaceRefreshPromise = null;
+      if (activeReply?.widgets.length) {
+        renderReplyWidgets();
+      }
+      if (
+        activeReply?.widgets.length &&
+        canvasSurfaceObservedUrl &&
+        (!canvasSurfaceUrl || canvasSurfaceNeedsRefresh())
+      ) {
+        scheduleCanvasSurfaceRetry();
+      }
+    });
+  return canvasSurfaceRefreshPromise;
+}
+
+let widgetSyncScheduled = false;
+let widgetSyncPromise = Promise.resolve();
+
+function scheduleWidgetSync() {
+  if (widgetSyncScheduled) {
+    return;
+  }
+  const generation = visibilitySequence;
+  widgetSyncScheduled = true;
+  window.requestAnimationFrame(() => {
+    widgetSyncScheduled = false;
+    const widgets = activeReply?.widgets || [];
+    const activeKey = activeReply?.activeWidgetKey ?? null;
+    const host = elements.replyWidgets.querySelector(".inline-widget-host");
+    const rect = host?.getBoundingClientRect();
+    const layouts = [];
+    if (rect && rect.width > 0 && rect.height > 0) {
+      for (const widget of widgets) {
+        const url = resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target);
+        if (!url) {
+          continue;
+        }
+        layouts.push({
+          key: widget.key,
+          url,
+          sandbox: widget.sandbox,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          visible: widget.key === activeKey && !openPopover,
+        });
+      }
+    }
+    widgetSyncPromise = widgetSyncPromise
+      .catch(() => {})
+      .then(() =>
+        invoke("quickchat_sync_widgets", {
+          widgets: layouts,
+          hasWidgets: widgets.length > 0,
+          expanded: !elements.reply.hidden || Boolean(openPopover),
+          sessionId: rendererSessionId,
+          rendererEpoch,
+          generation,
+        }),
+      )
+      .catch((error) => {
+        sendError = friendlyError(error, "Could not render the widget.");
+        renderStatus();
+      });
+  });
+}
+
+function selectReplyWidget(key) {
+  if (!activeReply?.widgets.some((widget) => widget.key === key)) {
+    return;
+  }
+  activeReply.activeWidgetKey = key;
+  renderReplyWidgets();
+}
+
+function renderReplyWidgets() {
+  elements.replyWidgets.replaceChildren();
+  const widgets = activeReply?.widgets || [];
+  elements.replyWidgets.hidden = widgets.length === 0;
+  elements.reply.classList.toggle("has-widgets", widgets.length > 0);
+  if (widgets.length === 0) {
+    scheduleWidgetSync();
+    return;
+  }
+
+  const activeKey = widgets.some((widget) => widget.key === activeReply.activeWidgetKey)
+    ? activeReply.activeWidgetKey
+    : widgets[0].key;
+  activeReply.activeWidgetKey = activeKey;
+  if (widgets.length > 1) {
+    const tabs = document.createElement("div");
+    tabs.className = "inline-widget-tabs";
+    for (const widget of widgets) {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "inline-widget-tab";
+      tab.classList.toggle("active", widget.key === activeKey);
+      tab.textContent = widget.title;
+      tab.addEventListener("click", () => selectReplyWidget(widget.key));
+      tabs.append(tab);
+    }
+    elements.replyWidgets.append(tabs);
+  }
+
+  const widget = widgets.find((candidate) => candidate.key === activeKey) ?? widgets[0];
+  const card = document.createElement("section");
+  card.className = "inline-widget";
+  card.dataset.widgetKey = widget.key;
+  const title = document.createElement("div");
+  title.className = "inline-widget-title";
+  title.textContent = widget.title;
+  card.append(title);
+
+  if (!resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target)) {
+    const unavailable = document.createElement("div");
+    unavailable.className = "inline-widget-unavailable";
+    unavailable.textContent = "Widget unavailable until the Gateway reconnects.";
+    card.append(unavailable);
+  } else {
+    const host = document.createElement("div");
+    host.className = "inline-widget-host";
+    host.style.height = `${Math.min(widget.preferredHeight, INLINE_WIDGET_VIEWPORT_MAX_HEIGHT)}px`;
+    card.append(host);
+  }
+  elements.replyWidgets.append(card);
+  scheduleWidgetSync();
+  scrollReplyToEnd();
+}
+
+function updateReplyWidgets(message) {
+  if (!Array.isArray(message?.content)) {
+    return;
+  }
+  const role = typeof message?.role === "string" ? message.role.trim().toLowerCase() : null;
+  if (role !== "assistant") {
+    return;
+  }
+  const widgets = chatMessageWidgets(message);
+  const changed = JSON.stringify(widgets) !== JSON.stringify(activeReply?.widgets || []);
+  if (activeReply && changed) {
+    activeReply.widgets = widgets;
+    if (!widgets.some((widget) => widget.key === activeReply.activeWidgetKey)) {
+      activeReply.activeWidgetKey = widgets[0]?.key ?? null;
+    }
+    if (widgets.length && canvasSurfaceNeedsRefresh()) {
+      const refresh = refreshCanvasSurface();
+      canvasSurfaceUrl = null;
+      renderReplyWidgets();
+      void refresh;
+    } else {
+      renderReplyWidgets();
+    }
+  }
 }
 
 function stopReplyThinking() {
@@ -249,12 +702,16 @@ function startReply(target, identity, runId) {
     },
     terminal: false,
     text: null,
+    widgets: [],
+    activeWidgetKey: null,
   };
   elements.reply.hidden = false;
-  elements.reply.classList.remove("has-error", "is-terminal");
+  elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
   elements.replyError.textContent = "";
   elements.replyState.textContent = "";
   elements.replyText.textContent = "";
+  elements.replyWidgets.replaceChildren();
+  elements.replyWidgets.hidden = true;
   elements.replyThinking.textContent = reducedMotion.matches ? "…" : "Thinking…";
   elements.replyThinking.hidden = false;
   renderAvatar(elements.replyAgentAvatar, identity);
@@ -275,6 +732,7 @@ function applyChatEvent(payload) {
     return;
   }
 
+  updateReplyWidgets(payload?.message);
   const hasTextUpdate =
     typeof payload?.deltaText === "string" || chatMessageText(payload?.message) !== null;
   if (hasTextUpdate) {
@@ -421,6 +879,9 @@ function setPopoverVisibility(kind) {
   if (kind !== "shortcut") {
     resetShortcutCapture();
   }
+  if (activeReply?.widgets.length) {
+    scheduleWidgetSync();
+  }
 }
 
 async function openNamedPopover(kind) {
@@ -537,8 +998,7 @@ async function requestHide() {
   if (hiding) {
     return;
   }
-  visibilitySequence += 1;
-  const hideSequence = visibilitySequence;
+  const operationGeneration = nextVisibilityOperation();
   hiding = true;
   pendingChatEvents = [];
   closePopover(false, false);
@@ -547,18 +1007,29 @@ async function requestHide() {
   hideTimer = window.setTimeout(
     async () => {
       try {
-        await invoke("quickchat_hide");
+        const hidden = await invoke("quickchat_hide", {
+          sessionId: rendererSessionId,
+          rendererEpoch,
+          generation: operationGeneration,
+        });
+        if (visibilitySequence !== operationGeneration) {
+          return;
+        }
+        if (hidden !== true) {
+          document.body.classList.add("shown");
+          return;
+        }
         resetAccepted();
         clearReply();
       } catch (error) {
-        if (visibilitySequence === hideSequence) {
+        if (visibilitySequence === operationGeneration) {
           sendError = friendlyError(error);
           renderStatus();
           document.body.classList.add("shown");
           elements.input.focus();
         }
       } finally {
-        if (visibilitySequence === hideSequence) {
+        if (visibilitySequence === operationGeneration) {
           hiding = false;
         }
       }
@@ -568,6 +1039,26 @@ async function requestHide() {
 }
 
 function reveal() {
+  const operationGeneration = nextVisibilityOperation();
+  void invoke("quickchat_activate", {
+    sessionId: rendererSessionId,
+    rendererEpoch,
+    generation: operationGeneration,
+  })
+    .then((accepted) => {
+      if (accepted !== true && visibilitySequence === operationGeneration) {
+        document.body.classList.remove("shown");
+        return;
+      }
+      if (
+        accepted === true &&
+        visibilitySequence === operationGeneration &&
+        activeReply?.widgets.length
+      ) {
+        scheduleWidgetSync();
+      }
+    })
+    .catch(() => {});
   window.clearTimeout(hideTimer);
   resetAccepted();
   hiding = false;
@@ -651,6 +1142,7 @@ async function send(openDashboard) {
   }
 }
 
+window.addEventListener("resize", scheduleWidgetSync);
 elements.input.addEventListener("input", () => {
   sendError = "";
   renderStatus();
@@ -746,7 +1238,6 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 await listen("quickchat:shown", () => {
-  visibilitySequence += 1;
   reveal();
 });
 await listen("quickchat:hide-requested", () => {
@@ -761,7 +1252,10 @@ await listen("quickchat:chat-event", (event) => {
 
 const readySequence = visibilitySequence;
 try {
-  const shouldShow = await invoke("quickchat_ready");
+  const shouldShow = await invoke("quickchat_ready", {
+    sessionId: rendererSessionId,
+    rendererEpoch,
+  });
   if (visibilitySequence === readySequence) {
     if (shouldShow) {
       reveal();

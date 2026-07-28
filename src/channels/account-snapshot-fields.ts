@@ -284,6 +284,9 @@ export function projectSafeChannelAccountSnapshotFields(
       : {}),
     ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),
+    // Only a proven-dead ingress crosses this boundary; `false`/absent both mean
+    // "nothing known", so never project a negative and invent a healthy claim.
+    ...(readBoolean(record, "ingressUnavailable") === true ? { ingressUnavailable: true } : {}),
     ...(readBoolean(record, "terminalDisconnect") !== undefined
       ? { terminalDisconnect: readBoolean(record, "terminalDisconnect") }
       : {}),

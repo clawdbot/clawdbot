@@ -2,19 +2,24 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createMeetingSession,
+  MeetingPlatformAdapter,
   MeetingSessionRuntime,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import type {
+  TranscriptStartRequest,
+  TranscriptStopRequest,
+} from "openclaw/plugin-sdk/transcripts";
 import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "./config.js";
 import {
   testZoomMeetingListening,
   testZoomMeetingSpeech,
   type ZoomMeetingsProbeContext,
 } from "./runtime-probes.js";
-import { createZoomMeetingsSession } from "./runtime-session.js";
 import { getZoomMeetingsSetupStatus } from "./runtime-setup.js";
 import {
   launchZoomMeetingInChrome,
@@ -30,14 +35,10 @@ import type {
   ZoomMeetingsJoinResult,
   ZoomMeetingsSession,
 } from "./transports/types.js";
-import {
-  ZOOM_MEETINGS_PLATFORM_ADAPTER,
-  isZoomMeetingsRealtimeRouteReady,
-  isZoomMeetingsTalkBackMode,
-} from "./transports/zoom-meetings-platform-adapter.js";
+import { ZOOM_MEETINGS_PLATFORM_ADAPTER } from "./transports/zoom-meetings-platform-adapter.js";
 import { hasSameZoomMeetingJoinCredential } from "./transports/zoom-meetings-urls.js";
 
-type ManualActionReason = NonNullable<ZoomMeetingsChromeHealth["manualActionReason"]>;
+type ManualActionReason = NonNullable<ZoomMeetingsChromeHealth["manualAction"]>["reason"];
 type SpeechBlockedReason = NonNullable<ZoomMeetingsChromeHealth["speechBlockedReason"]>;
 type SessionRuntime = MeetingSessionRuntime<
   ZoomMeetingsSession,
@@ -85,7 +86,7 @@ function noteSession(session: ZoomMeetingsSession, note: string): void {
 function isAwaitingAdmission(session: ZoomMeetingsSession): boolean {
   return (
     session.chrome?.health?.lobbyWaiting === true ||
-    session.chrome?.health?.manualActionReason === "zoom-admission-required"
+    session.chrome?.health?.manualAction?.reason === "zoom-admission-required"
   );
 }
 
@@ -130,7 +131,6 @@ export class ZoomMeetingsRuntime {
         speech: {
           audioBridgeUnavailable: "Realtime speech requires an active Chrome audio bridge.",
           browserUnverified: "Zoom browser state has not been verified yet.",
-          manualActionFallback: "Resolve the Zoom browser prompt before asking OpenClaw to speak.",
           microphoneMuted: "Turn on the OpenClaw Zoom microphone before asking OpenClaw to speak.",
           microphoneMutedReason: "zoom-microphone-muted",
           notInCall: "Zoom has not reported that the browser guest is in the call.",
@@ -146,7 +146,12 @@ export class ZoomMeetingsRuntime {
         agentId: normalizeAgentId(request.agentId ?? this.#defaultAgentId),
       }),
       createSession: ({ request, resolved, createdAt }) => {
-        const session = createZoomMeetingsSession({ config: params.config, resolved, createdAt });
+        const session: ZoomMeetingsSession = createMeetingSession({
+          platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
+          config: params.config,
+          resolved,
+          createdAt,
+        });
         if (request.requesterSessionKey) {
           this.#requesterSessionKeys.set(session.id, request.requesterSessionKey);
         }
@@ -155,7 +160,7 @@ export class ZoomMeetingsRuntime {
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport: () => true,
-      isTalkBackMode: isZoomMeetingsTalkBackMode,
+      isTalkBackMode: (mode) => MeetingPlatformAdapter.isTalkBackMode(mode),
       isTranscribeMode: (mode) => mode === "transcribe",
       sameMeetingUrl: (left, right) =>
         ZOOM_MEETINGS_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
@@ -212,12 +217,12 @@ export class ZoomMeetingsRuntime {
         const staleSession =
           !browser?.browserTab ||
           health?.meetingEnded === true ||
-          health?.manualActionReason === "zoom-session-conflict" ||
-          health?.manualActionReason === "browser-control-unavailable" ||
+          health?.manualAction?.reason === "zoom-session-conflict" ||
+          health?.manualAction?.reason === "browser-control-unavailable" ||
           health?.bridgeClosed === true;
         const replacePendingJoin =
           health?.inCall !== true &&
-          health?.manualActionReason === "zoom-passcode-required" &&
+          health?.manualAction?.reason === "zoom-passcode-required" &&
           !hasSameZoomMeetingJoinCredential(session.url, request.url);
         if (staleSession || replacePendingJoin) {
           session.state = "ended";
@@ -240,11 +245,24 @@ export class ZoomMeetingsRuntime {
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async () => undefined,
+      durableTranscripts: {
+        config: params.fullConfig.transcripts,
+        providerId: "zoom",
+        providerName: "Zoom",
+      },
     });
   }
 
   list(): ZoomMeetingsSession[] {
     return this.#sessions.list();
+  }
+
+  async startTranscriptSource(request: TranscriptStartRequest) {
+    return await this.#sessions.startTranscriptSource(request);
+  }
+
+  async stopTranscriptSource(request: TranscriptStopRequest) {
+    return await this.#sessions.stopTranscriptSource(request);
   }
 
   ownsSession(agentId: string, sessionId: string): boolean {
@@ -417,11 +435,11 @@ export class ZoomMeetingsRuntime {
   ): Promise<MeetingSessionRuntimeHandles<ZoomMeetingsChromeHealth> | undefined> {
     const bridgeClosed = session.chrome?.health?.bridgeClosed === true;
     if (
-      !isZoomMeetingsTalkBackMode(session.mode) ||
+      !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
       session.state !== "active" ||
       !session.chrome ||
       (session.chrome.audioBridge && !bridgeClosed) ||
-      !isZoomMeetingsRealtimeRouteReady(session.mode, session.chrome.health)
+      !MeetingPlatformAdapter.isRealtimeRouteReady(session.mode, session.chrome.health)
     ) {
       return undefined;
     }
@@ -483,6 +501,7 @@ export class ZoomMeetingsRuntime {
       const result = await recoverCurrentZoomMeetingTab({
         runtime: this.params.runtime,
         config: this.params.config,
+        fullConfig: this.params.fullConfig,
         meetingSessionId: session.id,
         mode: session.mode,
         nodeId: session.chrome?.nodeId,
@@ -516,9 +535,7 @@ export class ZoomMeetingsRuntime {
           captioning: false,
           audioInputRouted: false,
           audioOutputRouted: false,
-          manualActionRequired: true,
-          manualActionReason: "browser-control-unavailable",
-          manualActionMessage: result.message,
+          manualAction: { reason: "browser-control-unavailable", message: result.message },
           status: "browser-tab-missing",
           notes: [
             ...(session.chrome.health?.notes ?? []).filter((note) => note !== result.message),
@@ -538,9 +555,7 @@ export class ZoomMeetingsRuntime {
           captioning: false,
           audioInputRouted: false,
           audioOutputRouted: false,
-          manualActionRequired: true,
-          manualActionReason: "browser-control-unavailable",
-          manualActionMessage: message,
+          manualAction: { reason: "browser-control-unavailable", message },
           status: "browser-control",
           notes: [
             ...(session.chrome.health?.notes ?? []).filter((note) => note !== message),

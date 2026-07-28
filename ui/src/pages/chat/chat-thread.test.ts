@@ -1,17 +1,48 @@
+// @vitest-environment node
 // Control UI tests cover build chat items behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
-import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
+import * as toolCards from "../../lib/chat/tool-cards.ts";
 import {
+  assistantGroupCanOwnActiveRunStatus,
   buildCachedChatItems,
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
+import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
+import { resolveChatProjectionRunId } from "./tool-stream.ts";
+
+const { extractToolCardsCached: extractToolCards } = toolCards;
+
+describe("assistantGroupCanOwnActiveRunStatus", () => {
+  const group = (message: Record<string, unknown>): MessageGroup => ({
+    kind: "group",
+    key: "assistant:1",
+    role: "assistant",
+    timestamp: 1,
+    isStreaming: false,
+    messages: [{ key: "message:1", message }],
+  });
+
+  it("accepts visible replies and rejects forwarded assistant input", () => {
+    expect(assistantGroupCanOwnActiveRunStatus(group({ content: "Reply" }))).toBe(true);
+    expect(
+      assistantGroupCanOwnActiveRunStatus(
+        group({
+          content: "Forwarded input",
+          provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+        }),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("persistedMessageEntryId", () => {
   it("rejects optimistic pending bubbles and accepts transcript identities", () => {
@@ -33,8 +64,9 @@ type WorkGroupItem = Extract<
   { kind: "work-group" }
 >;
 
-const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+// Inbound context blocks are stamped with the provenance marker; strippers key
+// on the marker, so display fixtures must carry it to be recognized.
+const SENDER_METADATA_BLOCK = `${markInboundContextLabel("Sender:")}\n\`\`\`json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n\`\`\``;
 
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
@@ -86,6 +118,342 @@ function messageRecord(group: MessageGroup, index = 0): Record<string, unknown> 
 }
 
 describe("assistant commentary grouping", () => {
+  it("keeps user before assistant when the assistant timestamp lags the user timestamp", () => {
+    // Regression for #112943: Gateway clock can lag behind the browser clock,
+    // giving the assistant reply an earlier timestamp than the user prompt.
+    // Stable transcript rows must stay in insertion order; only tool/stream
+    // items get reordered by timestamp.
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "User prompt", timestamp: 2_000 },
+        { role: "assistant", content: "Server reply.", timestamp: 1_000 },
+      ],
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("keeps a skewed live tool below its user boundary when it becomes stable", () => {
+    const paneId = "clock-skew-tool-transition";
+    const user = { role: "user", content: "User prompt", timestamp: 2_000 };
+    const tool = {
+      role: "toolResult",
+      runId: "run-active",
+      toolCallId: "call-clock-skew",
+      toolName: "shell",
+      content: "Tool output",
+      timestamp: 1_000,
+    };
+    const liveGroups = messageGroups({
+      paneId,
+      runId: "run-active",
+      messages: [user],
+      toolMessages: [tool],
+    });
+    const stableGroups = messageGroups({ paneId, messages: [user, tool], toolMessages: [] });
+
+    expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool"]);
+    expect(stableGroups.map((group) => group.role)).toEqual(["user", "tool"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps current live work above a future queued user turn when it becomes stable", () => {
+    const paneId = "clock-skew-future-queue-transition";
+    const activeUser = {
+      role: "user",
+      content: "Active prompt",
+      timestamp: 2_000,
+      __openclaw: { idempotencyKey: "run-active:user" },
+    };
+    const liveTool = {
+      role: "toolResult",
+      runId: "run-active",
+      toolCallId: "call-active",
+      toolName: "shell",
+      content: "Current tool output",
+      timestamp: 1_000,
+    };
+    const activeSend = {
+      id: "active-send",
+      text: "Active prompt",
+      createdAt: 2_000,
+      sendRunId: "run-active",
+      sendSubmittedAtMs: 10,
+      sendState: "waiting-model" as const,
+    };
+    const futureSend = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 3_000,
+      sendAttempts: 1,
+      sendRunId: "run-future",
+      sendState: "waiting-reconnect" as const,
+    };
+    const liveGroups = messageGroups({
+      paneId,
+      runId: "run-active",
+      queue: [activeSend, futureSend],
+      toolMessages: [liveTool],
+    });
+    const stableGroups = messageGroups({
+      paneId,
+      messages: [activeUser, liveTool],
+      queue: [futureSend],
+      toolMessages: [],
+    });
+
+    expect(liveGroups.map((group) => group.role)).toEqual(["user", "tool", "user"]);
+    expect(stableGroups.map((group) => group.role)).toEqual(["user", "tool", "user"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps an active stream above a future queued user turn when it becomes stable", () => {
+    const paneId = "clock-skew-stream-queue-transition";
+    const activeUser = {
+      role: "user",
+      content: "Active prompt",
+      timestamp: 2_000,
+      __openclaw: { idempotencyKey: "run-active:user" },
+    };
+    const activeSend = {
+      id: "active-send",
+      text: "Active prompt",
+      createdAt: 2_000,
+      sendRunId: "run-active",
+      sendSubmittedAtMs: 10,
+      sendState: "waiting-model" as const,
+    };
+    const futureSend = {
+      id: "future-send",
+      text: "Future prompt",
+      createdAt: 3_000,
+      sendAttempts: 1,
+      sendRunId: "run-future",
+      sendState: "waiting-reconnect" as const,
+    };
+    const liveItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        queue: [activeSend, futureSend],
+        stream: "Current partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+    const stableItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        messages: [
+          activeUser,
+          { role: "assistant", content: "Current partial reply", timestamp: 1_000 },
+        ],
+        queue: [futureSend],
+      }),
+    );
+    const visibleKinds = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.map((item) => (item.kind === "group" ? item.role : item.kind));
+
+    expect(visibleKinds(liveItems)).toEqual(["user", "stream", "user"]);
+    expect(visibleKinds(stableItems)).toEqual(["user", "assistant", "user"]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps current-run segments below their user boundary under clock skew", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-active",
+        messages: [{ role: "user", content: "Current prompt", timestamp: 2_000 }],
+        streamSegments: [{ text: "Current progress", ts: 1_000, runId: "run-active" }],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+    ]);
+  });
+
+  it("keeps replayed tool and commentary items inside their older turn", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-current",
+        messages: [
+          {
+            role: "user",
+            content: "Earlier prompt",
+            timestamp: 1_000,
+            __openclaw: { idempotencyKey: "run-earlier:user" },
+          },
+          { role: "assistant", content: "Earlier reply", timestamp: 1_300 },
+          {
+            role: "user",
+            content: "Current prompt",
+            timestamp: 2_000,
+            __openclaw: { idempotencyKey: "run-current:user" },
+          },
+        ],
+        streamSegments: [
+          { text: "Earlier commentary", ts: 500, runId: "run-earlier", itemId: "earlier" },
+          { text: "Current commentary", ts: 1_200, runId: "run-current", itemId: "current" },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "run-earlier",
+            toolCallId: "call-earlier",
+            toolName: "shell",
+            content: "Earlier tool output",
+            timestamp: 3_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+      "assistant",
+      "tool",
+      "user",
+      "stream",
+    ]);
+  });
+
+  it("keeps unmatched legacy replay rows timestamped across older turns", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        runId: "run-current",
+        messages: [
+          { role: "user", content: "First prompt", timestamp: 1_000 },
+          { role: "assistant", content: "First reply", timestamp: 1_300 },
+          { role: "user", content: "Second prompt", timestamp: 2_000 },
+          { role: "assistant", content: "Second reply", timestamp: 2_300 },
+          { role: "user", content: "Current prompt", timestamp: 3_000 },
+        ],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "legacy-unmatched-run",
+            toolCallId: "call-legacy",
+            toolName: "shell",
+            content: "Legacy tool output",
+            timestamp: 1_100,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+      "assistant",
+      "user",
+      "assistant",
+      "user",
+    ]);
+  });
+
+  it("keeps a reconnecting current prompt above its retained stream", () => {
+    const paneId = "clock-skew-reconnecting-current-turn";
+    const reconnectingSend = {
+      id: "reconnecting-send",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-active",
+      sendState: "waiting-reconnect" as const,
+    };
+    const items = buildCachedChatItems(
+      createProps({
+        paneId,
+        runId: "run-active",
+        queue: [reconnectingSend],
+        stream: "Retained partial reply",
+        streamStartedAt: 1_000,
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+    ]);
+    resetChatThreadState(paneId);
+  });
+
+  it("keeps a restored reconnect prompt above its active server tool projection", () => {
+    const reconnectingSend = {
+      id: "reconnecting-send",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-restored",
+      sendState: "waiting-reconnect" as const,
+    };
+    const runId = resolveChatProjectionRunId({
+      activeRunIds: ["run-restored"],
+      queue: [reconnectingSend],
+    });
+    const items = buildCachedChatItems(
+      createProps({
+        runId,
+        queue: [reconnectingSend],
+        toolMessages: [
+          {
+            role: "toolResult",
+            runId: "run-restored",
+            toolCallId: "call-restored",
+            toolName: "shell",
+            content: "Restored tool output",
+            timestamp: 1_000,
+          },
+        ],
+      }),
+    );
+
+    expect(items.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "tool",
+    ]);
+  });
+
+  it("keeps a queued current prompt before a terminal delivered ahead of its ACK", () => {
+    const paneId = "terminal-before-send-ack";
+    const terminal = rememberLiveTerminalRun(
+      { role: "assistant", content: "Terminal reply", timestamp: 1_000 },
+      "run-active",
+    );
+    const sending = {
+      id: "sending-current",
+      text: "Current prompt",
+      createdAt: 2_000,
+      sendAttempts: 1,
+      sendRunId: "run-active",
+      sendState: "sending" as const,
+    };
+    const liveItems = buildCachedChatItems(
+      createProps({ paneId, runId: "run-active", messages: [terminal], queue: [sending] }),
+    );
+    const stableItems = buildCachedChatItems(
+      createProps({
+        paneId,
+        messages: [
+          {
+            role: "user",
+            content: "Current prompt",
+            timestamp: 2_000,
+            __openclaw: { idempotencyKey: "run-active:user" },
+          },
+          terminal,
+        ],
+      }),
+    );
+    const roles = (items: ReturnType<typeof buildCachedChatItems>) =>
+      items.filter((item) => item.kind === "group").map((item) => item.role);
+
+    expect(roles(liveItems)).toEqual(["user", "assistant"]);
+    expect(roles(stableItems)).toEqual(["user", "assistant"]);
+    resetChatThreadState(paneId);
+  });
+
   it("keeps keyed commentary separate from the terminal assistant reply", () => {
     const groups = messageGroups({
       messages: [
@@ -433,6 +801,42 @@ describe("collapseCompletedTurnWork", () => {
 });
 
 describe("buildCachedChatItems row identity", () => {
+  it("keeps an accepted initial send key across local-to-history replacement", () => {
+    resetChatThreadState();
+    const initial = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: { idempotencyKey: "initial-send:user", seq: 1 },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 1,
+          },
+        ],
+      }),
+      0,
+    );
+    const reconciled = groupAt(
+      messageGroups({
+        messages: [
+          {
+            __openclaw: {
+              id: "persisted-user-message",
+              idempotencyKey: "initial-send:user",
+              seq: 1,
+            },
+            role: "user",
+            content: "Initial image prompt",
+            timestamp: 2,
+          },
+        ],
+      }),
+      0,
+    );
+
+    expect(messageAt(reconciled, 0).key).toBe(messageAt(initial, 0).key);
+  });
+
   it("keeps a persistent message key across live-to-authoritative replacement", () => {
     resetChatThreadState();
     const initial = groupAt(
@@ -938,12 +1342,14 @@ describe("buildCachedChatItems", () => {
           role: "user",
           content: "first",
           senderLabel: "Iris",
+          __openclaw: { senderId: "iris", senderName: "Iris" },
           timestamp: 1000,
         },
         {
           role: "user",
           content: "second",
           senderLabel: "Joaquin De Rojas",
+          __openclaw: { senderId: "joaquin", senderName: "Joaquin De Rojas" },
           timestamp: 1001,
         },
       ],
@@ -951,6 +1357,71 @@ describe("buildCachedChatItems", () => {
 
     expect(groups).toHaveLength(2);
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
+    expect(groups.map((group) => group.sender?.id)).toEqual(["iris", "joaquin"]);
+  });
+
+  it("renders non-compaction system messages as notices and skips empty output", () => {
+    const items = buildCachedChatItems(
+      createProps({
+        messages: [
+          { role: "system", content: "Command output\n  indented", timestamp: 1000 },
+          { role: "system", content: "  \n", timestamp: 1001 },
+        ],
+      }),
+    );
+
+    expect(items).toEqual([
+      {
+        kind: "notice",
+        key: expect.any(String),
+        text: "Command output\n  indented",
+        timestamp: 1000,
+      },
+    ]);
+  });
+
+  it("attributes assistant groups to the latest user in multi-sender threads", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "Alice asks",
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+          timestamp: 1000,
+        },
+        { role: "assistant", content: "For Alice", timestamp: 1001 },
+        {
+          role: "user",
+          content: "Bob asks",
+          __openclaw: { senderId: "bob", senderName: "Bob" },
+          timestamp: 1002,
+        },
+        { role: "user", content: "Local follow-up", timestamp: 1003 },
+        { role: "assistant", content: "For Bob", timestamp: 1004 },
+      ],
+    });
+
+    const assistantGroups = groups.filter((group) => group.role === "assistant");
+    expect(assistantGroups.map((group) => group.replyToSender)).toEqual([
+      { id: "alice", name: "Alice" },
+      undefined,
+    ]);
+  });
+
+  it("does not add reply attribution in a single-sender thread", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "Alice asks",
+          __openclaw: { senderId: "alice", senderName: "Alice" },
+          timestamp: 1000,
+        },
+        { role: "assistant", content: "For Alice", timestamp: 1001 },
+      ],
+    });
+
+    expect(groups.find((group) => group.role === "assistant")?.replyToSender).toBeUndefined();
   });
 
   it("keeps differently cased user roles in one group", () => {
@@ -2341,6 +2812,36 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("hides a pending send after history accepts its idempotency key", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "accepted prompt",
+          timestamp: 1,
+          __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
+        },
+      ],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "accepted prompt",
+          createdAt: 2,
+          sendRunId: "accepted-run",
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
+      idempotencyKey: "accepted-run:user",
+      seq: 1,
+    });
+  });
+
   it("keeps failed queued sends out of the thread", () => {
     const groups = messageGroups({
       queue: [
@@ -2427,6 +2928,25 @@ describe("buildCachedChatItems", () => {
 
     expect(canvasBlocksIn(groupAt(groups, 0))).toHaveLength(1);
     expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+  });
+
+  it("keeps a clock-skewed live App preview after the latest user boundary", () => {
+    const groups = messageGroups({
+      messages: [
+        { role: "user", content: "Earlier request", timestamp: 1_000 },
+        { role: "assistant", content: "Earlier response", timestamp: 1_100 },
+        { role: "user", content: "Current request", timestamp: 2_000 },
+      ],
+      toolMessages: [
+        { ...mcpAppResult("mcp-app-skewed", "call-skewed", 900), runId: "run-active" },
+      ],
+      runId: "run-active",
+      showToolCalls: false,
+    });
+
+    expect(groups.map((group) => group.role)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(canvasBlocksIn(groupAt(groups, 1))).toStrictEqual([]);
+    expect(canvasBlocksIn(groupAt(groups, 3))).toHaveLength(1);
   });
 
   it("keeps a live App preview on an assistant search match", () => {
@@ -2790,6 +3310,36 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
+  it("skips the tool-card walk when the item array identity is unchanged", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-stable",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-stable",
+          message: { role: "assistant", content: "No tools in this row" },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+    const items = [group];
+    const extractSpy = vi.spyOn(toolCards, "extractToolCardsCached");
+    try {
+      syncToolCardExpansionState("identity-stable", items, false);
+      const callsAfterFirstSync = extractSpy.mock.calls.length;
+
+      syncToolCardExpansionState("identity-stable", items, false);
+
+      expect(callsAfterFirstSync).toBeGreaterThan(0);
+      expect(extractSpy).toHaveBeenCalledTimes(callsAfterFirstSync);
+    } finally {
+      extractSpy.mockRestore();
+    }
+  });
+
   it("expands already-visible tool cards when auto-expand turns on", () => {
     resetChatThreadState();
     const group: MessageGroup = {
@@ -2846,6 +3396,20 @@ describe("tool expansion state", () => {
     syncToolCardExpansionState("tool-name-session", [group], true);
 
     expect(getExpandedToolCards("tool-name-session").get("toolmsg:tool-name-result")).toBe(true);
+  });
+});
+
+describe("user message expansion state", () => {
+  it("keeps disclosure state per session and clears it with thread state", () => {
+    resetChatThreadState();
+    getExpandedUserMessages("main").set("user-message:one", true);
+
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("agent:main:main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("other").get("user-message:one")).toBeUndefined();
+
+    resetChatThreadState();
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBeUndefined();
   });
 });
 
@@ -2969,6 +3533,18 @@ describe("thread item cache", () => {
     resetChatThreadState("pane-a");
     expect(buildCachedChatItems({ ...paneA })).not.toBe(paneAItems);
     expect(buildCachedChatItems({ ...paneB })).toBe(paneBItems);
+  });
+
+  it("evicts the least-recently-used session after 20 cached transcripts", () => {
+    resetChatThreadState();
+    const paneId = "pane-lru";
+    const firstInput = createProps({ paneId, sessionKey: "session-0" });
+    const first = buildCachedChatItems(firstInput);
+    for (let index = 1; index <= 20; index += 1) {
+      buildCachedChatItems(createProps({ paneId, sessionKey: `session-${index}` }));
+    }
+
+    expect(buildCachedChatItems(firstInput)).not.toBe(first);
   });
 });
 

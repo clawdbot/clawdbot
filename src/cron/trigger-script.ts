@@ -11,7 +11,10 @@ import {
   createOpenClawCodingTools,
   resolveToolLoopDetectionConfig,
 } from "../agents/agent-tools.js";
-import type { CodeModeNamespaceDescriptor } from "../agents/code-mode-namespaces.js";
+import type {
+  CodeModeNamespaceDescriptor,
+  SerializedCodeModeNamespaceValue,
+} from "../agents/code-mode-namespaces.js";
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
@@ -25,6 +28,10 @@ import {
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
+import {
+  resolveScheduledToolPolicyContext,
+  type ScheduledToolPolicyContext,
+} from "../agents/scheduled-tool-policy.js";
 import {
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
@@ -78,6 +85,7 @@ type PrepareTriggerRuntime = (params: {
   jobId: string;
   agentId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   signal?: AbortSignal;
 }) => Promise<PreparedTriggerRuntime>;
 
@@ -103,6 +111,7 @@ async function prepareTriggerRuntime(params: {
   jobId: string;
   agentId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   signal?: AbortSignal;
 }): Promise<PreparedTriggerRuntime> {
   params.signal?.throwIfAborted();
@@ -169,6 +178,11 @@ async function prepareTriggerRuntime(params: {
         allowGatewaySubagentBinding: true,
         includeCoreTools: toolPlan.includeCoreTools,
         runtimeToolAllowlist: toolPlan.runtimeToolAllowlist,
+        inheritRuntimeToolAllowlist: Boolean(toolPlan.runtimeToolAllowlist),
+        scheduledToolPolicy: resolveScheduledToolPolicyContext({
+          toolsAllow: params.toolsAllow,
+          scheduledToolPolicy: params.scheduledToolPolicy,
+        }),
         toolConstructionPlan: toolPlan.codingToolConstructionPlan,
       })
     : [];
@@ -195,13 +209,19 @@ async function prepareTriggerRuntime(params: {
   };
 }
 
-function triggerStateNamespace(state: unknown): CodeModeNamespaceDescriptor {
+function triggerStateNamespace(state: unknown, streamBatch?: string): CodeModeNamespaceDescriptor {
+  const entries: Array<[string, SerializedCodeModeNamespaceValue]> = [
+    ["state", { kind: "value", value: state }],
+  ];
+  if (streamBatch !== undefined) {
+    entries.push(["streamBatch", { kind: "value", value: streamBatch }]);
+  }
   return {
     id: "cron:trigger",
     globalName: "trigger",
     scope: {
       kind: "object",
-      entries: [["state", { kind: "value", value: state }]],
+      entries,
     },
   };
 }
@@ -331,6 +351,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     requestedAgentId?: string;
     agentId: string;
     toolsAllow?: string[];
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
     toolsAllowKey: string;
     signal: AbortSignal;
   }): Promise<PreparedTriggerRuntime> => {
@@ -365,6 +386,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       jobId: request.jobId,
       agentId: request.requestedAgentId,
       toolsAllow: request.toolsAllow,
+      scheduledToolPolicy: request.scheduledToolPolicy,
       signal: request.signal,
     });
     const entry: TriggerRuntimeCacheEntry = {
@@ -390,6 +412,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     agentId?: string;
     script: string;
     toolsAllow?: string[];
+    scheduledToolPolicy?: ScheduledToolPolicyContext;
     abortSignal?: AbortSignal;
     wallClockMs: number;
     maxToolCalls: number;
@@ -407,13 +430,17 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     try {
       const runtimeConfig = resolveCronActiveRuntimeConfig(deps.config);
       const agentId = resolveTriggerAgentId(runtimeConfig, params.agentId);
-      const toolsAllowKey = JSON.stringify(params.toolsAllow ?? null);
+      const toolsAllowKey = JSON.stringify([
+        params.toolsAllow ?? null,
+        params.scheduledToolPolicy ?? null,
+      ]);
       const runtime = await resolveCachedRuntime({
         runtimeConfig,
         jobId: params.jobId,
         requestedAgentId: params.agentId,
         agentId,
         toolsAllow: params.toolsAllow,
+        scheduledToolPolicy: params.scheduledToolPolicy,
         toolsAllowKey,
         signal: evaluationScope.signal,
       });
@@ -578,7 +605,9 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       agentId?: string;
       script: string;
       state: unknown;
+      streamBatch?: string;
       toolsAllow?: string[];
+      scheduledToolPolicy?: ScheduledToolPolicyContext;
       abortSignal?: AbortSignal;
     }): Promise<CronTriggerEvaluationResult> => {
       if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {
@@ -591,7 +620,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
           wallClockMs: HEADLESS_TRIGGER_WALL_CLOCK_MS,
           maxToolCalls: HEADLESS_TRIGGER_TOOL_BUDGET,
           label: "cron trigger evaluation",
-          namespaces: [triggerStateNamespace(params.state)],
+          namespaces: [triggerStateNamespace(params.state, params.streamBatch)],
         });
         return outcome.kind === "completed" ? parseTriggerResult(outcome.result) : outcome;
       } finally {
@@ -603,7 +632,9 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
       agentId?: string;
       script: string;
       state: unknown;
+      streamBatch?: string;
       toolsAllow?: string[];
+      scheduledToolPolicy?: ScheduledToolPolicyContext;
       timeoutSeconds?: number;
       toolBudget?: number;
       abortSignal?: AbortSignal;
@@ -621,7 +652,7 @@ export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
         wallClockMs: timeoutSeconds * 1000,
         maxToolCalls: toolBudget,
         label: "cron script payload",
-        namespaces: [triggerStateNamespace(params.state)],
+        namespaces: [triggerStateNamespace(params.state, params.streamBatch)],
       });
       return outcome.kind === "completed" ? parseScriptPayloadResult(outcome.result) : outcome;
     },

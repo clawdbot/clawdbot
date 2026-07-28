@@ -5,11 +5,8 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import { buildMistralModelDefinition as buildBundledMistralModelDefinition } from "./model-definitions.js";
-import {
-  applyMistralConfig,
-  applyMistralProviderConfig,
-  MISTRAL_DEFAULT_MODEL_REF,
-} from "./onboard.js";
+import { MISTRAL_DEFAULT_MODEL_REF } from "./model-definitions.js";
+import { applyMistralConfig, applyMistralProviderConfig } from "./onboard.js";
 
 describe("mistral onboard", () => {
   it("adds Mistral provider with correct settings", () => {

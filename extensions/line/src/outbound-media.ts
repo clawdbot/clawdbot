@@ -2,9 +2,7 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { LineChannelData } from "./types.js";
-
-type LineOutboundMediaKind = "image" | "video" | "audio";
+import type { LineChannelData, LineOutboundMediaKind } from "./types.js";
 
 type LineOutboundMediaResolved = {
   mediaUrl: string;

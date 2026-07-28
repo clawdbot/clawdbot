@@ -50,11 +50,17 @@ export type SystemAgentTuiOptions = {
   setupWorkspace?: string;
   /** Test seam for the channel-setup wizard hosted by the chat bridge. */
   runChannelSetupWizard?: SystemAgentChatEngineOptions["runChannelSetupWizard"];
+  runSkillsSetupWizard?: SystemAgentChatEngineOptions["runSkillsSetupWizard"];
+  runSearchSetupWizard?: SystemAgentChatEngineOptions["runSearchSetupWizard"];
   runChannelsAdd?: (
     opts: ChannelsAddOptions,
     runtime: RuntimeEnv,
     params?: { hasFlags?: boolean; beforePersistentEffect?: () => Promise<void> },
   ) => Promise<unknown>;
+  runSearchSetupHandoff?: (
+    runtime: RuntimeEnv,
+    beforePersistentEffect: () => Promise<void>,
+  ) => Promise<void>;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
 
@@ -80,6 +86,8 @@ function createChatEngine(opts: SystemAgentTuiOptions): SystemAgentChatEngine {
     surface: "cli",
     verifiedInference: opts.verifiedInference,
     ...(opts.runChannelSetupWizard ? { runChannelSetupWizard: opts.runChannelSetupWizard } : {}),
+    ...(opts.runSkillsSetupWizard ? { runSkillsSetupWizard: opts.runSkillsSetupWizard } : {}),
+    ...(opts.runSearchSetupWizard ? { runSearchSetupWizard: opts.runSearchSetupWizard } : {}),
   });
 }
 
@@ -222,7 +230,7 @@ class SystemAgentTuiBackend implements TuiBackend {
       defaultId: SYSTEM_AGENT_ID,
       mainKey: "main",
       scope: "per-sender",
-      agents: [{ id: SYSTEM_AGENT_ID, name: "OpenClaw" }],
+      agents: [{ id: SYSTEM_AGENT_ID, kind: "system", name: "OpenClaw" }],
     };
   }
 
@@ -380,14 +388,12 @@ async function runSetupHandoff(
   opts: SystemAgentTuiOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  if (handoff.target !== "channels") {
+  if (handoff.target !== "channels" && handoff.target !== "search") {
     runtime.error(
       "Setup cannot replace the inference route powering OpenClaw. Exit and run `openclaw onboard`, then start OpenClaw again.",
     );
     return;
   }
-  const runChannelsAdd =
-    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
   const beforePersistentEffect = async () => {
     const binding = opts?.verifiedInference;
     if (!binding) {
@@ -411,6 +417,44 @@ async function runSetupHandoff(
     }
     throw new SystemAgentInferenceUnavailableError("conversation");
   };
+  if (handoff.target === "search") {
+    if (opts.runSearchSetupHandoff) {
+      await opts.runSearchSetupHandoff(runtime, beforePersistentEffect);
+      return;
+    }
+    const [
+      { runSearchSetupFlow },
+      { createClackPrompter },
+      { readSetupConfigFileSnapshot, writeWizardConfigFile },
+    ] = await Promise.all([
+      import("../flows/search-setup.js"),
+      import("../wizard/clack-prompter.js"),
+      import("../wizard/setup.shared.js"),
+    ]);
+    const snapshot = await readSetupConfigFileSnapshot();
+    if (!snapshot.exists || !snapshot.valid || !snapshot.hash) {
+      throw new Error(
+        "Web search setup requires a valid saved config snapshot. Run `openclaw doctor --fix`, then retry.",
+      );
+    }
+    const baseConfig = snapshot.sourceConfig ?? snapshot.config;
+    const searchSetup = await runSearchSetupFlow(baseConfig, runtime, createClackPrompter(), {
+      preserveDisabledSearchState: false,
+      beforePersistentEffect,
+    });
+    if (searchSetup.outcome !== "completed") {
+      return;
+    }
+    await beforePersistentEffect();
+    await writeWizardConfigFile(searchSetup.config, {
+      allowConfigSizeDrop: false,
+      baseHash: snapshot.hash,
+      migrationBaseConfig: baseConfig,
+    });
+    return;
+  }
+  const runChannelsAdd =
+    opts.runChannelsAdd ?? (await import("../commands/channels/add.js")).channelsAddCommand;
   await runChannelsAdd(handoff.channel ? { channel: handoff.channel } : {}, runtime, {
     hasFlags: false,
     beforePersistentEffect,

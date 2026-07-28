@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import {
@@ -16,7 +16,13 @@ import {
   type SessionTranscriptWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import type { CodexThread, JsonValue } from "./protocol.js";
+import {
+  attachCodexMirrorAttestation,
+  fingerprintCodexMirrorSourceMessage,
+  readCodexMirrorSourceFingerprint,
+} from "./transcript-mirror-attestation.js";
 import {
   attachCodexMirrorIdentity,
   attachUpstreamUserText,
@@ -34,11 +40,14 @@ type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" |
 type MirroredUserMessage = Extract<AgentMessage, { role: "user" }>;
 type CodexAppServerTranscriptMirrorResult = {
   assistantMirrorIdentitiesOwned: string[];
+  messagesPresent: MirroredAgentMessage[];
   userMessagesPresent: MirroredUserMessage[];
 };
 
-const MIRROR_ORIGIN_META_KEY = "mirrorOrigin" as const;
-const CODEX_APP_SERVER_MIRROR_ORIGIN = "codex-app-server" as const;
+function isMirroredAgentMessage(message: AgentMessage): message is MirroredAgentMessage {
+  return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
+}
+
 const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
 const CODEX_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 const CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES = 64 * 1024;
@@ -319,19 +328,6 @@ export async function importCodexThreadHistoryToTranscript(params: {
   };
 }
 
-function attachCodexMirrorOrigin(message: AgentMessage): AgentMessage {
-  const record = message as unknown as Record<string, unknown>;
-  const existing = record["__openclaw"];
-  const baseMeta =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? (existing as Record<string, unknown>)
-      : {};
-  return {
-    ...record,
-    __openclaw: { ...baseMeta, [MIRROR_ORIGIN_META_KEY]: CODEX_APP_SERVER_MIRROR_ORIGIN },
-  } as unknown as AgentMessage;
-}
-
 async function mirrorBestEffort(params: {
   params: EmbeddedRunAttemptParams;
   agentId?: string;
@@ -341,7 +337,11 @@ async function mirrorBestEffort(params: {
   cwd: string;
   threadId: string;
   turnId: string;
-}): Promise<boolean> {
+}): Promise<{
+  assistantTranscriptOwned: boolean;
+  assistantTranscriptIdempotencyKey?: string;
+  mirroredMessages: MirroredAgentMessage[];
+}> {
   try {
     const messages = await resolveFinalCodexMirrorMessages({
       params: params.params,
@@ -372,10 +372,39 @@ async function mirrorBestEffort(params: {
         });
       }
     }
-    return mirrorResult.assistantMirrorIdentitiesOwned.includes(`${params.turnId}:assistant`);
+    const expectedFingerprints = new Map(
+      messages.flatMap((message) => {
+        if (!isMirroredAgentMessage(message)) {
+          return [];
+        }
+        const identity = readMirrorIdentity(message);
+        return identity ? [[identity, fingerprintCodexMirrorSourceMessage(message)] as const] : [];
+      }),
+    );
+    const mirroredMessages = mirrorResult.messagesPresent.filter((message) => {
+      const identity = readMirrorIdentity(message);
+      return (
+        identity !== undefined &&
+        readCodexMirrorSourceFingerprint(message) === expectedFingerprints.get(identity)
+      );
+    });
+    const assistantMirrorIdentity = `${params.turnId}:assistant`;
+    const assistantTranscriptOwned =
+      mirrorResult.assistantMirrorIdentitiesOwned.includes(assistantMirrorIdentity);
+    const assistantTranscriptMessage = assistantTranscriptOwned
+      ? mirroredMessages.find((message) => readMirrorIdentity(message) === assistantMirrorIdentity)
+      : undefined;
+    const assistantTranscriptIdempotencyKey = normalizeOptionalString(
+      (assistantTranscriptMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
+    );
+    return {
+      assistantTranscriptOwned,
+      ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+      mirroredMessages,
+    };
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
-    return false;
+    return { assistantTranscriptOwned: false, mirroredMessages: [] };
   }
 }
 
@@ -443,13 +472,16 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
   }
   try {
     const mirrorPromise = (async () => {
-      const userPromptMessage = attachUpstreamUserText(
-        attachCodexMirrorIdentity(
-          await buildResolvedCodexUserPromptMessage(params.params),
-          `${params.turnId}:prompt`,
+      const userPromptMessage = projectAgentHarnessTranscriptMessageForDisplay({
+        hidden: params.params.trigger === "memory",
+        message: attachUpstreamUserText(
+          attachCodexMirrorIdentity(
+            await buildResolvedCodexUserPromptMessage(params.params),
+            `${params.turnId}:prompt`,
+          ),
+          params.upstreamUserText,
         ),
-        params.upstreamUserText,
-      );
+      });
       const mirrorResult = await mirror({
         agentId: params.agentId,
         sessionKey: params.sessionKey,
@@ -499,13 +531,11 @@ async function mirror(params: {
   messages: AgentMessage[];
   idempotencyScope?: string;
   config?: SessionTranscriptWriteLockParams["config"];
+  skipBeforeMessageWriteHooks?: boolean;
 }): Promise<CodexAppServerTranscriptMirrorResult> {
-  const messages = params.messages.filter(
-    (message): message is MirroredAgentMessage =>
-      message.role === "user" || message.role === "assistant" || message.role === "toolResult",
-  );
+  const messages = params.messages.filter(isMirroredAgentMessage);
   if (messages.length === 0) {
-    return { assistantMirrorIdentitiesOwned: [], userMessagesPresent: [] };
+    return { assistantMirrorIdentitiesOwned: [], messagesPresent: [], userMessagesPresent: [] };
   }
 
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
@@ -518,11 +548,13 @@ async function mirror(params: {
         messageSeq: number;
       }> = [];
       const nextAssistantMirrorIdentitiesOwned = new Set<string>();
+      const nextMessagesPresent: MirroredAgentMessage[] = [];
       const nextUserMessagesPresent: MirroredUserMessage[] = [];
       const mirrorState = readTranscriptMirrorState(await transcript.readEvents());
       let nextMessageSeq = mirrorState.messageCount;
       for (const message of messages) {
         const dedupeIdentity = buildMirrorDedupeIdentity(message);
+        const sourceFingerprint = fingerprintCodexMirrorSourceMessage(message);
         const sourceUserIdempotencyKey =
           message.role === "user"
             ? normalizeOptionalString(
@@ -535,11 +567,19 @@ async function mirror(params: {
           sourceUserIdempotencyKey ??
           (params.idempotencyScope ? `${params.idempotencyScope}:${dedupeIdentity}` : undefined);
         const transcriptMessage = {
-          ...(attachCodexMirrorOrigin(message) as unknown as Record<string, unknown>),
+          ...(attachCodexMirrorAttestation(message, sourceFingerprint) as unknown as Record<
+            string,
+            unknown
+          >),
           ...(idempotencyKey ? { idempotencyKey } : {}),
         } as AgentMessage;
         if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
-          const persistedUserMessage = mirrorState.userMessagesByIdempotencyKey.get(idempotencyKey);
+          const persistedMessage = mirrorState.messagesByIdempotencyKey.get(idempotencyKey);
+          if (persistedMessage) {
+            nextMessagesPresent.push(persistedMessage);
+          }
+          const persistedUserMessage =
+            persistedMessage?.role === "user" ? persistedMessage : undefined;
           if (persistedUserMessage) {
             nextUserMessagesPresent.push(persistedUserMessage);
           }
@@ -548,11 +588,13 @@ async function mirror(params: {
           }
           continue;
         }
-        const nextMessage = runAgentHarnessBeforeMessageWriteHook({
-          message: transcriptMessage,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        });
+        const nextMessage = params.skipBeforeMessageWriteHooks
+          ? transcriptMessage
+          : runAgentHarnessBeforeMessageWriteHook({
+              message: transcriptMessage,
+              agentId: params.agentId,
+              sessionKey: params.sessionKey,
+            });
         if (!nextMessage) {
           if (message.role === "assistant") {
             // A transcript hook deliberately blocked this logical assistant row.
@@ -562,14 +604,27 @@ async function mirror(params: {
           }
           continue;
         }
-        const messageToAppend = (
+        let messageToAppend = (
           idempotencyKey
             ? {
-                ...(attachCodexMirrorOrigin(nextMessage) as unknown as Record<string, unknown>),
+                ...(attachCodexMirrorAttestation(
+                  nextMessage,
+                  sourceFingerprint,
+                ) as unknown as Record<string, unknown>),
                 idempotencyKey,
               }
-            : attachCodexMirrorOrigin(nextMessage)
+            : attachCodexMirrorAttestation(nextMessage, sourceFingerprint)
         ) as AgentMessage;
+        const mirrorIdentity = readMirrorIdentity(message);
+        if (mirrorIdentity) {
+          // Hooks may replace the whole message. Restore the provider-owned
+          // identity so retries cannot turn a stale idempotency hit into evidence.
+          messageToAppend = attachCodexMirrorIdentity(messageToAppend, mirrorIdentity);
+        }
+        messageToAppend = projectAgentHarnessTranscriptMessageForDisplay({
+          hidden: (message as { display?: boolean }).display === false,
+          message: messageToAppend,
+        });
         const appended = await transcript.appendMessage({
           message: messageToAppend,
           idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
@@ -579,14 +634,17 @@ async function mirror(params: {
           continue;
         }
         const { messageId, message: appendedMessage } = appended;
+        if (isMirroredAgentMessage(appendedMessage)) {
+          nextMessagesPresent.push(appendedMessage);
+          if (idempotencyKey) {
+            mirrorState.messagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
+          }
+        }
         if (message.role === "assistant") {
           nextAssistantMirrorIdentitiesOwned.add(dedupeIdentity);
         }
         if (appendedMessage.role === "user") {
           nextUserMessagesPresent.push(appendedMessage);
-          if (idempotencyKey) {
-            mirrorState.userMessagesByIdempotencyKey.set(idempotencyKey, appendedMessage);
-          }
         }
         nextMessageSeq += 1;
         nextAppendedUpdates.push({
@@ -601,11 +659,13 @@ async function mirror(params: {
       return {
         appendedUpdates: nextAppendedUpdates,
         assistantMirrorIdentitiesOwned: [...nextAssistantMirrorIdentitiesOwned],
+        messagesPresent: nextMessagesPresent,
         userMessagesPresent: nextUserMessagesPresent,
       };
     },
   );
-  const { appendedUpdates, assistantMirrorIdentitiesOwned, userMessagesPresent } = mirrorBatch;
+  const { appendedUpdates, assistantMirrorIdentitiesOwned, messagesPresent, userMessagesPresent } =
+    mirrorBatch;
 
   for (const update of appendedUpdates) {
     try {
@@ -628,7 +688,7 @@ async function mirror(params: {
     }
   }
 
-  return { assistantMirrorIdentitiesOwned, userMessagesPresent };
+  return { assistantMirrorIdentitiesOwned, messagesPresent, userMessagesPresent };
 }
 
 export const codexTranscriptMirrorRuntime = { mirror, mirrorBestEffort };
@@ -654,11 +714,11 @@ function resolveCodexMirrorTranscriptTarget(params: {
 
 function readTranscriptMirrorState(events: unknown[]): {
   idempotencyKeys: Set<string>;
+  messagesByIdempotencyKey: Map<string, MirroredAgentMessage>;
   messageCount: number;
-  userMessagesByIdempotencyKey: Map<string, MirroredUserMessage>;
 } {
   const idempotencyKeys = new Set<string>();
-  const userMessagesByIdempotencyKey = new Map<string, MirroredUserMessage>();
+  const messagesByIdempotencyKey = new Map<string, MirroredAgentMessage>();
   let messageCount = 0;
   for (const event of events) {
     if (!event || typeof event !== "object" || Array.isArray(event)) {
@@ -673,14 +733,14 @@ function readTranscriptMirrorState(events: unknown[]): {
     }
     if (typeof parsed.message?.idempotencyKey === "string") {
       idempotencyKeys.add(parsed.message.idempotencyKey);
-      if (parsed.message.role === "user") {
-        userMessagesByIdempotencyKey.set(parsed.message.idempotencyKey, parsed.message);
+      if (isMirroredAgentMessage(parsed.message)) {
+        messagesByIdempotencyKey.set(parsed.message.idempotencyKey, parsed.message);
       }
     }
   }
   return {
     idempotencyKeys,
+    messagesByIdempotencyKey,
     messageCount,
-    userMessagesByIdempotencyKey,
   };
 }

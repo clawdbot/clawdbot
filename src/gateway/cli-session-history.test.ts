@@ -93,7 +93,7 @@ function createClaudeHistoryLines(sessionId: string) {
       message: {
         role: "user",
         content:
-          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
       },
     }),
     JSON.stringify({
@@ -764,7 +764,7 @@ describe("cli session history", () => {
       {
         role: "user",
         content:
-          'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
+          'Sender: ⟦openclaw:ctx⟧\n```json\n{"label":"openclaw-control-ui"}\n```\n\n[Thu 2026-03-26 16:29 GMT] hi',
         timestamp: Date.parse("2026-03-26T16:29:54.800Z"),
         __openclaw: {
           importedFrom: "claude-cli",
@@ -803,6 +803,27 @@ describe("cli session history", () => {
       importedFrom: "claude-cli",
       externalId: "user-2",
     });
+  });
+
+  it("preserves repeated Claude messages with distinct external UUIDs", () => {
+    const importedMessages = [
+      "11111111-1111-4111-8111-111111111111",
+      "22222222-2222-4222-8222-222222222222",
+    ].map((externalId) => ({
+      role: "assistant",
+      content: "repeated Claude reply",
+      timestamp: Date.parse("2026-03-26T16:29:55.500Z"),
+      __openclaw: {
+        id: externalId,
+        importedFrom: "claude-cli",
+        externalId,
+        cliSessionId: "session-1",
+      },
+    }));
+
+    expect(mergeImportedChatHistoryMessages({ localMessages: [], importedMessages })).toEqual(
+      importedMessages,
+    );
   });
 
   it("does not dedupe external ids from different imported sessions", () => {

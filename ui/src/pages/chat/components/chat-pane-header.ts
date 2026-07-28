@@ -1,13 +1,23 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
+import type {
+  NativeGatewaysCapability,
+  NativeGatewaysSnapshot,
+  NativeGateway,
+} from "../../../app/native-gateways.runtime.ts";
+import { isNativeWebChromeHost } from "../../../app/native-web-chrome.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import type { ActorIdentityUser } from "../../../app/user-profile.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
+import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
@@ -19,8 +29,11 @@ type ChatPaneHeaderProps = {
   paneId: string;
   narrow: boolean;
   mergedChrome: boolean;
+  navDrawerOpen?: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
+  showOwnerChip?: boolean;
+  ownerUser?: ActorIdentityUser;
   catalog: boolean;
   editing: boolean;
   renameValue: string;
@@ -38,8 +51,13 @@ type ChatPaneHeaderProps = {
   diffAction: TemplateResult | typeof nothing;
   backgroundTasksAction: TemplateResult | typeof nothing;
   workspaceAction: TemplateResult | typeof nothing;
+  presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
+  sharingControl?: TemplateResult | typeof nothing;
   boardDockAction?: TemplateResult | typeof nothing;
+  nativeGateways?: NativeGatewaysCapability | null;
+  gatewaysSnapshot?: NativeGatewaysSnapshot | null;
+  onboarding?: boolean;
   onBeginRename: () => void;
   onRenameInput: (value: string) => void;
   onCommitRename: () => void;
@@ -119,6 +137,94 @@ export function canRevealSessionWorkspace(params: {
   );
 }
 
+function gatewayHealthLabel(gateway: NativeGateway): string {
+  if (gateway.health === "ok") {
+    return t("chat.sessionHeader.gatewayPicker.connected");
+  }
+  if (gateway.health === "error") {
+    return t("chat.sessionHeader.gatewayPicker.unreachable");
+  }
+  return t("chat.sessionHeader.gatewayPicker.unknown");
+}
+
+function renderGatewayPicker(props: ChatPaneHeaderProps) {
+  const capability = props.nativeGateways;
+  const snapshot = props.gatewaysSnapshot;
+  if (
+    !capability ||
+    !snapshot ||
+    snapshot.gateways.length <= 1 ||
+    props.onboarding ||
+    !isNativeWebChromeHost()
+  ) {
+    return nothing;
+  }
+  const current = snapshot.gateways.find((gateway) => gateway.id === snapshot.currentId);
+  if (!current) {
+    return nothing;
+  }
+  const setPrimaryDisabled = current.isPrimary || !current.canPromote;
+  return html`
+    <wa-dropdown class="chat-pane__gateway-menu" placement="bottom-start">
+      <button
+        slot="trigger"
+        class="chat-pane__gateway-chip"
+        type="button"
+        aria-label=${t("chat.sessionHeader.gatewayPicker.menuLabel", { gateway: current.name })}
+      >
+        <span class="chat-pane__gateway-health" data-health=${current.health}></span>
+        <span class="chat-pane__gateway-name">${current.name}</span>
+        <span class="chat-pane__gateway-chevron">${icons.chevronUp}</span>
+      </button>
+      ${snapshot.gateways.map((gateway) => {
+        const selected = gateway.id === snapshot.currentId;
+        return html`<wa-dropdown-item
+          class="chat-pane__gateway-item"
+          type="checkbox"
+          role="menuitemradio"
+          aria-checked=${String(selected)}
+          ${ref((element) => syncDropdownItemRadio(element, selected))}
+          @click=${(event: MouseEvent) => {
+            if (event.altKey) {
+              capability.openWindow(gateway.id);
+            } else if (!selected) {
+              capability.select(gateway.id);
+            }
+          }}
+        >
+          <span
+            slot="icon"
+            class="chat-pane__gateway-health"
+            data-health=${gateway.health}
+            role="img"
+            aria-label=${gatewayHealthLabel(gateway)}
+          ></span>
+          <span>${gateway.name}</span>
+          <span slot="details" class="chat-pane__gateway-details">
+            ${gateway.isPrimary
+              ? html`<span class="chat-pane__gateway-primary"
+                  >${t("chat.sessionHeader.gatewayPicker.primaryTag")}</span
+                >`
+              : nothing}
+            ${selected
+              ? html`<span class="chat-pane__gateway-check">${icons.check}</span>`
+              : nothing}
+          </span>
+        </wa-dropdown-item>`;
+      })}
+      <div class="chat-pane__gateway-divider" role="separator"></div>
+      <wa-dropdown-item
+        ?disabled=${setPrimaryDisabled}
+        @click=${() => !setPrimaryDisabled && capability.setPrimary(current.id)}
+        >${t("chat.sessionHeader.gatewayPicker.setPrimary")}</wa-dropdown-item
+      >
+      <wa-dropdown-item @click=${() => capability.openSettings()}
+        >${t("chat.sessionHeader.gatewayPicker.openSettings")}</wa-dropdown-item
+      >
+    </wa-dropdown>
+  `;
+}
+
 export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const placementState = props.session?.placement?.state;
   const cloud = isCloudWorkerPlacementState(placementState);
@@ -132,15 +238,17 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
       ? t("chat.sessionHeader.copied")
       : t("chat.sessionHeader.copyBranch");
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
+  const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
 
   return html`
     <div class="chat-pane__header" @mousedown=${beginNativeWindowDrag}>
       ${props.mergedChrome
-        ? html`<openclaw-tooltip .content=${t("nav.expand")}>
+        ? html`<openclaw-tooltip .content=${drawerLabel}>
             <button
               class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
               type="button"
-              aria-label=${t("nav.expand")}
+              aria-label=${drawerLabel}
+              aria-expanded=${String(Boolean(props.navDrawerOpen))}
               @click=${(event: MouseEvent) => {
                 window.dispatchEvent(
                   new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
@@ -160,6 +268,15 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             aria-label=${cloudLabel}
             title=${cloudLabel}
             >${icons.globe}</span
+          >`
+        : nothing}
+      ${props.session?.incognito
+        ? html`<span
+            class="chat-pane__incognito"
+            role="img"
+            aria-label=${t("chat.sessionHeader.incognito")}
+            title=${t("chat.sessionHeader.incognito")}
+            >${icons.lock}</span
           >`
         : nothing}
       ${props.editing
@@ -192,6 +309,12 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             >
               ${props.title}
             </button>`}
+      ${renderSessionOwnerChip(
+        props.showOwnerChip ? props.session?.createdActor : undefined,
+        "header",
+        "created",
+        props.ownerUser,
+      )}
       ${!props.catalog && props.workspaceLabel
         ? html`
             <wa-dropdown
@@ -233,7 +356,8 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </wa-dropdown>
           `
         : nothing}
-      ${props.faceControl ?? nothing}
+      ${props.presence ?? nothing} ${props.faceControl ?? nothing}
+      ${props.sharingControl ?? nothing}
       ${!props.catalog && props.branches.length > 1
         ? html`
             <wa-dropdown
@@ -297,6 +421,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             </wa-dropdown>
           `
         : nothing}
+      ${renderGatewayPicker(props)}
       <div class="chat-pane__actions">
         ${props.boardDockAction ?? nothing} ${props.terminalAction} ${props.discussionAction}
         ${props.catalog

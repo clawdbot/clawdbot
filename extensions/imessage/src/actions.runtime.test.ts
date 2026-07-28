@@ -78,6 +78,56 @@ describe("imessage actions runtime", () => {
     ).rejects.toBe(wrapperError);
   });
 
+  it("suppresses the imsg poll caption when the caller already rendered context", async () => {
+    runIMessageCliJsonCommandMock.mockResolvedValue({
+      guid: "poll-guid",
+      poll: {
+        options: [
+          { id: " option-allow ", text: "Allow" },
+          { id: "option-deny", text: " Deny " },
+        ],
+      },
+    });
+
+    const result = await imessageActionsRuntime.sendPoll({
+      chatGuid: "iMessage;+;chat0000",
+      question: "Approval details",
+      choices: ["Allow", "Deny"],
+      suppressComment: true,
+      options: {
+        cliPath: "imsg",
+        dbPath: "/tmp/messages.db",
+        chatGuid: "iMessage;+;chat0000",
+      },
+    });
+
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
+      cliPath: "imsg",
+      dbPath: "/tmp/messages.db",
+      timeoutMs: undefined,
+      args: [
+        "poll",
+        "send",
+        "--chat",
+        "iMessage;+;chat0000",
+        "--question",
+        "Approval details",
+        "--option",
+        "Allow",
+        "--option",
+        "Deny",
+        "--no-comment",
+      ],
+    });
+    expect(result).toEqual({
+      messageId: "poll-guid",
+      pollOptions: [
+        { id: "option-allow", text: "Allow" },
+        { id: "option-deny", text: "Deny" },
+      ],
+    });
+  });
+
   it("drops cached chats.list entries when the current clock is not a valid date timestamp", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(1_700_000_000_000).mockReturnValueOnce(Number.NaN);
     const firstClient = mockRpcChatList([{ id: 1, guid: "iMessage;+;first" }]);
@@ -87,12 +137,14 @@ describe("imessage actions runtime", () => {
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 1 },
         options: { cliPath: "imsg-invalid-clock" },
+        conversationReadOrigin: "delegated",
       }),
     ).resolves.toBe("iMessage;+;first");
     await expect(
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 2 },
         options: { cliPath: "imsg-invalid-clock" },
+        conversationReadOrigin: "delegated",
       }),
     ).resolves.toBe("iMessage;+;second");
 
@@ -118,12 +170,14 @@ describe("imessage actions runtime", () => {
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 1 },
         options: { cliPath: "imsg-overflow-clock" },
+        conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;first");
     await expect(
       imessageActionsRuntime.resolveChatGuidForTarget({
         target: { kind: "chat_id", chatId: 2 },
         options: { cliPath: "imsg-overflow-clock" },
+        conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBe("iMessage;+;second");
 

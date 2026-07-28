@@ -7,6 +7,7 @@ import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import { pruneBindingsForMissingAgents } from "./legacy-config-binding-repair.js";
 import { normalizeBaseCompatibilityConfigValues } from "./legacy-config-compatibility-base.js";
 import { normalizeLegacyOpenAICodexModelsAddMetadata } from "./legacy-config-core-normalizers.js";
+import { stripRetiredTuningKnobs } from "./legacy-config-migrations.runtime.retired-media.js";
 
 function repairNullAgentWorkspaces(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const agents = cfg.agents?.list;
@@ -72,6 +73,11 @@ export function normalizeCompatibilityConfigValues(
     },
     options.blockedModelIdentities,
   );
+  const tuningCandidate = structuredClone(next);
+  if (stripRetiredTuningKnobs(tuningCandidate)) {
+    next = tuningCandidate;
+    changes.push("Removed retired runtime tuning knobs; built-in defaults now apply.");
+  }
   const channelMigrations = applyChannelDoctorCompatibilityMigrations(next);
   if (channelMigrations.changes.length > 0) {
     next = channelMigrations.next;

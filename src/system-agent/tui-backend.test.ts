@@ -8,10 +8,19 @@ import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
 import { runSystemAgentTui, type SystemAgentTuiOptions } from "./tui-backend.js";
 
-vi.mock("../plugins/providers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/providers.js")>()),
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(async () => []),
+}));
+
+vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
   resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+}));
+
+vi.mock("../agents/prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-catalog.js")>()),
+  // These tests exercise the TUI boundary, not filesystem-backed catalog discovery.
+  loadPreparedModelCatalog: vi.fn(async () => []),
 }));
 
 const overview: SystemAgentOverview = {
@@ -149,7 +158,7 @@ describe("runSystemAgentTui", () => {
     if (!options.backend || typeof options.backend !== "object") {
       throw new Error("expected openclaw TUI backend");
     }
-  });
+  }, 240_000);
 
   it("reports the verified model without its auth profile and the effective thinking level", async () => {
     const config = {
@@ -434,6 +443,10 @@ describe("runSystemAgentTui", () => {
         handoff: { kind: "open-setup", target: "channels", channel: "slack" },
         expected: "channels:slack:false:function",
       },
+      {
+        handoff: { kind: "open-setup", target: "search" },
+        expected: "search:function",
+      },
     ];
 
     for (const { handoff, expected } of cases) {
@@ -475,6 +488,9 @@ describe("runSystemAgentTui", () => {
             events.push(
               `channels:${opts.channel ?? "all"}:${String(params?.hasFlags)}:${typeof params?.beforePersistentEffect}`,
             );
+          },
+          runSearchSetupHandoff: async (_runtime, beforePersistentEffect) => {
+            events.push(`search:${typeof beforePersistentEffect}`);
           },
         },
         createRuntime(),

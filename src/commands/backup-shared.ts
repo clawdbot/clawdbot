@@ -290,7 +290,8 @@ export async function resolveBackupPlanFromDisk(
   const configPath = resolveConfigPath();
   const oauthDir = resolveOAuthDir();
 
-  const configSnapshot = await readConfigFileSnapshot();
+  // Backup discovery must not initialize or migrate the state DB before snapshot validation.
+  const configSnapshot = await readConfigFileSnapshot({ observe: false });
   if (includeWorkspace && configSnapshot.exists && !configSnapshot.valid) {
     throw new Error(
       `Config invalid at ${shortenHomePath(configSnapshot.path)}. OpenClaw cannot reliably discover custom workspaces for backup. Fix the config or rerun with --no-include-workspace for a partial backup.`,

@@ -1,6 +1,9 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -14,15 +17,17 @@ import {
   subscribeChatOutboxProjection,
   updateQueuedMessageForSession,
 } from "./chat-queue.ts";
+import { ChatStateController } from "./chat-state-controller.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+import { createPageState } from "./chat-state-page.ts";
+import { invalidateChatMetadataCache, refreshChatMetadata } from "./chat-state-refresh.ts";
 import {
-  ChatStateController,
-  handlePageGatewayEvent,
-  refreshChatMetadata,
   resetChatStateForRouteSession,
   retryChatComposerMemoryFallback,
   resolveChatAvatarUrl,
-  type ChatPageHost,
-} from "./chat-state.ts";
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
 import {
   admitStoredChatComposerQueueItem,
   ChatComposerPersistence,
@@ -35,6 +40,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
+import { openSlot } from "./sidebar-layout.ts";
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -49,6 +55,307 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("keeps the active observer digest when another run streams in the same session", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "The active run's status",
+      health: "on-track" as const,
+    };
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "delta",
+        runId: "run-2",
+        sessionKey: projectedDigest.sessionKey,
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+  });
+
+  it("rejects a run-less observer digest during an identified active run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: projectedDigest.sessionKey,
+        revision: 2,
+        updatedAt: 2_000,
+        headline: "Run-less live status",
+        health: "stuck",
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the row-active observer run when attaching mid-run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "r1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: null,
+      observerDigest: projectedDigest,
+      sessionsResult: {
+        sessions: [
+          {
+            key: projectedDigest.sessionKey,
+            hasActiveRun: true,
+            activeRunIds: ["r1"],
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (runId?: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: projectedDigest.sessionKey,
+          ...(runId ? { runId } : {}),
+          revision: 2,
+          updatedAt: 2_000,
+          headline: `Live status ${runId ?? "without run"}`,
+          health: "grinding",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent());
+    handlePageGatewayEvent(state, observerEvent("r2"));
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("r1"));
+    expect(state.observerDigest?.headline).toBe("Live status r1");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("accepts global observer digests only from the selected agent", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", scope: "global" },
+      chatRunId: "run-work",
+      observerDigest: null,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (agentId: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: "global",
+          agentId,
+          runId: "run-work",
+          revision: 1,
+          updatedAt: 1_000,
+          headline: `${agentId} status`,
+          health: "on-track",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent("main"));
+    expect(state.observerDigest).toBeNull();
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("work"));
+    expect(state.observerDigest?.headline).toBe("work status");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a fresher selected-agent digest when reconnect replays stale global events", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", scope: "global" },
+      chatRunId: "run-work",
+      observerDigest: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 4,
+        updatedAt: 4_000,
+        headline: "Current work status",
+        health: "grinding" as const,
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    for (const payload of [
+      {
+        sessionKey: "global",
+        agentId: "main",
+        runId: "run-work",
+        revision: 8,
+        updatedAt: 8_000,
+        headline: "Other agent status",
+        health: "done" as const,
+      },
+      {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 3,
+        updatedAt: 9_000,
+        headline: "Replayed work status",
+        health: "on-track" as const,
+      },
+    ]) {
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "session.observer",
+        payload,
+      });
+    }
+
+    expect(state.observerDigest?.headline).toBe("Current work status");
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a selected global alias with its scoped canonical row after reconnect", () => {
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "global",
+          },
+        },
+      },
+      chatRunId: null,
+      observerDigest: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 1,
+        updatedAt: 1_000,
+        headline: "Stale status",
+        health: "on-track",
+      },
+      sessionsResultAgentId: "work",
+      sessionsResult: {
+        sessions: [
+          {
+            key: "global",
+            hasActiveRun: true,
+            activeRunIds: ["run-work"],
+            observerDigest: {
+              agentId: "work",
+              runId: "run-work",
+              revision: 2,
+              updatedAt: 2_000,
+              headline: "Projected status",
+              health: "grinding",
+            },
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    expect(selectedChatSessionRow(state)?.key).toBe("global");
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-work",
+        revision: 3,
+        updatedAt: 3_000,
+        headline: "Reconnected live status",
+        health: "on-track",
+      },
+    });
+
+    expect(state.observerDigest?.headline).toBe("Reconnected live status");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+
+    const projectedRow = state.sessionsResult?.sessions[0];
+    if (projectedRow?.observerDigest) {
+      projectedRow.observerDigest.agentId = "main";
+    }
+    const sanitized = selectedChatSessionRow(state);
+    expect(sanitized?.key).toBe("global");
+    expect(sanitized?.activeRunIds).toEqual(["run-work"]);
+    expect(sanitized?.observerDigest).toBeUndefined();
+
+    state.sessionsResultAgentId = "main";
+    expect(selectedChatSessionRow(state)).toBeUndefined();
+  });
+
+  it.each([
+    {
+      name: "prefers an exact direct row over a preceding stray global row",
+      rows: [{ key: "global" }, { key: "agent:work:main", displayName: "Exact work session" }],
+      expectedKey: "agent:work:main",
+    },
+    {
+      name: "ignores a lone global row outside configured-global scope",
+      rows: [{ key: "global" }],
+      expectedKey: undefined,
+    },
+  ])("$name", ({ rows, expectedKey }) => {
+    const state = {
+      sessionKey: "agent:work:main",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+      sessionsResultAgentId: "work",
+      sessionsResult: { sessions: rows },
+    } as unknown as ChatPageHost;
+
+    expect(selectedChatSessionRow(state)?.key).toBe(expectedKey);
+  });
+
   it("tracks waiting approval only for the selected session until resolution", () => {
     const state = {
       sessionKey: "agent:main:current",
@@ -206,6 +513,56 @@ describe("ChatStateController render lifecycle", () => {
     expect(requestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("forces one PR-chips refresh per PR link seen in the live stream", () => {
+    vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation(() => 1);
+    const refreshSessionPullRequests = vi.fn(() => Promise.resolve());
+    const state = {
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamStartedAt: 1,
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      refreshSessionPullRequests,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+    } as unknown as ChatPageHost;
+    const delta = (deltaText: string, runId = "run-1") =>
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { state: "delta", runId, sessionKey: "main", deltaText },
+      });
+
+    delta("working on it ");
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+
+    // Issue links never carry chips.
+    delta("see https://github.com/openclaw/openclaw/issues/42 ");
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+
+    delta("opened https://github.com/openclaw/openclaw/pull/113840 for review ");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+
+    // One refresh reloads all of the branch's PRs; further links in the same
+    // run must not spend more GitHub quota.
+    delta("also https://github.com/openclaw/openclaw/pull/113900 ");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+
+    // Streaming may split a URL across chunks; the rolling tail rejoins it.
+    delta("continuing https://github.com/openclaw/openclaw/pu", "run-2");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(1);
+    delta("ll/113901 done", "run-2");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(2);
+
+    // A later run announcing the same PR (e.g. its merge) refreshes again.
+    delta("merged https://github.com/openclaw/openclaw/pull/113840 at last", "run-3");
+    expect(refreshSessionPullRequests).toHaveBeenCalledTimes(3);
+  });
+
   it("requests a render before selecting the commit promise", async () => {
     let resolveCommit: (value: boolean) => void = () => {};
     const nextCommit = new Promise<boolean>((resolve) => {
@@ -262,6 +619,48 @@ describe("ChatStateController render lifecycle", () => {
     await completion;
 
     expect(effect).not.toHaveBeenCalled();
+  });
+
+  it("aborts attachment reads when a pane adopts a different session", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(1);
+
+    controller.adoptComposerRoute();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+  });
+
+  it("aborts attachment reads when a chat pane disconnects", () => {
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    const previousSignal = controller.attachmentReads.readSignal;
+
+    controller.attachmentReads.updatePending(previousSignal, 1);
+    controller.hostDisconnected();
+
+    expect(previousSignal.aborted).toBe(true);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
+    expect(controller.attachmentReads.readSignal).not.toBe(previousSignal);
+    controller.attachmentReads.updatePending(previousSignal, -1);
+    expect(controller.attachmentReads.pendingReads).toBe(0);
   });
 
   it("rejects lifecycle work from detached and replaced state epochs", async () => {
@@ -344,6 +743,263 @@ describe("ChatStateController render lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
     expect(painted).not.toHaveBeenCalled();
   });
+
+  it("invalidates the render lifecycle when input history recall mutates the draft", () => {
+    const requestUpdate = vi.fn();
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+
+    const navigateHistory = vi.fn().mockReturnValue({
+      handled: true,
+      preventDefault: true,
+      restoreCaret: "up" as const,
+      decision: "handled:history-up" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: true,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 10,
+    });
+
+    const state = {
+      settings: undefined,
+      assistantAgentId: null,
+      agentsList: null,
+      hello: null,
+      sessionKey: "agent:main:current",
+      chatLoading: false,
+      chatMessages: [],
+      chatQueue: [],
+      renderLifecycle,
+      handleSendChat: vi.fn().mockResolvedValue(undefined),
+      handleChatDraftChange: vi.fn(),
+      handleChatInputHistoryKey: navigateHistory,
+    } as unknown as ChatPageHost;
+
+    controller.attach(state);
+
+    const input = {
+      key: "ArrowUp" as const,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    };
+    const result = state.handleChatInputHistoryKey!(input);
+
+    expect(result.handled).toBe(true);
+    expect(navigateHistory).toHaveBeenCalledWith(input);
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("does not invalidate the render lifecycle when input history key is not handled", () => {
+    const requestUpdate = vi.fn();
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+
+    const navigateHistory = vi.fn().mockReturnValue({
+      handled: false,
+      preventDefault: false,
+      restoreCaret: null,
+      decision: "blocked:modifier-or-composition" as const,
+      historyNavigationActiveBefore: false,
+      historyNavigationActiveAfter: false,
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 10,
+    });
+
+    const state = {
+      settings: undefined,
+      assistantAgentId: null,
+      agentsList: null,
+      hello: null,
+      sessionKey: "agent:main:current",
+      chatLoading: false,
+      chatMessages: [],
+      chatQueue: [],
+      renderLifecycle,
+      handleSendChat: vi.fn().mockResolvedValue(undefined),
+      handleChatDraftChange: vi.fn(),
+      handleChatInputHistoryKey: navigateHistory,
+    } as unknown as ChatPageHost;
+
+    controller.attach(state);
+
+    const input = {
+      key: "ArrowUp" as const,
+      selectionStart: 5,
+      selectionEnd: 5,
+      valueLength: 10,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    };
+    const result = state.handleChatInputHistoryKey!(input);
+
+    expect(result.handled).toBe(false);
+    expect(navigateHistory).toHaveBeenCalledWith(input);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe("session pull request refresh", () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function createFinalReplyState(refreshSessionPullRequests: ReturnType<typeof vi.fn>) {
+    return {
+      chatComposerFallbackByScope: {},
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatQueue: [],
+      chatQueueByScope: {},
+      chatRunId: null,
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      refreshSessionPullRequests,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+      sessions: { reconcileRunTerminal: vi.fn() },
+      settings: {},
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+    } as unknown as ChatPageHost;
+  }
+
+  it.each([
+    {
+      name: "requests an authoritative refresh after a final assistant PR link",
+      text: "Opened `https://github.com/openclaw/openclaw/pull/111532`.",
+      refresh: true,
+    },
+    {
+      name: "refreshes for a visible same-session final from another run",
+      text: "Opened https://github.com/openclaw/openclaw/pull/111532",
+      activeRunId: "active-run",
+      runId: "announcement-run",
+      refresh: true,
+    },
+    {
+      name: "does not inspect the active stream for another run's final",
+      text: "Finished the background task.",
+      activeRunId: "active-run",
+      runId: "announcement-run",
+      stream: "Opened https://github.com/openclaw/openclaw/pull/111532",
+      refresh: false,
+    },
+    {
+      name: "does not refresh for an issue link",
+      text: "Tracked in https://github.com/openclaw/openclaw/issues/111532.",
+      refresh: false,
+    },
+    {
+      name: "does not refresh for another session's PR announcement",
+      text: "Opened https://github.com/openclaw/openclaw/pull/111532",
+      sessionKey: "agent:main:other",
+      refresh: false,
+    },
+  ])("$name", ({ text, activeRunId, runId, stream, sessionKey, refresh }) => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+    if (activeRunId) {
+      state.chatRunId = activeRunId;
+    }
+    if (stream) {
+      state.chatStream = stream;
+    }
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        ...(runId ? { runId } : {}),
+        sessionKey: sessionKey ?? "main",
+        message: { role: "assistant", content: [{ type: "text", text }] },
+      },
+    });
+
+    if (refresh) {
+      expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+    } else {
+      expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("image lightbox lifecycle", () => {
+  it("invalidates immediately when beginning a deferred image open", () => {
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      {
+        invalidate,
+        afterCommit: () => () => {},
+      },
+      { querySelector: () => null },
+    );
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    const requestVersion = state.beginImageOpen();
+
+    expect(requestVersion).toBe(1);
+    expect(state.imageLightbox).toBeNull();
+    expect(release).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("route composer fallback", () => {
@@ -355,6 +1011,7 @@ describe("route composer fallback", () => {
       assistantAgentId: "main",
       agentsList: { defaultId: "main", mainKey: "main" },
       hello: null,
+      initialUserMessage: createInitialUserMessageHandoff(),
       sessionKey: "agent:main:first",
       chatMessage,
       chatComposerFallbackByScope: {},
@@ -362,6 +1019,8 @@ describe("route composer fallback", () => {
       chatQueueByScope: {},
       chatMessages: [],
       chatMessagesBySession: new Map(),
+      imageLightbox: null,
+      imageLightboxRequestVersion: 0,
       chatAttachments: [
         {
           id: "staged-image",
@@ -369,7 +1028,6 @@ describe("route composer fallback", () => {
           dataUrl: "data:image/png;base64,AAA",
         },
       ],
-      chatSideResultTerminalRuns: new Set(),
       chatToolMessages: [],
       chatStreamSegments: [],
       toolStreamById: new Map(),
@@ -384,17 +1042,44 @@ describe("route composer fallback", () => {
     return { resetChatInputHistoryNavigation, resetChatScroll, state };
   }
 
+  it("releases the active image lightbox on a route switch", () => {
+    const { state } = createRouteState("");
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(state.imageLightbox).toBeNull();
+  });
+
+  it("clears transient detail content on a route switch", () => {
+    const { state } = createRouteState("");
+    state.sidebarContent = { kind: "markdown", content: "First session detail" };
+    state.sidebarLayout = openSlot({ columns: [] }, "detail");
+
+    resetChatStateForRouteSession(state, "agent:main:second");
+
+    expect(state.sidebarContent).toBeNull();
+  });
+
   it("restores one atomic history snapshot when returning to a session", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const { state } = createRouteState("");
     state.chatMessages = [{ role: "assistant", content: "first session" }];
     state.chatHistoryPagination = { hasMore: true, nextOffset: 400, totalMessages: 718 };
     state.currentSessionId = "session-first";
+    state.chatDisplayedLeafEntryId = "leaf-first";
 
     resetChatStateForRouteSession(state, "agent:main:second");
     state.chatMessages = [{ role: "assistant", content: "second session" }];
     state.chatHistoryPagination = { hasMore: false, totalMessages: 1 };
     state.currentSessionId = "session-second";
+    state.chatDisplayedLeafEntryId = "leaf-second";
 
     resetChatStateForRouteSession(state, "agent:main:first");
 
@@ -405,6 +1090,7 @@ describe("route composer fallback", () => {
       totalMessages: 718,
     });
     expect(state.currentSessionId).toBe("session-first");
+    expect(state.chatDisplayedLeafEntryId).toBe("leaf-first");
   });
 
   it("reapplies a live send projection when a subscribed pane switches into its scope", () => {
@@ -1068,7 +1754,86 @@ describe("resolveChatAvatarUrl", () => {
   });
 });
 
+describe("loadPageAssistantIdentity", () => {
+  it("memoizes identity by agent while fetching a cross-agent switch", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
+      name: params?.agentId === "other" ? "Other Agent" : "Main Agent",
+      agentId: params?.agentId ?? "main",
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const context = {
+      agents: { state: { agentsList: null }, adoptList: vi.fn() },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          chatMessageMaxWidth: null,
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      gateway: { snapshot: { client, connected: true, hello: null } },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+    state.client = client;
+    state.connected = true;
+    state.assistantName = "Initial";
+    state.sessionKey = "agent:main:first";
+
+    await state.loadAssistantIdentity();
+    state.sessionKey = "agent:main:second";
+    await state.loadAssistantIdentity();
+
+    expect(request).toHaveBeenCalledWith("agent.identity.get", {
+      agentId: "main",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(state.assistantName).toBe("Main Agent");
+
+    state.sessionKey = "agent:other:main";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "other" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(state.assistantName).toBe("Other Agent");
+
+    now.mockReturnValue(61_001);
+    state.sessionKey = "agent:main:third";
+    await state.loadAssistantIdentity();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith("agent.identity.get", { agentId: "main" });
+  });
+});
+
 describe("refreshChatMetadata", () => {
+  function createMetadataState(
+    request: ReturnType<typeof vi.fn>,
+    overrides: Partial<Omit<ChatPageHost, "hello">> & {
+      hello?: { features: { methods: string[] } };
+    } = {},
+  ): ChatPageHost {
+    return {
+      agentsList: null,
+      assistantAgentId: "main",
+      chatMetadataRequestVersion: 0,
+      chatModelCatalog: [],
+      chatModelsLoading: false,
+      client: { request },
+      connected: true,
+      hello: { features: { methods: ["chat.metadata"] } },
+      sessionKey: "agent:work:main",
+      ...overrides,
+    } as unknown as ChatPageHost;
+  }
+
   it("applies agent-scoped metadata after a same-agent session switch", async () => {
     let resolveMetadata:
       | ((value: {
@@ -1092,17 +1857,7 @@ describe("refreshChatMetadata", () => {
       expect(params).toEqual({ agentId: "work" });
       return await metadata;
     });
-    const state = {
-      agentsList: null,
-      assistantAgentId: "main",
-      chatModelCatalog: [],
-      chatMetadataRequestVersion: 0,
-      chatModelsLoading: false,
-      client: { request },
-      connected: true,
-      hello: { features: { methods: ["chat.metadata"] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    const state = createMetadataState(request);
 
     const refresh = refreshChatMetadata(state);
     state.sessionKey = "agent:work:another";
@@ -1116,6 +1871,30 @@ describe("refreshChatMetadata", () => {
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ]);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses same-agent metadata and fetches a cross-agent catalog", async () => {
+    const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
+      commands: [],
+      models: [
+        {
+          id: `${params?.agentId}-model`,
+          name: `${params?.agentId} Model`,
+          provider: "openai",
+        },
+      ],
+    }));
+    const state = createMetadataState(request);
+
+    await refreshChatMetadata(state);
+    state.sessionKey = "agent:work:second";
+    await refreshChatMetadata(state);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    state.sessionKey = "agent:other:main";
+    await refreshChatMetadata(state);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith("chat.metadata", { agentId: "other" });
   });
 
   it("ignores metadata after switching to a different agent", async () => {
@@ -1135,17 +1914,7 @@ describe("refreshChatMetadata", () => {
     const existingCatalog = [
       { id: "work-model", name: "Work Model", provider: "openai", available: true },
     ];
-    const state = {
-      agentsList: null,
-      assistantAgentId: "main",
-      chatModelCatalog: existingCatalog,
-      chatMetadataRequestVersion: 0,
-      chatModelsLoading: false,
-      client: { request },
-      connected: true,
-      hello: { features: { methods: ["chat.metadata"] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    const state = createMetadataState(request, { chatModelCatalog: existingCatalog });
 
     const refresh = refreshChatMetadata(state);
     state.sessionKey = "agent:other:main";
@@ -1184,17 +1953,7 @@ describe("refreshChatMetadata", () => {
       async (_method: string, params?: { agentId?: string }) =>
         await (params?.agentId === "work" ? workMetadata : otherMetadata),
     );
-    const state = {
-      agentsList: null,
-      assistantAgentId: "main",
-      chatMetadataRequestVersion: 0,
-      chatModelCatalog: [],
-      chatModelsLoading: false,
-      client: { request },
-      connected: true,
-      hello: { features: { methods: ["chat.metadata"] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    const state = createMetadataState(request);
 
     const workRefresh = refreshChatMetadata(state);
     state.sessionKey = "agent:other:main";
@@ -1244,19 +2003,10 @@ describe("refreshChatMetadata", () => {
       requestCount += 1;
       return await (requestCount === 1 ? firstMetadata : secondMetadata);
     });
-    const state = {
-      agentsList: null,
-      assistantAgentId: "main",
-      chatMetadataRequestVersion: 0,
-      chatModelCatalog: [],
-      chatModelsLoading: false,
-      client: { request },
-      connected: true,
-      hello: { features: { methods: ["chat.metadata"] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    const state = createMetadataState(request);
 
     const firstRefresh = refreshChatMetadata(state);
+    invalidateChatMetadataCache(state);
     const secondRefresh = refreshChatMetadata(state);
     resolveSecond({
       commands: [],
@@ -1285,17 +2035,13 @@ describe("refreshChatMetadata", () => {
       expect(method).toBe("commands.list");
       return { commands: [] };
     });
-    const state = {
-      agentsList: null,
-      assistantAgentId: "main",
+    const state = createMetadataState(request, {
       chatMetadataRequestVersion: 2,
       chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
       chatModelsLoading: true,
-      client: { request },
-      connected: true,
       hello: { features: { methods: [] } },
       sessionKey: "agent:main:main",
-    } as unknown as ChatPageHost;
+    });
 
     await refreshChatMetadata(state);
 
@@ -1315,17 +2061,12 @@ describe("refreshChatMetadata", () => {
     const startupCatalog = [
       { id: "startup-model", name: "Startup Model", provider: "openai", available: true },
     ];
-    const state = {
-      agentsList: null,
-      assistantAgentId: "main",
+    const state = createMetadataState(request, {
       chatMetadataRequestVersion: 4,
       chatModelCatalog: startupCatalog,
       chatModelsLoading: true,
-      client: { request },
-      connected: true,
       hello: { features: { methods: ["chat.startup"] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    });
 
     await refreshChatMetadata(state, { preserveModelCatalogOnFallback: true });
 
@@ -1340,17 +2081,11 @@ describe("refreshChatMetadata", () => {
       expect(method).toBe("commands.list");
       return { commands: [] };
     });
-    const state = {
-      agentsList: { defaultId: "main" },
-      assistantAgentId: "main",
-      chatMetadataRequestVersion: 0,
+    const state = createMetadataState(request, {
+      agentsList: { defaultId: "main" } as ChatPageHost["agentsList"],
       chatModelCatalog: [{ id: "stale-model", name: "Stale Model", provider: "openai" }],
-      chatModelsLoading: false,
-      client: { request },
-      connected: true,
       hello: { features: { methods: [] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    });
 
     await refreshChatMetadata(state);
 
@@ -1402,17 +2137,10 @@ describe("refreshChatMetadata", () => {
         ],
       },
     });
-    const state = {
-      agentsList: { defaultId: "main" },
-      assistantAgentId: "main",
-      chatMetadataRequestVersion: 0,
-      chatModelCatalog: [],
-      chatModelsLoading: false,
-      client: { request },
-      connected: true,
+    const state = createMetadataState(request, {
+      agentsList: { defaultId: "main" } as ChatPageHost["agentsList"],
       hello: { features: { methods: [] } },
-      sessionKey: "agent:work:main",
-    } as unknown as ChatPageHost;
+    });
 
     const refresh = refreshChatMetadata(state);
     state.sessionKey = "agent:other:main";

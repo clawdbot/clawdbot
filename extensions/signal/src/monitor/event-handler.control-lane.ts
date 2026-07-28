@@ -1,3 +1,4 @@
+import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
 // Signal plugin helpers isolate active-run control scheduling from the inbound handler.
 import {
   listChatCommands,
@@ -22,10 +23,7 @@ export type SignalInboundEntry = {
   messageId?: string;
   replyToId?: string;
   isBatched?: boolean;
-  mediaPath?: string;
-  mediaType?: string;
-  mediaPaths?: string[];
-  mediaTypes?: string[];
+  media?: ChannelInboundMediaInput[];
   commandAuthorized: boolean;
   canDetectMention?: boolean;
   requireMention?: boolean;

@@ -10,7 +10,11 @@ const sockets: MockWebSocket[] = [];
 
 class MockWebSocket {
   static readonly OPEN = 1;
-  readonly close = vi.fn();
+  readonly close = vi.fn((code?: number, _reason?: string) => {
+    if (code !== undefined && code !== 1000 && (code < 3000 || code > 4999)) {
+      throw new DOMException("invalid code", "InvalidAccessError");
+    }
+  });
   readonly handlers = new Map<string, MockSocketHandler[]>();
   readyState = 0;
 
@@ -116,5 +120,39 @@ describe("createBrowserGatewaySocket", () => {
 
     expect(socket?.close).toHaveBeenCalledWith(1000, "stopped");
     expect(handlers.error).not.toHaveBeenCalled();
+  });
+
+  it("maps protocol policy-violation closes to the browser-safe connect failure code", () => {
+    const handlers = createHandlers();
+    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
+
+    expect(() => socketAdapter.close(1008, "connect failed")).not.toThrow();
+    expect(sockets[0]?.close).toHaveBeenCalledWith(4008, "connect failed");
+  });
+
+  it.each([1000, 3000, 4000, 4008, 4013, 4999])("preserves browser-valid close code %i", (code) => {
+    const handlers = createHandlers();
+    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
+
+    expect(() => socketAdapter.close(code, "valid close")).not.toThrow();
+    expect(sockets[0]?.close).toHaveBeenCalledWith(code, "valid close");
+  });
+
+  it("does not normalize other invalid browser close codes", () => {
+    const handlers = createHandlers();
+    const socketAdapter = createBrowserGatewaySocket("wss://gateway.example", handlers);
+
+    expect(() => socketAdapter.close(1009, "invalid client close")).toThrow(
+      expect.objectContaining({ name: "InvalidAccessError" }),
+    );
+  });
+
+  it("preserves policy-violation closes received from the gateway", () => {
+    const handlers = createHandlers();
+    createBrowserGatewaySocket("wss://gateway.example", handlers);
+
+    sockets[0]?.emit("close", { code: 1008, reason: "pairing required" });
+
+    expect(handlers.close).toHaveBeenCalledWith(1008, "pairing required");
   });
 });

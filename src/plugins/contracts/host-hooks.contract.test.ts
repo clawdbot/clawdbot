@@ -44,7 +44,11 @@ import {
 import { buildPluginAgentTurnPrepareContext, isPluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import {
+  pinActivePluginSessionExtensionRegistry,
+  releasePinnedPluginSessionExtensionRegistry,
+  setActivePluginRegistry,
+} from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
@@ -88,7 +92,10 @@ function loadSessionStore(
   _options?: { skipCache?: boolean },
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    listSessionEntries({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
   );
 }
 
@@ -124,6 +131,7 @@ async function withHostHookState(
   prefix: string,
   run: (fixture: HostHookStateFixture) => Promise<void>,
   createTempConfig: (storePath: string) => HostHookStateFixture["tempConfig"] = (storePath) => ({
+    agents: { entries: { main: { default: true } } },
     session: { store: storePath },
   }),
 ): Promise<void> {
@@ -144,6 +152,7 @@ async function withHostHookState(
 
 describe("host-hook fixture plugin contract", () => {
   afterEach(() => {
+    releasePinnedPluginSessionExtensionRegistry();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
@@ -1991,6 +2000,58 @@ describe("host-hook fixture plugin contract", () => {
         },
       ],
     });
+  });
+
+  it("keeps gateway UI descriptors pinned across agent registry replacement", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "pinned-ui-fixture",
+        name: "Pinned UI Fixture",
+      }),
+      register(api) {
+        api.registerControlUiDescriptor({
+          id: "gateway-panel",
+          surface: "session",
+          label: "Gateway panel",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    pinActivePluginSessionExtensionRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    const calls: Array<[boolean, unknown, unknown]> = [];
+    void expectDefined(
+      pluginHostHookHandlers["plugins.uiDescriptors"],
+      'pluginHostHookHandlers["plugins.uiDescriptors"] test invariant',
+    )({
+      params: {},
+      respond: (ok: boolean, payload: unknown, error: unknown) => {
+        calls.push([ok, payload, error]);
+      },
+    } as never);
+
+    expect(calls).toEqual([
+      [
+        true,
+        {
+          ok: true,
+          descriptors: [
+            {
+              id: "gateway-panel",
+              pluginId: "pinned-ui-fixture",
+              pluginName: "Pinned UI Fixture",
+              surface: "session",
+              label: "Gateway panel",
+            },
+          ],
+        },
+        undefined,
+      ],
+    ]);
   });
 
   it("enforces command requiredScopes for gateway clients and command owners", async () => {

@@ -48,14 +48,16 @@ export async function executeBashWithOperations(
   operations: BashOperations,
   options?: BashExecutorOptions,
 ): Promise<BashResult> {
-  const sanitizeOutput = createStreamingBinaryOutputSanitizer();
   const output = new OutputAccumulator({
     tempFilePrefix: "openclaw-bash",
-    transformDecodedText: (text) => sanitizeOutput(text).replace(/\r/g, ""),
+    createTextTransform: () => {
+      const sanitizeOutput = createStreamingBinaryOutputSanitizer();
+      return (text) => sanitizeOutput(text).replace(/\r/g, "");
+    },
   });
 
-  const onData = (data: Buffer) => {
-    const text = output.append(data);
+  const onData = (data: Buffer, stream?: "stdout" | "stderr") => {
+    const text = output.append(data, stream);
     options?.onChunk?.(text);
   };
 

@@ -3,6 +3,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readSkillProposalRecord } from "../../skills/workshop/store.js";
 import type { SkillWorkshopProposalMutationBudget } from "../../skills/workshop/types.js";
 import {
   createOpenClawTestState,
@@ -439,22 +440,13 @@ describe("skill_workshop tool", () => {
         .then((buffer) => buffer.at(-1)),
     ).resolves.toBe(0x0a);
     await expect(
-      fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "proposal.json",
-          ),
-          "utf8",
-        )
-        .then((raw) => JSON.parse(raw).origin),
-    ).resolves.toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:workshop-test",
-      runId: "run-workshop-test",
+      readSkillProposalRecord((result.details as { id: string }).id),
+    ).resolves.toMatchObject({
+      origin: {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:workshop-test",
+        runId: "run-workshop-test",
+      },
     });
     await expect(
       fs.readFile(
@@ -521,19 +513,8 @@ describe("skill_workshop tool", () => {
       ),
     ).resolves.toContain('version: "v2"');
     await expect(
-      fs
-        .readFile(
-          path.join(
-            stateDir,
-            "skill-workshop",
-            "proposals",
-            (result.details as { id: string }).id,
-            "proposal.json",
-          ),
-          "utf8",
-        )
-        .then((raw) => JSON.parse(raw).origin),
-    ).resolves.toEqual(reviewerOrigin);
+      readSkillProposalRecord((result.details as { id: string }).id),
+    ).resolves.toMatchObject({ origin: reviewerOrigin });
 
     const listed = await tool.execute("call-3", {
       action: "list",
@@ -779,7 +760,7 @@ describe("skill_workshop tool", () => {
     ).rejects.toThrow();
   });
 
-  it("scopes proposal discovery to the tool workspace", async () => {
+  it("keeps proposal discovery scoped to the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");
     const secondWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-second-");
     const firstTool = createSkillWorkshopTool({
@@ -811,15 +792,19 @@ describe("skill_workshop tool", () => {
       status: "pending",
     });
     expect(
-      (listed.details as { proposals: Array<{ id: string }> }).proposals.map(
-        (proposal) => proposal.id,
-      ),
-    ).toEqual([(first.details as { id: string }).id]);
+      (listed.details as { proposals: Array<{ id: string; workspaceMismatch?: true }> }).proposals,
+    ).toEqual([
+      expect.objectContaining({
+        id: (second.details as { id: string }).id,
+        workspaceMismatch: true,
+      }),
+      expect.objectContaining({ id: (first.details as { id: string }).id }),
+    ]);
     await expect(
       firstTool.execute("call-4", {
         action: "inspect",
         proposal_id: (second.details as { id: string }).id,
       }),
-    ).rejects.toThrow(`Skill proposal not found: ${(second.details as { id: string }).id}`);
+    ).resolves.toMatchObject({ details: { id: (second.details as { id: string }).id } });
   });
 });

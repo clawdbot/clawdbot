@@ -11,6 +11,7 @@ import {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "./ingress-retry-policy.js";
+import { ChannelIngressUnavailableError } from "./ingress-unavailable.js";
 
 const DEFAULT_APPEND_RETRY_DELAYS_MS = [0, 100, 300] as const;
 
@@ -600,6 +601,19 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     start: () => {
       if (running || stopped || isAborted()) {
         return;
+      }
+      // Open the durable queue before arming the poll timer. A monitor without a queue can
+      // neither admit nor drain, so channel start must fail through the caller instead of
+      // running a timer that reports the same unrecoverable error on every tick. The typed
+      // rethrow is what lets the gateway record the failure as dead ingress rather than as
+      // one more anonymous channel crash.
+      try {
+        getQueue();
+      } catch (error) {
+        throw new ChannelIngressUnavailableError(
+          `Channel ingress queue is unavailable: ${formatErrorMessage(error)}`,
+          { cause: error },
+        );
       }
       running = true;
       pollTimer = setInterval(requestDrain, options.pollIntervalMs);

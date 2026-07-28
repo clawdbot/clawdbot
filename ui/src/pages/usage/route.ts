@@ -36,7 +36,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
     timeZone: "local",
     agentId: context.agentSelection.state.scopeId,
   };
-  if (!gatewaySnapshot.connected || !gatewaySnapshot.client) {
+  if (gatewaySnapshot.phase !== "connected" || !gatewaySnapshot.client) {
     return {
       gateway,
       gatewaySnapshot,

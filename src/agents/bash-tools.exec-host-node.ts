@@ -14,7 +14,11 @@ import {
   resolveExecApprovalAllowedDecisions,
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
-import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
+import {
+  defaultExecAutoReviewer,
+  resolveExecAutoReviewDecision,
+  type ExecAutoReviewInput,
+} from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -38,6 +42,7 @@ import {
   normalizeNotifyOutput,
 } from "./bash-tools.exec-runtime.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -178,6 +183,7 @@ export async function executeNodeHostCommand(
           strictInlineEval: params.strictInlineEval,
         }),
     });
+    params.signal?.throwIfAborted();
     return await invokeNodeSystemRunDirect({ request: params, target });
   }
 
@@ -255,6 +261,7 @@ export async function executeNodeHostCommand(
       workdir: prepared.cwd,
       host: "node",
       nodeId: target.nodeId,
+      toolCallId: params.toolCallId,
       security: hostSecurity,
       ask: hostAsk,
       ...unavailableDecisionRequestParams,
@@ -375,7 +382,7 @@ export async function executeNodeHostCommand(
       !requiresSecurityAuditSuppressionApproval
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
-      const decision = await reviewer({
+      const pendingDecision = resolveExecAutoReviewDecision(reviewer, {
         command: prepared.rawCommand,
         argv: autoReviewArgv,
         cwd: prepared.cwd,
@@ -399,6 +406,10 @@ export async function executeNodeHostCommand(
           sessionKey: prepared.sessionKey,
         },
       });
+      // An injected reviewer cannot keep a cancelled node invocation or approval alive.
+      const decision = params.signal
+        ? await abortable(params.signal, pendingDecision)
+        : await pendingDecision;
       params.signal?.throwIfAborted();
       const autoReviewAllowed = decision.decision === "allow-once" && decision.risk === "low";
       if (autoReviewAllowed) {
@@ -692,12 +703,18 @@ export async function executeNodeHostCommand(
       inlineEvalHit === null &&
       !requiresSecurityAuditSuppressionApproval,
   });
+  params.signal?.throwIfAborted();
   const raw =
     (inlineApprovedByAsk || inlineApprovalSource) && inlineApprovalId
       ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
           scopes: APPROVED_NODE_INVOKE_SCOPES,
+          ...(params.signal ? { signal: params.signal } : {}),
         })
-      : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
+      : params.signal
+        ? await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke, {
+            signal: params.signal,
+          })
+        : await callGatewayTool("node.invoke", { timeoutMs: target.invokeTimeoutMs }, invoke);
   return formatNodeRunToolResult({
     raw,
     startedAt,

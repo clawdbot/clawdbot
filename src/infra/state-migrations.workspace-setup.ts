@@ -19,6 +19,11 @@ import { resolveLegacyStateDirs } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock, GatewayLockError } from "./gateway-lock.js";
+import {
+  legacyMigrationPathMayExist as pathMayExist,
+  legacyMigrationSourceOrClaimMayExist as sourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 import {
   markSourceRemoved,
@@ -42,19 +47,6 @@ const CLAIM_SUFFIX = WORKSPACE_DOCTOR_CLAIM_SUFFIX;
 const MIGRATION_LOCK_TIMEOUT_MS = 250;
 const MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
-
-function pathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
-function sourceOrClaimMayExist(sourcePath: string): boolean {
-  return pathMayExist(sourcePath) || pathMayExist(`${sourcePath}${CLAIM_SUFFIX}`);
-}
 
 async function readBoundedRegularFile(params: {
   sourceRoot: Root;
@@ -139,16 +131,6 @@ function createLegacySource(
     throw new Error("legacy workspace source is outside its migration root");
   }
   return { ...params, rootDir, relativePath, sourcePath };
-}
-
-function snapshotsMatch(left: SourceSnapshot, right: SourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
 }
 
 function siblingAttestationNeedsDoctor(filePath: string): boolean {

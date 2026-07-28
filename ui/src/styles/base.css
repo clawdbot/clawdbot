@@ -66,7 +66,26 @@
   --accent-2-muted: rgba(20, 184, 166, 0.7);
   --accent-2-subtle: rgba(20, 184, 166, 0.1);
 
-  /* Semantic */
+  /*
+   * Semantic status
+   *
+   * Each `--x` doubles as label text on its own `--x-subtle` tint, so the pair
+   * is one contrast decision: the 8% tint composites onto the surface and the
+   * label must still clear WCAG AA 4.5:1 on the lightest dark surface
+   * (dash `--card` #221a16, worse than claw `--card` #161920). Keep every
+   * `-subtle`/`-muted` rgba in sync with its base hex — they are the same
+   * color at 8%/75%, and re-tinting one without the other silently drops the
+   * pair below AA. Bases stay literal hex: `widget-theme.ts` publishes them to
+   * MCP app guest documents, where a `color-mix(... var(--x) ...)` string
+   * would not resolve.
+   *
+   * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
+   *   --ok     #22c55e  6.66:1 ✓    --warn  #f59e0b  6.93:1 ✓
+   *   --danger #f87171  5.52:1 ✓    --info  #60a5fa  5.97:1 ✓
+   *
+   * Bounded to --card and --bg. A status label can also land on --bg-hover,
+   * --bg-muted, --panel-hover or --input, which this audit does not cover.
+   */
   --ok: #22c55e;
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
@@ -75,10 +94,16 @@
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
-  --danger: #ef4444;
-  --danger-muted: rgba(239, 68, 68, 0.75);
-  --danger-subtle: rgba(239, 68, 68, 0.08);
-  --info: #3b82f6;
+  --danger: #f87171;
+  --danger-muted: rgba(248, 113, 113, 0.75);
+  --danger-subtle: rgba(248, 113, 113, 0.08);
+  --info: #60a5fa;
+  --info-subtle: rgba(96, 165, 250, 0.08);
+  /* Run state needs its own token: --accent is red in every shipped theme and
+     sits on top of --danger, so a spinning ring reads as a failed session.
+     Graphical indicator, judged against WCAG 1.4.11 (3:1), not the label audit
+     above: #14b8a6 is 7.7:1 on --bg. */
+  --run: #14b8a6;
 
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
@@ -112,7 +137,9 @@
   --shadow-xl: 0 24px 48px rgba(0, 0, 0, 0.5);
   --shadow-glow: 0 0 24px var(--accent-glow);
 
-  /* Spacing scale - use these instead of hardcoded px for padding/gap */
+  /* Spacing scale. Settings surfaces use these (see
+     ui/docs/design-system/settings-design.md); elsewhere raw px padding/gap is
+     grandfathered — adopt the scale when rewriting a rule, don't mass-migrate. */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
@@ -121,6 +148,11 @@
   --space-6: 24px;
   --space-7: 32px;
   --space-8: 40px;
+
+  /* One inset shared by every widget frame (chat preview panel, board card)
+     so agent-authored widget documents meet identical breathing room on all
+     surfaces. Board layout math mirrors this value numerically. */
+  --widget-frame-inset: var(--space-3);
 
   /* Radii - Slightly larger for modern feel */
   --radius-sm: 6px;
@@ -144,6 +176,10 @@
 
   /* Layering */
   --z-dropdown: 100;
+
+  /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
+     color is baked per theme mode; light mode overrides the whole image. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: dark;
 }
@@ -211,18 +247,37 @@
   --accent-2-muted: rgba(13, 148, 136, 0.75);
   --accent-2-subtle: rgba(13, 148, 136, 0.08);
 
-  --ok: #15803d;
-  --ok-muted: rgba(21, 128, 61, 0.75);
-  --ok-subtle: rgba(21, 128, 61, 0.08);
+  /*
+   * Semantic status — see the `:root` block for the pairing rule. Light mode
+   * is bounded by `--bg` (#faf9f7, and the darker dash-light #f7f2ec) rather
+   * than the white `--card`, so a token that passes on a card can still fail
+   * on the page behind it.
+   *
+   * WCAG 2.1 AA audit (label on own subtle tint, worst of --card / --bg):
+   *   --ok     #166534  5.70:1 ✓    --warn  #92400e  5.66:1 ✓
+   *   --danger #b91c1c  5.10:1 ✓    --info  #1d4ed8  5.34:1 ✓
+   *
+   * Bounded to --card and --bg. Hover and input surfaces are not covered, and
+   * one gap is reachable: .plugins-row-message--error sits on --danger-subtle
+   * over a hovered row, which is 4.28:1 under dash-light. That is an
+   * improvement on the 3.23:1 it replaced, not a regression, but it is not AA.
+   */
+  --ok: #166534;
+  --ok-muted: rgba(22, 101, 52, 0.75);
+  --ok-subtle: rgba(22, 101, 52, 0.08);
   --destructive: #dc2626;
   --destructive-foreground: #fafafa;
-  --warn: #b45309;
-  --warn-muted: rgba(180, 83, 9, 0.75);
-  --warn-subtle: rgba(180, 83, 9, 0.08);
-  --danger: #dc2626;
-  --danger-muted: rgba(220, 38, 38, 0.75);
-  --danger-subtle: rgba(220, 38, 38, 0.08);
-  --info: #2563eb;
+  --warn: #92400e;
+  --warn-muted: rgba(146, 64, 14, 0.75);
+  --warn-subtle: rgba(146, 64, 14, 0.08);
+  --danger: #b91c1c;
+  --danger-muted: rgba(185, 28, 28, 0.75);
+  --danger-subtle: rgba(185, 28, 28, 0.08);
+  --info: #1d4ed8;
+  --info-subtle: rgba(29, 78, 216, 0.08);
+  /* See the dark-theme note: run state stays off --accent. #0d9488 is 3.6:1 on
+     --bg, above the 3:1 WCAG 1.4.11 bar for a non-text indicator. */
+  --run: #0d9488;
 
   --focus: rgba(189, 69, 49, 0.15);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
@@ -236,6 +291,8 @@
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
   --shadow-xl: 0 24px 48px rgba(60, 42, 24, 0.11);
   --shadow-glow: 0 0 20px var(--accent-glow);
+
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: light;
 }

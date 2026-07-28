@@ -8,7 +8,7 @@
     "chokidar": "5.0.0",
     "json5": "2.2.3",
     "p-limit": "7.3.0",
-    "typebox": "1.3.3"
+    "typebox": "1.3.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

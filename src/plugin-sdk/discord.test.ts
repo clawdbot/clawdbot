@@ -108,7 +108,6 @@ describe("discord plugin-sdk facade", () => {
 
     for (const exportName of [
       "DEFAULT_ACCOUNT_ID",
-      "DiscordConfigSchema",
       "PAIRING_APPROVED_MESSAGE",
       "applyAccountNameToChannelSection",
       "autoBindSpawnedDiscordSubagent",

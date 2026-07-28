@@ -77,6 +77,23 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
   });
 
+  it("keeps focus on a field the user selected when the show animation settles", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <input id="autofocus-target" autofocus />
+        <textarea id="notes-field"></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    const { webAwesomeDialog } = await getRenderedModalDialog(container);
+    const notes = container.querySelector<HTMLTextAreaElement>("#notes-field");
+    notes?.focus();
+
+    webAwesomeDialog.dispatchEvent(new Event("wa-after-show"));
+
+    expect(document.activeElement).toBe(notes);
+  });
+
   it("delegates native modality and light dismissal to Web Awesome", async () => {
     const { webAwesomeDialog, dialog } = await renderModal();
 

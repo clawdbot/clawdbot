@@ -194,11 +194,43 @@
       ]
     },
     {
-      "locale": "vi",
-      "source": "Access Level",
+      "locale": "ja-JP",
+      "source": "%@ tokens",
       "translations": [
-        "Cấp truy cập",
-        "Mức truy cập"
+        "%@ トークン",
+        "%@トークン"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "%@ tokens",
+      "translations": [
+        "%@개 토큰",
+        "토큰 %@개"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "%@ tokens",
+      "translations": [
+        "%@ token",
+        "%@ tokens"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "%@ tokens",
+      "translations": [
+        "%@ jeton",
+        "%@ token"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "%@ tokens",
+      "translations": [
+        "%@ 个 token",
+        "%@ 个令牌"
       ]
     },
     {
@@ -546,6 +578,14 @@
       "translations": [
         "僅允許一次",
         "允許一次"
+      ]
+    },
+    {
+      "locale": "ja-JP",
+      "source": "Always",
+      "translations": [
+        "常に",
+        "常に許可"
       ]
     },
     {
@@ -1171,6 +1211,14 @@
       "translations": [
         "Chat",
         "聊天"
+      ]
+    },
+    {
+      "locale": "hi",
+      "source": "Collapsed",
+      "translations": [
+        "संकुचित",
+        "संक्षिप्त"
       ]
     },
     {
@@ -2555,9 +2603,18 @@
       ]
     },
     {
+      "locale": "ar",
+      "source": "Done",
+      "translations": [
+        "تم",
+        "مكتمل"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Done",
       "translations": [
+        "Completado",
         "Hecho",
         "Listo"
       ]
@@ -2574,8 +2631,17 @@
       "locale": "it",
       "source": "Done",
       "translations": [
+        "Completato",
         "Fatto",
         "Fine"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Done",
+      "translations": [
+        "Gereed",
+        "Klaar"
       ]
     },
     {
@@ -2584,6 +2650,30 @@
       "translations": [
         "Klar",
         "Klart"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Done",
+      "translations": [
+        "Bitti",
+        "Tamamlandı"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Done",
+      "translations": [
+        "Hoàn tất",
+        "Xong"
+      ]
+    },
+    {
+      "locale": "zh-CN",
+      "source": "Done",
+      "translations": [
+        "完成",
+        "已完成"
       ]
     },
     {
@@ -2828,6 +2918,38 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "Expanded",
+      "translations": [
+        "Buka",
+        "Diperluas"
+      ]
+    },
+    {
+      "locale": "sv",
+      "source": "Expanded",
+      "translations": [
+        "Expanderad",
+        "Utfälld"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Expanded",
+      "translations": [
+        "ขยายอยู่",
+        "ขยายแล้ว"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Expanded",
+      "translations": [
+        "Mở rộng",
+        "Đã mở rộng"
+      ]
+    },
+    {
       "locale": "fa",
       "source": "Export Transcript",
       "translations": [
@@ -2913,6 +3035,62 @@
       "translations": [
         "匯出對話紀錄",
         "匯出逐字稿"
+      ]
+    },
+    {
+      "locale": "ar",
+      "source": "Failed",
+      "translations": [
+        "فشل",
+        "فشلت"
+      ]
+    },
+    {
+      "locale": "es",
+      "source": "Failed",
+      "translations": [
+        "Fallida",
+        "Fallido"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "Failed",
+      "translations": [
+        "Échec",
+        "Échoué"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "Failed",
+      "translations": [
+        "실패",
+        "실패함"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "Failed",
+      "translations": [
+        "Niepowodzenie",
+        "Nieudane"
+      ]
+    },
+    {
+      "locale": "ru",
+      "source": "Failed",
+      "translations": [
+        "Не выполнено",
+        "Ошибка"
+      ]
+    },
+    {
+      "locale": "uk",
+      "source": "Failed",
+      "translations": [
+        "Не вдалося",
+        "Не виконано"
       ]
     },
     {
@@ -6206,6 +6384,54 @@
       ]
     },
     {
+      "locale": "hi",
+      "source": "Open Chat",
+      "translations": [
+        "Chat खोलें",
+        "चैट खोलें"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Open Chat",
+      "translations": [
+        "Buka Chat",
+        "Buka Obrolan"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "Open Chat",
+      "translations": [
+        "Apri Chat",
+        "Apri chat"
+      ]
+    },
+    {
+      "locale": "pt-BR",
+      "source": "Open Chat",
+      "translations": [
+        "Abrir Chat",
+        "Abrir chat"
+      ]
+    },
+    {
+      "locale": "th",
+      "source": "Open Chat",
+      "translations": [
+        "เปิดแชต",
+        "เปิดแชท"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Open Chat",
+      "translations": [
+        "Chat'i Aç",
+        "Sohbeti Aç"
+      ]
+    },
+    {
       "locale": "es",
       "source": "Open Settings",
       "translations": [
@@ -6920,6 +7146,38 @@
       ]
     },
     {
+      "locale": "fr",
+      "source": "Queued",
+      "translations": [
+        "En attente",
+        "En file d'attente"
+      ]
+    },
+    {
+      "locale": "id",
+      "source": "Queued",
+      "translations": [
+        "Dalam Antrean",
+        "Dalam antrean"
+      ]
+    },
+    {
+      "locale": "tr",
+      "source": "Queued",
+      "translations": [
+        "Sırada",
+        "Sıraya alındı"
+      ]
+    },
+    {
+      "locale": "vi",
+      "source": "Queued",
+      "translations": [
+        "Trong hàng đợi",
+        "Đang chờ"
+      ]
+    },
+    {
       "locale": "it",
       "source": "Ready",
       "translations": [
@@ -7213,6 +7471,7 @@
       "source": "Reconnecting…",
       "translations": [
         "다시 연결 중…",
+        "다시 연결하는 중…",
         "재연결 중…"
       ]
     },
@@ -7639,7 +7898,8 @@
       "source": "Retry",
       "translations": [
         "Erneut versuchen",
-        "Retry"
+        "Retry",
+        "Wiederholen"
       ]
     },
     {
@@ -7720,6 +7980,7 @@
       "locale": "pl",
       "source": "Retry",
       "translations": [
+        "Ponów",
         "Ponów próbę",
         "Retry",
         "Spróbuj ponownie"
@@ -7754,7 +8015,8 @@
       "source": "Retry",
       "translations": [
         "Retry",
-        "ลองอีกครั้ง"
+        "ลองอีกครั้ง",
+        "ลองใหม่"
       ]
     },
     {
@@ -7925,6 +8187,14 @@
       "translations": [
         "Chạy",
         "Lần chạy"
+      ]
+    },
+    {
+      "locale": "de",
+      "source": "Running",
+      "translations": [
+        "Läuft",
+        "Wird ausgeführt"
       ]
     },
     {
@@ -8500,6 +8770,14 @@
       "translations": [
         "Configurar",
         "Configuração"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "Show less",
+      "translations": [
+        "Minder tonen",
+        "Minder weergeven"
       ]
     },
     {
@@ -10072,19 +10350,19 @@
       ]
     },
     {
-      "locale": "de",
-      "source": "While Using the App",
-      "translations": [
-        "Bei Verwendung der App",
-        "Beim Verwenden der App"
-      ]
-    },
-    {
       "locale": "es",
       "source": "While Using the App",
       "translations": [
         "Al usar la app",
         "Mientras se usa la app"
+      ]
+    },
+    {
+      "locale": "fr",
+      "source": "While Using the App",
+      "translations": [
+        "Lors de l'utilisation de l'app",
+        "Lorsque l’app est utilisée"
       ]
     },
     {
@@ -10096,11 +10374,51 @@
       ]
     },
     {
+      "locale": "id",
+      "source": "While Using the App",
+      "translations": [
+        "Saat Menggunakan Aplikasi",
+        "Saat Menggunakan App"
+      ]
+    },
+    {
+      "locale": "it",
+      "source": "While Using the App",
+      "translations": [
+        "Durante l'uso dell'app",
+        "Mentre usi l'app"
+      ]
+    },
+    {
       "locale": "ja-JP",
       "source": "While Using the App",
       "translations": [
-        "アプリ使用中",
+        "アプリの使用中",
         "アプリ使用中のみ"
+      ]
+    },
+    {
+      "locale": "ko",
+      "source": "While Using the App",
+      "translations": [
+        "앱 사용 중",
+        "앱을 사용하는 동안"
+      ]
+    },
+    {
+      "locale": "nl",
+      "source": "While Using the App",
+      "translations": [
+        "Bij gebruik van de app",
+        "Tijdens gebruik van de app"
+      ]
+    },
+    {
+      "locale": "pl",
+      "source": "While Using the App",
+      "translations": [
+        "Podczas korzystania z aplikacji",
+        "Podczas używania aplikacji"
       ]
     },
     {
@@ -10108,7 +10426,7 @@
       "source": "While Using the App",
       "translations": [
         "Ao Usar o App",
-        "Ao usar o app"
+        "Durante o uso do app"
       ]
     },
     {
@@ -10120,6 +10438,14 @@
       ]
     },
     {
+      "locale": "th",
+      "source": "While Using the App",
+      "translations": [
+        "ขณะใช้งานแอป",
+        "ขณะใช้แอป"
+      ]
+    },
+    {
       "locale": "tr",
       "source": "While Using the App",
       "translations": [
@@ -10128,11 +10454,19 @@
       ]
     },
     {
+      "locale": "vi",
+      "source": "While Using the App",
+      "translations": [
+        "Khi dùng ứng dụng",
+        "Khi đang dùng ứng dụng"
+      ]
+    },
+    {
       "locale": "zh-CN",
       "source": "While Using the App",
       "translations": [
-        "使用应用时",
-        "使用应用期间"
+        "使用 App 期间",
+        "使用应用时"
       ]
     },
     {
