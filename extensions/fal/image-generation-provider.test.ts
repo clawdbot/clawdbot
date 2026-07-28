@@ -6,10 +6,8 @@ const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
 
-import {
-  setFalFetchGuardForTesting,
-  buildFalImageGenerationProvider,
-} from "./image-generation-provider.js";
+import { buildFalImageGenerationProvider } from "./image-generation-provider.js";
+import { setFalFetchGuardForTesting } from "./test-support.js";
 
 function expectFalJsonPost(params: { call: number; url: string; body: Record<string, unknown> }) {
   const request = fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0];
@@ -26,9 +24,10 @@ function expectFalJsonPost(params: { call: number; url: string; body: Record<str
   expect(JSON.parse(String(request.init?.body))).toEqual(params.body);
 }
 
-function expectFalDownload(params: { call: number; url: string }) {
+function expectFalDownload(params: { call: number; url: string; timeoutMs?: number }) {
   expect(fetchWithSsrFGuardMock.mock.calls[params.call - 1]?.[0]).toEqual({
     url: params.url,
+    timeoutMs: params.timeoutMs ?? 30_000,
     policy: undefined,
     auditContext: "fal-image-download",
   });
@@ -41,6 +40,7 @@ describe("fal image-generation provider", () => {
 
   afterEach(() => {
     setFalFetchGuardForTesting(null);
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -144,6 +144,116 @@ describe("fal image-generation provider", () => {
       model: "fal-ai/flux/dev",
       metadata: { prompt: "draw a cat" },
     });
+  });
+
+  it("shares an explicit operation deadline across generated image downloads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T00:00:00Z"));
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockImplementation(async () => {
+      vi.advanceTimersByTime(5_000);
+      return {
+        apiKey: "fal-test-key",
+        source: "env",
+        mode: "api-key",
+      };
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(10_000);
+        return {
+          response: new Response(
+            JSON.stringify({
+              images: [
+                { url: "https://v3.fal.media/files/example/first.png" },
+                { url: "https://v3.fal.media/files/example/second.png" },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+          release: vi.fn(async () => {}),
+        };
+      })
+      .mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(20_000);
+        return {
+          response: new Response(Buffer.from("first"), {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          }),
+          release: vi.fn(async () => {}),
+        };
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("second"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const result = await buildFalImageGenerationProvider().generateImage({
+      provider: "fal",
+      model: "fal-ai/flux/dev",
+      prompt: "draw two cats",
+      cfg: {},
+      timeoutMs: 180_000,
+      count: 2,
+    });
+
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.timeoutMs).toBe(175_000);
+    expectFalDownload({
+      call: 2,
+      url: "https://v3.fal.media/files/example/first.png",
+      timeoutMs: 165_000,
+    });
+    expectFalDownload({
+      call: 3,
+      url: "https://v3.fal.media/files/example/second.png",
+      timeoutMs: 145_000,
+    });
+    expect(result.images.map((image) => image.buffer.toString())).toEqual(["first", "second"]);
+  });
+
+  it("releases a timed-out generated image download", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    const releaseDownload = vi.fn(async () => {});
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/slow.png" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.error(new DOMException("timed out", "TimeoutError"));
+            },
+          }),
+          { status: 200, headers: { "content-type": "image/png" } },
+        ),
+        release: releaseDownload,
+      });
+
+    await expect(
+      buildFalImageGenerationProvider().generateImage({
+        provider: "fal",
+        model: "fal-ai/flux/dev",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(releaseDownload).toHaveBeenCalledTimes(1);
   });
 
   it("rejects generated image downloads that exceed the configured media cap", async () => {
@@ -1506,3 +1616,4 @@ describe("fal image-generation provider", () => {
     expectFalDownload({ call: 2, url: "http://media.relay.internal/files/generated.png" });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

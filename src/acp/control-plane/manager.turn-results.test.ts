@@ -84,6 +84,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "Investigate and report back",
@@ -169,6 +170,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Print the current directory",
@@ -252,6 +254,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -327,6 +330,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -402,6 +406,7 @@ describe("AcpSessionManager turn results", () => {
 
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -477,6 +482,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Inspect and report back",
@@ -550,6 +556,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Produce a final result",
@@ -643,6 +650,7 @@ describe("AcpSessionManager turn results", () => {
       const events: string[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "Investigate and report back",
@@ -689,6 +697,7 @@ describe("AcpSessionManager turn results", () => {
       const events: AcpRuntimeEvent[] = [];
       const manager = new AcpSessionManager();
       await manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:child-1",
         text: "long task",
@@ -741,6 +750,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -827,6 +837,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:child-1",
           text: "Investigate and report back",
@@ -864,6 +875,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expect(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -900,6 +912,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     await expectRejectedRecord(
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey: "agent:codex:acp:session-1",
         text: "do work",
@@ -944,6 +957,7 @@ describe("AcpSessionManager turn results", () => {
       const manager = new AcpSessionManager();
       await expect(
         manager.runTurn({
+          provenance: "system",
           cfg: baseCfg,
           sessionKey: "agent:codex:acp:session-1",
           text: "do work",
@@ -1027,6 +1041,7 @@ describe("AcpSessionManager turn results", () => {
     const manager = new AcpSessionManager();
     const runTurn = () =>
       manager.runTurn({
+        provenance: "system",
         cfg: baseCfg,
         sessionKey,
         text: "do work",
@@ -1107,3 +1122,4 @@ describe("AcpSessionManager turn results", () => {
     expect(scenario.runtimeState.ensureSession).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

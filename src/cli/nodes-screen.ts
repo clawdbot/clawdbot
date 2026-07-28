@@ -1,10 +1,11 @@
 // Screen-recording payload helpers for node media commands.
 import * as path from "node:path";
+import { extnameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeBase64ToFile } from "./nodes-camera.js";
 import { asRecord, asString, resolveTempPathParts } from "./nodes-media-utils.js";
 
 /** Validated payload returned by `nodes screen record` RPC calls. */
-export type ScreenRecordPayload = {
+type ScreenRecordPayload = {
   format: string;
   base64: string;
   durationMs?: number;
@@ -47,9 +48,11 @@ export async function writeScreenRecordToFile(
 }
 
 /** Validated payload returned by `nodes screen snapshot` RPC calls. */
-export type ScreenSnapshotPayload = {
+type ScreenSnapshotPayload = {
   format: string;
   base64: string;
+  /** Node-issued token binding this image to one physical display geometry. */
+  displayFrameId?: string;
   screenIndex?: number;
   width?: number;
   height?: number;
@@ -66,15 +69,34 @@ export function parseScreenSnapshotPayload(value: unknown): ScreenSnapshotPayloa
   return {
     format,
     base64,
+    displayFrameId: asString(obj.displayFrameId) || undefined,
     screenIndex: typeof obj.screenIndex === "number" ? obj.screenIndex : undefined,
     width: typeof obj.width === "number" ? obj.width : undefined,
     height: typeof obj.height === "number" ? obj.height : undefined,
   };
 }
 
+/**
+ * Maps a caller-chosen snapshot path to the encoding the node should produce.
+ *
+ * `screen.snapshot` lets the node pick its encoding, so asking for the one the
+ * filename already promises is what keeps the name and the bytes in agreement.
+ * Returns undefined when the path claims nothing recognizable and the node's
+ * own default should stand.
+ */
+export function screenSnapshotFormatForPath(filePath: string): "png" | "jpeg" | undefined {
+  const ext = extnameFromAnyPath(filePath).toLowerCase();
+  if (ext === ".png") {
+    return "png";
+  }
+  return ext === ".jpg" || ext === ".jpeg" ? "jpeg" : undefined;
+}
+
 /** Build the temp output path for a screen snapshot artifact. */
-export function screenSnapshotTempPath(opts: { ext?: string; tmpDir?: string; id?: string }) {
-  const { tmpDir, id, ext } = resolveTempPathParts({ ...opts, ext: opts.ext ?? ".png" });
+export function screenSnapshotTempPath(opts: { ext: string; tmpDir?: string; id?: string }) {
+  // No default extension: the node chooses the encoding, and assuming PNG here
+  // is how a JPEG snapshot ends up named `.png`.
+  const { tmpDir, id, ext } = resolveTempPathParts(opts);
   return path.join(tmpDir, `openclaw-screen-snapshot-${id}${ext}`);
 }
 

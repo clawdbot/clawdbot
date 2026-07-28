@@ -15,6 +15,7 @@ import {
 } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
 import {
+  isLocalDirectRequest,
   isLoopbackAddress,
   resolveLocalInterfaceAddressMatch,
   resolveRequestClientIp,
@@ -26,11 +27,9 @@ import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serializati
 export {
   resolveEffectiveSharedGatewayAuth,
   resolveGatewayAuth,
-  type EffectiveSharedGatewayAuth,
   type ResolvedGatewayAuth,
-  type ResolvedGatewayAuthMode,
-  type ResolvedGatewayAuthModeSource,
 } from "./auth-resolve.js";
+export { hasForwardedRequestHeaders, isLocalDirectRequest } from "./net.js";
 
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
@@ -59,10 +58,10 @@ type ConnectAuth = {
   password?: string;
 };
 
-export type GatewayAuthSurface = "http" | "ws-control-ui";
+type GatewayAuthSurface = "http" | "ws-control-ui";
 
 /** Inputs needed to authorize one HTTP or websocket gateway connection. */
-export type AuthorizeGatewayConnectParams = {
+type AuthorizeGatewayConnectParams = {
   auth: ResolvedGatewayAuth;
   connectAuth?: ConnectAuth | null;
   req?: IncomingMessage;
@@ -81,7 +80,7 @@ export type AuthorizeGatewayConnectParams = {
   rateLimitScope?: string;
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
-  /** Optional browser-origin policy for trusted-proxy HTTP requests. */
+  /** Optional browser-origin policy for HTTP requests that require Origin checks. */
   browserOriginPolicy?: {
     requestHost?: string;
     origin?: string;
@@ -150,38 +149,6 @@ function resolveTailscaleClientIp(req?: IncomingMessage): string | undefined {
     forwardedFor: headerValue(req.headers?.["x-forwarded-for"]),
     trustedProxies: [...TAILSCALE_TRUSTED_PROXIES],
   });
-}
-
-/** Detect forwarded/proxy headers that make loopback requests ineligible for direct-local auth. */
-/** Return true when forwarded headers make loopback direct-local auth unsafe. */
-export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
-  if (!req) {
-    return false;
-  }
-  const headers = req.headers ?? {};
-
-  return Boolean(
-    headers.forwarded ||
-    headers["x-real-ip"] ||
-    Object.keys(headers).some((header) =>
-      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
-    ),
-  );
-}
-
-/** Return whether a request is a clean loopback request without forwarded identity headers. */
-export function isLocalDirectRequest(
-  req?: IncomingMessage,
-  _trustedProxies?: string[],
-  _allowRealIpFallback = false,
-): boolean {
-  if (!req) {
-    return false;
-  }
-  if (!hasForwardedRequestHeaders(req)) {
-    return isLoopbackAddress(req.socket?.remoteAddress);
-  }
-  return false;
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
@@ -360,9 +327,11 @@ function shouldAllowTailscaleHeaderAuth(authSurface: GatewayAuthSurface): boolea
   return authSurface === "ws-control-ui";
 }
 
-function authorizeTrustedProxyBrowserOrigin(params: {
+function authorizeHttpBrowserOrigin(params: {
   authSurface: GatewayAuthSurface;
   browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+  isLocalClient: boolean;
+  reason: string;
 }): { ok: false; reason: string } | null {
   if (params.authSurface !== "http") {
     return null;
@@ -378,12 +347,23 @@ function authorizeTrustedProxyBrowserOrigin(params: {
     origin,
     allowedOrigins: params.browserOriginPolicy?.allowedOrigins,
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
-    isLocalClient: false,
+    isLocalClient: params.isLocalClient,
   });
   if (originCheck.ok) {
     return null;
   }
-  return { ok: false, reason: "trusted_proxy_origin_not_allowed" };
+  return { ok: false, reason: params.reason };
+}
+
+function authorizeTrustedProxyBrowserOrigin(params: {
+  authSurface: GatewayAuthSurface;
+  browserOriginPolicy?: AuthorizeGatewayConnectParams["browserOriginPolicy"];
+}): { ok: false; reason: string } | null {
+  return authorizeHttpBrowserOrigin({
+    ...params,
+    isLocalClient: false,
+    reason: "trusted_proxy_origin_not_allowed",
+  });
 }
 
 function authorizeTokenAuth(params: {
@@ -453,7 +433,7 @@ function rejectIfRateLimited(params: {
 }
 
 /** Authorize a gateway connection, including rate-limit handling around shared-secret failures. */
-export async function authorizeGatewayConnect(
+async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
   const { auth } = params;
@@ -531,6 +511,15 @@ async function authorizeGatewayConnectCore(
   }
 
   if (auth.mode === "none") {
+    const originResult = authorizeHttpBrowserOrigin({
+      authSurface,
+      browserOriginPolicy: params.browserOriginPolicy,
+      isLocalClient: localDirect,
+      reason: "origin_not_allowed",
+    });
+    if (originResult) {
+      return originResult;
+    }
     return { ok: true, method: "none" };
   }
 

@@ -9,10 +9,12 @@ import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
+const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn<() => Promise<SkillUsagePath[]>>(async () => []),
 );
 const ensureSandboxBrowserMock = vi.hoisted(() => vi.fn(async () => null));
+const resolveNodeExecEligibilityMock = vi.hoisted(() => vi.fn(() => ({ canExec: false })));
 const browserControlAuthMock = vi.hoisted(() => ({
   ensureBrowserControlAuth: vi.fn(async () => ({ auth: { token: "test-browser-token" } })),
   resolveBrowserControlAuth: vi.fn(() => ({ token: "test-browser-token" })),
@@ -26,6 +28,7 @@ const browserProfilesMock = vi.hoisted(() => ({
 }));
 
 vi.mock("./sandbox/registry.js", () => ({
+  readRegisteredSandboxRuntimeIds: readRegisteredSandboxRuntimeIdsMock,
   updateRegistry: updateRegistryMock,
 }));
 
@@ -38,7 +41,7 @@ vi.mock("../plugin-sdk/browser-control-auth.js", () => browserControlAuthMock);
 vi.mock("../plugin-sdk/browser-profiles.js", () => browserProfilesMock);
 
 vi.mock("./exec-defaults.js", () => ({
-  canExecRequestNode: vi.fn(() => false),
+  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
 }));
 
 vi.mock("../skills/runtime/remote.js", () => ({
@@ -204,23 +207,26 @@ describe("resolveSandboxContext", () => {
   }, 15_000);
 
   it("resolves a registered non-docker backend", async () => {
-    const restore = registerSandboxBackend("test-backend", {
-      factory: async () => ({
-        id: "test-backend",
-        runtimeId: "test-runtime",
-        runtimeLabel: "Test Runtime",
-        workdir: "/runtime/workspace",
-        buildExecSpec: async () => ({
-          argv: ["test-backend", "exec"],
-          env: process.env,
-          stdinMode: "pipe-closed",
-        }),
-        runShellCommand: async () => ({
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.alloc(0),
-          code: 0,
-        }),
+    resolveNodeExecEligibilityMock.mockClear();
+    readRegisteredSandboxRuntimeIdsMock.mockResolvedValue(["registered-runtime"]);
+    const backendFactory = vi.fn(async () => ({
+      id: "test-backend",
+      runtimeId: "test-runtime",
+      runtimeLabel: "Test Runtime",
+      workdir: "/runtime/workspace",
+      buildExecSpec: async () => ({
+        argv: ["test-backend", "exec"],
+        env: process.env,
+        stdinMode: "pipe-closed" as const,
       }),
+      runShellCommand: async () => ({
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      }),
+    }));
+    const restore = registerSandboxBackend("test-backend", {
+      factory: backendFactory,
       resolveWorkdir: () => "/runtime/workspace",
     });
     try {
@@ -240,6 +246,7 @@ describe("resolveSandboxContext", () => {
 
       const result = await resolveSandboxContext({
         config: cfg,
+        execOverrides: { host: "node", node: "build-node", security: "allowlist" },
         sessionKey: "agent:worker:task",
         workspaceDir: "/tmp/openclaw-test",
       });
@@ -248,6 +255,16 @@ describe("resolveSandboxContext", () => {
       expect(result?.runtimeId).toBe("test-runtime");
       expect(result?.containerName).toBe("test-runtime");
       expect(result?.backend?.id).toBe("test-backend");
+      expect(backendFactory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          registeredRuntimeIds: ["registered-runtime"],
+        }),
+      );
+      expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+        }),
+      );
 
       const workspace = await ensureSandboxWorkspaceForSession({
         config: cfg,
@@ -256,6 +273,7 @@ describe("resolveSandboxContext", () => {
       });
       expect(workspace?.containerWorkdir).toBe("/runtime/workspace");
     } finally {
+      readRegisteredSandboxRuntimeIdsMock.mockResolvedValue([]);
       restore();
     }
   }, 15_000);
@@ -367,7 +385,10 @@ describe("resolveSandboxContext", () => {
     expect(syncOptions?.targetWorkspaceDir).toBe(result.workspaceDir);
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
-    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(syncOptions?.eligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
     expect(result.skillUsagePaths).toEqual(skillUsagePaths);
   }, 15_000);
 
@@ -431,10 +452,16 @@ describe("resolveSandboxContext", () => {
     );
     expect(syncOptions?.config).toBe(cfg);
     expect(syncOptions?.agentId).toBe("main");
-    expect(syncOptions?.eligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(syncOptions?.eligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
     expect(result?.skillsWorkspaceDir).toBe(syncOptions?.targetWorkspaceDir);
     expect(result?.workspaceAccess).toBe("rw");
-    expect(result?.skillsEligibility).toEqual({ remote: { note: "test-remote" } });
+    expect(result?.skillsEligibility).toEqual({
+      nodeSkills: { canExec: false },
+      remote: { note: "test-remote" },
+    });
     await expect(
       fs.readFile(path.join(userOwnedSandboxSkillsDir, "SKILL.md"), "utf8"),
     ).resolves.toBe("# User owned\n");

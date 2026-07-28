@@ -49,7 +49,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     turnSourceTo?: string | null;
     turnSourceAccountId?: string | null;
     turnSourceThreadId?: string | null;
+    approvalSource?: string;
     runId?: string;
+    systemRunPlan?: Record<string, unknown>;
   };
 
   function approvedRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {
@@ -57,6 +59,14 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       runId: "approval-1",
       approved: true,
       approvalDecision: "allow-once",
+      ...overrides,
+    };
+  }
+
+  function fallbackRunParams(overrides: ApprovedRunParamOverrides): Record<string, unknown> {
+    return {
+      runId: "approval-1",
+      approvalSource: "ask-fallback",
       ...overrides,
     };
   }
@@ -88,6 +98,21 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       execApprovalManager:
         opts.execApprovalManager ??
         manager(opts.record ?? makeRecord(echoSafeCommand, echoSafeArgv)),
+      nowMs: opts.nowMs ?? now,
+    });
+  }
+
+  function sanitizeFallbackRun(opts: {
+    rawParams: ApprovedRunParamOverrides;
+    record?: ExecApprovalRecord;
+    client?: SanitizerOptions["client"];
+    nowMs?: number;
+  }) {
+    return sanitizeSystemRunParamsForForwarding({
+      rawParams: fallbackRunParams(opts.rawParams),
+      nodeId: "node-1",
+      client: opts.client ?? client,
+      execApprovalManager: manager(opts.record ?? makeTimedOutRecord()),
       nowMs: opts.nowMs ?? now,
     });
   }
@@ -124,6 +149,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   function manager(record: ReturnType<typeof makeRecord>) {
     let consumed = false;
+    let fallbackConsumed = false;
     return {
       getSnapshot: () => record,
       consumeAllowOnce: () => {
@@ -131,10 +157,37 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           return false;
         }
         consumed = true;
+        record.consumedDecision = record.decision;
         record.decision = undefined;
         return true;
       },
+      consumeAskFallback: () => {
+        if (
+          fallbackConsumed ||
+          record.resolvedAtMs === undefined ||
+          record.decision !== undefined
+        ) {
+          return false;
+        }
+        fallbackConsumed = true;
+        record.askFallbackConsumed = true;
+        return true;
+      },
     };
+  }
+
+  function makeTimedOutRecord(command = echoSafeCommand, commandArgv = echoSafeArgv) {
+    const record = makeRecord(command, commandArgv);
+    record.decision = undefined;
+    record.resolvedBy = null;
+    record.request.systemRunPlan = {
+      argv: commandArgv,
+      cwd: null,
+      commandText: command,
+      agentId: null,
+      sessionKey: null,
+    };
+    return record;
   }
 
   function expectAllowOnceForwardingResult(
@@ -240,6 +293,254 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nowMs: now,
     });
   }
+
+  test("forwards ask-fallback provenance only for a timed-out approval", () => {
+    const result = sanitizeFallbackRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+      },
+      record: makeTimedOutRecord(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const forwarded = result.params as Record<string, unknown>;
+    expect(forwarded.approvalSource).toBe("ask-fallback");
+    expect(forwarded.approved).toBeUndefined();
+    expect(forwarded.approvalDecision).toBeUndefined();
+  });
+
+  test("derives marker-only auto-review provenance from the consumed Gateway record", () => {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.resolutionSource = "auto-review";
+    record.request.systemRunPlan = {
+      argv: echoSafeArgv,
+      cwd: null,
+      commandText: echoSafeCommand,
+      agentId: null,
+      sessionKey: null,
+    };
+    const approvalManager = manager(record);
+    const rawParams = approvedRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+    });
+    const sanitize = () =>
+      sanitizeSystemRunParamsForForwarding({
+        rawParams,
+        nodeId: "node-1",
+        client,
+        execApprovalManager: approvalManager,
+        nowMs: now,
+      });
+
+    const first = sanitize();
+    expect(first.ok).toBe(true);
+    if (!first.ok) {
+      throw new Error("unreachable");
+    }
+    expect(first.params).toMatchObject({ approvalSource: "auto-review" });
+    expect(first.params).not.toHaveProperty("approved");
+    expect(first.params).not.toHaveProperty("approvalDecision");
+    expectRejectedForwardingResult(sanitize(), "APPROVAL_REQUIRED");
+  });
+
+  test("rejects auto-review provenance when the stored decision is not allow-once", () => {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.decision = "allow-always";
+    record.resolutionSource = "auto-review";
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
+  });
+
+  test("rejects stored auto-review provenance without a canonical execution plan", () => {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    record.resolutionSource = "auto-review";
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_PLAN_REQUIRED");
+    expect(record.decision).toBe("allow-once");
+  });
+
+  test("rejects caller-forged auto-review provenance before consuming a record", () => {
+    const record = makeRecord(echoSafeCommand, echoSafeArgv);
+    const result = sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+        approvalSource: "auto-review",
+      },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "INVALID_APPROVAL_SOURCE");
+    expect(record.decision).toBe("allow-once");
+  });
+
+  test("forwards timed-out fallback during resolved-record grace after expiry", () => {
+    const record = makeTimedOutRecord();
+    record.expiresAtMs = now - 1_000;
+    record.resolvedAtMs = now - 500;
+    const result = sanitizeFallbackRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+      },
+      record,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const forwarded = result.params as Record<string, unknown>;
+    expect(forwarded.approvalSource).toBe("ask-fallback");
+  });
+
+  test("accepts a no-route server expiration as ask fallback", () => {
+    const record = makeTimedOutRecord();
+    record.resolvedBy = "no-approval-route";
+    const result = sanitizeFallbackRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  test("rejects ask fallback without a canonical execution plan", () => {
+    const record = makeTimedOutRecord();
+    delete record.request.systemRunPlan;
+    const result = sanitizeFallbackRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_PLAN_REQUIRED");
+  });
+
+  test("consumes ask fallback exactly once", () => {
+    const record = makeTimedOutRecord();
+    const approvalManager = manager(record);
+    const rawParams = fallbackRunParams({
+      command: echoSafeArgv,
+      rawCommand: echoSafeCommand,
+    });
+    const sanitize = () =>
+      sanitizeSystemRunParamsForForwarding({
+        rawParams,
+        nodeId: "node-1",
+        client,
+        execApprovalManager: approvalManager,
+        nowMs: now,
+      });
+
+    expect(sanitize().ok).toBe(true);
+    expectRejectedForwardingResult(sanitize(), "APPROVAL_REQUIRED");
+  });
+
+  test("rejects timed-out fallback after resolved-record grace", () => {
+    const record = makeTimedOutRecord();
+    record.expiresAtMs = now - 20_000;
+    record.resolvedAtMs = now - 16_000;
+    const result = sanitizeFallbackRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+      },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_EXPIRED");
+  });
+
+  test("rejects an early no-route fallback after resolved-record grace", () => {
+    const record = makeTimedOutRecord();
+    record.expiresAtMs = now + 60_000;
+    record.resolvedAtMs = now - 16_000;
+    record.resolvedBy = "no-approval-route";
+    const result = sanitizeFallbackRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+      },
+      record,
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_EXPIRED");
+  });
+
+  test("rejects timed-out fallback without authenticated provenance", () => {
+    const result = sanitizeApprovedRun({
+      rawParams: { command: echoSafeArgv, rawCommand: echoSafeCommand },
+      record: makeTimedOutRecord(),
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
+  });
+
+  test("rejects ask fallback combined with explicit approval fields", () => {
+    const result = sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+        approvalSource: "ask-fallback",
+      },
+      record: makeTimedOutRecord(),
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
+  });
+
+  test("rejects ask-fallback provenance for a human approval", () => {
+    const result = sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+        approvalSource: "ask-fallback",
+      },
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_SOURCE_MISMATCH");
+  });
+
+  test("rejects unrecognized approval provenance", () => {
+    const result = sanitizeApprovedRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+        approvalSource: "explicit",
+      },
+    });
+
+    expectRejectedForwardingResult(result, "INVALID_APPROVAL_SOURCE");
+  });
+
+  test("rejects timed-out fallback from a client without approval scope", () => {
+    const result = sanitizeFallbackRun({
+      rawParams: {
+        command: echoSafeArgv,
+        rawCommand: echoSafeCommand,
+      },
+      client: {
+        ...client,
+        connect: { ...client.connect, scopes: ["operator.write"] },
+      },
+      record: makeTimedOutRecord(),
+    });
+
+    expectRejectedForwardingResult(result, "APPROVAL_REQUIRED");
+  });
 
   test("rejects cmd.exe /c trailing-arg mismatch against rawCommand", () => {
     const result = sanitizeApprovedRun({
@@ -350,6 +651,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       commandText: "/usr/bin/echo SAFE",
       agentId: "main",
       sessionKey: "agent:main:main",
+      policySnapshot: {
+        security: "allowlist",
+        ask: "on-miss",
+        askFallback: "deny",
+        autoAllowSkills: false,
+        allowlistRules: [{ pattern: "/usr/bin/echo" }],
+      },
     };
     record.request.systemRunBinding = buildSystemRunApprovalBinding({
       argv: ["/usr/bin/echo", "SAFE"],
@@ -364,6 +672,20 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         cwd: "/tmp/attacker-link/sub",
         agentId: "attacker",
         sessionKey: "agent:attacker:main",
+        systemRunPlan: {
+          argv: ["echo", "PWNED"],
+          cwd: "/tmp/attacker-link/sub",
+          commandText: "echo PWNED",
+          agentId: "attacker",
+          sessionKey: "agent:attacker:main",
+          policySnapshot: {
+            security: "full",
+            ask: "off",
+            askFallback: "full",
+            autoAllowSkills: true,
+            allowlistRules: [],
+          },
+        },
       },
       record,
     });
@@ -377,6 +699,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           commandText?: string;
           agentId?: string;
           sessionKey?: string;
+          policySnapshot?: unknown;
         }
       | undefined;
     expect(systemRunPlan?.argv).toEqual(["/usr/bin/echo", "SAFE"]);
@@ -384,6 +707,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(systemRunPlan?.commandText).toBe("/usr/bin/echo SAFE");
     expect(systemRunPlan?.agentId).toBe("main");
     expect(systemRunPlan?.sessionKey).toBe("agent:main:main");
+    expect(systemRunPlan?.policySnapshot).toEqual({
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+      autoAllowSkills: false,
+      allowlistRules: [{ pattern: "/usr/bin/echo" }],
+    });
     expect(forwarded.cwd).toBe("/real/cwd");
     expect(forwarded.agentId).toBe("main");
     expect(forwarded.sessionKey).toBe("agent:main:main");

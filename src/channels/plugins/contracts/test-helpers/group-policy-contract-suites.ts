@@ -6,7 +6,7 @@
 import { expect, it } from "vitest";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../../../config/runtime-group-policy.js";
 
-export type RuntimeGroupPolicyResolver = (
+type RuntimeGroupPolicyResolver = (
   params: Parameters<typeof resolveOpenProviderRuntimeGroupPolicy>[0],
 ) => ReturnType<typeof resolveOpenProviderRuntimeGroupPolicy>;
 

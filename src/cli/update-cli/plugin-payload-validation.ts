@@ -3,27 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "../../plugins/bundle-manifest.js";
+import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginBundleFormat } from "../../plugins/manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
 import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
+import type { PluginVerificationFailureReason } from "../../plugins/runtime-degraded-state.js";
 import { resolveUserPath } from "../../utils.js";
-
-export type PluginPayloadSmokeFailureReason =
-  | "missing-install-path"
-  | "missing-package-dir"
-  | "missing-package-json"
-  | "invalid-package-json"
-  | "missing-bundle-manifest"
-  | "invalid-bundle-manifest"
-  | "missing-main-entry"
-  | "missing-extension-entry"
-  | "missing-openclaw-peer-link";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
   installPath?: string;
-  reason: PluginPayloadSmokeFailureReason;
+  reason: PluginVerificationFailureReason;
   detail: string;
 };
 
@@ -117,10 +108,29 @@ export async function runPluginPayloadSmokeCheck(params: {
   return { checked, failures };
 }
 
+/** Verifies the exact manifest records selected for this process. */
+export async function runPluginPayloadSmokeCheckForManifestRecords(params: {
+  plugins: readonly Pick<PluginManifestRecord, "id" | "rootDir" | "format">[];
+  env: NodeJS.ProcessEnv;
+}): Promise<PluginPayloadSmokeResult> {
+  const records = Object.fromEntries(
+    params.plugins.map((plugin) => [
+      plugin.id,
+      {
+        source: plugin.format === "bundle" ? "marketplace" : "npm",
+        installPath: plugin.rootDir,
+        ...(plugin.format === "bundle" ? { clawhubFamily: "bundle-plugin" as const } : {}),
+      } satisfies PluginInstallRecord,
+    ]),
+  );
+  return await runPluginPayloadSmokeCheck({ records, env: params.env });
+}
+
 type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };
 
 type PackagePayloadManifestReadResult =
   | { status: "missing" }
+  | { status: "unreadable"; error: string }
   | { status: "invalid"; error: string }
   | { status: "present"; manifest: PackagePayloadManifest };
 
@@ -132,10 +142,16 @@ async function readPackagePayloadManifest(
   if (!packageJsonStat?.isFile()) {
     return { status: "missing" };
   }
+  let packageJson: string;
+  try {
+    packageJson = await fs.readFile(packageJsonPath, "utf8");
+  } catch (err) {
+    return { status: "unreadable", error: err instanceof Error ? err.message : String(err) };
+  }
   try {
     return {
       status: "present",
-      manifest: JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as PackagePayloadManifest,
+      manifest: JSON.parse(packageJson) as PackagePayloadManifest,
     };
   } catch (err) {
     return { status: "invalid", error: err instanceof Error ? err.message : String(err) };
@@ -147,6 +163,15 @@ function formatPackagePayloadReadFailure(params: {
   installPath: string;
   packagePayload: Exclude<PackagePayloadManifestReadResult, { status: "present" }>;
 }): PluginPayloadSmokeFailure {
+  if (params.packagePayload.status === "unreadable") {
+    const packageJsonPath = path.join(params.installPath, "package.json");
+    return {
+      pluginId: params.pluginId,
+      installPath: params.installPath,
+      reason: "unreadable-package-json",
+      detail: `Could not read package.json at ${packageJsonPath}: ${params.packagePayload.error}`,
+    };
+  }
   if (params.packagePayload.status === "invalid") {
     return {
       pluginId: params.pluginId,

@@ -4,6 +4,7 @@ import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.allowsPackage
 import ai.openclaw.app.isWithinQuietHours
+import ai.openclaw.app.takeUtf16Safe
 import android.app.Notification
 import android.app.NotificationManager
 import android.app.RemoteInput
@@ -28,17 +29,6 @@ internal fun sanitizeNotificationText(value: CharSequence?): String? {
   val normalized = value?.toString()?.trim().orEmpty()
   // Notification extras can include long previews; cap before sending over node events.
   return normalized.takeUtf16Safe(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
-}
-
-private fun String.takeUtf16Safe(maxChars: Int): String {
-  if (length <= maxChars) return this
-  val end =
-    if (maxChars > 0 && Character.isHighSurrogate(this[maxChars - 1])) {
-      maxChars - 1
-    } else {
-      maxChars
-    }
-  return take(end)
 }
 
 /**

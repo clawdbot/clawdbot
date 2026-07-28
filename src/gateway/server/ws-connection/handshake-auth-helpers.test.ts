@@ -7,8 +7,6 @@ import {
 import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import {
-  BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
-  BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,
   resolveHandshakeBrowserSecurityContext,
   resolvePairingLocality,
   resolveUnauthorizedHandshakeContext,
@@ -40,6 +38,17 @@ const CONTROL_UI_WEBCHAT_CONNECT_PARAMS = {
   },
 } as ConnectParams;
 
+function createRateLimiter(): AuthRateLimiter {
+  return {
+    check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
+    reset: () => {},
+    recordFailure: () => {},
+    size: () => 0,
+    prune: () => {},
+    dispose: () => {},
+  };
+}
+
 const GATEWAY_BACKEND_CONNECT_PARAMS = {
   client: {
     id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -60,17 +69,6 @@ const CLI_CONNECT_PARAMS = {
     mode: GATEWAY_CLIENT_MODES.CLI,
   },
 } as ConnectParams;
-
-function createRateLimiter(): AuthRateLimiter {
-  return {
-    check: () => ({ allowed: true, remaining: 1, retryAfterMs: 0 }),
-    reset: () => {},
-    recordFailure: () => {},
-    size: () => 0,
-    prune: () => {},
-    dispose: () => {},
-  };
-}
 
 function resolveDockerPublishedBrowserLocality(overrides: PairingLocalityOverrides = {}) {
   return resolvePairingLocality({
@@ -146,7 +144,7 @@ function preserveLocalCliSharedAuthScopes(overrides: Partial<LocalCliSharedAuthS
 }
 
 describe("handshake auth helpers", () => {
-  it("pins browser-origin loopback clients to the synthetic rate-limit ip", () => {
+  it("isolates browser-origin loopback clients in the browser limiter", () => {
     const rateLimiter = createRateLimiter();
     const browserRateLimiter = createRateLimiter();
     const resolved = resolveHandshakeBrowserSecurityContext({
@@ -156,21 +154,20 @@ describe("handshake auth helpers", () => {
       browserRateLimiter,
     });
 
-    expect(resolved.hasBrowserOriginHeader).toBe(true);
-    expect(resolved.enforceOriginCheckForAnyClient).toBe(true);
-    expect(resolved.rateLimitClientIp).toBe(
-      `${BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX}https://app.example`,
-    );
-    expect(resolved.authRateLimiter).toBe(browserRateLimiter);
+    expect(resolved).toMatchObject({
+      hasBrowserOriginHeader: true,
+      enforceOriginCheckForAnyClient: true,
+      rateLimitClientIp: "browser-origin:https://app.example",
+      authRateLimiter: browserRateLimiter,
+    });
   });
 
-  it("falls back to the legacy synthetic ip when the browser origin is invalid", () => {
+  it("uses the synthetic browser key when the origin is invalid", () => {
     const resolved = resolveHandshakeBrowserSecurityContext({
       requestOrigin: "not a url",
       clientIp: "127.0.0.1",
     });
-
-    expect(resolved.rateLimitClientIp).toBe(BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP);
+    expect(resolved.rateLimitClientIp).toBe("198.18.0.1");
   });
 
   it("recommends device-token retry only for shared-token mismatch with device identity", () => {

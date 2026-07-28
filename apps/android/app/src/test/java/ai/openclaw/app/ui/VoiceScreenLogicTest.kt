@@ -75,23 +75,38 @@ class VoiceScreenLogicTest {
   }
 
   @Test
+  fun voiceRuntimeAttentionStatusPreservesUtf16BoundariesAtLimit() {
+    val splitPairPrefix = "failed: ${"x".repeat(78)}"
+    assertEquals(
+      "$splitPairPrefix...",
+      voiceRuntimeAttentionStatus("$splitPairPrefix😀${"y".repeat(10)}"),
+    )
+
+    val completePairPrefix = "failed: ${"x".repeat(77)}"
+    assertEquals(
+      "$completePairPrefix😀...",
+      voiceRuntimeAttentionStatus("$completePairPrefix😀${"y".repeat(10)}"),
+    )
+  }
+
+  @Test
   fun talkSessionWaveformPhaseFollowsTalkState() {
     assertEquals(
       TalkWaveformPhase.Speaking(0.4f),
-      talkSessionWaveformPhase(speaking = true, listening = true, statusText = "Speaking…", inputLevel = 0.2f, speechActive = true, outputLevel = 0.4f),
+      talkSessionWaveformPhase(speaking = true, listening = true, awaitingAgent = false, inputLevel = 0.2f, speechActive = true, outputLevel = 0.4f),
     )
-    // Thinking statuses win over the still-running capture loop.
+    // Awaiting the agent wins over the still-running capture loop.
     assertEquals(
       TalkWaveformPhase.Thinking,
-      talkSessionWaveformPhase(speaking = false, listening = true, statusText = "Thinking…", inputLevel = 0.2f, speechActive = false, outputLevel = null),
+      talkSessionWaveformPhase(speaking = false, listening = true, awaitingAgent = true, inputLevel = 0.2f, speechActive = false, outputLevel = null),
     )
     assertEquals(
       TalkWaveformPhase.Listening(level = 0.2f, speechActive = true),
-      talkSessionWaveformPhase(speaking = false, listening = true, statusText = "Listening", inputLevel = 0.2f, speechActive = true, outputLevel = null),
+      talkSessionWaveformPhase(speaking = false, listening = true, awaitingAgent = false, inputLevel = 0.2f, speechActive = true, outputLevel = null),
     )
     assertEquals(
       TalkWaveformPhase.Idle,
-      talkSessionWaveformPhase(speaking = false, listening = false, statusText = "Off", inputLevel = 0f, speechActive = false, outputLevel = null),
+      talkSessionWaveformPhase(speaking = false, listening = false, awaitingAgent = false, inputLevel = 0f, speechActive = false, outputLevel = null),
     )
   }
 

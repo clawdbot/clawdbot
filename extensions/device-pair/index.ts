@@ -37,6 +37,8 @@ type SetupPayload = {
   urls?: string[];
   bootstrapToken: string;
   expiresAtMs: number;
+  access: "full" | "limited";
+  accessDowngraded?: true;
 };
 
 type ResolveUrlResult = {
@@ -304,6 +306,17 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
+function isFullAccessMobilePairingUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return (
+      parsed.protocol === "wss:" || (parsed.protocol === "ws:" && isLoopbackHost(parsed.hostname))
+    );
+  } catch {
+    return false;
+  }
+}
+
 function pickMatchingIPv4(predicate: (address: string) => boolean): string | null {
   const nets = os.networkInterfaces();
   for (const entries of Object.values(nets)) {
@@ -529,6 +542,7 @@ function formatSetupReply(payload: SetupPayload, authLabel: string): string {
     "",
     ...formatGatewayLines(payload),
     `Auth: ${authLabel}`,
+    ...buildAccessLines(payload),
     ...buildSecurityNoticeLines({
       kind: "setup code",
       expiresAtMs: payload.expiresAtMs,
@@ -558,6 +572,7 @@ function buildQrInfoLines(params: {
   return [
     ...formatGatewayLines(params.payload),
     `Auth: ${params.authLabel}`,
+    ...buildAccessLines(params.payload),
     ...buildSecurityNoticeLines({
       kind: "QR code",
       expiresAtMs: params.expiresAtMs,
@@ -578,6 +593,7 @@ function formatQrInfoMarkdown(params: {
   return [
     ...formatGatewayLines(params.payload).map((line) => `- ${line}`),
     `- Auth: ${params.authLabel}`,
+    ...buildAccessLines(params.payload, true),
     ...buildSecurityNoticeLines({
       kind: "QR code",
       expiresAtMs: params.expiresAtMs,
@@ -590,8 +606,9 @@ function formatQrInfoMarkdown(params: {
   ].join("\n");
 }
 
-function canSendQrPngToChannel(channel: string): boolean {
-  return channel in QR_CHANNEL_SENDERS;
+function resolveQrChannelSender(channel: string): QrChannelSender | undefined {
+  // Prototype names are not supported channel entries and must take the setup-code fallback.
+  return Object.hasOwn(QR_CHANNEL_SENDERS, channel) ? QR_CHANNEL_SENDERS[channel] : undefined;
 }
 
 function resolveQrReplyTarget(ctx: QrCommandContext): string {
@@ -617,33 +634,61 @@ function formatGatewayLines(payload: SetupPayload): string[] {
   );
 }
 
-async function issueSetupPayload(url: string, urls?: string[]): Promise<SetupPayload> {
+function buildAccessLines(payload: SetupPayload, markdown = false): string[] {
+  const prefix = markdown ? "- " : "";
+  return [
+    `${prefix}Access: ${payload.access}`,
+    ...(payload.accessDowngraded
+      ? [
+          `${prefix}Plaintext ws:// was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.`,
+        ]
+      : []),
+  ];
+}
+
+async function issueSetupPayload(params: {
+  url: string;
+  urls?: string[];
+  allowFullAccess: boolean;
+}): Promise<SetupPayload> {
   const { issueDeviceBootstrapToken, PAIRING_SETUP_BOOTSTRAP_PROFILE } =
     await loadDevicePairApiModule();
+  const hasPlaintextRoute = [...new Set([params.url, ...(params.urls ?? [])])].some(
+    (url) => !isFullAccessMobilePairingUrl(url),
+  );
+  // Every advertised URL shares this bearer token. Admin handoff therefore
+  // needs both an authorized issuer and TLS (or same-host loopback) everywhere.
+  const fullAccess = params.allowFullAccess && !hasPlaintextRoute;
+  const accessDowngraded = params.allowFullAccess && hasPlaintextRoute;
   const issuedBootstrap = await issueDeviceBootstrapToken({
-    profile: PAIRING_SETUP_BOOTSTRAP_PROFILE,
+    profile: fullAccess
+      ? {
+          roles: [...PAIRING_SETUP_BOOTSTRAP_PROFILE.roles],
+          scopes: ["operator.admin", ...PAIRING_SETUP_BOOTSTRAP_PROFILE.scopes],
+          purpose: "mobile-full",
+        }
+      : PAIRING_SETUP_BOOTSTRAP_PROFILE,
   });
   return {
-    url,
-    ...(urls ? { urls } : {}),
+    url: params.url,
+    ...(params.urls ? { urls: params.urls } : {}),
     bootstrapToken: issuedBootstrap.token,
     expiresAtMs: issuedBootstrap.expiresAtMs,
+    access: fullAccess ? "full" : "limited",
+    ...(accessDowngraded ? { accessDowngraded: true } : {}),
   };
 }
 
 async function sendQrPngToSupportedChannel(params: {
   api: OpenClawPluginApi;
   ctx: QrCommandContext;
+  sender: QrChannelSender;
   target: string;
   caption: string;
   qrFilePath: string;
 }): Promise<boolean> {
   const mediaLocalRoots = [path.dirname(params.qrFilePath)];
   const accountId = normalizeOptionalString(params.ctx.accountId) || undefined;
-  const sender = QR_CHANNEL_SENDERS[params.ctx.channel];
-  if (!sender) {
-    return false;
-  }
   const adapter = await params.api.runtime.channel.outbound.loadAdapter(params.ctx.channel);
   const send = adapter?.sendMedia;
   if (!send) {
@@ -653,7 +698,7 @@ async function sendQrPngToSupportedChannel(params: {
     cfg: params.api.config,
     to: params.target,
     text: params.caption,
-    ...sender.createOpts({
+    ...params.sender.createOpts({
       ctx: params.ctx,
       qrFilePath: params.qrFilePath,
       mediaLocalRoots,
@@ -783,6 +828,7 @@ export default definePluginEntry({
 
         if (action === "qr") {
           const channel = ctx.channel;
+          const qrChannelSender = resolveQrChannelSender(channel);
           const target = resolveQrReplyTarget(ctx);
           let autoNotifyArmed = false;
 
@@ -797,7 +843,11 @@ export default definePluginEntry({
             }
           }
 
-          let payload = await issueSetupPayload(urlResult.url, urlResult.urls);
+          let payload = await issueSetupPayload({
+            url: urlResult.url,
+            urls: urlResult.urls,
+            allowFullAccess: authState.canIssueFullAccessSetup,
+          });
           let setupCode = encodeSetupCode(payload);
 
           const infoLines = buildQrInfoLines({
@@ -807,7 +857,7 @@ export default definePluginEntry({
             expiresAtMs: payload.expiresAtMs,
           });
 
-          if (target && canSendQrPngToChannel(channel)) {
+          if (target && qrChannelSender) {
             let qrFilePath: string | undefined;
             try {
               const { resolvePreferredOpenClawTmpDir, writeQrPngTempFile } =
@@ -822,6 +872,7 @@ export default definePluginEntry({
               const sent = await sendQrPngToSupportedChannel({
                 api,
                 ctx,
+                sender: qrChannelSender,
                 target,
                 caption: ["Scan this QR code with the OpenClaw iOS app:", "", ...infoLines].join(
                   "\n",
@@ -842,7 +893,11 @@ export default definePluginEntry({
                 `device-pair: QR image send failed channel=${channel}, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload(urlResult.url, urlResult.urls);
+              payload = await issueSetupPayload({
+                url: urlResult.url,
+                urls: urlResult.urls,
+                allowFullAccess: authState.canIssueFullAccessSetup,
+              });
               setupCode = encodeSetupCode(payload);
             } finally {
               if (qrFilePath) {
@@ -864,7 +919,11 @@ export default definePluginEntry({
                 `device-pair: webchat QR render failed, falling back (${(err as Error)?.message ?? err})`,
               );
               await revokeDeviceBootstrapToken({ token: payload.bootstrapToken }).catch(() => {});
-              payload = await issueSetupPayload(urlResult.url, urlResult.urls);
+              payload = await issueSetupPayload({
+                url: urlResult.url,
+                urls: urlResult.urls,
+                allowFullAccess: authState.canIssueFullAccessSetup,
+              });
               return {
                 text:
                   "QR image delivery is not available on this channel right now, so I generated a pasteable setup code instead.\n\n" +
@@ -902,7 +961,11 @@ export default definePluginEntry({
           normalizeOptionalString(ctx.from) ||
           normalizeOptionalString(ctx.to) ||
           "";
-        const payload = await issueSetupPayload(urlResult.url, urlResult.urls);
+        const payload = await issueSetupPayload({
+          url: urlResult.url,
+          urls: urlResult.urls,
+          allowFullAccess: authState.canIssueFullAccessSetup,
+        });
 
         if (channel === "telegram" && target) {
           try {
@@ -948,3 +1011,4 @@ export default definePluginEntry({
     });
   },
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

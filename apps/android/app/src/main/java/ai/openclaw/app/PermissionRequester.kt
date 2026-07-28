@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.i18n.nativeString
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -8,8 +9,6 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
-import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -17,7 +16,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -31,31 +29,26 @@ import kotlin.coroutines.resume
  */
 class PermissionRequester internal constructor(
   private val activity: ComponentActivity,
-  launcherFactory: ((Map<String, Boolean>) -> Unit) -> ActivityResultLauncher<Array<String>>,
+  private val permissionRequestLauncher: (Array<String>, Int) -> Unit,
+  private val requestCodeAllocator: PermissionRequestCodeAllocator = PermissionRequestCodeAllocator(),
 ) {
   private data class PendingPermissionRequest(
+    val requestCode: Int,
+    val permissions: List<String>,
     val deferred: CompletableDeferred<Map<String, Boolean>>,
-    var timedOut: Boolean = false,
-  )
-
-  private class PermissionRequestSlot(
-    val launcher: ActivityResultLauncher<Array<String>>,
-    var request: PendingPermissionRequest? = null,
   )
 
   constructor(activity: ComponentActivity) : this(
     activity = activity,
-    launcherFactory = { callback ->
-      activity.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions(), callback)
+    permissionRequestLauncher = { permissions, requestCode ->
+      ActivityCompat.requestPermissions(activity, permissions, requestCode)
     },
   )
 
   private val mutex = Mutex()
-  private val requestSlotsLock = Any()
+  private val permissionRequestsLock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
-
-  // ActivityResult launchers cannot be registered after start; pre-register a small pool for nested UI flows.
-  private val launchers = List(4) { createPermissionRequestSlot(launcherFactory) }
+  private val pendingPermissionRequests = mutableMapOf<Int, PendingPermissionRequest>()
 
   /**
    * Request missing Android runtime permissions and return the final grant state for every requested permission.
@@ -86,24 +79,22 @@ class PermissionRequester internal constructor(
         }
 
         val deferred = CompletableDeferred<Map<String, Boolean>>()
-        val request = PendingPermissionRequest(deferred)
-        val slot = reservePermissionRequestSlot(request)
+        val request = reservePermissionRequest(missing, deferred)
         try {
           withContext(Dispatchers.Main) {
-            slot.launcher.launch(missing.toTypedArray())
+            permissionRequestLauncher(missing.toTypedArray(), request.requestCode)
           }
         } catch (err: Throwable) {
-          clearPermissionRequestSlot(slot, request)
+          clearPermissionRequest(request)
           throw err
         }
 
         val result =
           try {
             withTimeout(timeoutMs) { deferred.await() }
-          } catch (err: TimeoutCancellationException) {
-            // Late ActivityResult callbacks are ignored by completePermissionRequest.
-            request.timedOut = true
-            throw err
+          } finally {
+            // Timeout and caller cancellation both retire the request code before the mutex admits another prompt.
+            clearPermissionRequest(request)
           }
 
         val merged =
@@ -127,46 +118,41 @@ class PermissionRequester internal constructor(
     }
   }
 
-  private fun createPermissionRequestSlot(
-    launcherFactory: ((Map<String, Boolean>) -> Unit) -> ActivityResultLauncher<Array<String>>,
-  ): PermissionRequestSlot {
-    var slot: PermissionRequestSlot? = null
-    val launcher = launcherFactory { result -> completePermissionRequest(checkNotNull(slot), result) }
-    val created = PermissionRequestSlot(launcher)
-    slot = created
-    return created
+  internal fun onRequestPermissionsResult(
+    requestCode: Int,
+    permissions: Array<String>,
+    grantResults: IntArray,
+  ): Boolean {
+    val request =
+      synchronized(permissionRequestsLock) {
+        pendingPermissionRequests.remove(requestCode)
+      } ?: return false
+    val grants =
+      permissions
+        .mapIndexed { index, permission ->
+          permission to (grantResults.getOrNull(index) == PackageManager.PERMISSION_GRANTED)
+        }.toMap()
+    request.deferred.complete(request.permissions.associateWith { permission -> grants[permission] == true })
+    return true
   }
 
-  private fun reservePermissionRequestSlot(request: PendingPermissionRequest): PermissionRequestSlot =
-    synchronized(requestSlotsLock) {
-      // The outer mutex serializes normal callers; this guard catches accidental concurrent launchers in tests.
-      val slot = launchers.firstOrNull { it.request == null } ?: error("permission request launcher busy")
-      slot.request = request
-      slot
+  private fun reservePermissionRequest(
+    permissions: List<String>,
+    deferred: CompletableDeferred<Map<String, Boolean>>,
+  ): PendingPermissionRequest =
+    synchronized(permissionRequestsLock) {
+      val requestCode = requestCodeAllocator.allocate(pendingPermissionRequests::containsKey)
+      val request = PendingPermissionRequest(requestCode, permissions, deferred)
+      pendingPermissionRequests[requestCode] = request
+      request
     }
 
-  private fun completePermissionRequest(
-    slot: PermissionRequestSlot,
-    result: Map<String, Boolean>,
-  ) {
-    val request =
-      synchronized(requestSlotsLock) {
-        slot.request.also {
-          slot.request = null
-        }
-      } ?: return
-    // Timed-out requests have already resumed callers with failure; ignore any late platform callback.
-    if (request.timedOut) return
-    request.deferred.complete(result)
-  }
-
-  private fun clearPermissionRequestSlot(
-    slot: PermissionRequestSlot,
+  private fun clearPermissionRequest(
     request: PendingPermissionRequest,
   ) {
-    synchronized(requestSlotsLock) {
-      if (slot.request === request) {
-        slot.request = null
+    synchronized(permissionRequestsLock) {
+      if (pendingPermissionRequests[request.requestCode] === request) {
+        pendingPermissionRequests.remove(request.requestCode)
       }
     }
   }
@@ -210,10 +196,10 @@ class PermissionRequester internal constructor(
         dialog =
           AlertDialog
             .Builder(activity)
-            .setTitle("Permission required")
+            .setTitle(nativeString("Permission required"))
             .setMessage(buildRationaleMessage(permissions))
-            .setPositiveButton("Continue") { _, _ -> finish(true) }
-            .setNegativeButton("Not now") { _, _ -> finish(false) }
+            .setPositiveButton(nativeString("Continue")) { _, _ -> finish(true) }
+            .setNegativeButton(nativeString("Not now")) { _, _ -> finish(false) }
             .setOnCancelListener { finish(false) }
             .show()
       }
@@ -240,9 +226,9 @@ class PermissionRequester internal constructor(
       dialog =
         AlertDialog
           .Builder(activity)
-          .setTitle("Enable permission in Settings")
+          .setTitle(nativeString("Enable permission in Settings"))
           .setMessage(buildSettingsMessage(permissions))
-          .setPositiveButton("Open Settings") { _, _ ->
+          .setPositiveButton(nativeString("Open Settings")) { _, _ ->
             if (activity.isFinishing || activity.isDestroyed) return@setPositiveButton
             val intent =
               Intent(
@@ -250,36 +236,75 @@ class PermissionRequester internal constructor(
                 Uri.fromParts("package", activity.packageName, null),
               )
             activity.startActivity(intent)
-          }.setNegativeButton("Cancel", null)
+          }.setNegativeButton(nativeString("Cancel"), null)
           .setOnDismissListener { removeObserver() }
           .show()
     }
 
   private fun buildRationaleMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "OpenClaw needs ${labels.joinToString(", ")} permissions to continue."
+    return nativeString(
+      "OpenClaw needs \${labels.joinToString(\", \")} permissions to continue.",
+      labels.joinToString(", "),
+    )
   }
 
   private fun buildSettingsMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "Please enable ${labels.joinToString(", ")} in Android Settings to continue."
+    return nativeString(
+      "Please enable \${labels.joinToString(\", \")} in Android Settings to continue.",
+      labels.joinToString(", "),
+    )
   }
 
   private fun permissionLabel(permission: String): String =
     when (permission) {
-      Manifest.permission.CAMERA -> "Camera"
-      Manifest.permission.RECORD_AUDIO -> "Microphone"
-      Manifest.permission.SEND_SMS -> "Send SMS"
-      Manifest.permission.READ_SMS -> "Read SMS"
-      Manifest.permission.READ_CONTACTS -> "Read Contacts"
-      Manifest.permission.WRITE_CONTACTS -> "Write Contacts"
-      Manifest.permission.READ_CALENDAR -> "Read Calendar"
-      Manifest.permission.WRITE_CALENDAR -> "Write Calendar"
-      Manifest.permission.READ_CALL_LOG -> "Read Call Log"
-      Manifest.permission.ACTIVITY_RECOGNITION -> "Motion Activity"
-      Manifest.permission.READ_MEDIA_IMAGES -> "Photos"
-      Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED -> "Photos"
-      Manifest.permission.READ_EXTERNAL_STORAGE -> "Photos"
+      Manifest.permission.CAMERA -> nativeString("Camera")
+      Manifest.permission.RECORD_AUDIO -> nativeString("Microphone")
+      Manifest.permission.SEND_SMS -> nativeString("Send SMS")
+      Manifest.permission.READ_SMS -> nativeString("Read SMS")
+      Manifest.permission.READ_CONTACTS -> nativeString("Read Contacts")
+      Manifest.permission.WRITE_CONTACTS -> nativeString("Write Contacts")
+      Manifest.permission.READ_CALENDAR -> nativeString("Read Calendar")
+      Manifest.permission.WRITE_CALENDAR -> nativeString("Write Calendar")
+      Manifest.permission.READ_CALL_LOG -> nativeString("Read Call Log")
+      Manifest.permission.ACTIVITY_RECOGNITION -> nativeString("Motion Activity")
+      Manifest.permission.READ_MEDIA_IMAGES -> nativeString("Photos")
+      Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED -> nativeString("Photos")
+      Manifest.permission.READ_EXTERNAL_STORAGE -> nativeString("Photos")
       else -> permission
     }
+}
+
+internal class PermissionRequestCodeAllocator(
+  initialRequestCode: Int = FIRST_PERMISSION_REQUEST_CODE,
+) {
+  private var nextRequestCode = initialRequestCode
+
+  init {
+    require(initialRequestCode in FIRST_PERMISSION_REQUEST_CODE..LAST_PERMISSION_REQUEST_CODE)
+  }
+
+  fun allocate(isInUse: (Int) -> Boolean): Int {
+    repeat(PERMISSION_REQUEST_CODE_COUNT) {
+      val requestCode = nextRequestCode
+      nextRequestCode =
+        if (requestCode == LAST_PERMISSION_REQUEST_CODE) {
+          FIRST_PERMISSION_REQUEST_CODE
+        } else {
+          requestCode + 1
+        }
+      if (!isInUse(requestCode)) return requestCode
+    }
+    error("permission request codes exhausted")
+  }
+
+  internal companion object {
+    // AndroidX ActivityResultRegistry reserves request codes >= 0x10000. Direct ActivityCompat
+    // requests stay in a disjoint 16-bit range and skip live codes when the counter wraps.
+    const val FIRST_PERMISSION_REQUEST_CODE = 0x4C00
+    const val LAST_PERMISSION_REQUEST_CODE = 0xFFFF
+    private const val PERMISSION_REQUEST_CODE_COUNT =
+      LAST_PERMISSION_REQUEST_CODE - FIRST_PERMISSION_REQUEST_CODE + 1
+  }
 }

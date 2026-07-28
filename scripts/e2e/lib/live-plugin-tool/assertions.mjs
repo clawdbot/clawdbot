@@ -1,6 +1,7 @@
 // Assertions for live plugin tool E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { extractAgentReplyTexts } from "../agent-turn-output.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
@@ -33,6 +34,7 @@ const AGENT_OUTPUT_MAX_BYTES = readPositiveIntEnv(
   1024 * 1024,
 );
 const SESSION_FILE_LIST_LIMIT = 20;
+const LIVE_PLUGIN_TOOL_SESSION_ID = "live-plugin-tool";
 const SESSION_SCAN_MAX_ENTRIES = readPositiveIntEnv(
   "OPENCLAW_LIVE_PLUGIN_TOOL_SESSION_SCAN_MAX_ENTRIES",
   50_000,
@@ -373,6 +375,41 @@ function scanSessionTranscripts(sessionsDir, toolName, expected) {
   return { checkedFiles, filesChecked, found: false, missingDir: false };
 }
 
+function scanSqliteSessionTranscript(databasePath, sessionId, toolName, expected) {
+  if (!fs.existsSync(databasePath)) {
+    return { eventsChecked: 0, found: false };
+  }
+  const database = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'transcript_events'")
+      .get();
+    if (!table) {
+      return { eventsChecked: 0, found: false };
+    }
+    const rows = database
+      .prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq LIMIT ?")
+      .all(sessionId, SESSION_SCAN_MAX_ENTRIES + 1);
+    if (rows.length > SESSION_SCAN_MAX_ENTRIES) {
+      throw new Error(`session transcript scan exceeded ${SESSION_SCAN_MAX_ENTRIES} SQLite events`);
+    }
+
+    const tracker = createToolEvidenceTracker(toolName, expected);
+    for (const row of rows) {
+      if (typeof row.event_json !== "string") {
+        continue;
+      }
+      const message = transcriptMessageFromLine(row.event_json);
+      if (message && tracker.recordMessage(message)) {
+        return { eventsChecked: rows.length, found: true };
+      }
+    }
+    return { eventsChecked: rows.length, found: false };
+  } finally {
+    database.close();
+  }
+}
+
 function realPathMaybe(filePath) {
   try {
     return fs.realpathSync(filePath);
@@ -416,7 +453,7 @@ function pluginInstallPath() {
   if (record.source !== "npm" || record.artifactKind !== "npm-pack") {
     throw new Error(`expected npm-pack install record: ${JSON.stringify(record)}`);
   }
-  return String(record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
+  return (record.installPath || "").replace(/^~(?=$|\/)/u, process.env.HOME);
 }
 
 function writeFixture() {
@@ -610,13 +647,22 @@ function assertAgentTurn() {
       `live agent reply did not contain tool slug ${expected}:\nstdout tail=${tailText(stdout, ERROR_DETAIL_TAIL_BYTES)}\nstderr tail=${stderrTail}`,
     );
   }
-  const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const scan = scanSessionTranscripts(sessionsDir, toolName, expected);
-  if (!scan.found) {
-    const checkedFiles = scan.checkedFiles.length > 0 ? scan.checkedFiles.join(", ") : "<none>";
-    const missingDir = scan.missingDir ? " sessions directory was missing." : "";
+  const agentStateDir = path.join(stateDir(), "agents", "main");
+  const sqliteScan = scanSqliteSessionTranscript(
+    path.join(agentStateDir, "agent", "openclaw-agent.sqlite"),
+    LIVE_PLUGIN_TOOL_SESSION_ID,
+    toolName,
+    expected,
+  );
+  const fileScan = sqliteScan.found
+    ? { checkedFiles: [], filesChecked: 0, found: false, missingDir: false }
+    : scanSessionTranscripts(path.join(agentStateDir, "sessions"), toolName, expected);
+  if (!sqliteScan.found && !fileScan.found) {
+    const checkedFiles =
+      fileScan.checkedFiles.length > 0 ? fileScan.checkedFiles.join(", ") : "<none>";
+    const missingDir = fileScan.missingDir ? " sessions directory was missing." : "";
     throw new Error(
-      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${scan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
+      `session transcript did not show ${toolName} returning ${expected}; missing causal tool-result evidence after checking ${sqliteScan.eventsChecked} SQLite event(s) and ${fileScan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
     );
   }
 }

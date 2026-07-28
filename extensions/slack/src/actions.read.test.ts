@@ -3,6 +3,15 @@ import type { WebClient } from "@slack/web-api";
 import { describe, expect, it, vi } from "vitest";
 import { readSlackMessages, resolveSlackConversationName } from "./actions.js";
 
+const createSlackLookupClientMock = vi.hoisted(() =>
+  vi.fn(() => ({ conversations: { info: vi.fn(), replies: vi.fn(), history: vi.fn() } })),
+);
+
+vi.mock("./client.js", () => ({
+  createSlackLookupClient: createSlackLookupClientMock,
+  getSlackWriteClient: vi.fn(),
+}));
+
 function createClient() {
   return {
     conversations: {
@@ -110,6 +119,73 @@ describe("Slack read actions", () => {
     });
     expect(client.conversations.replies).not.toHaveBeenCalled();
     expect(result.messages.map((message) => message.ts)).toEqual(["1"]);
+  });
+
+  it("renders attachment tables in channel reads without dropping raw payloads", async () => {
+    const client = createClient();
+    const blocks = [
+      {
+        type: "table",
+        rows: [
+          [
+            { type: "raw_text", text: "ID" },
+            { type: "raw_text", text: "Status" },
+          ],
+          [
+            { type: "raw_number", value: 12345 },
+            { type: "raw_text", text: "enabled" },
+          ],
+        ],
+      },
+    ];
+    const attachments = [{ fallback: "[no preview available]", blocks }];
+    client.conversations.history.mockResolvedValueOnce({
+      messages: [{ ts: "1", text: "  Please check these.  ", attachments }],
+      has_more: false,
+    });
+
+    const result = await readSlackMessages("C1", { client, token: "xoxb-test" });
+
+    expect(result.messages[0]?.text).toBe("  Please check these.  \nID\tStatus\n12345\tenabled");
+    expect(result.messages[0]?.attachments).toBe(attachments);
+    expect(result.messages[0]?.attachments?.[0]?.blocks).toBe(blocks);
+  });
+
+  it("renders attachment tables in thread reads", async () => {
+    const client = createClient();
+    client.conversations.replies.mockResolvedValueOnce({
+      messages: [
+        { ts: "1.000", text: "parent" },
+        {
+          ts: "1.001",
+          text: "Thread data",
+          attachments: [
+            {
+              blocks: [
+                {
+                  type: "table",
+                  rows: [
+                    [{ type: "raw_text", text: "Name" }],
+                    [{ type: "raw_text", text: "Example A" }],
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      has_more: false,
+    });
+
+    const result = await readSlackMessages("C1", {
+      client,
+      threadId: "1.000",
+      token: "xoxb-test",
+    });
+
+    expect(result.messages.map((message) => message.text)).toEqual([
+      "Thread data\nName\nExample A",
+    ]);
   });
 
   it("filters a specific channel message by messageId", async () => {
@@ -229,5 +305,22 @@ describe("Slack read actions", () => {
       oldest: "1712340000.000001",
     });
     expect(client.conversations.history).not.toHaveBeenCalled();
+  });
+
+  it("routes read-mode actions through the bounded lookup client", async () => {
+    createSlackLookupClientMock.mockReturnValue({
+      conversations: {
+        info: vi.fn().mockResolvedValue({ channel: { name: "general" } }),
+        replies: vi.fn(),
+        history: vi.fn(),
+      },
+    });
+
+    await resolveSlackConversationName("C1", {
+      token: "test-auth-token",
+      cfg: { channels: { slack: { enabled: true, botToken: "test-auth-token" } } },
+    } as Parameters<typeof resolveSlackConversationName>[1]);
+
+    expect(createSlackLookupClientMock).toHaveBeenCalledWith("test-auth-token");
   });
 });

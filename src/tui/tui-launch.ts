@@ -69,6 +69,7 @@ function buildTuiCliArgs(opts: TuiOptions): string[] {
   appendOption(args, "--url", opts.url);
   appendOption(args, "--token", opts.token);
   appendOption(args, "--password", opts.password);
+  appendOption(args, "--tls-fingerprint", opts.tlsFingerprint);
   appendOption(args, "--session", opts.session);
   appendOption(args, "--thinking", opts.thinking);
   appendOption(args, "--message", opts.message);

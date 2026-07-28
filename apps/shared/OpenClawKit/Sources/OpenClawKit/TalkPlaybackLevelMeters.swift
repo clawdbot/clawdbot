@@ -13,6 +13,24 @@ public enum TalkAudioLevel {
         max(0, min(1, (decibels + 50) / 50))
     }
 
+    /// Average RMS across all channels of a float PCM buffer; 0 for degenerate
+    /// buffers (Core Audio taps never deliver them in practice). Callable from
+    /// realtime audio tap threads.
+    public static func rms(buffer: AVAudioPCMBuffer) -> Double {
+        guard let channelData = buffer.floatChannelData, buffer.frameLength > 0 else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        let channelCount = max(1, Int(buffer.format.channelCount))
+        var sum: Double = 0
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            for index in 0..<frameCount {
+                let sample = Double(samples[index])
+                sum += sample * sample
+            }
+        }
+        return (sum / Double(frameCount * channelCount)).squareRoot()
+    }
+
     /// RMS of little-endian PCM16 mono bytes; 0 for empty or odd-length data.
     public static func pcm16RMS(_ data: Data) -> Double {
         let sampleCount = data.count / 2
@@ -89,6 +107,32 @@ public final class PCMPlaybackEnvelope {
         self.scheduleEnd = start
     }
 
+    /// Passes PCM chunks through to a player while metering them into this
+    /// envelope, so the published level follows the audible speech. Callers
+    /// `cancel()` once playback returns.
+    public func metering(
+        _ stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double) -> AsyncThrowingStream<Data, Error>
+    {
+        self.begin(sampleRate: sampleRate)
+        return AsyncThrowingStream { continuation in
+            let task = Task { @MainActor [weak self] in
+                do {
+                    for try await chunk in stream {
+                        self?.append(chunk)
+                        continuation.yield(chunk)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     /// Stops immediately (interruption/teardown) and clears the published level.
     public func cancel() {
         self.publishTask?.cancel()
@@ -137,16 +181,16 @@ public final class PCMPlaybackEnvelope {
 /// via its built-in metering at ~30 Hz. Detach clears the level to nil so the
 /// consumer can distinguish "silent" from "not playing".
 @MainActor
-public final class AudioPlayerLevelMeter {
+final class AudioPlayerLevelMeter {
     private let onLevel: @MainActor (Double?) -> Void
     private var pollTask: Task<Void, Never>?
     private weak var player: AVAudioPlayer?
 
-    public init(onLevel: @escaping @MainActor (Double?) -> Void) {
+    init(onLevel: @escaping @MainActor (Double?) -> Void) {
         self.onLevel = onLevel
     }
 
-    public func attach(_ player: AVAudioPlayer) {
+    func attach(_ player: AVAudioPlayer) {
         self.detach()
         player.isMeteringEnabled = true
         self.player = player
@@ -160,7 +204,7 @@ public final class AudioPlayerLevelMeter {
         }
     }
 
-    public func detach() {
+    func detach() {
         self.pollTask?.cancel()
         self.pollTask = nil
         self.player = nil

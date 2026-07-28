@@ -4,9 +4,11 @@ import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
+  createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isXaiProviderId } from "./provider-id.js";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -21,24 +23,6 @@ function resolveXaiFastModelId(modelId: unknown): string | undefined {
     return undefined;
   }
   return XAI_FAST_MODEL_IDS.get(modelId.trim());
-}
-
-function stripUnsupportedStrictFlag(tool: unknown): unknown {
-  if (!tool || typeof tool !== "object") {
-    return tool;
-  }
-  const toolObj = tool as Record<string, unknown>;
-  const fn = toolObj.function;
-  if (!fn || typeof fn !== "object") {
-    return tool;
-  }
-  const fnObj = fn as Record<string, unknown>;
-  if (typeof fnObj.strict !== "boolean") {
-    return tool;
-  }
-  const nextFunction = { ...fnObj };
-  delete nextFunction.strict;
-  return { ...toolObj, function: nextFunction };
 }
 
 function supportsExplicitImageInput(model: { input?: unknown }): boolean {
@@ -60,7 +44,11 @@ function ensureXaiResponsesEncryptedReasoningInclude(
   payloadObj: Record<string, unknown>,
   model: { api?: unknown; provider?: unknown; reasoning?: unknown },
 ): void {
-  if (model.provider !== "xai" || model.api !== "openai-responses" || model.reasoning !== true) {
+  if (
+    !isXaiProviderId(model.provider) ||
+    model.api !== "openai-responses" ||
+    model.reasoning !== true
+  ) {
     return;
   }
   const existing = payloadObj.include;
@@ -227,37 +215,21 @@ function normalizeXaiResponsesToolResultPayload(
   payloadObj.input = normalizedInput;
 }
 
-export function createXaiToolPayloadCompatibilityWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          if (Array.isArray(payloadObj.tools)) {
-            payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
-          }
-          normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          if (!supportsReasoningControls(model)) {
-            // Only current flagship Grok models advertise configurable effort.
-            delete payloadObj.reasoning;
-            delete payloadObj.reasoningEffort;
-            delete payloadObj.reasoning_effort;
-          }
-          // All reasoning xAI models should still request + later replay encrypted_content.
-          ensureXaiResponsesEncryptedReasoningInclude(payloadObj, model);
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  };
+function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
+    normalizeXaiResponsesToolResultPayload(payload, model);
+    if (!supportsReasoningControls(model)) {
+      // Only current flagship Grok models advertise configurable effort.
+      delete payload.reasoning;
+      delete payload.reasoningEffort;
+      delete payload.reasoning_effort;
+    }
+    // All reasoning xAI models should still request + later replay encrypted_content.
+    ensureXaiResponsesEncryptedReasoningInclude(payload, model);
+  });
 }
 
-export function createXaiFastModeWrapper(
+function createXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: DynamicFastMode,
 ): StreamFn {
@@ -268,7 +240,7 @@ export function createXaiFastModeWrapper(
     if (
       (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
       !supportsFastAliasTransport ||
-      model.provider !== "xai"
+      !isXaiProviderId(model.provider)
     ) {
       return underlying(model, context, options);
     }
@@ -301,14 +273,12 @@ function hasXaiFastModeParam(extraParams: Record<string, unknown> | undefined): 
 export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
   const toolStreamEnabled = extraParams?.tool_stream !== false;
-  return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
-    let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
-    if (hasXaiFastModeParam(extraParams)) {
-      wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, () =>
-        resolveXaiFastMode(extraParams),
-      );
-    }
-    wrappedStreamFn = createPlainTextToolCallCompatWrapper(wrappedStreamFn);
-    return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
-  });
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    createXaiToolPayloadCompatibilityWrapper,
+    hasXaiFastModeParam(extraParams) &&
+      ((streamFn) => createXaiFastModeWrapper(streamFn, () => resolveXaiFastMode(extraParams))),
+    createPlainTextToolCallCompatWrapper,
+    (streamFn) => createToolStreamWrapper(streamFn, toolStreamEnabled),
+  );
 }

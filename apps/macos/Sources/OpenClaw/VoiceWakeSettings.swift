@@ -43,6 +43,10 @@ struct VoiceWakeSettings: View {
         MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
+    private var selectedLocaleSupportsOnDeviceRecognition: Bool {
+        SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(localeID: self.state.voiceWakeLocaleID)
+    }
+
     private var voiceSummaryPanel: some View {
         let enabled = voiceWakeSupported && self.state.swabbleEnabled
         let pushToTalk = voiceWakeSupported && self.state.voicePushToTalkEnabled
@@ -158,8 +162,14 @@ struct VoiceWakeSettings: View {
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
-                            subtitle: "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
+                            subtitle: self.selectedLocaleSupportsOnDeviceRecognition
+                                ? """
+                                Listen for a wake phrase before running voice commands. \
+                                Wake-phrase recognition stays on this Mac.
+                                """
+                                : "On-device recognition is unavailable for the selected language on this Mac.",
                             binding: self.voiceWakeBinding)
+                            .disabled(!self.selectedLocaleSupportsOnDeviceRecognition && !self.state.swabbleEnabled)
 
                         SettingsCardToggleRow(
                             title: "Trigger Talk Mode",
@@ -184,7 +194,9 @@ struct VoiceWakeSettings: View {
 
                         SettingsCardToggleRow(
                             title: "Play phase-transition sounds",
-                            subtitle: "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
+                            subtitle: """
+                            Play short sounds when Talk Mode switches between listening, thinking, and speaking.
+                            """,
                             binding: self.$state.talkPhaseSoundsEnabled)
 
                         SettingsCardToggleRow(
@@ -453,7 +465,7 @@ struct VoiceWakeSettings: View {
     }
 
     private func chimeRow(
-        title: String,
+        title: SettingsTextValue,
         selection: Binding<VoiceWakeChime>,
         showsDivider: Bool = true) -> some View
     {
@@ -585,6 +597,18 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.controlWidth)
             }
 
+            if !self.selectedLocaleSupportsOnDeviceRecognition {
+                Text("""
+                Voice Wake needs on-device recognition for its selected language. \
+                Push-to-talk and Talk Mode remain available.
+                """)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
+            }
+
             SettingsCardRow(
                 title: "Additional languages",
                 subtitle: self.additionalLanguagesSubtitle,
@@ -607,7 +631,7 @@ struct VoiceWakeSettings: View {
         }
     }
 
-    private var additionalLanguagesSubtitle: String {
+    private var additionalLanguagesSubtitle: SettingsTextValue {
         if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
             return "None configured."
         }
@@ -853,7 +877,9 @@ private struct AdditionalLanguageRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: "Language \(self.index + 2)",
+            title: .verbatim(String(
+                format: String(localized: "Language %lld"),
+                self.index + 2)),
             subtitle: "Fallback recognition language.",
             showsDivider: self.showsDivider)
         {

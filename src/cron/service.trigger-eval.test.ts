@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { appendCronRunLog, readCronRunLogEntriesSync } from "./run-log.js";
-import type { CronEvent, CronServiceDeps } from "./service.js";
+import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
+import type { CronServiceDeps } from "./service/state.js";
+import { loadCronStore } from "./store.js";
+import { cronStoreKey } from "./store/key.js";
+import { readCronTaskRunHistoryPage } from "./task-run-history.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-trigger-eval-" });
@@ -36,13 +39,13 @@ async function createHarness(params: {
   const cron = new CronService({
     storePath,
     cronEnabled: true,
-    cronConfig: { triggers: { enabled: true, minIntervalMs: 30_000 } },
+    cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent,
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
     ...(params.evaluateCronTrigger ? { evaluateCronTrigger: params.evaluateCronTrigger } : {}),
-    onEvent: (event) => events.push(event),
+    onEvent: (event) => events.push(structuredClone(event)),
   });
   await cron.start();
   return { cron, enqueueSystemEvent, events, runIsolatedAgentJob, storePath };
@@ -68,10 +71,14 @@ describe("cron trigger evaluation", () => {
     try {
       const job = await harness.cron.add(watcher());
       const dueAt = job.state.nextRunAtMs ?? 0;
+      harness.events.length = 0;
 
       expect(await runWhenDue(harness.cron, job.id)).toEqual({ ok: true, ran: true });
 
       const stored = harness.cron.getJob(job.id);
+      const persisted = (await loadCronStore(harness.storePath)).jobs.find(
+        (entry) => entry.id === job.id,
+      );
       expect(stored?.state).toMatchObject({
         lastTriggerEvalAtMs: dueAt,
         triggerEvalCount: 1,
@@ -82,10 +89,19 @@ describe("cron trigger evaluation", () => {
       expect(stored?.state.lastRunAtMs).toBeUndefined();
       expect((stored?.state.nextRunAtMs ?? 0) - dueAt).toBeGreaterThanOrEqual(30_000);
       expect(harness.runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(harness.events.filter((event) => event.action === "finished")).toHaveLength(0);
-      expect(readCronRunLogEntriesSync({ storePath: harness.storePath, jobId: job.id })).toEqual(
-        [],
-      );
+      expect(harness.events.map((event) => event.action)).toEqual(["started", "scheduled"]);
+      expect(harness.events.at(-1)).toMatchObject({
+        jobId: job.id,
+        action: "scheduled",
+        nextRunAtMs: persisted?.state.nextRunAtMs,
+        job: { state: { nextRunAtMs: persisted?.state.nextRunAtMs } },
+      });
+      expect(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(harness.storePath),
+          jobId: job.id,
+        }).entries,
+      ).toEqual([]);
     } finally {
       harness.cron.stop();
     }
@@ -112,19 +128,12 @@ describe("cron trigger evaluation", () => {
       if (!finished) {
         throw new Error("missing finished event");
       }
-      await appendCronRunLog({
-        storePath: harness.storePath,
-        entry: {
-          ts: Date.now(),
+      expect(
+        readCronTaskRunHistoryPage({
+          storeKey: cronStoreKey(harness.storePath),
           jobId: job.id,
-          action: "finished",
-          status: finished.status,
-          triggerFired: finished.triggerFired,
-        },
-      });
-      expect(readCronRunLogEntriesSync({ storePath: harness.storePath, jobId: job.id })).toEqual([
-        expect.objectContaining({ triggerFired: true }),
-      ]);
+        }).entries,
+      ).toEqual([expect.objectContaining({ triggerFired: true })]);
       expect(harness.cron.getJob(job.id)?.state).toMatchObject({
         triggerEvalCount: 1,
         lastTriggerFireAtMs: expect.any(Number),
@@ -174,17 +183,33 @@ describe("cron trigger evaluation", () => {
     try {
       const job = await harness.cron.add(watcher());
       const dueAt = job.state.nextRunAtMs ?? 0;
+      harness.events.length = 0;
       await runWhenDue(harness.cron, job.id);
 
-      expect(harness.cron.getJob(job.id)?.state).toMatchObject({
+      const stored = harness.cron.getJob(job.id);
+      const persisted = (await loadCronStore(harness.storePath)).jobs.find(
+        (entry) => entry.id === job.id,
+      );
+      expect(stored?.state).toMatchObject({
         consecutiveErrors: 1,
         triggerEvalCount: 1,
         lastRunStatus: "error",
       });
-      expect(harness.cron.getJob(job.id)?.state.nextRunAtMs).toBeGreaterThan(dueAt);
+      expect(stored?.state.nextRunAtMs).toBeGreaterThan(dueAt);
       expect(harness.events.find((event) => event.action === "finished")).toMatchObject({
         status: "error",
         error: expect.stringContaining("deadline exceeded"),
+      });
+      expect(harness.events.map((event) => event.action)).toEqual([
+        "started",
+        "finished",
+        "scheduled",
+      ]);
+      expect(harness.events.at(-1)).toMatchObject({
+        jobId: job.id,
+        action: "scheduled",
+        nextRunAtMs: persisted?.state.nextRunAtMs,
+        job: { state: { nextRunAtMs: persisted?.state.nextRunAtMs } },
       });
     } finally {
       harness.cron.stop();

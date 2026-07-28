@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { fetchDiscord } from "./api.js";
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
 import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import {
   buildDiscordUnresolvedResults,
@@ -106,7 +106,9 @@ export async function resolveDiscordUserAllowlist(params: {
   let guilds: DiscordGuildSummary[] | null = null;
   const getGuilds = async (): Promise<DiscordGuildSummary[]> => {
     if (!guilds) {
-      guilds = await listGuilds(token, fetcher);
+      guilds = await listGuilds(token, fetcher, {
+        timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS,
+      });
     }
     return guilds;
   };
@@ -148,6 +150,7 @@ export async function resolveDiscordUserAllowlist(params: {
         `/guilds/${guild.id}/members/search?${paramsObj.toString()}`,
         token,
         fetcher,
+        { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS },
       );
       for (const member of members) {
         const score = scoreDiscordMember(member, query);

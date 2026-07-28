@@ -264,7 +264,7 @@ describe("registerTelegramNativeCommands real plugin registry", () => {
         commands: { allowFrom: { telegram: ["999"] } } as OpenClawConfig["commands"],
       }),
       bot,
-      allowFrom: ["999"],
+      opts: { token: "token", allowFrom: ["999"] },
       nativeEnabled: false,
     });
 

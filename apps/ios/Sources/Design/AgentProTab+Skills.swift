@@ -84,12 +84,15 @@ extension AgentProTab {
                         .buttonStyle(.plain)
                     }
                 }
-                Picker("Status", selection: self.$skillStatusFilter) {
+                Picker(selection: self.$skillStatusFilter) {
                     ForEach(SkillStatusFilter.allCases) { filter in
                         Text(filter.title)
                             .font(OpenClawType.captionSemiBold)
                             .tag(filter)
                     }
+                } label: {
+                    Text("Status")
+                        .font(OpenClawType.captionSemiBold)
                 }
                 .pickerStyle(.segmented)
                 .controlSize(.small)
@@ -178,7 +181,10 @@ extension AgentProTab {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .disabled(installing || !self.skillConfigBusyKeys.isEmpty)
-            .accessibilityLabel("Install \(result.displayName)")
+            .accessibilityLabel(
+                String(
+                    format: String(localized: "Install %@"),
+                    result.displayName))
         }
         .padding(.vertical, 10)
     }
@@ -290,18 +296,24 @@ extension AgentProTab {
                 Text(skill.displayName)
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(self.normalized(skill.description) ?? self.normalized(skill.source) ?? "Workspace skill")
+                Text(verbatim: self.normalized(skill.description)
+                    ?? self.normalized(skill.source)
+                    ?? String(localized: "Workspace skill"))
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                 if let missing = skill.missingSummary {
-                    Text("Missing: \(missing)")
+                    Text(verbatim: String(
+                        format: String(localized: "Missing: %@"),
+                        missing))
                         .font(OpenClawType.caption2)
                         .foregroundStyle(OpenClawBrand.warn)
                         .lineLimit(1)
                 }
                 if let install = skill.installSummary {
-                    Text("Setup: \(install)")
+                    Text(verbatim: String(
+                        format: String(localized: "Setup: %@"),
+                        install))
                         .font(OpenClawType.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -309,7 +321,7 @@ extension AgentProTab {
             }
             Spacer(minLength: 8)
             VStack(alignment: .trailing, spacing: 6) {
-                self.skillToggle(skill, title: status.text)
+                self.skillToggle(skill, title: self.localizedSkillStatus(status.text))
                 HStack(spacing: 6) {
                     if self.canInstallSkillRequirements(skill) {
                         Button {
@@ -320,7 +332,10 @@ extension AgentProTab {
                         .buttonStyle(.bordered)
                         .controlSize(.mini)
                         .disabled(self.isSkillConfigBusy(skill))
-                        .accessibilityLabel("Set up \(skill.displayName)")
+                        .accessibilityLabel(
+                            String(
+                                format: String(localized: "Set up %@"),
+                                skill.displayName))
                     }
                     Button {
                         self.openSkillEditor(skill)
@@ -329,9 +344,14 @@ extension AgentProTab {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.mini)
-                    .accessibilityLabel("Edit \(skill.displayName)")
+                    .accessibilityLabel(
+                        String(
+                            format: String(localized: "Edit %@"),
+                            skill.displayName))
                 }
-                Text(busy ? "saving" : status.text)
+                Text(verbatim: busy
+                    ? String(localized: "saving")
+                    : self.localizedSkillStatus(status.text))
                     .font(OpenClawType.caption2SemiBold)
                     .foregroundStyle(status.color)
                     .lineLimit(1)
@@ -342,14 +362,15 @@ extension AgentProTab {
     }
 
     func skillToggle(_ skill: SkillStatusEntryLite, title: String) -> some View {
-        Toggle(
-            title,
-            isOn: Binding(
-                get: { self.isSkillAllowed(skill) },
-                set: { enabled in
-                    Task { await self.setSkillAllowed(skill, enabled: enabled) }
-                }))
-                .labelsHidden()
+        Toggle(isOn: Binding(
+            get: { self.isSkillAllowed(skill) },
+            set: { enabled in
+                Task { await self.setSkillAllowed(skill, enabled: enabled) }
+            })) {
+                Text(title)
+                    .font(OpenClawType.body)
+            }
+            .labelsHidden()
                 .disabled(self.skillMutationBusy)
                 .toggleStyle(.switch)
                 .controlSize(.mini)
@@ -454,13 +475,15 @@ extension AgentProTab {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(skill.displayName)
                         .font(OpenClawType.headline)
-                    Text(self.normalized(skill.description) ?? self.normalized(skill.source) ?? "Workspace skill")
+                    Text(verbatim: self.normalized(skill.description)
+                        ?? self.normalized(skill.source)
+                        ?? String(localized: "Workspace skill"))
                         .font(OpenClawType.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
                 }
                 Spacer(minLength: 8)
-                ProValuePill(value: status.text, color: status.color)
+                ProValuePill(value: self.localizedSkillStatus(status.text), color: status.color)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -557,7 +580,9 @@ extension AgentProTab {
                 Text("Setup")
                     .font(OpenClawType.headline)
                 if let missing = skill.missingSummary {
-                    Text("Missing: \(missing)")
+                    Text(verbatim: String(
+                        format: String(localized: "Missing: %@"),
+                        missing))
                         .font(OpenClawType.caption)
                         .foregroundStyle(OpenClawBrand.warn)
                 } else {
@@ -844,5 +869,22 @@ extension AgentProTab {
             return ("setup", OpenClawBrand.warn)
         }
         return ("enabled", OpenClawBrand.accent)
+    }
+
+    func localizedSkillStatus(_ status: String) -> String {
+        switch status {
+        case "off":
+            String(localized: "off")
+        case "blocked":
+            String(localized: "blocked")
+        case "disabled":
+            String(localized: "disabled")
+        case "setup":
+            String(localized: "setup")
+        case "enabled":
+            String(localized: "enabled")
+        default:
+            status
+        }
     }
 }

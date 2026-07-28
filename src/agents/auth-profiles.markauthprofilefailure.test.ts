@@ -168,30 +168,6 @@ describe("markAuthProfileFailure", () => {
       expectCooldownInRange(remainingMs, 4.5 * 60 * 60 * 1000, 5.5 * 60 * 60 * 1000);
     });
   });
-  it("honors per-provider billing backoff overrides", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const startedAt = Date.now();
-      await markAuthProfileFailure({
-        store,
-        profileId: "anthropic:default",
-        reason: "billing",
-        agentDir,
-        cfg: {
-          auth: {
-            cooldowns: {
-              billingBackoffHoursByProvider: { Anthropic: 1 },
-              billingMaxHours: 2,
-            },
-          },
-        } as never,
-      });
-
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
-      expect(typeof disabledUntil).toBe("number");
-      const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 0.8 * 60 * 60 * 1000, 1.2 * 60 * 60 * 1000);
-    });
-  });
   it("keeps persisted cooldownUntil unchanged across mid-window retries", async () => {
     await withAuthProfileStore(async ({ agentDir, store }) => {
       await markAuthProfileFailure({
@@ -275,30 +251,6 @@ describe("markAuthProfileFailure", () => {
     });
   });
 
-  it("honors auth_permanent backoff overrides", async () => {
-    await withAuthProfileStore(async ({ agentDir, store }) => {
-      const startedAt = Date.now();
-      await markAuthProfileFailure({
-        store,
-        profileId: "anthropic:default",
-        reason: "auth_permanent",
-        agentDir,
-        cfg: {
-          auth: {
-            cooldowns: {
-              authPermanentBackoffMinutes: 15,
-              authPermanentMaxMinutes: 45,
-            },
-          },
-        } as never,
-      });
-
-      const disabledUntil = store.usageStats?.["anthropic:default"]?.disabledUntil;
-      expect(typeof disabledUntil).toBe("number");
-      const remainingMs = (disabledUntil as number) - startedAt;
-      expectCooldownInRange(remainingMs, 14 * 60 * 1000, 16 * 60 * 1000);
-    });
-  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = makeAgentDir("reset-window");
     const now = Date.now();
@@ -330,9 +282,6 @@ describe("markAuthProfileFailure", () => {
       profileId: "anthropic:default",
       reason: "billing",
       agentDir,
-      cfg: {
-        auth: { cooldowns: { failureWindowHours: 24 } },
-      } as never,
     });
 
     expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);

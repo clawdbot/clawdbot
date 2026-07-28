@@ -7,12 +7,9 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
-export {
-  collectPluginConfigContractMatches,
-  type PluginConfigContractMatch,
-} from "./config-contract-matches.js";
+export { collectPluginConfigContractMatches } from "./config-contract-matches.js";
 
-export type PluginConfigContractMetadata = {
+type PluginConfigContractMetadata = {
   /** Runtime origin that supplied the contract metadata. */
   origin: PluginOrigin;
   /** Manifest-declared config contract paths used by secret/security/config scanners. */

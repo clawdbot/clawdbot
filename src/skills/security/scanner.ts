@@ -1,15 +1,17 @@
 // Skill security scanner inspects skill files and manifests for unsafe patterns.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { isPathInside } from "../../security/scan-paths.js";
+import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export type SkillScanSeverity = "info" | "warn" | "critical";
+type SkillScanSeverity = "info" | "warn" | "critical";
 
 export type SkillScanFinding = {
   ruleId: string;
@@ -20,7 +22,7 @@ export type SkillScanFinding = {
   evidence: string;
 };
 
-export type SkillScanSummary = {
+type SkillScanSummary = {
   scannedFiles: number;
   critical: number;
   warn: number;
@@ -223,6 +225,7 @@ const SOURCE_RULES: SourceRule[] = [
 ];
 
 const SKILL_CONTENT_RULES: SourceRule[] = [
+  LITERAL_SECRET_SKILL_CONTENT_RULE,
   {
     ruleId: "prompt-injection-ignore-instructions",
     severity: "critical",
@@ -271,13 +274,6 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
 // ---------------------------------------------------------------------------
 // Core scanner
 // ---------------------------------------------------------------------------
-
-function truncateEvidence(evidence: string, maxLen = 120): string {
-  if (evidence.length <= maxLen) {
-    return evidence;
-  }
-  return `${truncateUtf16Safe(evidence, maxLen)}…`;
-}
 
 function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
   const command = match[1];
@@ -409,8 +405,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
+    for (const [i, line] of lines.entries()) {
       const match = rule.pattern.exec(line);
       if (!match) {
         continue;
@@ -422,7 +417,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
 
       // Special handling for suspicious-network: check port
       if (rule.ruleId === "suspicious-network") {
-        const port = Number.parseInt(match[1], 10);
+        const port = Number.parseInt(expectDefined(match[1], "scanner regex capture 1"), 10);
         if (STANDARD_PORTS.has(port)) {
           continue;
         }
@@ -434,7 +429,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         file: filePath,
         line: i + 1,
         message: rule.message,
-        evidence: truncateEvidence(line.trim()),
+        evidence: formatScanEvidence(line),
       });
       matchedLineRules.add(rule.ruleId);
       break; // one finding per line-rule per file
@@ -466,7 +461,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       file: filePath,
       line: match.line,
       message: rule.message,
-      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
+      evidence: formatScanEvidence(lines[match.line - 1] ?? match.evidence),
     });
     matchedSourceRules.add(ruleKey);
   }
@@ -497,7 +492,11 @@ export function scanSkillContent(content: string, filePath: string): SkillScanFi
       file: filePath,
       line: match.line,
       message: rule.message,
-      evidence: truncateEvidence(lines[match.line - 1]?.trim() ?? match.evidence.trim()),
+      // Scanner output is user-visible; redact the whole evidence line if any rule sees a key.
+      evidence:
+        rule.ruleId === "literal-secret"
+          ? "[REDACTED CREDENTIAL]"
+          : formatScanEvidence(lines[match.line - 1] ?? match.evidence),
     });
     matchedRules.add(rule.ruleId);
   }
@@ -814,3 +813,4 @@ export async function scanDirectoryWithSummary(
     findings: allFindings,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

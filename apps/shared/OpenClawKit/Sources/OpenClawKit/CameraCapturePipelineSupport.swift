@@ -2,6 +2,25 @@ import AVFoundation
 import Foundation
 
 #if !os(watchOS)
+public struct CameraMovieSessionOptions: Sendable {
+    public let preferFrontCamera: Bool
+    public let deviceId: String?
+    public let includeAudio: Bool
+    public let durationMs: Int
+
+    public init(
+        preferFrontCamera: Bool,
+        deviceId: String?,
+        includeAudio: Bool,
+        durationMs: Int)
+    {
+        self.preferFrontCamera = preferFrontCamera
+        self.deviceId = deviceId
+        self.includeAudio = includeAudio
+        self.durationMs = durationMs
+    }
+}
+
 public enum CameraCapturePipelineSupport {
     public static func preparePhotoSession(
         preferFrontCamera: Bool,
@@ -28,10 +47,7 @@ public enum CameraCapturePipelineSupport {
     }
 
     public static func prepareMovieSession(
-        preferFrontCamera: Bool,
-        deviceId: String?,
-        includeAudio: Bool,
-        durationMs: Int,
+        options: CameraMovieSessionOptions,
         pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
         cameraUnavailableError: @autoclosure () -> Error,
         mapSetupError: (CameraSessionConfigurationError) -> Error) throws
@@ -40,7 +56,7 @@ public enum CameraCapturePipelineSupport {
         let session = AVCaptureSession()
         session.sessionPreset = .high
 
-        guard let camera = pickCamera(preferFrontCamera, deviceId) else {
+        guard let camera = pickCamera(options.preferFrontCamera, options.deviceId) else {
             throw cameraUnavailableError()
         }
 
@@ -48,8 +64,8 @@ public enum CameraCapturePipelineSupport {
             try CameraSessionConfiguration.addCameraInput(session: session, camera: camera)
             let output = try CameraSessionConfiguration.addMovieOutput(
                 session: session,
-                includeAudio: includeAudio,
-                durationMs: durationMs)
+                includeAudio: options.includeAudio,
+                durationMs: options.durationMs)
             return (session, output)
         } catch let setupError as CameraSessionConfigurationError {
             throw mapSetupError(setupError)
@@ -57,48 +73,64 @@ public enum CameraCapturePipelineSupport {
     }
 
     public static func prepareWarmMovieSession(
-        preferFrontCamera: Bool,
-        deviceId: String?,
-        includeAudio: Bool,
-        durationMs: Int,
+        options: CameraMovieSessionOptions,
         pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
         cameraUnavailableError: @autoclosure () -> Error,
         mapSetupError: (CameraSessionConfigurationError) -> Error) async throws
         -> (session: AVCaptureSession, output: AVCaptureMovieFileOutput)
     {
+        try Task.checkCancellation()
         let prepared = try self.prepareMovieSession(
-            preferFrontCamera: preferFrontCamera,
-            deviceId: deviceId,
-            includeAudio: includeAudio,
-            durationMs: durationMs,
+            options: options,
             pickCamera: pickCamera,
             cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
+        try Task.checkCancellation()
         prepared.session.startRunning()
-        await self.warmUpCaptureSession()
+        do {
+            try await self.warmUpCaptureSession()
+            try Task.checkCancellation()
+        } catch {
+            prepared.session.stopRunning()
+            throw error
+        }
         return prepared
     }
 
     public static func withWarmMovieSession<T>(
-        preferFrontCamera: Bool,
-        deviceId: String?,
-        includeAudio: Bool,
-        durationMs: Int,
+        options: CameraMovieSessionOptions,
         pickCamera: (_ preferFrontCamera: Bool, _ deviceId: String?) -> AVCaptureDevice?,
         cameraUnavailableError: @autoclosure () -> Error,
         mapSetupError: (CameraSessionConfigurationError) -> Error,
         operation: (AVCaptureMovieFileOutput) async throws -> T) async throws -> T
     {
-        let prepared = try await self.prepareWarmMovieSession(
-            preferFrontCamera: preferFrontCamera,
-            deviceId: deviceId,
-            includeAudio: includeAudio,
-            durationMs: durationMs,
+        try Task.checkCancellation()
+        let prepared = try self.prepareMovieSession(
+            options: options,
             pickCamera: pickCamera,
             cameraUnavailableError: cameraUnavailableError(),
             mapSetupError: mapSetupError)
-        defer { prepared.session.stopRunning() }
-        return try await operation(prepared.output)
+        return try await self.withCaptureSessionLifecycle(
+            start: { prepared.session.startRunning() },
+            stop: { prepared.session.stopRunning() },
+            warmUp: { try await self.warmUpCaptureSession() },
+            operation: { try await operation(prepared.output) })
+    }
+
+    static func withCaptureSessionLifecycle<T>(
+        start: () -> Void,
+        stop: () -> Void,
+        warmUp: () async throws -> Void,
+        operation: () async throws -> T) async throws -> T
+    {
+        try Task.checkCancellation()
+        start()
+        defer { stop() }
+
+        try Task.checkCancellation()
+        try await warmUp()
+        try Task.checkCancellation()
+        return try await operation()
     }
 
     public static func mapMovieSetupError<E: Error>(
@@ -123,23 +155,9 @@ public enum CameraCapturePipelineSupport {
         return settings
     }
 
-    public static func capturePhotoData(
-        output: AVCapturePhotoOutput,
-        makeDelegate: (CheckedContinuation<Data, Error>) -> any AVCapturePhotoCaptureDelegate) async throws -> Data
-    {
-        var delegate: (any AVCapturePhotoCaptureDelegate)?
-        let rawData: Data = try await withCheckedThrowingContinuation { cont in
-            let captureDelegate = makeDelegate(cont)
-            delegate = captureDelegate
-            output.capturePhoto(with: self.makePhotoSettings(output: output), delegate: captureDelegate)
-        }
-        withExtendedLifetime(delegate) {}
-        return rawData
-    }
-
-    public static func warmUpCaptureSession() async {
+    public static func warmUpCaptureSession() async throws {
         // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+        try await Task.sleep(nanoseconds: 150_000_000) // 150ms
     }
 
     public static func positionLabel(_ position: AVCaptureDevice.Position) -> String {

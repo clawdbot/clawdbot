@@ -451,14 +451,17 @@ These auth-related config keys can be set via environment variables instead of `
 
 ## Member info action
 
-OpenClaw exposes a Graph-backed `member-info` message action for Microsoft Teams so agents and automations can resolve channel member details (display name, email, job title, UPN, office location) directly from Microsoft Graph.
+OpenClaw exposes a Graph-backed `member-info` action for Microsoft Teams so agents and automations can resolve verified roster details for a configured conversation.
 
 Requirements:
 
-- `Member.Read.Group` RSC permission (already in the recommended manifest).
-- For cross-team lookups: `User.Read.All` Graph Application permission with admin consent.
+- `ChannelSettings.Read.Group` and `TeamMember.Read.Group` RSC permissions (already in the recommended manifest).
 
-The action runs whenever Graph credentials are configured; it fails with a Graph auth error when they are not. There is no separate `channels.msteams.actions.memberInfo` toggle.
+The action is available whenever Graph credentials are configured; there is no separate `channels.msteams.actions.memberInfo` toggle.
+Standard-channel lookups return the matching team-roster identity, display name, email, and roles.
+In the current DM or group chat, the action can return the trusted sender's stable user ID.
+Private/shared-channel and non-current chat member lookups require additional roster permissions
+and are rejected by the default permission baseline.
 
 ## History context
 
@@ -608,16 +611,35 @@ Adds:
 
 **Bottom line:** RSC is for real-time listening; Graph API is for historical access. To catch up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
 
-## Graph-enabled media + history (required for channels)
+## Graph-enabled media + history
 
-For images/files in **channels**, or to fetch **message history**, enable Microsoft Graph permissions and grant admin consent:
+Enable only the Microsoft Graph application permissions needed for the Teams scopes and data you use:
 
 1. Entra ID (Azure AD) **App Registration** → add Graph **Application permissions**:
-   - `ChannelMessage.Read.All` (channel attachments + history)
-   - `Chat.Read.All` or `ChatMessage.Read.All` (group chats)
+   - `ChannelMessage.Read.All` for channel attachments and channel history.
+   - `Chat.Read.All` for group-chat attachments and group-chat history.
+   - `Files.Read.All` when attachment bytes must be downloaded from SharePoint/OneDrive storage; history-only setups do not need it.
 2. **Grant admin consent** for the tenant.
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
 4. **Fully quit and relaunch Teams** to clear cached app metadata.
+
+### Channel/group file recovery (`graphMediaFallback`)
+
+Teams can remove file markers from the HTML activity sent to a bot. In that case, the Bot Framework activity is indistinguishable from an ordinary HTML message; the complete attachment reference exists only on the Graph copy of the message.
+
+Enable the fallback after granting the permissions above:
+
+```json5
+{
+  channels: {
+    msteams: {
+      graphMediaFallback: true,
+    },
+  },
+}
+```
+
+This applies to channels and group chats only. It adds one Graph message lookup whenever an HTML activity produced no directly downloadable media, including ordinary or mention-only messages. The default is `false` so existing installations do not gain extra Graph traffic or permission errors automatically.
 
 **User mentions:** @mentions work out of the box for users already in the conversation. To dynamically search and mention users **not in the current conversation**, add `User.Read.All` (Application) permission and grant admin consent.
 
@@ -625,12 +647,13 @@ For images/files in **channels**, or to fetch **message history**, enable Micros
 
 ### Webhook timeouts
 
-Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server timeouts to that webhook listener: 30s inactivity, 30s total request, 15s to receive headers. If agent processing takes longer than the client's own retry window, you may see:
-
-- Teams retrying the message (causing duplicates).
-- Dropped replies.
-
-OpenClaw acks the webhook quickly (before agent processing finishes) and sends replies proactively once the agent responds, but very slow agent runs can still surface retries/duplicates on the Teams side.
+Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server
+timeouts to that webhook listener: 30s inactivity, 30s total request, and 15s
+to receive headers. Optional inbound media and context enrichment has a shared
+10-second budget. The SDK returns after the raw activity is durably appended;
+the agent turn drains independently and replies proactively. If request
+handling or durable admission misses the transport window, Teams may retry the
+activity, and the ingress tombstone rejects a repeated event ID.
 
 ### Teams cloud and service URL support
 
@@ -706,9 +729,10 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size in characters (default `4000`, and hard-capped at `4000` regardless of a higher configured value).
-- `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.msteams.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
+- `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](#channelgroup-file-recovery-graphmediafallback)).
 - `channels.msteams.mediaMaxMb`: per-channel media size limit override in MB. Falls back to `agents.defaults.mediaMaxMb` when unset.
 - `channels.msteams.requireMention`: require @mention in channels/groups (default `true`).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply style](#reply-style-threads-vs-posts)).
@@ -817,18 +841,18 @@ Bots can send files in DMs using the built-in FileConsentCard flow. **Sending fi
 | Context                  | How files are sent                           | Setup needed                                    |
 | ------------------------ | -------------------------------------------- | ----------------------------------------------- |
 | **DMs**                  | FileConsentCard → user accepts → bot uploads | Works out of the box                            |
-| **Group chats/channels** | Upload to SharePoint → share link            | Requires `sharePointSiteId` + Graph permissions |
+| **Group chats/channels** | Upload to SharePoint → native file card      | Requires `sharePointSiteId` + Graph permissions |
 | **Images (any context)** | Base64-encoded inline                        | Works out of the box                            |
 
 ### Why group chats need SharePoint
 
-Bots do not have a personal OneDrive drive (`/me/drive` does not work for application identities). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
+Bots use an application identity, while Microsoft Graph's `/me` resource [requires a signed-in user](https://learn.microsoft.com/en-us/graph/api/user-get?view=graph-rest-1.0). To send files in group chats/channels, the bot uploads to a **SharePoint site** and creates a sharing link.
 
 ### Setup
 
 1. **Add Graph API permissions** in Entra ID (Azure AD) → App Registration:
    - `Sites.ReadWrite.All` (Application) - upload files to SharePoint.
-   - `Chat.Read.All` (Application) - optional, enables per-user sharing links.
+   - `ChatMember.Read.All` (Application) - least-privileged tenant-wide permission for group-chat file sends. `Chat.Read.All` also works and already covers this when group-chat history is enabled. As a per-chat alternative, use the `ChatMember.Read.Chat` [resource-specific consent permission](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent).
 2. **Grant admin consent** for the tenant.
 3. **Get your SharePoint site ID:**
 
@@ -859,21 +883,23 @@ Bots do not have a personal OneDrive drive (`/me/drive` does not work for applic
 
 ### Sharing behavior
 
-| Permission                              | Sharing behavior                                          |
-| --------------------------------------- | --------------------------------------------------------- |
-| `Sites.ReadWrite.All` only              | Organization-wide sharing link (anyone in org can access) |
-| `Sites.ReadWrite.All` + `Chat.Read.All` | Per-user sharing link (only chat members can access)      |
+| Context and permission                                                  | Sharing behavior                                          |
+| ----------------------------------------------------------------------- | --------------------------------------------------------- |
+| Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
+| Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
+| Group chat without a supported chat-member read grant                   | Send fails closed                                         |
 
-Per-user sharing is more secure since only chat participants can access the file. If `Chat.Read.All` is missing, the bot falls back to organization-wide sharing.
+Per-user sharing is more secure since only chat participants can access the file. OpenClaw requires a successful member lookup for group chats; timeouts, transport failures, empty results, and Graph API denials fail the send instead of widening access to the organization.
 
 ### Fallback behavior
 
-| Scenario                                          | Result                                             |
-| ------------------------------------------------- | -------------------------------------------------- |
-| Group chat + file + `sharePointSiteId` configured | Upload to SharePoint, send sharing link            |
-| Group chat + file + no `sharePointSiteId`         | Attempt OneDrive upload (may fail), send text only |
-| Personal chat + file                              | FileConsentCard flow (works without SharePoint)    |
-| Any context + image                               | Base64-encoded inline (works without SharePoint)   |
+| Scenario                                                         | Result                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------ |
+| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card    |
+| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error      |
+| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card    |
+| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)  |
+| Any context + image                                              | Base64-encoded inline (works without SharePoint) |
 
 ### Files stored location
 

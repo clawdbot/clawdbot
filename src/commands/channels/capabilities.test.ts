@@ -1,9 +1,7 @@
 // Channels capabilities tests cover capability reporting, account selection, probes, and installable plugins.
-process.env.NO_COLOR = "1";
-
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { channelsCapabilitiesCommand } from "./capabilities.js";
 
@@ -48,7 +46,7 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+vi.mock("../../plugins/registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
 }));
 
@@ -129,6 +127,7 @@ function buildPlugin(params: {
 
 describe("channelsCapabilitiesCommand", () => {
   beforeEach(() => {
+    vi.stubEnv("NO_COLOR", "1");
     resetOutput();
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });

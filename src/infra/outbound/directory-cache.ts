@@ -12,7 +12,7 @@ type CacheEntry<T> = {
 /**
  * Stable dimensions that partition channel-directory cache entries.
  */
-export type DirectoryCacheKey = {
+type DirectoryCacheKey = {
   channel: ChannelId;
   accountId?: string | null;
   kind: ChannelDirectoryEntryKind;

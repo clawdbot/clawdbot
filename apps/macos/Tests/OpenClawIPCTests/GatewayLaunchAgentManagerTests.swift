@@ -2,8 +2,56 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized)
 struct GatewayLaunchAgentManagerTests {
-    @Test func `attach only runtime override does not uninstall gateway launch agent`() throws {
+    @Test func `reads Gateway service ownership command directly from launchd`() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-gateway-\(UUID().uuidString).plist")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let arguments = [
+            "/Users/Test/.openclaw/tools/node/bin/node",
+            "/Users/Test/.openclaw/lib/node_modules/openclaw/dist/index.js",
+            "gateway",
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["ProgramArguments": arguments],
+            format: .xml,
+            options: 0)
+        try data.write(to: url, options: .atomic)
+
+        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == arguments)
+        try Data("not a plist".utf8).write(to: url, options: .atomic)
+        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == nil)
+        try FileManager.default.removeItem(at: url)
+        #expect(GatewayLaunchAgentManager._testLaunchdProgramArguments(plistURL: url) == [])
+    }
+
+    @Test func `daemon status exposes only a loaded running gateway pid`() {
+        #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: """
+        {
+          "service": {
+            "loaded": true,
+            "runtime": { "status": "running", "pid": 4242 }
+          }
+        }
+        """) == 4242)
+
+        let rejected = [
+            #"{"service":{"loaded":false,"runtime":{"status":"running","pid":4242}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"stopped","pid":4242}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":0}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":2147483648}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running","pid":"4242"}}}"#,
+            #"{"service":{"loaded":true,"runtime":{"status":"running"}}}"#,
+            #"{"service":null}"#,
+            "not-json",
+        ]
+        for json in rejected {
+            #expect(GatewayLaunchAgentManager._testRunningGatewayPID(from: json) == nil)
+        }
+    }
+
+    @Test func `attach only runtime override blocks gateway launch agent writes`() async throws {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)
         let marker = dir.appendingPathComponent("disable-launchagent")
@@ -20,10 +68,28 @@ struct GatewayLaunchAgentManagerTests {
         GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
 
         let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride()
+        let kickstartError = await GatewayLaunchAgentManager.kickstart()
 
         #expect(error == nil)
+        #expect(kickstartError == nil)
         #expect(FileManager().fileExists(atPath: marker.path))
         #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+    }
+
+    @Test func `unintercepted daemon commands fail closed during tests`() async {
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-no-disable-marker-\(UUID().uuidString)")
+        defer {
+            GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+        }
+
+        GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(marker)
+        GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+
+        let error = await GatewayLaunchAgentManager.kickstart()
+
+        #expect(error == "Gateway daemon commands require explicit interception during tests")
     }
 
     @Test func `launch agent plist snapshot parses args and env`() throws {

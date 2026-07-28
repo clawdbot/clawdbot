@@ -38,7 +38,7 @@ export type SkillInvocationPolicy = {
   disableModelInvocation: boolean;
 };
 
-export type SkillCommandDispatchSpec = {
+type SkillCommandDispatchSpec = {
   kind: "tool";
   /** Name of the tool to invoke (AnyAgentTool.name). */
   toolName: string;
@@ -85,7 +85,7 @@ export type SkillsInstallPreferences = {
 
 export type ParsedSkillFrontmatter = Record<string, string>;
 
-export type SkillExposure = {
+type SkillExposure = {
   includeInRuntimeRegistry: boolean;
   includeInAvailableSkillsPrompt: boolean;
   userInvocable: boolean;
@@ -99,9 +99,14 @@ export type SkillEntry = {
   exposure?: SkillExposure;
   syncSourceDir?: string;
   syncDirName?: string;
+  disableCommandDispatch?: boolean;
 };
 
 export type SkillEligibilityContext = {
+  nodeSkills?: {
+    canExec: boolean;
+    node?: string;
+  };
   remote?: {
     platforms: string[];
     hasBin: (bin: string) => boolean;
@@ -110,13 +115,21 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 2;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 3;
 
 export type SkillSnapshot = {
   prompt: string;
-  skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
+  skills: Array<{
+    name: string;
+    /** Config key can differ from the prompt-facing skill name. */
+    skillKey?: string;
+    primaryEnv?: string;
+    requiredEnv?: string[];
+  }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /** Effective node-exec eligibility used to select connected node-hosted skills. */
+  nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
   resolvedSkills?: Skill[];
   version?: number;
   promptFormatVersion?: number;

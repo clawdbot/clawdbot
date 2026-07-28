@@ -18,60 +18,20 @@ import {
   resolveAgentRunAbortLifecycleFields,
   resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
-import {
-  emitAgentEvent,
-  onAgentEvent,
-  withAgentRunLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import type { GetReplyOptions } from "../types.js";
+import {
+  type AgentEventDeliveryStartOrder,
+  createAgentEventBridge,
+  createAgentEventDeliveryStartOrder,
+} from "./agent-event-bridge.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
-
-function createAgentEventBridge<T>(params: {
-  runId: string;
-  suppressed?: boolean;
-  read: (evt: AgentEventPayload) => T | undefined;
-  deliver?: (payload: T) => Promise<void>;
-}) {
-  const deliver = params.deliver;
-  if (!deliver) {
-    return {
-      unsubscribe: () => undefined,
-      drain: async (): Promise<void> => undefined,
-    };
-  }
-  let unsubscribed = false;
-  let delivery = Promise.resolve();
-  const rawUnsubscribe = onAgentEvent((evt) => {
-    if (evt.runId !== params.runId) {
-      return;
-    }
-    if (params.suppressed) {
-      return;
-    }
-    const payload = params.read(evt);
-    if (payload === undefined) {
-      return;
-    }
-    delivery = delivery.then(() => deliver(payload)).catch(() => undefined);
-  });
-  return {
-    unsubscribe() {
-      if (unsubscribed) {
-        return;
-      }
-      unsubscribed = true;
-      rawUnsubscribe();
-    },
-    async drain(): Promise<void> {
-      await delivery;
-    },
-  };
-}
 
 type AgentEventBridge = {
   unsubscribe: () => void;
@@ -91,12 +51,14 @@ function createAssistantTextBridge(params: {
   runId: string;
   suppressed?: boolean;
   deliver?: (text: string) => Promise<void>;
+  startOrder?: AgentEventDeliveryStartOrder;
 }) {
   let lastText: string | undefined;
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
     deliver: params.deliver,
+    startOrder: params.startOrder,
     read: (evt) => {
       if (evt.stream !== "assistant") {
         return undefined;
@@ -111,12 +73,12 @@ function createAssistantTextBridge(params: {
   });
 }
 
-export type ReasoningTextPayload = {
+type ReasoningTextPayload = {
   text: string;
   isReasoningSnapshot?: boolean;
 };
 
-export type ReasoningProgressPayload = {
+type ReasoningProgressPayload = {
   progressTokens: number;
 };
 
@@ -139,12 +101,14 @@ function createReasoningTextBridge(params: {
   runId: string;
   suppressed?: boolean;
   deliver?: (payload: ReasoningTextPayload) => Promise<void>;
+  startOrder?: AgentEventDeliveryStartOrder;
 }) {
   let lastText: string | undefined;
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
     deliver: params.deliver,
+    startOrder: params.startOrder,
     read: (evt) => {
       if (evt.stream !== "thinking") {
         return undefined;
@@ -166,12 +130,14 @@ function createReasoningProgressBridge(params: {
   runId: string;
   suppressed?: boolean;
   deliver?: (payload: ReasoningProgressPayload) => Promise<void>;
+  startOrder?: AgentEventDeliveryStartOrder;
 }) {
   let lastProgressTokens: number | undefined;
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
     deliver: params.deliver,
+    startOrder: params.startOrder,
     read: (evt) => {
       if (evt.stream !== "thinking") {
         return undefined;
@@ -285,11 +251,13 @@ function createToolEventBridge(params: {
   runId: string;
   suppressed?: boolean;
   deliver?: (payload: CliToolEventPayload) => Promise<void>;
+  startOrder?: AgentEventDeliveryStartOrder;
 }) {
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
     deliver: params.deliver,
+    startOrder: params.startOrder,
     read: (evt) => {
       if (evt.stream !== "tool") {
         return undefined;
@@ -374,12 +342,46 @@ function createCommentaryEventBridge(params: {
   runId: string;
   suppressed?: boolean;
   deliver?: (payload: CommentaryTextPayload) => Promise<void>;
+  startOrder?: AgentEventDeliveryStartOrder;
 }) {
   return createAgentEventBridge({
     runId: params.runId,
     suppressed: params.suppressed,
     deliver: params.deliver,
+    startOrder: params.startOrder,
     read: readCommentaryTextPayload,
+  });
+}
+
+function createPlanUpdateBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: GetReplyOptions["onPlanUpdate"];
+  startOrder?: AgentEventDeliveryStartOrder;
+}) {
+  const deliver = params.deliver;
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    // GetReplyOptions callbacks may return void; the bridge awaits promises.
+    deliver: deliver
+      ? async (payload: Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0]) => {
+          await deliver(payload);
+        }
+      : undefined,
+    startOrder: params.startOrder,
+    read: (evt) => {
+      if (evt.stream !== "plan") {
+        return undefined;
+      }
+      return {
+        phase: normalizeOptionalString(evt.data.phase),
+        title: normalizeOptionalString(evt.data.title),
+        explanation: normalizeOptionalString(evt.data.explanation),
+        steps: normalizeAgentPlanSteps(evt.data.steps),
+        source: normalizeOptionalString(evt.data.source),
+      };
+    },
   });
 }
 
@@ -419,11 +421,13 @@ type RunCliAgentWithLifecycleParams = {
    * stamp lets stale-takeover reclaim a healthy run.
    */
   onActivity?: () => void;
+  preserveProgressCallbackStartOrder?: boolean;
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
+  onPlanUpdate?: GetReplyOptions["onPlanUpdate"];
   onFastModeAutoProgress?: (payload: ReplyPayload) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
   transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
@@ -537,15 +541,20 @@ async function runCliAgentWithLifecycleInternal(
         },
       })
     : undefined;
+  const progressStartOrder = params.preserveProgressCallbackStartOrder
+    ? createAgentEventDeliveryStartOrder()
+    : undefined;
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: params.onAssistantText,
+    startOrder: progressStartOrder,
   });
   let finalReasoningText: string | undefined;
   const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
+    startOrder: progressStartOrder,
     deliver: async (payload: ReasoningTextPayload) => {
       finalReasoningText = normalizeOptionalString(payload.text);
       await params.onReasoningText?.(payload);
@@ -555,16 +564,25 @@ async function runCliAgentWithLifecycleInternal(
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: params.onReasoningProgress,
+    startOrder: progressStartOrder,
   });
   const toolBridge = createToolEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: params.onToolEvent,
+    startOrder: progressStartOrder,
   });
   const commentaryBridge = createCommentaryEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
     deliver: params.onCommentaryText,
+    startOrder: progressStartOrder,
+  });
+  const planBridge = createPlanUpdateBridge({
+    runId: params.runId,
+    suppressed: params.suppressAssistantBridge,
+    deliver: params.onPlanUpdate,
+    startOrder: progressStartOrder,
   });
   const toolBoundaryBridge = createToolBoundaryBridge({
     runId: params.runId,
@@ -578,6 +596,7 @@ async function runCliAgentWithLifecycleInternal(
     reasoningProgressBridge,
     toolBridge,
     commentaryBridge,
+    planBridge,
     toolBoundaryBridge,
   ].filter((bridge): bridge is AgentEventBridge => bridge !== undefined);
   let lifecycleTerminalEmitted = false;

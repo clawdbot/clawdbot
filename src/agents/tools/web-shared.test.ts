@@ -1,16 +1,13 @@
 // Shared web helper tests cover timeout normalization, process-local cache
 // expiry guards, and bounded response body cleanup.
-import {
-  MAX_TIMER_TIMEOUT_MS,
-  MAX_TIMER_TIMEOUT_SECONDS,
-} from "@openclaw/normalization-core/number-coercion";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  normalizeCacheKey,
   readCache,
   readResponseText,
   resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
   type CacheEntry,
 } from "./web-shared.js";
@@ -23,6 +20,7 @@ function responseFromReader(params: {
   chunks: string[];
   cancel: () => Promise<void>;
   releaseLock: () => void;
+  contentType?: string;
   readError?: Error;
 }): Response {
   const chunks: Array<ReadableStreamReadResult<Uint8Array>> = params.chunks.map((chunk) => ({
@@ -49,9 +47,20 @@ function responseFromReader(params: {
 
   return {
     body: { getReader: () => reader },
-    headers: new Headers({ "content-type": "text/plain; charset=utf-8" }),
+    headers: new Headers({ "content-type": params.contentType ?? "text/plain; charset=utf-8" }),
   } as Response;
 }
+
+describe("web cache keys", () => {
+  it("keeps case-sensitive request components distinct in cache keys", () => {
+    const upper = normalizeCacheKey(" fetch:https://example.com/get?marker=OpenClawCase ");
+    const lower = normalizeCacheKey("fetch:https://example.com/get?marker=openclawcase");
+
+    expect(upper).toBe("fetch:https://example.com/get?marker=OpenClawCase");
+    expect(lower).toBe("fetch:https://example.com/get?marker=openclawcase");
+    expect(upper).not.toBe(lower);
+  });
+});
 
 describe("web shared timeout seconds", () => {
   it("caps timeoutSeconds at the shared timer-safe ceiling", () => {
@@ -108,20 +117,6 @@ describe("web shared timeout seconds", () => {
   });
 });
 
-describe("web shared withTimeout", () => {
-  it("clamps oversized timeoutMs before scheduling", () => {
-    const setTimeoutSpy = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-
-    const signal = withTimeout(undefined, Number.MAX_SAFE_INTEGER);
-    signal.dispatchEvent(new Event("abort"));
-
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-  });
-});
-
 describe("readResponseText", () => {
   it("releases bounded response readers after complete reads", async () => {
     const cancel = vi.fn(async () => undefined);
@@ -154,6 +149,24 @@ describe("readResponseText", () => {
       text: "hello",
       truncated: true,
       bytesRead: 5,
+    });
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops partial UTF-8 characters when bounded response reads truncate a stream", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const releaseLock = vi.fn();
+    const response = responseFromReader({
+      chunks: ["ab" + String.fromCodePoint(0x1f600) + "cd"],
+      cancel,
+      releaseLock,
+    });
+
+    await expect(readResponseText(response, { maxBytes: 3 })).resolves.toEqual({
+      text: "ab",
+      truncated: true,
+      bytesRead: 3,
     });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
@@ -230,6 +243,30 @@ describe("readResponseText", () => {
     });
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps truncated fallback charset decoding isolated between responses", async () => {
+    const firstResponse = responseFromReader({
+      chunks: ["ab😀cd"],
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+      contentType: "text/plain; charset=x-unsupported-test",
+    });
+    await expect(readResponseText(firstResponse, { maxBytes: 3 })).resolves.toMatchObject({
+      text: "ab",
+      truncated: true,
+    });
+
+    const secondResponse = responseFromReader({
+      chunks: ["cd"],
+      cancel: vi.fn(async () => undefined),
+      releaseLock: vi.fn(),
+      contentType: "text/plain; charset=x-unsupported-test",
+    });
+    await expect(readResponseText(secondResponse, { maxBytes: 64 })).resolves.toMatchObject({
+      text: "cd",
+      truncated: false,
+    });
   });
 
   it("does not mark exact-limit responses as truncated when followed by zero-byte chunks", async () => {

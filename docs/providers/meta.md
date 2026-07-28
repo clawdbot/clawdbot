@@ -18,7 +18,7 @@ plugin.
 | Onboarding flag   | `--auth-choice meta-api-key`       |
 | Direct CLI flag   | `--meta-api-key <key>`             |
 | API               | Responses API (`openai-responses`) |
-| Base URL          | `https://api.ai.meta.com/v1`       |
+| Base URL          | `https://api.meta.ai/v1`           |
 | Default model     | `meta/muse-spark-1.1`              |
 | Default reasoning | `high` (`reasoning.effort`)        |
 
@@ -68,13 +68,13 @@ openclaw onboard --non-interactive --accept-risk \
 
 ## Built-in catalog
 
-| Model ref             | Name           | Reasoning | Context window | Max output |
-| --------------------- | -------------- | --------- | -------------- | ---------- |
-| `meta/muse-spark-1.1` | Muse Spark 1.1 | yes       | 1,048,576      | 128,000    |
+| Model ref             | Name           | Input       | Reasoning | Context window | Max output | Input / cached input / output per 1M tokens |
+| --------------------- | -------------- | ----------- | --------- | -------------- | ---------- | ------------------------------------------- |
+| `meta/muse-spark-1.1` | Muse Spark 1.1 | text, image | yes       | 1,048,576      | 131,072    | $1.25 / $0.15 / $4.25                       |
 
 Capabilities:
 
-- Text + image input
+- Text and image input
 - Tool calling and streaming
 - Reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh` (default: `high`)
 - Stateless encrypted reasoning replay (`store: false`, `include: ["reasoning.encrypted_content"]`)
@@ -83,11 +83,6 @@ Capabilities:
 `muse-spark-1.1` does not accept `reasoning.effort: "none"`. OpenClaw maps
 `--thinking off` to `minimal` for this provider.
 </Warning>
-
-<Note>
-Until `muse-spark-1.1` is deployed, smoke tests and manual checks can use the
-deployed `muse-spark` model id: `--model meta/muse-spark`.
-</Note>
 
 ## Manual config
 
@@ -117,12 +112,10 @@ separately.
 
 ```bash
 export MODEL_API_KEY=<key>
-export OPENCLAW_LIVE_TEST=1
-export META_LIVE_TEST=1
-pnpm test extensions/meta/meta.live.test.ts
+pnpm test:live -- extensions/meta/meta.live.test.ts
 ```
 
-Live tests use deployed `muse-spark` against `POST /v1/responses`.
+Live tests use `muse-spark-1.1` against `POST /v1/responses`.
 
 ## Related
 

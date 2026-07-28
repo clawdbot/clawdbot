@@ -1,3 +1,4 @@
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 // Discord helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
@@ -6,46 +7,21 @@ export const discordChannelConfigUiHints = {
     label: "Discord",
     help: "Discord channel provider configuration for bot auth, retry policy, streaming, thread bindings, and optional voice capabilities. Keep privileged intents and advanced features disabled unless needed.",
   },
-  dmPolicy: {
-    label: "Discord DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"].',
-  },
-  "dm.policy": {
-    label: "Discord DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.discord.allowFrom=["*"] (legacy: channels.discord.dm.allowFrom).',
-  },
-  configWrites: {
-    label: "Discord Config Writes",
-    help: "Allow Discord to write config in response to channel events/commands (default: true).",
-  },
-  mentionPatterns: {
-    label: "Discord Mention Pattern Policy",
-    help: "Scopes configured groupChat mentionPatterns to selected Discord channel IDs. Native Discord @mentions still trigger even when regex patterns are denied.",
-  },
-  "mentionPatterns.mode": {
-    label: "Discord Mention Pattern Mode",
-    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
-  },
-  "mentionPatterns.allowIn": {
-    label: "Discord Mention Pattern Allowlist",
-    help: "Discord channel IDs where configured regex mention patterns are enabled when mode is deny.",
-  },
-  "mentionPatterns.denyIn": {
-    label: "Discord Mention Pattern Denylist",
-    help: "Discord channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Discord",
+    dmPolicy: { channelKey: "discord" },
+    configWrites: true,
+    mentionPatterns: {
+      targetDescription: "Discord channel IDs",
+      policyNote: "Native Discord @mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native @mentions still trigger.",
+    },
+  }),
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
   },
-  "commands.native": {
-    label: "Discord Native Commands",
-    help: 'Override native commands for Discord (bool or "auto").',
-  },
-  "commands.nativeSkills": {
-    label: "Discord Native Skill Commands",
-    help: 'Override native skill commands for Discord (bool or "auto").',
-  },
+  ...createChannelConfigUiHints({ channelLabel: "Discord", nativeCommands: true }),
   streaming: {
     label: "Discord Streaming Mode",
     help: 'Unified Discord stream preview mode: "off" | "partial" | "block" | "progress". "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are auto-mapped.',
@@ -86,50 +62,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Draft Command Text",
     help: 'Command/exec detail in preview tool-progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
   },
-  "streaming.progress.label": {
-    label: "Discord Progress Label",
-    help: 'Initial progress draft title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
-  },
-  "streaming.progress.labels": {
-    label: "Discord Progress Label Pool",
-    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
-  },
-  "streaming.progress.maxLines": {
-    label: "Discord Progress Max Lines",
-    help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
-  },
-  "streaming.progress.maxLineChars": {
-    label: "Discord Progress Max Line Chars",
-    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
-  },
-  "streaming.progress.toolProgress": {
-    label: "Discord Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
-  },
-  "streaming.progress.commentary": {
-    label: "Discord Progress Commentary",
-    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
-  },
-  "streaming.progress.commandText": {
-    label: "Discord Progress Command Text",
-    help: 'Command/exec detail in progress draft lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
-  "retry.attempts": {
-    label: "Discord Retry Attempts",
-    help: "Max retry attempts for outbound Discord API calls (default: 3).",
-  },
-  "retry.minDelayMs": {
-    label: "Discord Retry Min Delay (ms)",
-    help: "Minimum retry delay in ms for Discord outbound calls.",
-  },
-  "retry.maxDelayMs": {
-    label: "Discord Retry Max Delay (ms)",
-    help: "Maximum retry delay cap in ms for Discord outbound calls.",
-  },
-  "retry.jitter": {
-    label: "Discord Retry Jitter",
-    help: "Jitter factor (0-1) applied to Discord retry delays.",
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Discord",
+    progress: { includeCommentary: true },
+  }),
   maxLinesPerMessage: {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
@@ -141,18 +77,6 @@ export const discordChannelConfigUiHints = {
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
-  },
-  "eventQueue.listenerTimeout": {
-    label: "Discord EventQueue Listener Timeout (ms)",
-    help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
-  },
-  "eventQueue.maxQueueSize": {
-    label: "Discord EventQueue Max Queue Size",
-    help: "Optional Discord EventQueue capacity override (max queued events before backpressure). Set per account via channels.discord.accounts.<id>.eventQueue.maxQueueSize.",
-  },
-  "eventQueue.maxConcurrency": {
-    label: "Discord EventQueue Max Concurrency",
-    help: "Optional Discord EventQueue concurrency override (max concurrent handler executions). Set per account via channels.discord.accounts.<id>.eventQueue.maxConcurrency.",
   },
   "threadBindings.enabled": {
     label: "Discord Thread Binding Enabled",
@@ -174,10 +98,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Spawn Context",
     help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
-  "ui.components.accentColor": {
-    label: "Discord Component Accent Color",
-    help: "Accent color for Discord component containers (hex). Set per account via channels.discord.accounts.<id>.ui.components.accentColor.",
-  },
   "agentComponents.ttlMs": {
     label: "Discord Component TTL (ms)",
     help: "How long sent Discord component callbacks remain registered. Default is 1800000 (30 minutes); maximum is 86400000 (24 hours).",
@@ -194,25 +114,13 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice States Intent",
     help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
   },
-  gatewayInfoTimeoutMs: {
-    label: "Discord Gateway Metadata Timeout (ms)",
-    help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
-  },
-  gatewayReadyTimeoutMs: {
-    label: "Discord Gateway READY Timeout (ms)",
-    help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
-  },
-  gatewayRuntimeReadyTimeoutMs: {
-    label: "Discord Gateway Runtime READY Timeout (ms)",
-    help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
-  },
   "voice.enabled": {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.5). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.6-sol). Leave unset to inherit the routed agent model.",
   },
   "voice.mode": {
     label: "Discord Voice Mode",
@@ -250,10 +158,6 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Speaker Voice ID",
     help: "Provider realtime output voice id.",
   },
-  "voice.realtime.voice": {
-    label: "Discord Realtime Voice",
-    help: "Deprecated provider realtime output voice. Use voice.realtime.speakerVoice.",
-  },
   "voice.realtime.toolPolicy": {
     label: "Discord Realtime Tool Policy",
     help: "Tool policy for the OpenClaw agent consult tool in realtime voice modes: safe-read-only, owner, or none. Default is owner for agent-proxy and safe-read-only for bidi.",
@@ -264,11 +168,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.requireWakeName": {
     label: "Discord Realtime Require Wake Name",
-    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+    help: "Control OpenAI agent-proxy wake-name gating. Unset listens naturally with one human and requires a wake name with two or more; true always requires one and false never does.",
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names used whenever OpenAI agent-proxy Discord realtime voice has an active wake-name gate.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
@@ -317,7 +221,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
-    help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
+    help: "Optional TTS overrides for Discord voice playback (merged with tts).",
   },
   "pluralkit.enabled": {
     label: "Discord PluralKit Enabled",
@@ -347,17 +251,33 @@ export const discordChannelConfigUiHints = {
     label: "Discord Auto Presence Min Update Interval (ms)",
     help: "Minimum time between actual Discord presence update calls in milliseconds (default: 15000). Prevents status spam on noisy state changes.",
   },
-  "autoPresence.healthyText": {
-    label: "Discord Auto Presence Healthy Text",
-    help: "Optional custom status text while runtime is healthy (online). If omitted, falls back to static channels.discord.activity when set.",
+  "guilds.*.presenceEvents": {
+    label: "Discord Online Presence Events",
+    help: "Route selected human offline-to-online transitions into the configured guild channel as agent system events. Requires the Guild Presences privileged intent and an enabled agent heartbeat.",
   },
-  "autoPresence.degradedText": {
-    label: "Discord Auto Presence Degraded Text",
-    help: "Optional custom status text while runtime/model availability is degraded or unknown (idle).",
+  "guilds.*.presenceEvents.enabled": {
+    label: "Discord Online Presence Events Enabled",
+    help: "Enable online-presence agent wakes for this guild. Defaults to true when presenceEvents is configured.",
   },
-  "autoPresence.exhaustedText": {
-    label: "Discord Auto Presence Exhausted Text",
-    help: "Optional custom status text while runtime detects exhausted/unavailable model quota (dnd). Supports {reason} template placeholder.",
+  "guilds.*.presenceEvents.channelId": {
+    label: "Discord Online Presence Target Channel",
+    help: "Numeric Discord channel ID whose routed agent session receives online-presence events and greeting delivery.",
+  },
+  "guilds.*.presenceEvents.users": {
+    label: "Discord Online Presence User IDs",
+    help: "Optional immutable Discord user ID allowlist. Omit to include all human members in the guild.",
+  },
+  "guilds.*.presenceEvents.reconnectSuppressSeconds": {
+    label: "Discord Online Presence Reconnect Suppression",
+    help: "Suppress online-presence events for this many seconds after a new Gateway session while guild presence state is rebuilt. Resumed sessions are unaffected. 0 disables. Default: 300.",
+  },
+  "guilds.*.presenceEvents.burstLimit": {
+    label: "Discord Online Presence Burst Limit",
+    help: "Maximum successfully queued online-presence events for this guild per burst window; the rest are suppressed and logged once. Default: 8.",
+  },
+  "guilds.*.presenceEvents.burstWindowSeconds": {
+    label: "Discord Online Presence Burst Window",
+    help: "Sliding window in seconds used for burst detection. Default: 60.",
   },
   activityType: {
     label: "Discord Presence Activity Type",
@@ -403,5 +323,18 @@ export const discordChannelConfigUiHints = {
   applicationId: {
     label: "Discord Application ID",
     help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
+  },
+  activities: {
+    label: "Discord Activities",
+    help: "Enable Discord Activity widgets for this account. Routes, the agent tool, and the launch handler remain disabled when this block is absent.",
+  },
+  "activities.clientSecret": {
+    label: "Discord Activities Client Secret",
+    help: "OAuth2 client secret for the Discord application. DISCORD_CLIENT_SECRET is used when this field is unset.",
+    sensitive: true,
+  },
+  "activities.applicationId": {
+    label: "Discord Activities Application ID",
+    help: "Optional Activity application ID. Defaults to the bot application ID learned at gateway startup.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

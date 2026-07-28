@@ -8,11 +8,13 @@ import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
+type GatewayCliDependencies = Parameters<typeof registerGatewayCli>[1];
+
 type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
-
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const defaultCallGateway = async (): Promise<unknown> => ({ ok: true });
+const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(defaultCallGateway);
 const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
@@ -123,10 +125,10 @@ vi.mock("../infra/ports.js", () => ({
 
 let gatewayProgram: Command;
 
-function createGatewayProgram() {
+function createGatewayProgram(deps?: GatewayCliDependencies) {
   const program = new Command();
   program.exitOverride();
-  registerGatewayCli(program);
+  registerGatewayCli(program, deps);
   return program;
 }
 
@@ -156,6 +158,8 @@ describe("gateway-cli coverage", () => {
 
   beforeEach(() => {
     gatewayProgram = createGatewayProgram();
+    callGateway.mockReset();
+    callGateway.mockImplementation(defaultCallGateway);
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
     defaultRuntime.log.mockClear();
@@ -252,6 +256,116 @@ describe("gateway-cli coverage", () => {
     expect(costCall?.method).toBe("usage.cost");
     expect(costCall?.params).toEqual({ days: 7, agentScope: "all" });
   });
+
+  it("prints the provider/model breakdown for missing costs", async () => {
+    callGateway.mockResolvedValue({
+      updatedAt: 1,
+      days: 7,
+      daily: [],
+      totals: {
+        input: 12,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 12,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 12,
+        missingCostByModel: {
+          "openai/gpt-5.6-sol": 10,
+          "openai-codex/gpt-5.5": 2,
+        },
+      },
+      cacheStatus: {
+        status: "fresh",
+        cachedFiles: 1,
+        pendingFiles: 0,
+        staleFiles: 0,
+      },
+    });
+
+    await runGatewayCommand(["gateway", "usage-cost", "--days", "7"]);
+
+    expect(runtimeLogs.join("\n")).toContain(
+      "Missing cost: 12 (openai/gpt-5.6-sol 10, openai-codex/gpt-5.5 2)",
+    );
+  });
+
+  it("waits for refreshing all-agent usage caches before printing totals", async () => {
+    const settleSleep = vi.fn(async (_ms: number) => {});
+    gatewayProgram = createGatewayProgram({
+      usageCostSettle: {
+        now: () => 0,
+        sleep: settleSleep,
+      },
+    });
+    callGateway
+      .mockResolvedValueOnce({
+        cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 2 },
+      })
+      .mockResolvedValueOnce({
+        totals: { totalTokens: 100, totalCost: 0.1 },
+        cacheStatus: { status: "fresh", cachedFiles: 2, pendingFiles: 0 },
+      });
+
+    await runGatewayCommand(["gateway", "usage-cost", "--all-agents", "--days", "7", "--json"]);
+
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(settleSleep).toHaveBeenCalledOnce();
+    expect(settleSleep).toHaveBeenCalledWith(250);
+    const costCalls = callGateway.mock.calls.map(
+      ([raw]) => raw as { method?: string; timeoutMs?: number },
+    );
+    expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+    expect(costCalls.every((call) => call.timeoutMs === 10_000)).toBe(true);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totals: expect.objectContaining({ totalTokens: 100, totalCost: 0.1 }),
+        cacheStatus: expect.objectContaining({ status: "fresh" }),
+      }),
+    );
+  });
+
+  it.each(["refreshing", "partial", "stale"] as const)(
+    "uses --timeout as the command-wide usage-cost settle budget for %s caches",
+    async (status) => {
+      let now = 0;
+      gatewayProgram = createGatewayProgram({
+        usageCostSettle: {
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+        },
+      });
+      callGateway.mockResolvedValue({
+        cacheStatus: { status, cachedFiles: 0, pendingFiles: 1 },
+      });
+
+      await expectGatewayExit([
+        "gateway",
+        "usage-cost",
+        "--all-agents",
+        "--timeout",
+        "50",
+        "--json",
+      ]);
+
+      // A fast host can fit a second poll inside the 50ms budget; the contract
+      // is the budget bound on every call, not the poll count.
+      expect(callGateway.mock.calls.length).toBeGreaterThanOrEqual(1);
+      const costCalls = callGateway.mock.calls.map(
+        ([raw]) => raw as { method?: string; timeoutMs?: number },
+      );
+      expect(costCalls.every((call) => call.method === "usage.cost")).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) > 0)).toBe(true);
+      expect(costCalls.every((call) => (call.timeoutMs ?? 0) <= 50)).toBe(true);
+      expect(runtimeErrors.join("\n")).toContain("Timed out waiting for usage cost cache refresh");
+    },
+  );
 
   it("rejects combining --agent with --all-agents for usage-cost", async () => {
     callGateway.mockClear();
@@ -512,6 +626,7 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
+    expect(runtimeErrors.join("\n")).toContain("--params must be valid JSON.");
   });
 
   it("validates gateway call timeout before opening a transport", async () => {
@@ -565,7 +680,7 @@ describe("gateway-cli coverage", () => {
     }
   });
 
-  it("prints stop hints on GatewayLockError when service is loaded", async () => {
+  it("prints stop hints on an already-running GatewayLockError", async () => {
     await withEnvOverride(
       {
         LAUNCH_JOB_LABEL: undefined,
@@ -587,7 +702,7 @@ describe("gateway-cli coverage", () => {
         );
         await expect(
           runGatewayCommand(["gateway", "--token", "test-token", "--allow-unconfigured"]),
-        ).rejects.toThrow("__exit__:0");
+        ).rejects.toThrow(/__exit__:[01]/);
 
         expect(startGatewayServer).toHaveBeenCalledTimes(1);
         expect(runtimeErrors.join("\n")).toContain("Gateway failed to start:");

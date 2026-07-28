@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover browser redact behavior.
 import { describe, expect, it } from "vitest";
 import { redactToolDetail, redactToolPayloadText } from "./browser-redact.ts";
@@ -53,6 +54,38 @@ describe("browser tool detail redaction", () => {
   it("exposes the tool payload redaction name used by shared display modules", () => {
     expect(redactToolPayloadText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
       "OPENAI_API_KEY=sk-123...cdef",
+    );
+  });
+
+  it.each([
+    ["leading split", "abcde😀xxxxxxxxwxyz", "abcde...wxyz"],
+    ["trailing split", "abcdefghijklm😀xyz", "abcdef...xyz"],
+    ["intact leading pair", "abcd😀xxxxxxxxwxyz", "abcd😀...wxyz"],
+    ["intact trailing pair", "abcdefghijklmn😀xy", "abcdef...😀xy"],
+  ])("masks tool payload tokens with a UTF-16-safe %s", (_label, token, masked) => {
+    expect(redactToolPayloadText(`{"token":"${token}"}`)).toBe(`{"token":"${masked}"}`);
+  });
+
+  it("does not trust mask-shaped input as already redacted", () => {
+    expect(redactToolPayloadText("TOKEN=abcde...wxyz")).toBe("TOKEN=abcde....wxyz");
+  });
+
+  it("redacts replacement-template text literally without changing surrounding text", () => {
+    const markerLike = "\u{e000}0\u{e001}";
+    expect(redactToolPayloadText(`${markerLike} TOKEN=$\`abcdxxxxxxxxwxyz`)).toBe(
+      `${markerLike} TOKEN=$\`abcd...wxyz`,
+    );
+  });
+
+  it("redacts the captured value when key and value repeat", () => {
+    expect(redactToolPayloadText("LONG_LONG_LONG_TOKEN=LONG_LONG_LONG_TOKEN")).toBe(
+      "LONG_LONG_LONG_TOKEN=LONG_L...OKEN",
+    );
+  });
+
+  it("prefers an outer credential match over a nested one", () => {
+    expect(redactToolPayloadText('cookie: "TOKEN=abcdefghijklmno&abcdefghij"')).toBe(
+      'cookie: "TOKEN=...ghij"',
     );
   });
 });

@@ -1,5 +1,8 @@
 // Discord tests cover outbound adapter plugin behavior.
-import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  adaptMessagePresentationForChannel,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordOutboundHoisted,
@@ -106,15 +109,6 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("sanitizes internal runtime scaffolding before Discord delivery", () => {
-    expect(
-      discordOutbound.sanitizeText?.({
-        text: "<previous_response>null</previous_response>visible",
-        payload: { text: "<previous_response>null</previous_response>visible" },
-      }),
-    ).toBe("visible");
-  });
-
   it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
     expect(
       discordOutbound.resolveTarget?.({
@@ -125,17 +119,6 @@ describe("discordOutbound", () => {
       ok: true,
       to: "user:1470130713209602050",
     });
-  });
-
-  it("preserves Discord-native angle markup while stripping internal scaffolding", () => {
-    expect(
-      discordOutbound.sanitizeText?.({
-        text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
-        payload: {
-          text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
-        },
-      }),
-    ).toBe("soon <t:1710000000:R> run </deploy:123> ");
   });
 
   it("forwards explicit formatting options to Discord text sends", async () => {
@@ -178,7 +161,6 @@ describe("discordOutbound", () => {
             channels: {
               discord: {
                 token: "test-token",
-                retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
               },
             },
           },
@@ -866,6 +848,85 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("falls back to chunked text when a table exceeds the Discord component envelope", async () => {
+    const table = {
+      type: "table" as const,
+      caption: "Large pipeline",
+      headers: ["Account", "Stage"],
+      rows: Array.from({ length: 900 }, (_entry, index) => [
+        `account-${String(index)}-${"x".repeat(80)}`,
+        "Review",
+      ]),
+    };
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          table,
+          {
+            type: "buttons",
+            buttons: [{ label: "Continue", action: { type: "command", command: "/continue" } }],
+          },
+        ],
+      },
+      capabilities: discordOutbound.presentationCapabilities,
+    });
+
+    const rendered = await discordOutbound.renderPresentation?.({
+      payload: {},
+      presentation,
+      ctx: { cfg: {}, to: "channel:123456" },
+    } as never);
+    const fallbackText = renderMessagePresentationFallbackText({ presentation });
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: fallbackText,
+      payload: { text: fallbackText },
+      accountId: "default",
+    });
+    const textChunks = hoisted.sendMessageDiscordMock.mock.calls.map((call) => String(call[1]));
+    const deliveredText = textChunks.join("\n");
+
+    expect(presentation.blocks.length).toBeGreaterThan(40);
+    expect(rendered).toBeNull();
+    expect(hoisted.sendDiscordComponentMessageMock).not.toHaveBeenCalled();
+    expect(textChunks.length).toBeGreaterThan(1);
+    expect(deliveredText).toContain("account-0-");
+    expect(deliveredText).toContain("account-899-");
+    expect(deliveredText).toContain("Continue: `/continue`");
+  });
+
+  it("counts nested Discord components against the 40-component limit", async () => {
+    const buttons = Array.from({ length: 25 }, (_entry, index) => ({
+      label: `Action ${String(index)}`,
+      value: `action-${String(index)}`,
+    }));
+    const buildPresentation = (textBlockCount: number) => ({
+      title: "At limit",
+      blocks: [
+        ...Array.from({ length: textBlockCount }, (_entry, index) => ({
+          type: "text" as const,
+          text: `Detail ${String(index)}`,
+        })),
+        { type: "buttons" as const, buttons },
+      ],
+    });
+
+    const atLimit = await discordOutbound.renderPresentation?.({
+      payload: {},
+      presentation: buildPresentation(8),
+      ctx: { cfg: {}, to: "channel:123456" },
+    } as never);
+    const overLimit = await discordOutbound.renderPresentation?.({
+      payload: {},
+      presentation: buildPresentation(9),
+      ctx: { cfg: {}, to: "channel:123456" },
+    } as never);
+
+    expect(atLimit).not.toBeNull();
+    expect(overLimit).toBeNull();
+  });
+
   it("keeps replyToId on every internal component media send when replyToMode is all", async () => {
     const payload = await discordOutbound.renderPresentation?.({
       payload: {
@@ -1109,3 +1170,4 @@ describe("discordOutbound", () => {
     ).toBe("default");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

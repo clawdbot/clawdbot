@@ -105,13 +105,11 @@ export function registerBrowserInspectCommands(
     .option("--labels", "Include label overlay screenshot with annotations", false)
     .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
-    .action(async (opts, cmd) => {
+    .action(async (opts, cmd: Command) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
-      const formatWasExplicit =
-        typeof cmd.getOptionValueSource === "function" &&
-        cmd.getOptionValueSource("format") === "cli";
+      const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
       const configMode =
         !formatWasExplicit &&
         format === "ai" &&

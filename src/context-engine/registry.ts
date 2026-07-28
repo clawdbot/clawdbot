@@ -27,7 +27,7 @@ import type {
  * Provides config and path information so plugins can initialize engines
  * without fragile workarounds.
  */
-export type ContextEngineFactoryContext = {
+type ContextEngineFactoryContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -45,9 +45,9 @@ export type ContextEngineFactoryContext = {
 export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
-export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
-export type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
-export type ContextEngineRegistration = {
+type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
+type ContextEngineRegistration = {
   factory: ContextEngineFactory;
   owner: string;
   lifecycle: ContextEngineRegistrationLifecycle;
@@ -82,15 +82,21 @@ const SESSION_KEY_COMPAT_METHODS = [
   "assemble",
   "compact",
 ] as const;
-const LEGACY_COMPAT_PARAMS = ["sessionKey", "prompt", "runtimeSettings"] as const;
+const LEGACY_COMPAT_PARAMS = [
+  "sessionKey",
+  "prompt",
+  "runtimeSettings",
+  "sessionTarget",
+  "runtimeContext",
+] as const;
 const LEGACY_COMPAT_METHOD_KEYS = {
-  bootstrap: ["sessionKey", "runtimeSettings"],
-  maintain: ["sessionKey", "runtimeSettings"],
+  bootstrap: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
+  maintain: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
   ingest: ["sessionKey"],
   ingestBatch: ["sessionKey"],
-  afterTurn: ["sessionKey", "runtimeSettings"],
+  afterTurn: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
   assemble: ["sessionKey", "prompt", "runtimeSettings"],
-  compact: ["sessionKey", "runtimeSettings"],
+  compact: ["sessionKey", "runtimeSettings", "sessionTarget", "runtimeContext"],
 } as const;
 
 type SessionKeyCompatMethodName = (typeof SESSION_KEY_COMPAT_METHODS)[number];
@@ -98,6 +104,8 @@ type SessionKeyCompatParams = {
   sessionKey?: string;
   prompt?: string;
   runtimeSettings?: unknown;
+  sessionTarget?: unknown;
+  runtimeContext?: unknown;
 };
 type LegacyCompatKey = (typeof LEGACY_COMPAT_PARAMS)[number];
 type LegacyCompatParamMap = Partial<Record<LegacyCompatKey, unknown>>;
@@ -185,6 +193,24 @@ const LEGACY_UNKNOWN_FIELD_PATTERNS: Record<LegacyCompatKey, readonly RegExp[]> 
     /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeSettings['"`]/i,
     /['"`]runtimeSettings['"`].*\b(?:was|is)\s+not allowed\b/i,
     /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeSettings"/i,
+  ],
+  sessionTarget: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]sessionTarget['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]sessionTarget['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]sessionTarget['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionTarget['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]sessionTarget['"`]/i,
+    /['"`]sessionTarget['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"sessionTarget"/i,
+  ],
+  runtimeContext: [
+    /\bunrecognized key(?:\(s\)|s)? in object:.*['"`]runtimeContext['"`]/i,
+    /\badditional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\bmust not have additional propert(?:y|ies)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unexpected|extraneous)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /\b(?:unknown|invalid)\s+(?:property|properties|field|fields|key|keys)\b.*['"`]runtimeContext['"`]/i,
+    /['"`]runtimeContext['"`].*\b(?:was|is)\s+not allowed\b/i,
+    /"code"\s*:\s*"unrecognized_keys"[^]*"runtimeContext"/i,
   ],
 } as const;
 
@@ -385,9 +411,8 @@ function wrapResolvedContextEngine(
 
 const CONTEXT_ENGINE_REGISTRY_STATE = Symbol.for("openclaw.contextEngineRegistryState");
 const CORE_CONTEXT_ENGINE_OWNER = "core";
-const PUBLIC_CONTEXT_ENGINE_OWNER = "public-sdk";
 
-export type ContextEngineRuntimeQuarantine = {
+type ContextEngineRuntimeQuarantine = {
   engineId: string;
   owner?: string;
   operation: string;
@@ -492,7 +517,7 @@ export function listContextEngineQuarantines(): ContextEngineRuntimeQuarantine[]
   return quarantines;
 }
 
-export function clearContextEngineRuntimeQuarantine(engineId?: string): void {
+function clearContextEngineRuntimeQuarantine(engineId?: string): void {
   const quarantinedEngines = getContextEngineRegistryState().quarantinedEngines;
   if (engineId === undefined) {
     quarantinedEngines.clear();
@@ -541,28 +566,6 @@ export function registerContextEngineForOwner(
   return { ok: true };
 }
 
-/**
- * Public SDK entry point for third-party registrations.
- *
- * This path is intentionally unprivileged: it cannot claim core-owned ids and
- * it cannot safely refresh an existing registration because the caller's
- * identity is not authenticated.
- */
-export function registerContextEngine(
-  id: string,
-  factory: ContextEngineFactory,
-): ContextEngineRegistrationResult {
-  return registerContextEngineForOwner(id, factory, PUBLIC_CONTEXT_ENGINE_OWNER);
-}
-
-/**
- * Return the factory for a registered engine, or undefined.
- */
-export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  const registration = getContextEngineRegistration(id);
-  return registration?.lifecycle === "runtime" ? registration.factory : undefined;
-}
-
 /** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
 export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
   return getContextEngineRegistryState().engines.get(id);
@@ -571,7 +574,7 @@ export function getContextEngineRegistration(id: string): ContextEngineRegistrat
 /**
  * List all registered engine ids.
  */
-export function listContextEngineIds(): string[] {
+function listContextEngineIds(): string[] {
   return [...getContextEngineRegistryState().engines.keys()];
 }
 
@@ -1047,3 +1050,4 @@ async function resolveDefaultContextEngine(
     engineId: defaultEngineId,
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

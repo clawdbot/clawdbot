@@ -4,7 +4,6 @@
  * Tracks draft previews and converts them into finalized message receipts when possible.
  */
 import type { LiveMessageState, MessageReceipt, RenderedMessageBatch } from "./types.js";
-export type { LiveMessagePhase, LiveMessageState } from "./types.js";
 
 /** Mutable draft preview handle used before a live message is finalized or discarded. */
 export type LivePreviewFinalizerDraft<TId> = {
@@ -23,13 +22,13 @@ export type LivePreviewFinalizerResultKind =
   | "preview-retained";
 
 /** Result of a live preview finalization attempt plus the latest live state. */
-export type LivePreviewFinalizerResult<TPayload> = {
+type LivePreviewFinalizerResult<TPayload> = {
   kind: LivePreviewFinalizerResultKind;
   liveState?: LiveMessageState<TPayload>;
 };
 
 /** Adapter contract for channels that can edit a draft preview into the final message. */
-export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
+type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
   draft?: LivePreviewFinalizerDraft<TId>;
   buildFinalEdit: (payload: TPayload) => TEdit | undefined;
   editFinal: (id: TId, edit: TEdit) => Promise<void>;
@@ -74,7 +73,7 @@ export function createLiveMessageState<TPayload = unknown>(params?: {
 }
 
 /** Marks a live message as finalized and disables further in-place preview edits. */
-export function markLiveMessageFinalized<TPayload>(
+function markLiveMessageFinalized<TPayload>(
   state: LiveMessageState<TPayload>,
   receipt: MessageReceipt,
 ): LiveMessageState<TPayload> {
@@ -294,7 +293,7 @@ export function markLiveMessagePreviewUpdated<TPayload>(
 }
 
 /** Marks a live message cancelled and prevents later in-place finalization. */
-export function markLiveMessageCancelled<TPayload>(
+function markLiveMessageCancelled<TPayload>(
   state: LiveMessageState<TPayload>,
 ): LiveMessageState<TPayload> {
   return {

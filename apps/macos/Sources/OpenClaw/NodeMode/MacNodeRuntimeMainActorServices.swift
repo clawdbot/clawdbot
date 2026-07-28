@@ -9,7 +9,7 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         maxWidth: Int?,
         quality: Double?,
         format: OpenClawScreenSnapshotFormat?) async throws
-        -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        -> ScreenSnapshotResult
 
     func recordScreen(
         screenIndex: Int?,
@@ -25,8 +25,10 @@ protocol MacNodeRuntimeMainActorServices: Sendable {
         maxAgeMs: Int?,
         timeoutMs: Int?) async throws -> CLLocation
 
-    func performComputerAct(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult
-    func releaseHeldInput()
+    func performComputerAct(
+        _ params: OpenClawComputerActParams,
+        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+    func releaseHeldInput(lifecycleGeneration: UInt64) async
 }
 
 @MainActor
@@ -41,7 +43,7 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
         maxWidth: Int?,
         quality: Double?,
         format: OpenClawScreenSnapshotFormat?) async throws
-        -> (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        -> ScreenSnapshotResult
     {
         try await self.screenSnapshotter.snapshot(
             screenIndex: screenIndex,
@@ -84,11 +86,16 @@ final class LiveMacNodeRuntimeMainActorServices: MacNodeRuntimeMainActorServices
             timeoutMs: timeoutMs)
     }
 
-    func performComputerAct(_ params: OpenClawComputerActParams) async throws -> OpenClawComputerActResult {
-        try await self.computerAction.perform(params)
+    func performComputerAct(
+        _ params: OpenClawComputerActParams,
+        lifecycleGeneration: UInt64) async throws -> OpenClawComputerActResult
+    {
+        try await self.computerAction.perform(
+            params,
+            lifecycleGeneration: lifecycleGeneration)
     }
 
-    func releaseHeldInput() {
-        self.computerAction.releaseHeldInput()
+    func releaseHeldInput(lifecycleGeneration: UInt64) async {
+        await self.computerAction.releaseHeldInput(lifecycleGeneration: lifecycleGeneration)
     }
 }

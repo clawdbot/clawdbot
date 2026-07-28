@@ -14,6 +14,7 @@ const resolveGatewayProgramArguments = vi.fn(async (_opts?: unknown) => ({
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceStage = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
+const serviceStart = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue({ outcome: "completed" });
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);
@@ -100,6 +101,7 @@ vi.mock("../daemon/service.js", async () => {
       stage: serviceStage,
       install: serviceInstall,
       uninstall: serviceUninstall,
+      start: serviceStart,
       stop: serviceStop,
       restart: serviceRestart,
       isLoaded: serviceIsLoaded,
@@ -347,14 +349,15 @@ describe("daemon-cli coverage", () => {
 
   it("starts and stops daemon (json output)", async () => {
     runtimeLogs.length = 0;
-    serviceRestart.mockClear();
+    serviceStart.mockClear();
     serviceStop.mockClear();
     serviceIsLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValueOnce({ status: "stopped" });
 
     await runDaemonCommand(["daemon", "start", "--json"]);
-    await runDaemonCommand(["daemon", "stop", "--json"]);
+    await runDaemonCommand(["daemon", "stop", "--json", "--force"]);
 
-    expect(serviceRestart).toHaveBeenCalledTimes(1);
+    expect(serviceStart).toHaveBeenCalledTimes(1);
     expect(serviceStop).toHaveBeenCalledTimes(1);
     const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
     const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });

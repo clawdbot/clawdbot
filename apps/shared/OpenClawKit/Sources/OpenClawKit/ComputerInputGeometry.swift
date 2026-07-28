@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// A target display expressed in the global CoreGraphics point space (top-left
@@ -28,6 +29,56 @@ public struct OpenClawComputerDisplayGeometry: Sendable, Equatable {
 /// where physical pixels and logical points differ. Retina backing scale never
 /// enters CGEvent coordinates, which are always points.
 public enum OpenClawComputerInputGeometry {
+    /// Stable opaque identity for one physical display geometry and reference
+    /// scale. Screenshot and input paths independently derive this value so
+    /// hot-plug/reindex/geometry/scale changes fail closed before coordinates can
+    /// target pixels other than the frame the caller observed.
+    public static func displayFrameId(
+        displayID: UInt32,
+        sourceWidth: Double,
+        sourceHeight: Double,
+        referenceWidth: Int,
+        display: OpenClawComputerDisplayGeometry) -> String
+    {
+        let descriptor = [
+            String(displayID),
+            String(sourceWidth.bitPattern),
+            String(sourceHeight.bitPattern),
+            String(referenceWidth),
+            String(display.originX.bitPattern),
+            String(display.originY.bitPattern),
+            String(display.widthPoints.bitPattern),
+            String(display.heightPoints.bitPattern),
+        ].joined(separator: "\u{0}")
+        let digest = SHA256.hash(data: Data(descriptor.utf8))
+            .map { String(format: "%02x", $0) }
+            .joined()
+        return "display-frame:v1:\(digest)"
+    }
+
+    /// Whether capture-source dimensions and their target display form a safe,
+    /// finite coordinate mapping. Callers must reject invalid geometry before
+    /// dispatching input; otherwise the fallback mapper collapses to an origin.
+    public static func isValidMappingGeometry(
+        sourceWidth: Double,
+        sourceHeight: Double,
+        display: OpenClawComputerDisplayGeometry) -> Bool
+    {
+        guard sourceWidth.isFinite,
+              sourceHeight.isFinite,
+              display.originX.isFinite,
+              display.originY.isFinite,
+              display.widthPoints.isFinite,
+              display.heightPoints.isFinite
+        else {
+            return false
+        }
+        return sourceWidth > 0 &&
+            sourceHeight > 0 &&
+            display.widthPoints > 0 &&
+            display.heightPoints > 0
+    }
+
     /// The delivered screenshot pixel width for a reference width and the capture
     /// source dimensions. `sourceWidth`/`sourceHeight` are the capture source
     /// dimensions in the same units ScreenSnapshotService reads from the display.

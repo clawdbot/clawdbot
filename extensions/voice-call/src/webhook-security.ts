@@ -1,5 +1,6 @@
 // Voice Call plugin module implements webhook security behavior.
 import crypto from "node:crypto";
+import { isIP } from "node:net";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -127,16 +128,29 @@ function extractHostname(hostHeader: string): string | null {
     return null;
   }
 
-  let hostname: string;
-
   // Handle IPv6 addresses: [::1]:8080
   if (hostHeader.startsWith("[")) {
     const endBracket = hostHeader.indexOf("]");
     if (endBracket === -1) {
       return null; // Malformed IPv6
     }
-    hostname = hostHeader.slice(1, endBracket);
-    return normalizeLowercaseStringOrEmpty(hostname);
+    const suffix = hostHeader.slice(endBracket + 1);
+    if (suffix && !/^:\d+$/u.test(suffix)) {
+      return null;
+    }
+    const hostname = hostHeader.slice(1, endBracket);
+    if (isIP(hostname) !== 6) {
+      return null;
+    }
+    try {
+      const parsedHostname = new URL(`https://[${hostname}]/`).hostname;
+      if (!parsedHostname.startsWith("[") || !parsedHostname.endsWith("]")) {
+        return null;
+      }
+      return normalizeLowercaseStringOrEmpty(parsedHostname.slice(1, -1));
+    } catch {
+      return null;
+    }
   }
 
   // Handle IPv4/domain with optional port
@@ -145,10 +159,10 @@ function extractHostname(hostHeader: string): string | null {
     return null; // Reject potential injection: attacker.com:80@legitimate.com
   }
 
-  hostname = hostHeader.split(":")[0];
+  const hostname = hostHeader.split(":").at(0);
 
   // Validate the extracted hostname
-  if (!isValidHostname(hostname)) {
+  if (!hostname || !isValidHostname(hostname)) {
     return null;
   }
 
@@ -175,6 +189,10 @@ function normalizeAllowedHosts(allowedHosts?: string[]): Set<string> | null {
     }
   }
   return normalized.size > 0 ? normalized : null;
+}
+
+function formatHostnameForUrl(hostname: string): string {
+  return isIP(hostname) === 6 ? `[${hostname}]` : hostname;
 }
 
 /**
@@ -287,7 +305,7 @@ export function reconstructWebhookUrl(ctx: WebhookContext, options?: WebhookUrlO
     // URL parsing failed
   }
 
-  return `${proto}://${host}${path}`;
+  return `${proto}://${formatHostnameForUrl(host)}${path}`;
 }
 
 function buildTwilioVerificationUrl(
@@ -721,8 +739,11 @@ function toParamMapFromSearchParams(sp: URLSearchParams): PlivoParamMap {
 
 function sortedQueryString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).toSorted()) {
-    const values = [...params[key]].toSorted();
+  const entries = Object.entries(params).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [key, entryValues] of entries) {
+    const values = [...entryValues].toSorted();
     for (const value of values) {
       parts.push(`${key}=${value}`);
     }
@@ -732,8 +753,11 @@ function sortedQueryString(params: PlivoParamMap): string {
 
 function sortedParamsString(params: PlivoParamMap): string {
   const parts: string[] = [];
-  for (const key of Object.keys(params).toSorted()) {
-    const values = [...params[key]].toSorted();
+  const entries = Object.entries(params).toSorted(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
+  for (const [key, entryValues] of entries) {
+    const values = [...entryValues].toSorted();
     for (const value of values) {
       parts.push(`${key}${value}`);
     }
@@ -865,7 +889,6 @@ export function verifyPlivoWebhook(
     try {
       const req = new URL(reconstructed);
       const base = new URL(options.publicUrl);
-      base.pathname = req.pathname;
       base.search = req.search;
       verificationUrl = base.toString();
     } catch {

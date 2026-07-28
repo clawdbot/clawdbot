@@ -1,16 +1,23 @@
 // Mattermost tests cover send plugin behavior.
 import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let parseMattermostTarget: typeof import("./send.js").parseMattermostTarget;
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
-let resetMattermostOpaqueTargetCacheForTests: typeof import("./target-resolution.js").resetMattermostOpaqueTargetCacheForTests;
+let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
 
 type SendMessageMattermostOptions = NonNullable<
   Parameters<typeof import("./send.js").sendMessageMattermost>[2]
 >;
 
 const TEST_CFG = {};
+const MATTERMOST_TABLE_GOLDEN = {
+  name: "keeps native Mattermost tables instead of downgrading them to code",
+  input: "| A | B |\n|---|---|\n| 1 | 2 |",
+  before: "```\n| A | B |\n| --- | --- |\n| 1 | 2 |\n```",
+  after: "| A | B |\n|---|---|\n| 1 | 2 |",
+};
+const MATTERMOST_MARKDOWN_GOLDENS = [MATTERMOST_TABLE_GOLDEN];
 
 const mockState = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
@@ -23,7 +30,6 @@ const mockState = vi.hoisted(() => ({
     config: {},
   })),
   createMattermostClient: vi.fn(),
-  createMattermostDirectChannel: vi.fn(),
   createMattermostDirectChannelWithRetry: vi.fn(),
   createMattermostPost: vi.fn(),
   fetchMattermostChannelByName: vi.fn(),
@@ -32,6 +38,10 @@ const mockState = vi.hoisted(() => ({
   fetchMattermostUserTeams: vi.fn(),
   fetchMattermostUserByUsername: vi.fn(),
   normalizeMattermostBaseUrl: vi.fn((input: string | undefined) => input?.trim() ?? ""),
+  resolveMarkdownTableMode: vi.fn(
+    (params: { cfg?: { channels?: { mattermost?: { markdown?: { tables?: string } } } } }) =>
+      params.cfg?.channels?.mattermost?.markdown?.tables ?? "off",
+  ),
   uploadMattermostFile: vi.fn(),
 }));
 
@@ -114,11 +124,10 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
     }
     throw new Error("Mattermost send requires a resolved runtime config");
   },
-  resolveMarkdownTableMode: vi.fn(() => "off"),
 }));
 
-vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
-  convertMarkdownTables: vi.fn((text: string) => text),
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
+  resolveMarkdownTableMode: mockState.resolveMarkdownTableMode,
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
@@ -154,7 +163,6 @@ vi.mock("./accounts.js", () => ({
 
 vi.mock("./client.js", () => ({
   createMattermostClient: mockState.createMattermostClient,
-  createMattermostDirectChannel: mockState.createMattermostDirectChannel,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
@@ -202,7 +210,6 @@ describe("sendMessageMattermost", () => {
     });
     mockState.loadOutboundMediaFromUrl.mockReset();
     mockState.createMattermostClient.mockReset();
-    mockState.createMattermostDirectChannel.mockReset();
     mockState.createMattermostDirectChannelWithRetry.mockReset();
     mockState.createMattermostPost.mockReset();
     mockState.fetchMattermostChannelByName.mockReset();
@@ -210,6 +217,7 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUser.mockReset();
     mockState.fetchMattermostUserTeams.mockReset();
     mockState.fetchMattermostUserByUsername.mockReset();
+    mockState.resolveMarkdownTableMode.mockClear();
     mockState.uploadMattermostFile.mockReset();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-1" });
@@ -218,9 +226,8 @@ describe("sendMessageMattermost", () => {
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
-    ({ parseMattermostTarget, sendMessageMattermost } = await import("./send.js"));
-    ({ resetMattermostOpaqueTargetCacheForTests } = await import("./target-resolution.js"));
-    resetMattermostOpaqueTargetCacheForTests();
+    ({ sendMessageMattermost } = await import("./send.js"));
+    ({ parseMattermostTarget } = await import("./target-resolution.js"));
   });
 
   it("uses provided cfg and skips runtime loadConfig", async () => {
@@ -254,6 +261,25 @@ describe("sendMessageMattermost", () => {
       accountId: "work",
     });
   });
+
+  it.each(MATTERMOST_MARKDOWN_GOLDENS)("$name", async ({ input, before, after }) => {
+    expect(convertMarkdownTables(input, "code")).toBe(before);
+
+    await sendMessageMattermost("channel:town-square", input, { cfg: TEST_CFG });
+
+    expect(createMattermostPostParams().message).toBe(after);
+  });
+
+  it.each(["code", "block"] as const)(
+    "respects the explicit Mattermost %s table fallback mode",
+    async (tables) => {
+      await sendMessageMattermost("channel:town-square", MATTERMOST_TABLE_GOLDEN.input, {
+        cfg: { channels: { mattermost: { markdown: { tables } } } },
+      });
+
+      expect(createMattermostPostParams().message).toBe(MATTERMOST_TABLE_GOLDEN.before);
+    },
+  );
 
   it("fails hard when cfg is omitted", async () => {
     await expect(
@@ -544,7 +570,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     vi.clearAllMocks();
     mockState.createMattermostClient.mockReturnValue({});
     mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
-    mockState.createMattermostDirectChannel.mockResolvedValue({ id: "dm-channel-id" });
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-id" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
   });
@@ -742,5 +767,95 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(retryCall?.[2]?.maxRetries).toBe(overrideOptions.maxRetries);
     expect(retryCall?.[2]?.timeoutMs).toBe(overrideOptions.timeoutMs);
     expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
+  });
+});
+
+describe("sendMessageMattermost outbound cache bounds", () => {
+  const baseUrl = "https://mattermost.example.com";
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockState.resolveMattermostAccount.mockReturnValue({
+      accountId: "default",
+      botToken: "default-token",
+      baseUrl,
+      config: {},
+    });
+    mockState.createMattermostClient.mockReturnValue({});
+    mockState.createMattermostPost.mockResolvedValue({ id: "post-id" });
+    mockState.createMattermostDirectChannelWithRetry.mockImplementation(
+      async (_client, userIds: string[]) => ({ id: `dm-${userIds[1]}` }),
+    );
+    mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-id" });
+    mockState.fetchMattermostUserByUsername.mockImplementation(
+      async (_client, username: string) => ({
+        id: `user-${username}`,
+      }),
+    );
+    mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-id" }]);
+    mockState.fetchMattermostChannelByName.mockImplementation(
+      async (_client, _teamId: string, name: string) => ({ id: `channel-${name}` }),
+    );
+    ({ sendMessageMattermost } = await import("./send.js"));
+  });
+
+  const send = async (to: string, token: string) =>
+    await sendMessageMattermost(to, "hello", {
+      cfg: TEST_CFG,
+      botToken: token,
+      baseUrl,
+    });
+
+  it("bounds DM channel entries without refreshing insertion order on reads", async () => {
+    const token = "dm-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`user:user-${index}`, token);
+    }
+    await send("user:user-0", token);
+    await send("user:user-1024", token);
+    await send("user:user-0", token);
+    await send("user:user-1024", token);
+
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds username entries and retains the newest resolved target", async () => {
+    const token = "username-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`@name-${index}`, token);
+    }
+    await send("@name-0", token);
+    await send("@name-1024", token);
+    await send("@name-0", token);
+    await send("@name-1024", token);
+
+    expect(mockState.fetchMattermostUserByUsername).toHaveBeenCalledTimes(1026);
+    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds channel-name entries and retains the newest resolved target", async () => {
+    const token = "channel-cache-token";
+    for (let index = 0; index < 1024; index += 1) {
+      await send(`#channel-${index}`, token);
+    }
+    await send("#channel-0", token);
+    await send("#channel-1024", token);
+    await send("#channel-0", token);
+    await send("#channel-1024", token);
+
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledTimes(1026);
+  });
+
+  it("bounds bot-user entries independently from DM channel entries", async () => {
+    for (let index = 0; index < 64; index += 1) {
+      await send(`user:user-${index}`, `bot-cache-token-${index}`);
+    }
+    await send("user:probe-before-overflow", "bot-cache-token-0");
+    await send("user:user-64", "bot-cache-token-64");
+    await send("user:probe-after-overflow", "bot-cache-token-0");
+    await send("user:newest-probe", "bot-cache-token-64");
+
+    expect(mockState.fetchMattermostMe).toHaveBeenCalledTimes(66);
   });
 });

@@ -18,7 +18,6 @@ struct TalkRuntimeIssue: Equatable {
     let model: String?
     let transport: String?
     let phase: String?
-    let occurredAt: Date
 
     init(
         code: Code,
@@ -26,8 +25,7 @@ struct TalkRuntimeIssue: Equatable {
         provider: String? = nil,
         model: String? = nil,
         transport: String? = nil,
-        phase: String? = nil,
-        occurredAt: Date = Date())
+        phase: String? = nil)
     {
         self.code = code
         self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -35,28 +33,27 @@ struct TalkRuntimeIssue: Equatable {
         self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.occurredAt = occurredAt
     }
 
     var displayMessage: String {
         if !self.message.isEmpty { return self.message }
-        return "Realtime voice did not start."
+        return String(localized: "Realtime voice did not start.")
     }
 
     var fallbackStatusText: String {
-        "Listening (iOS Speech fallback)"
+        String(localized: "Listening (iOS Speech fallback)")
     }
 
     var fallbackBannerTitle: String {
-        "Using iOS Speech fallback"
+        String(localized: "Using iOS Speech fallback")
     }
 
     var fallbackBannerOwnerLabel: String {
-        "Fallback active"
+        String(localized: "Fallback active")
     }
 
     var fallbackBannerMessage: String {
-        "Realtime voice did not start. Talk is running with iOS speech recognition and TTS."
+        String(localized: "Realtime voice did not start. Talk is running with iOS speech recognition and TTS.")
     }
 
     var technicalDetails: String {
@@ -448,9 +445,7 @@ enum TalkModeGatewayConfigParser {
         guard let config else { return nil }
         for key in keys {
             let value = config[key]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-            if value?.isEmpty == false {
-                return value
-            }
+            if value?.isEmpty == false { return value }
         }
         return nil
     }

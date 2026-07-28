@@ -67,8 +67,10 @@ function findExecutableOnPath(command, envPath, platform, env, cwd) {
   }
   const extensions =
     platform === "win32"
-      ? (env[Object.keys(env).find((key) => key.toLowerCase() === "pathext") ?? "PATHEXT"] ??
-          ".COM;.EXE;.BAT;.CMD")
+      ? (
+          env[Object.keys(env).find((key) => key.toLowerCase() === "pathext") ?? "PATHEXT"] ??
+          ".COM;.EXE;.BAT;.CMD"
+        )
           .split(";")
           .filter(Boolean)
           .map((extension) => extension.toLowerCase())
@@ -84,7 +86,7 @@ function findExecutableOnPath(command, envPath, platform, env, cwd) {
       : pathImpl.resolve(cwd, directory);
     for (const extension of extensions) {
       const candidate = pathImpl.join(resolvedDirectory, `${command}${extension}`);
-      if ((platform === "win32" ? isFile(candidate) : isExecutableFile(candidate))) {
+      if (platform === "win32" ? isFile(candidate) : isExecutableFile(candidate)) {
         return candidate;
       }
     }

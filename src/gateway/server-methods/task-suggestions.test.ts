@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
-  MAX_TASK_SUGGESTION_RETAINED_BYTES,
+  abandonTaskSuggestionAcceptance,
   beginTaskSuggestionAcceptance,
-  resetTaskSuggestionsForTest,
 } from "../task-suggestion-registry.js";
 import { sessionsHandlers } from "./sessions.js";
 import { taskSuggestionsHandlers } from "./task-suggestions.js";
@@ -37,8 +36,19 @@ function requirePayload(result: Awaited<ReturnType<typeof call>>): unknown {
   return result.response[1];
 }
 
-beforeEach(() => resetTaskSuggestionsForTest());
-afterEach(() => vi.restoreAllMocks());
+async function dismissPendingTaskSuggestions(): Promise<void> {
+  const listed = await call("taskSuggestions.list", {});
+  const payload = requirePayload(listed) as { suggestions: Array<{ id: string }> };
+  for (const suggestion of payload.suggestions) {
+    await call("taskSuggestions.dismiss", { taskId: suggestion.id });
+  }
+}
+
+beforeEach(dismissPendingTaskSuggestions);
+afterEach(async () => {
+  await dismissPendingTaskSuggestions();
+  vi.restoreAllMocks();
+});
 
 describe("task suggestion gateway methods", () => {
   it("creates, lists, and resolves an ephemeral suggestion", async () => {
@@ -331,7 +341,7 @@ describe("task suggestion gateway methods", () => {
     const listed = await call("taskSuggestions.list", {});
     const payload = requirePayload(listed) as { suggestions: Array<{ id: string }> };
     expect(Buffer.byteLength(JSON.stringify(payload.suggestions))).toBeLessThanOrEqual(
-      MAX_TASK_SUGGESTION_RETAINED_BYTES,
+      2 * 1024 * 1024,
     );
     expect(payload.suggestions.length).toBeLessThan(70);
     expect(payload.suggestions.some((suggestion) => suggestion.id === taskIds[0])).toBe(false);
@@ -370,6 +380,7 @@ describe("task suggestion gateway methods", () => {
   });
 
   it("rejects a new suggestion when every bounded registry entry is accepting", async () => {
+    const claimedTaskIds: string[] = [];
     for (let index = 0; index < 100; index += 1) {
       const created = await call("taskSuggestions.create", {
         title: `Follow up ${index}`,
@@ -380,6 +391,7 @@ describe("task suggestion gateway methods", () => {
       });
       const taskId = (requirePayload(created) as { taskId: string }).taskId;
       expect(beginTaskSuggestionAcceptance(taskId).status).toBe("claimed");
+      claimedTaskIds.push(taskId);
     }
 
     const rejected = await call("taskSuggestions.create", {
@@ -397,5 +409,9 @@ describe("task suggestion gateway methods", () => {
       retryable: true,
     });
     expect(rejected.broadcast).not.toHaveBeenCalled();
+
+    for (const taskId of claimedTaskIds) {
+      expect(abandonTaskSuggestionAcceptance(taskId)).toBe(true);
+    }
   });
 });

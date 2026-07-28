@@ -10,7 +10,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -185,18 +185,39 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
-  it("wraps malformed Twilio media stream JSON with an owned parser error", () => {
-    let error: unknown;
-    try {
-      parseTwilioMediaMessage(Buffer.from("{not json"));
-    } catch (caught) {
-      error = caught;
-    }
+  it("wraps malformed Twilio media stream JSON with an owned parser error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
-    expect(error).not.toBeInstanceOf(SyntaxError);
-    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+    try {
+      const ws = await connectWs(server.url);
+      ws.send("{not json");
+
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(
+          "[MediaStream] Error processing message:",
+          expect.objectContaining({
+            message: "Twilio media stream message was malformed JSON",
+          }),
+        );
+      });
+      const error = errorSpy.mock.calls.find(
+        ([message]) => message === "[MediaStream] Error processing message:",
+      )?.[1];
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(SyntaxError);
+      expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      errorSpy.mockRestore();
+      await server.close();
+    }
   });
 
   it("rejects start frames when no stream acceptance validator is configured", async () => {
@@ -436,19 +457,59 @@ describe("MediaStreamHandler security hardening", () => {
     expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
-  it("sanitizes websocket close reason before logging", () => {
-    const reason = sanitizeLogText("forged\nline\r\tentry", 120);
-    expect(reason).not.toContain("\n");
-    expect(reason).not.toContain("\r");
-    expect(reason).not.toContain("\t");
-    expect(reason).toContain("forged line entry");
+  it("sanitizes websocket close reason before logging", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.close(1000, "forged\nline\r\tentry");
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("reason: forged line entry"));
+      });
+      const line = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("WebSocket closed"));
+      expect(line).not.toContain("\n");
+      expect(line).not.toContain("\r");
+      expect(line).not.toContain("\t");
+    } finally {
+      logSpy.mockRestore();
+      await server.close();
+    }
   });
 
-  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", () => {
-    const reason = sanitizeLogText(`abc\uD83D\uDE80tail`, 4);
-    expect(reason).toBe("abc...");
-    expect(reason).not.toContain("\uD83D");
-    expect(reason).not.toContain("\uDE80");
+  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.close(1000, `${"a".repeat(119)}\uD83D\uDE80`);
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining(`reason: ${"a".repeat(119)}...`),
+        );
+      });
+      const line = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("WebSocket closed"));
+      expect(line).not.toContain("\uD83D");
+      expect(line).not.toContain("\uDE80");
+    } finally {
+      logSpy.mockRestore();
+      await server.close();
+    }
   });
 
   it("closes idle pre-start connections after timeout", async () => {

@@ -20,10 +20,10 @@ vi.mock("../logging/subsystem.js", () => ({
   }),
 }));
 
-import {
-  logModelFallbackDecision,
-  resetModelFallbackDecisionLogCoalescingForTest,
-} from "./model-fallback-observation.js";
+import { logModelFallbackDecision } from "./model-fallback-observation.js";
+
+let activeSessionId = "session-0";
+let testSequence = 0;
 
 function makeAuthFailure(
   overrides: Partial<ModelFallbackDecisionParams> = {},
@@ -31,7 +31,7 @@ function makeAuthFailure(
   return {
     decision: "candidate_failed",
     runId: "run-1",
-    sessionId: "session-1",
+    sessionId: activeSessionId,
     lane: "default",
     requestedProvider: "modelstudio",
     requestedModel: "glm-5",
@@ -57,13 +57,12 @@ function loggedPayloads(): Array<Record<string, unknown>> {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-16T00:00:00Z"));
+  activeSessionId = `session-${++testSequence}`;
   loggerMocks.isEnabled.mockReturnValue(true);
   loggerMocks.warn.mockClear();
-  resetModelFallbackDecisionLogCoalescingForTest();
 });
 
 afterEach(() => {
-  resetModelFallbackDecisionLogCoalescingForTest();
   vi.useRealTimers();
 });
 
@@ -119,9 +118,35 @@ describe("logModelFallbackDecision", () => {
     ]);
   });
 
+  it("records the candidate route provenance", () => {
+    logModelFallbackDecision(
+      makeAuthFailure({
+        candidate: {
+          provider: "modelstudio",
+          model: "glm-5",
+          routeOrigin: "requested",
+          routeResolution: "raw",
+        },
+        nextCandidate: {
+          provider: "minimax",
+          model: "MiniMax-M2.7-highspeed",
+          routeOrigin: "configured-fallback",
+          routeResolution: "resolved",
+        },
+      }),
+    );
+
+    expect(loggedPayloads()[0]).toMatchObject({
+      candidateRouteOrigin: "requested",
+      candidateRouteResolution: "raw",
+      nextCandidateRouteOrigin: "configured-fallback",
+      nextCandidateRouteResolution: "resolved",
+    });
+  });
+
   it("keeps distinct sessions visible", () => {
-    logModelFallbackDecision(makeAuthFailure({ sessionId: "session-1" }));
-    logModelFallbackDecision(makeAuthFailure({ sessionId: "session-2" }));
+    logModelFallbackDecision(makeAuthFailure({ sessionId: `${activeSessionId}-first` }));
+    logModelFallbackDecision(makeAuthFailure({ sessionId: `${activeSessionId}-second` }));
 
     expect(loggerMocks.warn).toHaveBeenCalledTimes(2);
   });

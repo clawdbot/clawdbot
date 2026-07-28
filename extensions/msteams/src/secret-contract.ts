@@ -1,25 +1,16 @@
 // Msteams plugin module implements secret contract behavior.
 import {
   collectSecretInputAssignment,
+  createChannelSecretTargetRegistryEntries,
   getChannelRecord,
   type ResolverContext,
   type SecretDefaults,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
-  [
-    {
-      id: "channels.msteams.appPassword",
-      targetType: "channels.msteams.appPassword",
-      configFile: "openclaw.json",
-      pathPattern: "channels.msteams.appPassword",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-  ];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "msteams",
+  channel: ["appPassword"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
@@ -38,6 +29,13 @@ export function collectRuntimeConfigAssignments(params: {
     context: params.context,
     active: msteams.enabled !== false,
     inactiveReason: "Microsoft Teams channel is disabled.",
+    owner: {
+      ownerKind: "account",
+      ownerId: "msteams:default",
+      requiredForGateway: false,
+      disposition: "isolate",
+      contract: msteams,
+    },
     apply: (value) => {
       msteams.appPassword = value;
     },

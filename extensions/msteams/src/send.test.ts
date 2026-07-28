@@ -83,11 +83,14 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-vi.mock("./graph-upload.js", () => ({
-  uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
-  getDriveItemProperties: mockState.getDriveItemProperties,
-  uploadAndShareOneDrive: vi.fn(),
-}));
+vi.mock("./graph-upload.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./graph-upload.js")>();
+  return {
+    ...actual,
+    uploadAndShareSharePoint: mockState.uploadAndShareSharePoint,
+    getDriveItemProperties: mockState.getDriveItemProperties,
+  };
+});
 
 vi.mock("./graph-chat.js", () => ({
   buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard,
@@ -151,16 +154,11 @@ function mockProactiveSendContextFailure(error: string) {
   });
 }
 
-function createSharePointSendContext(params: {
-  conversationId: string;
-  graphChatId: string | null;
-  siteId: string;
-}) {
+function createSharePointSendContext(params: { conversationId: string; siteId: string }) {
   return {
     app: createMockApp(),
     appId: "app-id",
     conversationId: params.conversationId,
-    graphChatId: params.graphChatId,
     ref: {},
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     conversationType: "groupChat" as const,
@@ -262,6 +260,7 @@ describe("sendMessageMSTeams", () => {
 
   it("loads media through shared helper and forwards mediaLocalRoots", async () => {
     const mediaBuffer = Buffer.from("tiny-image");
+    mockState.sendMSTeamsMessages.mockResolvedValueOnce(["message-text", "message-media"]);
     mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
       buffer: mediaBuffer,
       contentType: "image/png",
@@ -287,14 +286,19 @@ describe("sendMessageMSTeams", () => {
 
     const sendPayload = firstObjectArg(mockState.sendMSTeamsMessages);
     const messages = sendPayload.messages as Array<Record<string, unknown>>;
-    expect(messages).toHaveLength(1);
+    expect(messages).toHaveLength(2);
     expect(messages[0]?.text).toBe("hello");
-    expect(messages[0]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
-    expect(result.receipt?.primaryPlatformMessageId).toBe("message-1");
-    expect(result.receipt?.platformMessageIds).toEqual(["message-1"]);
-    expect(result.receipt?.parts).toHaveLength(1);
-    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-1");
-    expect(result.receipt?.parts[0]?.kind).toBe("media");
+    expect(messages[0]?.mediaUrl).toBeUndefined();
+    expect(messages[1]?.text).toBeUndefined();
+    expect(messages[1]?.mediaUrl).toBe(`data:image/png;base64,${mediaBuffer.toString("base64")}`);
+    expect(result.messageId).toBe("message-text");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("message-text");
+    expect(result.receipt?.platformMessageIds).toEqual(["message-text", "message-media"]);
+    expect(result.receipt?.parts).toHaveLength(2);
+    expect(result.receipt?.parts[0]?.platformMessageId).toBe("message-text");
+    expect(result.receipt?.parts[1]?.platformMessageId).toBe("message-media");
+    expect(result.receipt?.parts[0]?.kind).toBe("text");
+    expect(result.receipt?.parts[1]?.kind).toBe("media");
   });
 
   it("sends with provided cfg even when Teams runtime text helpers are unavailable", async () => {
@@ -382,46 +386,12 @@ describe("sendMessageMSTeams", () => {
     expect(firstObjectArg(mockState.sendMSTeamsMessages).replyStyle).toBe("top-level");
   });
 
-  it("uses graphChatId instead of conversationId when uploading to SharePoint", async () => {
-    // Simulates a group chat where Bot Framework conversationId is valid but we have
-    // a resolved Graph chat ID cached from a prior send.
-    const graphChatId = "19:graph-native-chat-id@thread.tacv2";
-    const botFrameworkConversationId = "19:bot-framework-id@thread.tacv2";
+  it("uses the Graph-native group conversation ID for SharePoint sharing", async () => {
+    const graphConversationId = "19:group-id@thread.v2";
 
     mockState.resolveMSTeamsSendContext.mockResolvedValue(
       createSharePointSendContext({
-        conversationId: botFrameworkConversationId,
-        graphChatId,
-        siteId: "site-123",
-      }),
-    );
-    mockSharePointPdfUpload({
-      bufferSize: 100,
-      fileName: "doc.pdf",
-      itemId: "item-1",
-      uniqueId: "{GUID-123}",
-    });
-
-    await sendMessageMSTeams({
-      cfg: {} as OpenClawConfig,
-      to: "conversation:19:bot-framework-id@thread.tacv2",
-      text: "here is a file",
-      mediaUrl: "https://example.com/doc.pdf",
-    });
-
-    // The Graph-native chatId must be passed to SharePoint upload, not the Bot Framework ID
-    const uploadPayload = firstObjectArg(mockState.uploadAndShareSharePoint);
-    expect(uploadPayload.chatId).toBe(graphChatId);
-    expect(uploadPayload.siteId).toBe("site-123");
-  });
-
-  it("falls back to conversationId when graphChatId is not available", async () => {
-    const botFrameworkConversationId = "19:fallback-id@thread.tacv2";
-
-    mockState.resolveMSTeamsSendContext.mockResolvedValue(
-      createSharePointSendContext({
-        conversationId: botFrameworkConversationId,
-        graphChatId: null,
+        conversationId: graphConversationId,
         siteId: "site-456",
       }),
     );
@@ -434,15 +404,40 @@ describe("sendMessageMSTeams", () => {
 
     await sendMessageMSTeams({
       cfg: {} as OpenClawConfig,
-      to: "conversation:19:fallback-id@thread.tacv2",
+      to: `conversation:${graphConversationId}`,
       text: "report",
       mediaUrl: "https://example.com/report.pdf",
     });
 
-    // Falls back to conversationId when graphChatId is null
     const uploadPayload = firstObjectArg(mockState.uploadAndShareSharePoint);
-    expect(uploadPayload.chatId).toBe(botFrameworkConversationId);
+    expect(uploadPayload.chatId).toBe(graphConversationId);
     expect(uploadPayload.siteId).toBe("site-456");
+  });
+
+  it("fails clearly when a group file has no SharePoint site", async () => {
+    mockState.resolveMSTeamsSendContext.mockResolvedValue({
+      ...createSharePointSendContext({
+        conversationId: "19:group-id@thread.v2",
+        siteId: "unused",
+      }),
+      sharePointSiteId: undefined,
+    });
+    mockState.loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "report.pdf",
+      kind: "file",
+    });
+
+    await expect(
+      sendMessageMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: "conversation:19:group-id@thread.v2",
+        text: "report",
+        mediaUrl: "https://example.com/report.pdf",
+      }),
+    ).rejects.toThrow("channels.msteams.sharePointSiteId is required");
+    expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
   });
 });
 

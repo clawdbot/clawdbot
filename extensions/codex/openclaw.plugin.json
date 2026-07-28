@@ -1,28 +1,36 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
-  "providers": ["codex"],
+  "description": "Codex app-server harness and native session catalog.",
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
-    "tools": ["codex_threads"],
+    "tools": [
+      "codex_threads",
+      "codex_endpoint_probe",
+      "codex_sessions_list",
+      "codex_session_read",
+      "codex_session_send",
+      "codex_session_interrupt"
+    ],
     "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
       "capabilities": ["image"],
       "defaultModels": {
-        "image": "gpt-5.5"
+        "image": "gpt-5.6-sol"
       }
     }
   },
-  "providerCatalogEntry": "./provider-discovery.ts",
-  "syntheticAuthRefs": ["codex"],
-  "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
     "onStartup": false,
-    "onAgentHarnesses": ["codex"]
+    "onAgentHarnesses": ["codex"],
+    "onCommands": ["codex"],
+    "onConfigPaths": [
+      "plugins.entries.codex.config.sessionCatalog.enabled",
+      "plugins.entries.codex.config.supervision.enabled"
+    ]
   },
   "commandAliases": [
     {
@@ -44,6 +52,13 @@
         "type": "array",
         "items": { "type": "string" },
         "default": []
+      },
+      "sessionCatalog": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": true }
+        }
       },
       "discovery": {
         "type": "object",
@@ -73,6 +88,38 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "liveTestTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "toolCallTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 60000
+          },
+          "healthCheckEnabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "healthCheckIntervalMinutes": {
+            "type": "number",
+            "enum": [30, 60, 120, 240],
+            "default": 60
+          },
+          "pluginCacheMode": {
+            "type": "string",
+            "enum": ["shared", "independent"],
+            "default": "independent"
+          },
+          "strictReadiness": {
+            "type": "boolean",
+            "default": false
+          },
+          "autoRepair": {
+            "type": "boolean",
+            "default": false
           },
           "marketplaceSource": {
             "type": "string"
@@ -120,7 +167,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated"]
+                  "enum": ["openai-curated", "workspace-directory"]
                 },
                 "pluginName": {
                   "type": "string"
@@ -133,6 +180,46 @@
           }
         }
       },
+      "supervision": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false },
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": { "type": "string" },
+                    "label": { "type": "string" },
+                    "transport": { "const": "stdio-proxy" },
+                    "command": { "type": "string" },
+                    "args": { "type": "array", "items": { "type": "string" } },
+                    "cwd": { "type": "string" }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["transport", "url"],
+                  "properties": {
+                    "id": { "type": "string" },
+                    "label": { "type": "string" },
+                    "transport": { "const": "websocket" },
+                    "url": { "type": "string" },
+                    "authTokenEnv": { "type": "string" }
+                  }
+                }
+              ]
+            }
+          },
+          "allowRawTranscripts": { "type": "boolean", "default": false },
+          "allowWriteControls": { "type": "boolean", "default": false }
+        }
+      },
       "appServer": {
         "type": "object",
         "additionalProperties": false,
@@ -143,7 +230,7 @@
           },
           "transport": {
             "type": "string",
-            "enum": ["stdio", "websocket"],
+            "enum": ["stdio", "websocket", "unix"],
             "default": "stdio"
           },
           "homeScope": {
@@ -178,6 +265,10 @@
             "type": "boolean",
             "default": false
           },
+          "loopDetectionPreToolUseRelay": {
+            "type": "boolean",
+            "default": true
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -187,6 +278,11 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "turnAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 10000
           },
           "postToolRawAssistantCompletionIdleTimeoutMs": {
             "type": "number",
@@ -273,6 +369,14 @@
     }
   },
   "uiHints": {
+    "sessionCatalog": {
+      "label": "Native Session Discovery",
+      "help": "Controls whether Codex sessions from this Gateway and paired nodes appear in the sidebar. Disabling also removes this host's paired-node catalog commands without disabling the Codex provider or harness. Node-list failures usually indicate a Gateway pairing-store or node-registry problem; verify Settings > Devices or run openclaw nodes list. Changes require a Gateway restart."
+    },
+    "sessionCatalog.enabled": {
+      "label": "Discover Codex Sessions",
+      "help": "List native Codex sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
     "codexDynamicToolsLoading": {
       "label": "Dynamic Tools Loading",
       "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
@@ -316,6 +420,41 @@
       "help": "Maximum time to wait for Codex app-server to finish loading marketplaces during Computer Use install.",
       "advanced": true
     },
+    "computerUse.liveTestTimeoutMs": {
+      "label": "Live Test Timeout",
+      "help": "Maximum time for the Computer Use list_apps readiness probe before status and startup treat the live test as failed.",
+      "advanced": true
+    },
+    "computerUse.toolCallTimeoutMs": {
+      "label": "Tool Call Timeout",
+      "help": "Maximum expected time for real Computer Use tool calls such as list_apps before OpenClaw treats the child runtime as stale.",
+      "advanced": true
+    },
+    "computerUse.healthCheckEnabled": {
+      "label": "Periodic Health Checks",
+      "help": "When true, run periodic Computer Use live probes on the configured cadence.",
+      "advanced": true
+    },
+    "computerUse.healthCheckIntervalMinutes": {
+      "label": "Health Check Interval",
+      "help": "Cadence for periodic Computer Use health checks when health checks are enabled.",
+      "advanced": true
+    },
+    "computerUse.pluginCacheMode": {
+      "label": "Plugin Cache Mode",
+      "help": "The default independent mode leaves each Codex home unmanaged. Choose shared to opt in to a refreshed Codex-discoverable cache copy.",
+      "advanced": true
+    },
+    "computerUse.strictReadiness": {
+      "label": "Strict Readiness",
+      "help": "When true, a failed Computer Use live probe stops Codex-mode startup. The default false value preserves existing enabled setups by continuing with a warning.",
+      "advanced": true
+    },
+    "computerUse.autoRepair": {
+      "label": "Auto Repair",
+      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children before retrying once.",
+      "advanced": true
+    },
     "computerUse.marketplaceSource": {
       "label": "Marketplace Source",
       "help": "Optional Codex marketplace source to add before installing Computer Use.",
@@ -348,7 +487,7 @@
     },
     "codexPlugins.enabled": {
       "label": "Enable Native Plugins",
-      "help": "Expose explicit migrated Codex plugin entries to Codex harness turns.",
+      "help": "Expose explicit Codex plugin entries to Codex harness turns.",
       "advanced": true
     },
     "codexPlugins.allow_all_plugins": {
@@ -362,8 +501,32 @@
       "advanced": true
     },
     "codexPlugins.plugins": {
-      "label": "Migrated Plugin Entries",
-      "help": "Explicit migration-authored plugin entries. The wildcard key * is not supported.",
+      "label": "Plugin Entries",
+      "help": "Explicit plugin entries. The wildcard key * is not supported.",
+      "advanced": true
+    },
+    "supervision": {
+      "label": "Codex Supervision",
+      "help": "Configure the separate user-home App Server connection used by the native session catalog and optional supervision tools.",
+      "advanced": true
+    },
+    "supervision.enabled": {
+      "label": "Enable Codex Supervision",
+      "help": "Enable agent-facing Codex supervision tools. The operator session catalog remains available whenever the plugin is active."
+    },
+    "supervision.endpoints": {
+      "label": "Legacy Supervisor Endpoints",
+      "help": "Advanced compatibility endpoints for migrated Codex Supervisor agent tools.",
+      "advanced": true
+    },
+    "supervision.allowRawTranscripts": {
+      "label": "Allow Raw Transcript Tools",
+      "help": "Allow supervision agent tools, including turn-inclusive codex_threads reads, to expose full transcripts and transcript previews.",
+      "advanced": true
+    },
+    "supervision.allowWriteControls": {
+      "label": "Allow Write Control Tools",
+      "help": "Allow supervision agent tools to control turns and let codex_threads fork, rename, archive, or unarchive native threads.",
       "advanced": true
     },
     "appServer": {
@@ -378,7 +541,7 @@
     },
     "appServer.transport": {
       "label": "Transport",
-      "help": "Use stdio to spawn Codex locally, or websocket to connect to an already-running app-server.",
+      "help": "Use stdio to spawn Codex locally or unix for the shared local control socket. Remote websocket transport is experimental and unsupported by Codex.",
       "advanced": true
     },
     "appServer.homeScope": {
@@ -428,6 +591,11 @@
       "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
       "advanced": true
     },
+    "appServer.loopDetectionPreToolUseRelay": {
+      "label": "Loop Detection Pre-tool Relay",
+      "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
@@ -436,6 +604,11 @@
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.turnAssistantCompletionIdleTimeoutMs": {
+      "label": "Assistant Completion Idle Timeout",
+      "help": "Short quiet-time guard after Codex reports a completed assistant message before OpenClaw releases the turn.",
       "advanced": true
     },
     "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {

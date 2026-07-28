@@ -1,6 +1,7 @@
 // Slack plugin module validates non-serializable per-event Enterprise Grid scope.
-import type { WebClient } from "@slack/web-api";
+import type { WebClient, WebClientOptions } from "@slack/web-api";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getSlackListenerUploadCompletionClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
 
 export type SlackEventScope = {
@@ -8,12 +9,14 @@ export type SlackEventScope = {
   enterpriseId: string;
   teamId: string;
   isEnterpriseInstall: true;
-  // Keep Bolt's exact listener client: Bolt pools it by authorized team and WebClient injects
-  // that client's team_id into every API call. Do not recreate it or add team_id payloads here.
+  // Keep Bolt's exact listener client for ordinary reads and writes.
   client: WebClient;
+  // Completion is one-shot, so uploads finalize through a team-scoped client
+  // that cannot inherit Bolt's normal request retries.
+  uploadCompletionClient?: WebClient;
 };
 
-export type SlackEventScopeResolution =
+type SlackEventScopeResolution =
   | { ok: true; scope?: SlackEventScope }
   | {
       ok: false;
@@ -38,6 +41,7 @@ export function resolveSlackEventScope(params: {
     teamId?: unknown;
   };
   client?: WebClient;
+  clientOptions?: WebClientOptions;
 }): SlackEventScopeResolution {
   const context = params.context ?? {};
   if (params.identity.kind !== "enterprise") {
@@ -74,6 +78,11 @@ export function resolveSlackEventScope(params: {
   if (!params.client) {
     return { ok: false, reason: "missing_listener_client" };
   }
+  const uploadCompletionClient = getSlackListenerUploadCompletionClient({
+    listenerClient: params.client,
+    teamId,
+    clientOptions: params.clientOptions,
+  });
   return {
     ok: true,
     scope: {
@@ -82,6 +91,7 @@ export function resolveSlackEventScope(params: {
       teamId,
       isEnterpriseInstall: true,
       client: params.client,
+      ...(uploadCompletionClient ? { uploadCompletionClient } : {}),
     },
   };
 }

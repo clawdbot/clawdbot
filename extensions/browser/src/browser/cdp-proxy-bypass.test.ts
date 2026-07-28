@@ -33,7 +33,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
 import {
   assertManagedProxyAllowsCdpUrl,
   getDirectAgentForCdp,
-  hasProxyEnv,
   withManagedProxyForCdpUrl,
   withNoProxyForCdpUrl,
 } from "./cdp-proxy-bypass.js";
@@ -109,51 +108,6 @@ describe("cdp-proxy-bypass", () => {
 
     it("returns undefined for invalid URLs", () => {
       expect(getDirectAgentForCdp("not-a-url")).toBeUndefined();
-    });
-  });
-
-  describe("hasProxyEnv", () => {
-    const proxyVars = [
-      "HTTP_PROXY",
-      "http_proxy",
-      "HTTPS_PROXY",
-      "https_proxy",
-      "ALL_PROXY",
-      "all_proxy",
-    ];
-    const saved: Record<string, string | undefined> = {};
-
-    beforeEach(() => {
-      for (const v of proxyVars) {
-        saved[v] = process.env[v];
-      }
-      for (const v of proxyVars) {
-        delete process.env[v];
-      }
-    });
-
-    afterEach(() => {
-      for (const v of proxyVars) {
-        if (saved[v] !== undefined) {
-          process.env[v] = saved[v];
-        } else {
-          delete process.env[v];
-        }
-      }
-    });
-
-    it("returns false when no proxy vars set", () => {
-      expect(hasProxyEnv()).toBe(false);
-    });
-
-    it("returns true when HTTP_PROXY is set", () => {
-      process.env.HTTP_PROXY = "http://proxy:8080";
-      expect(hasProxyEnv()).toBe(true);
-    });
-
-    it("returns true when ALL_PROXY is set", () => {
-      process.env.ALL_PROXY = "socks5://proxy:1080";
-      expect(hasProxyEnv()).toBe(true);
     });
   });
 

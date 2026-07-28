@@ -19,6 +19,9 @@ const OPENAI_REALTIME_SSRF_POLICY = {
   allowIpv6UniqueLocalRange: true,
   hostnameAllowlist: [new URL(OPENAI_REALTIME_API_BASE_URL).hostname],
 } satisfies SsrFPolicy;
+// Secret minting blocks interactive Talk setup; keep this absolute budget aligned
+// with the maintained realtime Talk live smoke.
+const OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS = 30_000;
 
 export const trimToUndefined = normalizeOptionalString;
 export { asFiniteNumber, asObjectRecord };
@@ -67,7 +70,7 @@ export function captureOpenAIRealtimeWsClose(params: {
   });
 }
 
-export type OpenAIRealtimeClientSecretResult = {
+type OpenAIRealtimeClientSecretResult = {
   value: string;
   expiresAt?: number;
 };
@@ -113,6 +116,7 @@ async function createOpenAIRealtimeSecret(
       body: JSON.stringify(params.body),
     },
     policy: OPENAI_REALTIME_SSRF_POLICY,
+    timeoutMs: OPENAI_REALTIME_CLIENT_SECRET_REQUEST_TIMEOUT_MS,
     auditContext: params.auditContext,
   });
   const payload = await (async () => {

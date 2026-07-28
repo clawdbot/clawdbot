@@ -32,19 +32,93 @@ import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/type
 import { normalizePositiveLimit } from "./limits.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
-import type { ReadToolDetails } from "./tool-contracts.js";
+import type { ReadToolDetails, ReadToolTruncationDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.js";
+import {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_LINES,
+  formatSize,
+  truncateHead,
+  type TruncationResult,
+} from "./truncate.js";
 
 const readSchema = Type.Object({
-  path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-  offset: Type.Optional(
-    Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" }),
-  ),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+  path: Type.String({ description: "File path; relative/absolute." }),
+  offset: Type.Optional(Type.Integer({ minimum: 1, description: "Start line; 1-based." })),
+  limit: Type.Optional(Type.Number({ description: "Max lines." })),
 });
-export type { ReadToolDetails, ReadToolInput } from "./tool-contracts.js";
 
+const ReadTruncationOutputSchema = Type.Object(
+  {
+    truncated: Type.Literal(true),
+    truncatedBy: Type.Union([Type.Literal("lines"), Type.Literal("bytes")]),
+    totalLines: Type.Integer({ minimum: 0 }),
+    totalBytes: Type.Integer({ minimum: 0 }),
+    outputLines: Type.Integer({ minimum: 0 }),
+    outputBytes: Type.Integer({ minimum: 0 }),
+    lastLinePartial: Type.Boolean(),
+    firstLineExceedsLimit: Type.Boolean(),
+    maxLines: Type.Integer({ minimum: 1 }),
+    maxBytes: Type.Integer({ minimum: 1 }),
+  },
+  { additionalProperties: false },
+);
+
+const ReadToolOutputSchema = Type.Union([
+  Type.Object(
+    { kind: Type.Literal("text"), content: Type.String() },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("image"),
+      content: Type.String(),
+      mimeType: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("truncated"),
+      content: Type.String(),
+      truncation: ReadTruncationOutputSchema,
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      kind: Type.Literal("not_found"),
+      status: Type.Literal("not_found"),
+      path: Type.String(),
+      optional: Type.Literal(true),
+    },
+    { additionalProperties: false },
+  ),
+]);
+
+function withoutTruncationContent(truncation: TruncationResult): ReadToolTruncationDetails {
+  const { content: _content, ...details } = truncation;
+  return details;
+}
+
+function createReadDetails(
+  content: (TextContent | ImageContent)[],
+  truncation?: TruncationResult,
+): ReadToolDetails {
+  const text = content.find((part): part is TextContent => part.type === "text")?.text ?? "";
+  const image = content.find((part): part is ImageContent => part.type === "image");
+  if (image) {
+    return { kind: "image", content: text, mimeType: image.mimeType };
+  }
+  if (truncation) {
+    return {
+      kind: "truncated",
+      content: text,
+      truncation: withoutTruncationContent(truncation),
+    };
+  }
+  return { kind: "text", content: text };
+}
 interface CompactReadClassification {
   kind: "docs" | "resource" | "skill";
   label: string;
@@ -91,7 +165,9 @@ function formatReadLineRange(args: ReadRenderArgs | undefined, theme: Theme): st
     return "";
   }
   const startLine = args.offset ?? 1;
-  const endLine = args.limit !== undefined ? startLine + args.limit - 1 : "";
+  const normalizedLimit =
+    args.limit !== undefined ? normalizePositiveLimit(args.limit, DEFAULT_MAX_LINES) : undefined;
+  const endLine = normalizedLimit !== undefined ? startLine + normalizedLimit - 1 : "";
   return theme.fg("warning", `:${startLine}${endLine ? `-${endLine}` : ""}`);
 }
 
@@ -237,7 +313,7 @@ function formatReadResult(
     text += `${theme.fg("muted", `\n... (${remaining} more lines,`)} ${keyHint("app.tools.expand", "to expand")})`;
   }
 
-  const truncation = result.details?.truncation;
+  const truncation = result.details?.kind === "truncated" ? result.details.truncation : undefined;
   if (truncation?.truncated) {
     if (truncation.firstLineExceedsLimit) {
       text += `\n${theme.fg("warning", `[First line exceeds ${formatSize(truncation.maxBytes ?? DEFAULT_MAX_BYTES)} limit]`)}`;
@@ -253,16 +329,17 @@ function formatReadResult(
 export function createReadToolDefinition(
   cwd: string,
   options?: ReadToolOptions,
-): ToolDefinition<typeof readSchema, ReadToolDetails | undefined> {
+): ToolDefinition<typeof readSchema, ReadToolDetails> {
   const autoResizeImages = options?.autoResizeImages ?? true;
   const ops = options?.operations ?? defaultReadOperations;
   return {
     name: "read",
     label: "read",
-    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp, bmp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+    description: `Read text/image file (jpg/png/gif/webp/bmp); images attach. Text caps ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB. Large/full file: continue offset/limit.`,
     promptSnippet: "Read file contents",
     promptGuidelines: ["Use read to examine files instead of cat or sed."],
     parameters: readSchema,
+    outputSchema: ReadToolOutputSchema,
     async execute(
       toolCallId,
       { path, offset, limit }: { path: string; offset?: number; limit?: number },
@@ -277,7 +354,7 @@ export function createReadToolDefinition(
       }
       return new Promise<{
         content: (TextContent | ImageContent)[];
-        details: ReadToolDetails | undefined;
+        details: ReadToolDetails;
       }>((resolve, reject) => {
         if (signal?.aborted) {
           reject(new Error("Operation aborted"));
@@ -302,7 +379,7 @@ export function createReadToolDefinition(
               ? await ops.detectImageMimeType(absolutePath)
               : undefined;
             let content: (TextContent | ImageContent)[];
-            let details: ReadToolDetails | undefined;
+            let truncationDetails: TruncationResult | undefined;
             const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
             if (mimeType) {
               // Read image as binary.
@@ -360,9 +437,13 @@ export function createReadToolDefinition(
               let outputText: string;
               if (truncation.firstLineExceedsLimit) {
                 // First line alone exceeds the byte limit. Point the model at a bash fallback.
-                const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine], "utf-8"));
+                const firstLine = allLines.at(startLine);
+                if (firstLine === undefined) {
+                  throw new Error("Requested line is outside the file.");
+                }
+                const firstLineSize = formatSize(Buffer.byteLength(firstLine, "utf-8"));
                 outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startLineDisplay}p' ${quotePosixShellArg(path)} | head -c ${DEFAULT_MAX_BYTES}]`;
-                details = { truncation };
+                truncationDetails = truncation;
               } else if (truncation.truncated) {
                 // Truncation occurred. Build an actionable continuation notice.
                 const endLineDisplay = startLineDisplay + truncation.outputLines - 1;
@@ -373,7 +454,7 @@ export function createReadToolDefinition(
                 } else {
                   outputText += `\n\n[Showing lines ${startLineDisplay}-${endLineDisplay} of ${totalFileLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Use offset=${nextOffset} to continue.]`;
                 }
-                details = { truncation };
+                truncationDetails = truncation;
               } else if (
                 userLimitedLines !== undefined &&
                 startLine + userLimitedLines < allLines.length
@@ -393,7 +474,7 @@ export function createReadToolDefinition(
               return;
             }
             signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details });
+            resolve({ content, details: createReadDetails(content, truncationDetails) });
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {

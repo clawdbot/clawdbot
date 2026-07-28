@@ -18,7 +18,7 @@ function ensureMetaResponsesReplayFields(payloadObj: Record<string, unknown>): v
   payloadObj.store = false;
 }
 
-export function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
@@ -32,9 +32,7 @@ export function createMetaResponsesWrapper(baseStreamFn: StreamFn | undefined): 
     });
 }
 
-export function wrapMetaProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-): StreamFn | undefined {
+export function wrapMetaProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   if (ctx.provider !== "meta" || ctx.model?.api !== "openai-responses") {
     return undefined;
   }

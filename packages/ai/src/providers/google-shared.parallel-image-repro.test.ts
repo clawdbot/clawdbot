@@ -1,4 +1,5 @@
 import type { Part } from "@google/genai";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { Context, Model } from "../types.js";
 import { convertMessages } from "./google-shared.js";
@@ -79,7 +80,9 @@ describe("google-shared convertMessages — parallel tool results with an image 
       const contents = convertMessagesForTest(model, context);
 
       expect(contents.map((content) => content.role)).toEqual(["user", "model", "user", "user"]);
-      expect(functionResponseNames(contents[2].parts)).toEqual(resultOrder);
+      expect(
+        functionResponseNames(expectDefined(contents[2], "contents[2] test invariant").parts),
+      ).toEqual(resultOrder);
       expect(contents[3]).toEqual({
         role: "user",
         parts: [

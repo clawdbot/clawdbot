@@ -1,4 +1,5 @@
 // Qqbot plugin module implements group behavior.
+import { resolveScopeRequireMention, type ScopeTree } from "openclaw/plugin-sdk/channel-policy";
 import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
 import { resolveAccountBase } from "./resolve.js";
@@ -14,10 +15,10 @@ interface GroupConfig {
 
 export type QQBotGroupCommandLevel = "all" | "safety" | "strict";
 
-export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 // Omitted commandLevel preserves shipped QQBot group behavior. Operators opt in to
 // the fail-closed safety/strict modes per group or wildcard group config.
-export const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
+const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
 
 export const DEFAULT_GROUP_PROMPT =
   "If the sender is a bot, respond only when they explicitly @mention you to ask a question or request assistance with a specific task; keep your replies concise and clear, avoiding the urge to race other bots to answer or engage in lengthy, unproductive exchanges. In group chats, prioritize responding to messages from human users; bots should maintain a collaborative rather than competitive dynamic to ensure the conversation remains orderly and does not result in message flooding.";
@@ -81,18 +82,32 @@ export function resolveGroupConfig(
 ): GroupConfig {
   const account = resolveAccountBase(cfg, accountId);
   const groups = readGroupsMap(cfg, accountId);
-  const wildcard = groups["*"] ?? {};
+  const { "*": wildcard = {}, ...scopes } = groups;
   const specific = groupOpenid ? (groups[groupOpenid] ?? {}) : {};
 
   // 账户级默认值：defaultRequireMention 配置 > 默认 true
-  const accountDefaultRequireMention =
-    asBoolean(account.config.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
+  const accountDefaultRequireMention = asBoolean(account.config.defaultRequireMention);
+  const mentionTree: ScopeTree = {
+    defaults: { requireMention: readBoolean(wildcard, "requireMention") },
+    scopes: Object.fromEntries(
+      Object.entries(scopes).map(([key, entry]) => [
+        key,
+        { requireMention: readBoolean(entry, "requireMention") },
+      ]),
+    ),
+  };
+  // Engine mention matching stays exact and case-sensitive. QQBot's tool-policy
+  // adapter is intentionally case-insensitive, so these paths remain asymmetric.
+  const mentionPath =
+    groupOpenid && Object.hasOwn(mentionTree.scopes, groupOpenid) ? [groupOpenid] : [];
 
   return {
-    requireMention:
-      readBoolean(specific, "requireMention") ??
-      readBoolean(wildcard, "requireMention") ??
-      accountDefaultRequireMention,
+    requireMention: resolveScopeRequireMention({
+      tree: mentionTree,
+      path: mentionPath,
+      requireMentionOverride: accountDefaultRequireMention,
+      overrideOrder: "after-config",
+    }),
     ignoreOtherMentions:
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
@@ -122,57 +137,6 @@ export function resolveGroupCommandLevelFromAccountConfig(
     readCommandLevel(wildcard, "commandLevel") ??
     DEFAULT_GROUP_CONFIG.commandLevel
   );
-}
-
-export function resolveHistoryLimit(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): number {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).historyLimit;
-}
-
-export function resolveRequireMention(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): boolean {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).requireMention;
-}
-
-export function resolveIgnoreOtherMentions(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): boolean {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
-}
-
-/**
- * Resolve the behaviour prompt (PE) for a group. Falls back to the built-in
- * default when neither specific nor wildcard configuration provides one.
- */
-export function resolveGroupPrompt(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): string {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).prompt ?? DEFAULT_GROUP_PROMPT;
-}
-
-/**
- * Resolve the display name for a group.
- *
- * When no name is configured, the first 8 characters of the openid are used
- * as a short identifier so log lines stay compact.
- */
-export function resolveGroupName(
-  cfg: Record<string, unknown>,
-  groupOpenid: string,
-  accountId?: string | null,
-): string {
-  const name = resolveGroupConfig(cfg, groupOpenid, accountId).name;
-  return name || groupOpenid.slice(0, 8);
 }
 
 // ============ GroupSettings (aggregate) ============

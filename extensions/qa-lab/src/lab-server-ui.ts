@@ -55,8 +55,9 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
   if (overrideDir?.trim()) {
     return overrideDir;
   }
+  const sourceDistDir = path.resolve(repoRoot, "extensions/qa-lab/web/dist");
   const candidates = [
-    path.resolve(repoRoot, "extensions/qa-lab/web/dist"),
+    sourceDistDir,
     path.resolve(repoRoot, "dist/extensions/qa-lab/web/dist"),
     fileURLToPath(new URL("../web/dist", import.meta.url)),
   ];
@@ -67,7 +68,7 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
       }
       const indexPath = path.join(candidate, "index.html");
       return fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
-    }) ?? candidates[0]
+    }) ?? sourceDistDir
   );
 }
 

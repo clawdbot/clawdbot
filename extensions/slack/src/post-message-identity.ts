@@ -1,11 +1,14 @@
 // Slack plugin module implements best-effort custom identity fallback for chat.postMessage.
-import type { ChatPostMessageArguments } from "@slack/web-api";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { SlackBasePostMessagePayload } from "./post-message-payload.js";
+import type {
+  SlackBasePostMessagePayload,
+  SlackPostMessagePayload,
+} from "./post-message-payload.js";
 
 export type SlackPostMessageIdentity = {
   username?: string;
@@ -21,16 +24,6 @@ type SlackWebApiErrorData = {
     acceptedScopes?: unknown;
   };
 };
-
-function normalizeSlackScopeList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((scope) => {
-    const normalized = normalizeOptionalString(scope);
-    return normalized ? [normalized] : [];
-  });
-}
 
 function getSlackWebApiErrorData(err: unknown): SlackWebApiErrorData | undefined {
   if (!(err instanceof Error)) {
@@ -51,8 +44,8 @@ function isSlackCustomizeScopeError(err: unknown): boolean {
     return true;
   }
   const scopes = [
-    ...normalizeSlackScopeList(data?.response_metadata?.scopes),
-    ...normalizeSlackScopeList(data?.response_metadata?.acceptedScopes),
+    ...normalizeTrimmedStringList(data?.response_metadata?.scopes),
+    ...normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes),
   ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
 }
@@ -74,7 +67,7 @@ function hasCustomIdentity(identity?: SlackPostMessageIdentity): boolean {
 export async function postSlackMessageWithIdentityFallback<T>(params: {
   basePayload: SlackBasePostMessagePayload;
   identity?: SlackPostMessageIdentity;
-  post: (payload: ChatPostMessageArguments, identity?: SlackPostMessageIdentity) => Promise<T>;
+  post: (payload: SlackPostMessagePayload, identity?: SlackPostMessageIdentity) => Promise<T>;
 }): Promise<T> {
   const { basePayload, identity, post } = params;
   try {

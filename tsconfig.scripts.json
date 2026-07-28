@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "tsBuildInfoFile": ".artifacts/tsgo-cache/scripts.tsbuildinfo"
+  },
+  "include": ["scripts/**/*", "src/**/*.d.ts", "packages/**/*.d.ts"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "**/dist/**",
+    // E2E clients import built dist artifacts and are validated by Docker runs,
+    // so they cannot join this source-only program.
+    "scripts/e2e/**"
+  ]
+}

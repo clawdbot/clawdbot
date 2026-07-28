@@ -26,6 +26,15 @@ beforeEach(() => {
 });
 
 describe("resolveNodeIdFromList defaults", () => {
+  it("keeps compact display-name matching opt-in", () => {
+    const nodes = [node({ nodeId: "mac-1", displayName: "Mac Studio" })];
+
+    expect(() => resolveNodeIdFromList(nodes, "MacStudio")).toThrow(/unknown node: MacStudio/);
+    expect(
+      resolveNodeIdFromList(nodes, "MacStudio", false, { allowCompactDisplayName: true }),
+    ).toBe("mac-1");
+  });
+
   it("falls back to most recently connected node when multiple non-Mac candidates exist", () => {
     const nodes: NodeListNode[] = [
       node({ nodeId: "ios-1", platform: "ios", connectedAtMs: 1 }),
@@ -67,7 +76,8 @@ describe("listNodes", () => {
         paired: [{ nodeId: "pair-1", displayName: "Pair 1", platform: "ios", remoteIp: "1.2.3.4" }],
       });
 
-    await expect(listNodes({})).resolves.toEqual([
+    const signal = new AbortController().signal;
+    await expect(listNodes({}, signal)).resolves.toEqual([
       {
         nodeId: "pair-1",
         displayName: "Pair 1",
@@ -75,8 +85,22 @@ describe("listNodes", () => {
         remoteIp: "1.2.3.4",
       },
     ]);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(1, "node.list", {}, {});
-    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(2, "node.pair.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "node.list",
+      {},
+      {},
+      { signal },
+    );
+    expect(gatewayMocks.callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "node.pair.list",
+      {},
+      {},
+      {
+        signal,
+      },
+    );
   });
 
   it("rethrows unexpected node.list failures without fallback", async () => {
@@ -84,8 +108,9 @@ describe("listNodes", () => {
       new Error("gateway closed (1008): unauthorized"),
     );
 
-    await expect(listNodes({})).rejects.toThrow("gateway closed (1008): unauthorized");
+    const signal = new AbortController().signal;
+    await expect(listNodes({}, signal)).rejects.toThrow("gateway closed (1008): unauthorized");
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1);
-    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {});
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith("node.list", {}, {}, { signal });
   });
 });

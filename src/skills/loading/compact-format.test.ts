@@ -107,6 +107,20 @@ describe("formatSkillsCompact", () => {
     expect(out).not.toContain("<description>");
   });
 
+  it("preserves location notes when compact descriptions are omitted", () => {
+    const out = formatSkillsCompact(
+      [
+        {
+          ...makeSkill("remote", "Remote skill"),
+          locationNote: "Load with exec host=node node=node-1.",
+        },
+      ],
+      { descriptionMaxChars: 0 },
+    );
+
+    expect(out).toContain("<location_note>Load with exec host=node node=node-1.</location_note>");
+  });
+
   it("truncates descriptions without splitting emoji surrogate pairs", () => {
     const out = formatSkillsCompact([makeSkill("emoji", `${"A".repeat(16)}😀 trailing`)], {
       descriptionMaxChars: 20,

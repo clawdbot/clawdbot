@@ -3,7 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
 const SUPPORTED_DIST_TAGS = new Set(["alpha", "beta", "latest", "extended-stable"]);
 
@@ -38,14 +38,15 @@ export function validateNpmPublishBoundary(
   if (parsed === null) {
     throw new Error(`Unsupported release version "${packageVersion}".`);
   }
+  const releaseTrain = classifyReleaseTrain(parsed);
 
-  if (parsed.channel === "alpha") {
+  if (releaseTrain === "alpha") {
     if (npmDistTag !== "alpha") {
       throw new Error("Alpha prereleases must publish to the alpha npm dist-tag.");
     }
     return parsed;
   }
-  if (parsed.channel === "beta") {
+  if (releaseTrain === "beta") {
     if (npmDistTag !== "beta") {
       throw new Error("Beta prereleases must publish to the beta npm dist-tag.");
     }
@@ -56,12 +57,15 @@ export function validateNpmPublishBoundary(
     if (parsed.correctionNumber !== undefined) {
       throw new Error("Extended-stable npm publication does not allow correction suffixes.");
     }
-    if (!bypassExtendedStableGuard && parsed.patch < 33) {
+    if (!bypassExtendedStableGuard && releaseTrain !== "extended-stable") {
       throw new Error("Extended-stable npm publication requires release patch 33 or above.");
     }
     return parsed;
   }
-  if (parsed.patch >= 33) {
+  if (
+    releaseTrain === "extended-stable" ||
+    releaseTrain === "unsupported-extended-stable-correction"
+  ) {
     throw new Error(
       `Final or correction release patch 33 and above must publish to the extended-stable npm dist-tag; got ${npmDistTag}.`,
     );
@@ -159,7 +163,7 @@ export function validateExtendedStableNpmReleaseRequest(request) {
       `Protected main must be in a later calendar month than ${taggedVersion.year}.${taggedVersion.month}; got ${request.mainPackageVersion}.`,
     );
   }
-  if (mainVersion.patch >= 33) {
+  if (classifyReleaseTrain(mainVersion) !== "stable") {
     throw new Error("Protected main must remain on a daily patch below 33.");
   }
   return { extendedStable: true, releaseVersion, extendedStableBranch };
@@ -210,6 +214,8 @@ export function validateFullReleaseValidationManifest({
   npmDistTag,
   expectedWorkflowRef,
   expectedSha,
+  expectedRunId,
+  expectedRunAttempt,
 }) {
   if (manifest.workflowName !== "Full Release Validation") {
     throw new Error(
@@ -219,6 +225,19 @@ export function validateFullReleaseValidationManifest({
   if (manifest.targetSha !== expectedSha) {
     throw new Error(
       `Full release validation target SHA mismatch: expected ${expectedSha}, got ${manifest.targetSha ?? "<missing>"}.`,
+    );
+  }
+  if (expectedRunId !== undefined && String(manifest.runId) !== String(expectedRunId)) {
+    throw new Error(
+      `Full release validation run ID mismatch: expected ${expectedRunId}, got ${manifest.runId ?? "<missing>"}.`,
+    );
+  }
+  if (
+    expectedRunAttempt !== undefined &&
+    String(manifest.runAttempt) !== String(expectedRunAttempt)
+  ) {
+    throw new Error(
+      `Full release validation run attempt mismatch: expected ${expectedRunAttempt}, got ${manifest.runAttempt ?? "<missing>"}.`,
     );
   }
   if (npmDistTag === "extended-stable" && manifest.workflowRef !== expectedWorkflowRef) {
@@ -482,6 +501,8 @@ async function main() {
       npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
       expectedWorkflowRef: process.env.EXPECTED_WORKFLOW_REF,
       expectedSha: process.env.EXPECTED_RELEASE_SHA,
+      expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
+      expectedRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
     });
     return;
   }

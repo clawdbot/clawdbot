@@ -1,5 +1,5 @@
 // Committer tests cover committer script behavior.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -61,6 +61,10 @@ function commitWithHelper(repo: string, commitMessage: string, ...args: string[]
 
 function commitWithHelperArgs(repo: string, ...args: string[]) {
   return run(repo, "bash", [scriptPath, ...args]);
+}
+
+function commitWithHelperFailure(repo: string, ...args: string[]) {
+  return spawnSync("bash", [scriptPath, ...args], { cwd: repo, encoding: "utf8" });
 }
 
 function committedPaths(repo: string) {
@@ -172,13 +176,67 @@ describe("scripts/committer", () => {
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 
+  it("fails before staging when formatting dependencies are missing", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeRepoFile(
+      repo,
+      "scripts/pre-commit/filter-staged-files.mjs",
+      "for (const file of process.argv.slice(4)) { if (file.endsWith('.ts')) process.stdout.write(file + '\\0'); }\n",
+    );
+    writeRepoFile(repo, "note.ts", "export const note = true;\n");
+
+    const result = commitWithHelperFailure(repo, "test: missing formatter", "note.ts");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("cannot run oxfmt without node_modules");
+    expect(result.stderr).toContain("--no-verify-formatted");
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(git(repo, "log", "-1", "--pretty=%s")).toBe("seed");
+  });
+
+  it("commits dependency-less formatted work only with the explicit assertion", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeRepoFile(
+      repo,
+      "scripts/pre-commit/filter-staged-files.mjs",
+      "for (const file of process.argv.slice(4)) { if (file.endsWith('.ts')) process.stdout.write(file + '\\0'); }\n",
+    );
+    writeRepoFile(repo, "note.ts", "export const note = true;\n");
+
+    const output = commitWithHelperArgs(
+      repo,
+      "--no-verify-formatted",
+      "test: formatted assertion",
+      "note.ts",
+    );
+
+    expect(output).toContain("asserts separate formatting proof; committing with --no-verify");
+    expect(committedPaths(repo)).toEqual(["note.ts"]);
+  });
+
+  it("fails before staging when formatter applicability cannot be determined", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeRepoFile(
+      repo,
+      "scripts/pre-commit/filter-staged-files.mjs",
+      "process.stderr.write('fixture filter failure\\n'); process.exit(7);\n",
+    );
+    writeRepoFile(repo, "note.ts", "export const note = true;\n");
+
+    const result = commitWithHelperFailure(repo, "test: failed formatter filter", "note.ts");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unable to determine formatter applicability");
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(git(repo, "log", "-1", "--pretty=%s")).toBe("seed");
+  });
+
   it("bypasses git hooks when using --fast", () => {
     const repo = createRepo();
-    installHook(
-      repo,
-      ".githooks/pre-commit",
-      "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n",
-    );
+    installHook(repo, ".githooks/pre-commit", "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n");
     writeRepoFile(repo, "note.txt", "hello\n");
 
     const output = commitWithHelperArgs(repo, "--fast", "test: fast no verify", "note.txt");
@@ -215,7 +273,7 @@ describe("scripts/committer", () => {
     const output = commitWithHelperArgs(repo, "--help");
 
     expect(output).toContain(
-      'Usage: committer [--force] [--fast] "commit message" "file" ["file" ...]',
+      'Usage: committer [--force] [--fast] [--no-verify-formatted] "commit message" "file" ["file" ...]',
     );
   });
 });

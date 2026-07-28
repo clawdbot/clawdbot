@@ -1,9 +1,15 @@
 /**
  * Gateway session preview resolve tests.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test } from "vitest";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+  loadSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -11,38 +17,60 @@ import {
   sessionStoreEntry,
   getMainPreviewEntry,
   directSessionReq,
-  createLinearSessionTranscript,
+  loadSeededTranscriptEvents,
+  seedLinearSessionTranscript,
+  seedSessionTranscript,
 } from "./test/server-sessions.test-helpers.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-async function writeTranscriptMessage(
-  dir: string,
-  sessionId: string,
-  content: string,
+async function replaceSessionEntries(
+  storePath: string,
+  entries: Record<string, Partial<SessionEntry>>,
+  agentId = "main",
 ): Promise<void> {
-  await fs.writeFile(
-    path.join(dir, `${sessionId}.jsonl`),
-    [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "assistant", content } }),
-    ].join("\n"),
-    "utf-8",
-  );
+  clearSessionStoreCacheForTest();
+  await applySessionEntryLifecycleMutation({
+    agentId,
+    storePath,
+    removals: listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({ sessionKey })),
+    upserts: Object.entries(entries).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry: {
+        updatedAt: 0,
+        ...entry,
+        sessionId: entry.sessionId ?? sessionKey,
+      },
+    })),
+    skipMaintenance: true,
+  });
+  clearSessionStoreCacheForTest();
 }
 
 async function previewMainAliasFromStore(params: {
   transcripts: Record<string, string>;
   store: Record<string, { sessionId: string; updatedAt: number }>;
 }): Promise<Awaited<ReturnType<typeof getMainPreviewEntry>>> {
-  const { dir, storePath } = await createSessionStoreDir();
+  const { dir } = await createSessionStoreDir();
+  const storePath = path.join(dir, "agents", "ops", "sessions", "sessions.json");
+  testState.sessionStorePath = storePath;
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
 
-  for (const [sessionId, content] of Object.entries(params.transcripts)) {
-    await writeTranscriptMessage(dir, sessionId, content);
+  await writeSessionStore({ agentId: "ops", entries: {} });
+  await replaceSessionEntries(storePath, params.store, "ops");
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    const content = params.transcripts[entry.sessionId];
+    if (content) {
+      await seedSessionTranscript({
+        agentId: "ops",
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath,
+        messages: [{ role: "assistant", content }],
+      });
+    }
   }
-  await fs.writeFile(storePath, JSON.stringify(params.store, null, 2), "utf-8");
 
   const { ws } = await openClient();
   try {
@@ -53,16 +81,24 @@ async function previewMainAliasFromStore(params: {
 }
 
 test("sessions.preview returns transcript previews", async () => {
-  const { dir } = await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
-  await fs.writeFile(transcriptPath, lines.join("\n"), "utf-8");
 
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(sessionId),
     },
+  });
+  await seedSessionTranscript({
+    sessionId,
+    sessionKey: "agent:main:main",
+    storePath,
+    messages: lines
+      .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
+      .map((record) => record.message)
+      .filter((message): message is Record<string, unknown> => Boolean(message))
+      .map((message) => Object.assign({ role: String(message.role) }, message)),
   });
 
   const preview = await directSessionReq<{
@@ -118,25 +154,32 @@ test("sessions.preview prefers the freshest duplicate row for a legacy main alia
 });
 
 test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
-  const { dir, storePath } = await createSessionStoreDir();
+  const { dir } = await createSessionStoreDir();
+  const storePath = path.join(dir, "agents", "ops", "sessions", "sessions.json");
+  testState.sessionStorePath = storePath;
   testState.agentsConfig = { list: [{ id: "ops", default: true }] };
   testState.sessionConfig = { mainKey: "work" };
   const sessionId = "sess-alias-cleanup";
-  const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
-  await fs.writeFile(
-    transcriptPath,
-    createLinearSessionTranscript(
-      sessionId,
-      Array.from({ length: 8 }, (_, index) => `line ${index}`),
-    ),
-    "utf-8",
-  );
+  await writeSessionStore({ agentId: "ops", entries: {} });
+  await seedLinearSessionTranscript({
+    agentId: "ops",
+    contents: Array.from({ length: 8 }, (_, index) => `line ${index}`),
+    sessionId,
+    sessionKey: "agent:ops:work",
+    storePath,
+  });
 
-  const writeRawStore = async (store: Record<string, unknown>) => {
-    await fs.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
+  const writeRawStore = async (store: Record<string, Partial<SessionEntry>>) => {
+    await replaceSessionEntries(storePath, store, "ops");
   };
-  const readStore = async () =>
-    JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, Record<string, unknown>>;
+  const readStoreKeys = () =>
+    listSessionEntries({ agentId: "ops", storePath }).map(({ sessionKey }) => sessionKey);
+  const readWorkEntry = () =>
+    loadSessionEntry({
+      agentId: "ops",
+      sessionKey: "agent:ops:work",
+      storePath,
+    });
 
   await writeRawStore({
     "agent:ops:main": { sessionId, updatedAt: Date.now() - 1_000 },
@@ -149,12 +192,11 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   });
   expect(resolved.ok).toBe(true);
   expect(resolved.payload?.key).toBe("agent:ops:work");
-  let store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
 
   await writeRawStore({
-    ...store,
-    "agent:ops:main": { ...store["agent:ops:work"] },
+    "agent:ops:work": readWorkEntry() ?? { sessionId },
+    "agent:ops:main": readWorkEntry() ?? { sessionId },
   });
   const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
     key: "main",
@@ -162,13 +204,12 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   });
   expect(patched.ok).toBe(true);
   expect(patched.payload?.key).toBe("agent:ops:work");
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
-  expect(store["agent:ops:work"]?.thinkingLevel).toBe("medium");
+  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
+  expect(readWorkEntry()?.thinkingLevel).toBe("medium");
 
   await writeRawStore({
-    ...store,
-    "agent:ops:main": { ...store["agent:ops:work"] },
+    "agent:ops:work": readWorkEntry() ?? { sessionId },
+    "agent:ops:main": readWorkEntry() ?? { sessionId },
   });
   const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
     key: "main",
@@ -176,18 +217,31 @@ test("sessions.resolve and mutators clean legacy main-alias ghost keys", async (
   });
   expect(compacted.ok).toBe(true);
   expect(compacted.payload?.compacted).toBe(true);
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
+  const compactedEvents = await loadSeededTranscriptEvents({
+    agentId: "ops",
+    sessionId,
+    sessionKey: "agent:ops:work",
+    storePath,
+  });
+  expect(
+    compactedEvents
+      .map((event) =>
+        event && typeof event === "object" && "message" in event
+          ? (event as { message?: { content?: unknown } }).message?.content
+          : undefined,
+      )
+      .filter((content) => content !== undefined),
+  ).toEqual(["line 6", "line 7"]);
 
   await writeRawStore({
-    ...store,
-    "agent:ops:main": { ...store["agent:ops:work"] },
+    "agent:ops:work": readWorkEntry() ?? { sessionId },
+    "agent:ops:main": readWorkEntry() ?? { sessionId },
   });
   const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:ops:work");
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual(["agent:ops:work"]);
+  expect(readStoreKeys().toSorted()).toEqual(["agent:ops:work"]);
 
   ws.close();
 });

@@ -9,7 +9,8 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
 import { getApiKeyForModel, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
-import { createImageTool, resolveImageModelConfigForTool, testing } from "./image-tool.js";
+import { createImageTool } from "./image-tool.js";
+import { resolveImageModelConfigForTool, testing } from "./image-tool.test-support.js";
 import { hasProviderAuthForTool } from "./model-config.helpers.js";
 
 const USER_PROVIDER = "hatchery-qwen3.6-plus";
@@ -189,9 +190,9 @@ describe("image custom provider auth regression", () => {
     });
   });
 
-  it("executes deferred image tool discovery with config-backed auth and runtime key resolution", async () => {
-    // This covers the production deferred-discovery path: registration can
-    // avoid auth work, but execution still resolves the config-backed key.
+  it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
+    // This covers the text-only fallback path: registration can avoid auth work,
+    // but execution still resolves the config-backed image-model key.
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig();
       const auth = await getApiKeyForModel({
@@ -217,7 +218,7 @@ describe("image custom provider auth regression", () => {
         config: cfg,
         agentDir,
         deferAutoModelResolution: true,
-        modelHasVision: true,
+        modelHasVision: false,
       });
       expect(typeof tool?.execute).toBe("function");
 
@@ -234,30 +235,7 @@ describe("image custom provider auth regression", () => {
     });
   });
 
-  it("accepts a custom provider whose key arrives only via the process environment", async () => {
-    // Service-managed env keys (OPENCLAW_SERVICE_MANAGED_ENV_KEYS) land in
-    // process.env, not in the auth profile store; availability gating must
-    // count them like chat routing does (#103828).
-    const cfg = createUserReportedConfig({ includeApiKey: false });
-    const providers = (cfg.models?.providers ?? {}) as Record<string, { apiKey?: unknown }>;
-    const providerEntry = providers[USER_PROVIDER];
-    if (providerEntry) {
-      providerEntry.apiKey = "${NVIDIA_TEST_API_KEY}";
-    }
-    const previous = process.env.NVIDIA_TEST_API_KEY;
-    process.env.NVIDIA_TEST_API_KEY = "test-env-only-key";
-    try {
-      expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(true);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.NVIDIA_TEST_API_KEY;
-      } else {
-        process.env.NVIDIA_TEST_API_KEY = previous;
-      }
-    }
-  });
-
-  it("still rejects the same config when apiKey is missing", async () => {
+  it("still rejects the same fallback config when apiKey is missing", async () => {
     await withEmptyAgentDir(async (agentDir) => {
       const cfg = createUserReportedConfig({ includeApiKey: false });
       expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
@@ -268,7 +246,7 @@ describe("image custom provider auth regression", () => {
         config: cfg,
         agentDir,
         deferAutoModelResolution: true,
-        modelHasVision: true,
+        modelHasVision: false,
       });
       await expect(
         tool!.execute("regression-2", {

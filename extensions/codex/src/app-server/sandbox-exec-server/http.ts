@@ -6,6 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
@@ -13,7 +14,7 @@ import { requireBackend } from "./runtime.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
 /** Maximum JSON-line size accepted from the streaming HTTP helper process. */
-export const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
+const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 
 /** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
@@ -116,15 +117,31 @@ async function runStreamingSandboxHttpRequest(
     env: {},
     usePty: false,
   });
-  const [command, ...args] = execSpec.argv;
-  if (!command) {
-    throw new Error("OpenClaw sandbox HTTP exec spec did not provide a command.");
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    const [command, ...args] = execSpec.argv;
+    if (!command) {
+      throw new Error("OpenClaw sandbox HTTP exec spec did not provide a command.");
+    }
+    child = spawn(command, args, {
+      env: execSpec.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (error) {
+    try {
+      await backend.finalizeExec?.({
+        status: "failed",
+        exitCode: null,
+        timedOut: false,
+        token: execSpec.finalizeToken,
+      });
+    } catch (finalizeError) {
+      embeddedAgentLog.warn("codex sandbox http/request finalize after start failure failed", {
+        error: finalizeError,
+      });
+    }
+    throw error;
   }
-
-  const child = spawn(command, args, {
-    env: execSpec.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
   const abortOnSocketClose = () => child.kill("SIGTERM");
   socket.once("close", abortOnSocketClose);
   child.once("close", () => {
@@ -156,6 +173,7 @@ function readStreamingSandboxHttpResponse(params: {
   return new Promise((resolve, reject) => {
     let headerResolved = false;
     let failed = false;
+    let childFailure: string | null = null;
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
@@ -187,8 +205,9 @@ function readStreamingSandboxHttpResponse(params: {
       }
       reject(new Error(message));
     };
-    params.child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf8");
+    params.child.stdout.setEncoding("utf8");
+    params.child.stdout.on("data", (chunk: string) => {
+      stdoutBuffer += chunk;
       let newline = stdoutBuffer.indexOf("\n");
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -229,13 +248,22 @@ function readStreamingSandboxHttpResponse(params: {
         );
       }
     });
-    params.child.stderr.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
+    params.child.stderr.setEncoding("utf8");
+    params.child.stderr.on("data", (chunk: string) => {
+      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -4096);
     });
-    params.child.once("error", (error) => fail(error.message, null));
+    params.child.once("error", (error) => {
+      // ChildProcess error can precede close while the helper is still alive.
+      // Keep its backend lease until close provides the terminal exit state.
+      childFailure ??= error.message;
+    });
     params.child.once("close", (code) => {
       const exitCode = code ?? 1;
       if (failed) {
+        return;
+      }
+      if (childFailure) {
+        fail(childFailure, exitCode);
         return;
       }
       if (exitCode === 0) {
@@ -252,7 +280,7 @@ function readStreamingSandboxHttpResponse(params: {
   });
 }
 
-export const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
+const SANDBOX_HTTP_REQUEST_SCRIPT = String.raw`
 tmp=$(mktemp "$TMPDIR/openclaw-http.XXXXXX.py" 2>/dev/null || mktemp "/tmp/openclaw-http.XXXXXX.py") || exit 1
 trap 'rm -f "$tmp"' EXIT
 cat > "$tmp" <<'PY'

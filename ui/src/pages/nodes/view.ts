@@ -1,19 +1,27 @@
 // Nodes page renders its screen content.
 import { html, nothing } from "lit";
+import {
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSection,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import "../../styles/nodes.css";
 import { renderExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.ts";
 import { renderNodesInventory } from "./view-inventory.ts";
 import { resolveConfigAgents, resolveNodeTargets, type NodeTargetOption } from "./view-shared.ts";
-export type { NodesProps } from "./view.types.ts";
 import type { NodesProps } from "./view.types.ts";
 
 export function renderNodes(props: NodesProps) {
   const bindingState = resolveBindingsState(props);
   const approvalsState = resolveExecApprovalsState(props);
-  return html`
-    ${renderNodesInventory(props)} ${renderExecApprovals(approvalsState)}
-    ${renderBindings(bindingState)}
-  `;
+  return renderSettingsPage(
+    html`
+      ${renderNodesInventory(props)} ${renderExecApprovals(approvalsState)}
+      ${renderBindings(bindingState)}
+    `,
+    { wide: true },
+  );
 }
 
 type BindingAgent = {
@@ -68,118 +76,105 @@ function resolveBindingsState(props: NodesProps): BindingState {
 function renderBindings(state: BindingState) {
   const supportsBinding = state.nodes.length > 0;
   const defaultValue = state.defaultBinding ?? "";
-  return html`
-    <section class="card">
-      <div class="row" style="justify-content: space-between; align-items: center;">
-        <div>
-          <div class="card-title">${t("nodes.binding.execNodeBinding")}</div>
-          <div class="card-sub">${t("nodes.binding.execNodeBindingSubtitle")}</div>
-        </div>
-        <button
-          class="btn"
-          ?disabled=${state.disabled || !state.configDirty}
-          @click=${state.onSave}
-        >
-          ${state.configSaving ? t("common.saving") : t("common.save")}
-        </button>
-      </div>
-
-      ${state.formMode === "raw"
-        ? html`
-            <div class="callout warn" style="margin-top: 12px">
-              ${t("nodes.binding.formModeHint")}
-            </div>
-          `
-        : nothing}
-      ${!state.ready
-        ? html`<div class="row" style="margin-top: 12px; gap: 12px;">
-            <div class="muted">${t("nodes.binding.loadConfigHint")}</div>
+  const saveButton = html`
+    <button class="btn" ?disabled=${state.disabled || !state.configDirty} @click=${state.onSave}>
+      ${state.configSaving ? t("common.saving") : t("common.save")}
+    </button>
+  `;
+  const rows = html`
+    ${state.formMode === "raw"
+      ? renderSettingsRow({ title: t("nodes.binding.formModeHint") })
+      : nothing}
+    ${!state.ready
+      ? renderSettingsRow({
+          title: t("nodes.binding.loadConfigHint"),
+          control: html`
             <button class="btn" ?disabled=${state.configLoading} @click=${state.onLoadConfig}>
               ${state.configLoading ? t("common.loading") : t("common.loadConfig")}
             </button>
-          </div>`
-        : html`
-            <div class="list" style="margin-top: 16px;">
-              <div class="list-item">
-                <div class="list-main">
-                  <div class="list-title">${t("nodes.binding.defaultBinding")}</div>
-                  <div class="list-sub">${t("nodes.binding.defaultBindingHint")}</div>
-                </div>
-                <div class="list-meta">
-                  <label class="field">
-                    <span>${t("nodes.binding.node")}</span>
-                    <select
-                      ?disabled=${state.disabled || !supportsBinding}
-                      @change=${(event: Event) => {
-                        const target = event.target as HTMLSelectElement;
-                        const value = target.value.trim();
-                        state.onBindDefault(value ? value : null);
-                      }}
-                    >
-                      <option value="" ?selected=${defaultValue === ""}>Any node</option>
-                      ${state.nodes.map(
-                        (node) =>
-                          html`<option value=${node.id} ?selected=${defaultValue === node.id}>
-                            ${node.label}
-                          </option>`,
-                      )}
-                    </select>
-                  </label>
-                  ${!supportsBinding
-                    ? html` <div class="muted">No nodes with system.run available.</div> `
-                    : nothing}
-                </div>
-              </div>
-
-              ${state.agents.length === 0
-                ? html` <div class="muted">No agents found.</div> `
-                : state.agents.map((agent) => renderAgentBinding(agent, state))}
-            </div>
-          `}
-    </section>
+          `,
+        })
+      : html`
+          ${renderSettingsRow({
+            title: t("nodes.binding.defaultBinding"),
+            description: supportsBinding
+              ? t("nodes.binding.defaultBindingHint")
+              : html`${t("nodes.binding.defaultBindingHint")} ${t("nodes.binding.noNodes")}`,
+            control: html`
+              <select
+                class="settings-select"
+                aria-label=${t("nodes.binding.node")}
+                ?disabled=${state.disabled || !supportsBinding}
+                @change=${(event: Event) => {
+                  const target = event.target as HTMLSelectElement;
+                  const value = target.value.trim();
+                  state.onBindDefault(value ? value : null);
+                }}
+              >
+                <option value="" ?selected=${defaultValue === ""}>
+                  ${t("nodes.binding.anyNode")}
+                </option>
+                ${state.nodes.map(
+                  (node) =>
+                    html`<option value=${node.id} ?selected=${defaultValue === node.id}>
+                      ${node.label}
+                    </option>`,
+                )}
+              </select>
+            `,
+          })}
+          ${state.agents.length === 0
+            ? renderSettingsRow({ title: t("nodes.binding.noAgents") })
+            : state.agents.map((agent) => renderAgentBinding(agent, state))}
+        `}
   `;
+  return renderSettingsSection(
+    {
+      title: t("nodes.binding.execNodeBinding"),
+      description: t("nodes.binding.execNodeBindingSubtitle"),
+      actions: saveButton,
+    },
+    rows,
+  );
 }
 
 function renderAgentBinding(agent: BindingAgent, state: BindingState) {
   const bindingValue = agent.binding ?? "__default__";
   const label = agent.name?.trim() ? `${agent.name} (${agent.id})` : agent.id;
   const supportsBinding = state.nodes.length > 0;
-  return html`
-    <div class="list-item">
-      <div class="list-main">
-        <div class="list-title">${label}</div>
-        <div class="list-sub">
-          ${agent.isDefault ? "default agent" : "agent"} ·
-          ${bindingValue === "__default__"
-            ? `uses default (${state.defaultBinding ?? "any"})`
-            : `override: ${agent.binding}`}
-        </div>
-      </div>
-      <div class="list-meta">
-        <label class="field">
-          <span>Binding</span>
-          <select
-            ?disabled=${state.disabled || !supportsBinding}
-            @change=${(event: Event) => {
-              const target = event.target as HTMLSelectElement;
-              const value = target.value.trim();
-              state.onBindAgent(agent.index, value === "__default__" ? null : value);
-            }}
-          >
-            <option value="__default__" ?selected=${bindingValue === "__default__"}>
-              Use default
-            </option>
-            ${state.nodes.map(
-              (node) =>
-                html`<option value=${node.id} ?selected=${bindingValue === node.id}>
-                  ${node.label}
-                </option>`,
-            )}
-          </select>
-        </label>
-      </div>
-    </div>
-  `;
+  return renderSettingsRow({
+    title: label,
+    description: html`
+      ${agent.isDefault ? t("nodes.binding.defaultAgent") : t("nodes.binding.agent")} ·
+      ${bindingValue === "__default__"
+        ? t("nodes.binding.usesDefault", {
+            node: state.defaultBinding ?? t("nodes.binding.any"),
+          })
+        : t("nodes.binding.override", { node: agent.binding ?? "" })}
+    `,
+    control: html`
+      <select
+        class="settings-select"
+        aria-label=${t("nodes.binding.binding")}
+        ?disabled=${state.disabled || !supportsBinding}
+        @change=${(event: Event) => {
+          const target = event.target as HTMLSelectElement;
+          const value = target.value.trim();
+          state.onBindAgent(agent.index, value === "__default__" ? null : value);
+        }}
+      >
+        <option value="__default__" ?selected=${bindingValue === "__default__"}>
+          ${t("nodes.binding.useDefault")}
+        </option>
+        ${state.nodes.map(
+          (node) =>
+            html`<option value=${node.id} ?selected=${bindingValue === node.id}>
+              ${node.label}
+            </option>`,
+        )}
+      </select>
+    `,
+  });
 }
 
 function resolveExecNodes(nodes: Array<Record<string, unknown>>): BindingNode[] {

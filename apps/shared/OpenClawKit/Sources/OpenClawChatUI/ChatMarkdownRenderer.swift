@@ -14,7 +14,38 @@ struct ChatMarkdownRenderer: View {
         case assistant
     }
 
-    struct InlineMathTypography {
+    enum Typography: Equatable {
+        enum HeadingStyle: Equatable {
+            case hierarchy
+            case prose
+        }
+
+        case response
+        case thinking
+
+        var headingStyle: HeadingStyle {
+            self == .response ? .hierarchy : .prose
+        }
+
+        var proseFont: Font {
+            self == .response
+                ? OpenClawChatTypography.body
+                : OpenClawChatTypography.callout.italic()
+        }
+
+        var inlineMath: InlineMathTypography {
+            self == .response ? .body : .callout
+        }
+
+        func headingFont(level: Int) -> Font {
+            switch self.headingStyle {
+            case .hierarchy: OpenClawChatTypography.heading(level: level)
+            case .prose: self.proseFont
+            }
+        }
+    }
+
+    struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
         static let callout = Self(size: 16, relativeTo: .callout)
 
@@ -25,8 +56,14 @@ struct ChatMarkdownRenderer: View {
     let snapshot: ChatMarkdownRenderSnapshot
     let context: Context
     let variant: ChatMarkdownVariant
-    let font: Font
+    let typography: Typography
     let textColor: Color
+
+    static func styledText(_ content: String, font: Font) -> SwiftUI.Text {
+        SwiftUI.Text(content)
+            .font(font)
+    }
+
     var reveal: ChatMarkdownProseReveal?
 
     @ScaledMetric private var inlineMathFontSize: CGFloat
@@ -36,38 +73,36 @@ struct ChatMarkdownRenderer: View {
         text: String,
         context: Context,
         variant: ChatMarkdownVariant,
-        font: Font,
+        typography: Typography = .response,
         textColor: Color,
-        inlineMathTypography: InlineMathTypography = .body,
         isComplete: Bool = true)
     {
         self.init(
             snapshot: ChatMarkdownRenderSnapshot(text: text, isComplete: isComplete),
             context: context,
             variant: variant,
-            font: font,
-            textColor: textColor,
-            inlineMathTypography: inlineMathTypography)
+            typography: typography,
+            textColor: textColor)
     }
 
     init(
         snapshot: ChatMarkdownRenderSnapshot,
         context: Context,
         variant: ChatMarkdownVariant,
-        font: Font,
+        typography: Typography = .response,
         textColor: Color,
-        inlineMathTypography: InlineMathTypography = .body,
         reveal: ChatMarkdownProseReveal? = nil)
     {
         self.snapshot = snapshot
         self.context = context
         self.variant = variant
-        self.font = font
+        self.typography = typography
         self.textColor = textColor
         self.reveal = reveal
+        let inlineMath = typography.inlineMath
         self._inlineMathFontSize = ScaledMetric(
-            wrappedValue: inlineMathTypography.size,
-            relativeTo: inlineMathTypography.relativeTo)
+            wrappedValue: inlineMath.size,
+            relativeTo: inlineMath.relativeTo)
     }
 
     var body: some View {
@@ -87,19 +122,42 @@ struct ChatMarkdownRenderer: View {
         switch block {
         case let .prose(prose):
             self.proseText(prose, index: index)
-                .font(self.font)
+                .font(self.typography.proseFont)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
                 .lineSpacing(self.variant == .compact ? 2 : 4)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
+        case let .heading(level, prose):
+            self.proseText(prose, index: index)
+                .font(self.typography.headingFont(level: level))
+                .foregroundStyle(self.textColor)
+                .tint(self.linkColor)
+                .textSelection(.enabled)
+                .lineSpacing(self.variant == .compact ? 2 : 4)
+                .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
+                .accessibilityAddTraits(.isHeader)
         case let .code(code):
             ChatCodeBlockView(block: code)
         case let .math(math):
             ChatMathBlockView(block: math, textColor: self.textColor)
         case let .table(table):
             ChatMarkdownTableView(table: table)
+        case let .list(list):
+            self.listView(list)
+        case .thematicBreak:
+            Divider()
+                .accessibilityHidden(true)
         }
+    }
+
+    func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
+        ChatMarkdownListView(
+            list: list,
+            context: self.context,
+            variant: self.variant,
+            typography: self.typography,
+            textColor: self.textColor)
     }
 
     private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {
@@ -141,12 +199,23 @@ struct ChatMarkdownRenderSnapshot {
                     markdown: markdown,
                     isComplete: isComplete,
                     preparesReveal: preparesReveal))
+            case let .heading(heading):
+                .heading(
+                    level: heading.level,
+                    prose: ChatMarkdownProse(
+                        markdown: heading.markdown,
+                        isComplete: isComplete,
+                        preparesReveal: false))
             case let .code(code):
                 .code(code)
             case let .math(math):
                 .math(math)
             case let .table(table):
                 .table(table)
+            case let .list(list):
+                .list(list)
+            case .thematicBreak:
+                .thematicBreak
             }
         }
         self.images = processed.images
@@ -164,9 +233,12 @@ struct ChatMarkdownRenderSnapshot {
 
 enum ChatMarkdownRenderedBlock {
     case prose(ChatMarkdownProse)
+    case heading(level: Int, prose: ChatMarkdownProse)
     case code(ChatCodeBlock)
     case math(ChatMathBlock)
     case table(ChatMarkdownTable)
+    case list(ChatMarkdownList)
+    case thematicBreak
 }
 
 @MainActor
@@ -219,6 +291,7 @@ struct ChatMarkdownProse {
         }
     }
 
+    // periphery:ignore - package tests inspect parsed math spans without exposing renderer internals.
     var inlineMathLatex: [String] {
         self.inlineContent?.compactMap { content in
             if case let .math(span) = content {
@@ -438,14 +511,14 @@ private struct ChatInlineMathAccessibilityModifier: ViewModifier {
 
     func body(content: Content) -> some View {
         if let label {
-            content.accessibilityLabel(Text(label))
+            content.accessibilityLabel(label)
         } else {
             content
         }
     }
 }
 
-/// Fenced code, display math, and GFM tables are split out by `ChatMarkdownBlockSegmenter`
+/// Structural Markdown blocks are split out by `ChatMarkdownBlockSegmenter`
 /// before this runs, so prose only needs chat-style soft-break preservation.
 enum ChatMarkdownDisplayPreprocessor {
     static func preserveChatSoftBreaks(in markdown: String) -> String {

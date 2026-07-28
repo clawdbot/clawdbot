@@ -138,7 +138,6 @@ describe("xai code_execution tool", () => {
                   apiKey: "xai-config-test", // pragma: allowlist secret
                 },
                 codeExecution: {
-                  model: "grok-4-1-fast",
                   maxTurns: 2,
                   timeoutSeconds: 45,
                 },
@@ -156,7 +155,9 @@ describe("xai code_execution tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4-1-fast");
+    expect(body.model).toBe("grok-4.3");
+    expect(body.store).toBe(false);
+    expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);
     expect(body.tools).toEqual([{ type: "code_interpreter" }]);
     expect(
@@ -243,28 +244,5 @@ describe("xai code_execution tool", () => {
         task: "Calculate the mean of [40, 42, 44]",
       }),
     ).rejects.toThrow("xAI code execution failed: malformed JSON response");
-  });
-
-  it("reuses the legacy grok web search key for code_execution requests", async () => {
-    const mockFetch = installCodeExecutionFetch();
-    const tool = createCodeExecutionTool({
-      config: {
-        tools: {
-          web: {
-            search: {
-              grok: {
-                apiKey: "xai-legacy-key", // pragma: allowlist secret
-              },
-            },
-          },
-        },
-      },
-    });
-
-    await tool?.execute?.("code-execution:legacy-key", {
-      task: "Count rows in a two-column table",
-    });
-
-    expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-legacy-key");
   });
 });

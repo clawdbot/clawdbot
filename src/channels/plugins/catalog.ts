@@ -52,6 +52,7 @@ export type ChannelPluginCatalogEntry = {
   pluginId?: string;
   origin?: PluginOrigin;
   trustedSourceLinkedOfficialInstall?: boolean;
+  channel?: PluginPackageChannel;
   meta: ChannelMeta;
   install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
@@ -398,6 +399,7 @@ function buildCatalogEntryFromManifest(params: {
     ...(params.trustedSourceLinkedOfficialInstall
       ? { trustedSourceLinkedOfficialInstall: true }
       : {}),
+    channel: params.channel,
     meta,
     install,
     installSource: describePluginInstallSource(install, {
@@ -529,17 +531,6 @@ export function listRawChannelPluginCatalogEntries(
       }
       return a.meta.label.localeCompare(b.meta.label);
     });
-}
-
-/**
- * @deprecated Use `listTrustedChannelPluginCatalogEntries` for execution-facing
- * paths, or `listRawChannelPluginCatalogEntries` for internal plumbing
- * that applies its own trust filtering.
- */
-export function listChannelPluginCatalogEntries(
-  options: CatalogOptions = {},
-): ChannelPluginCatalogEntry[] {
-  return listRawChannelPluginCatalogEntries(options);
 }
 
 export function getChannelPluginCatalogEntry(

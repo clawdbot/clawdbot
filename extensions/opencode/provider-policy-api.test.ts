@@ -42,4 +42,23 @@ describe("opencode provider policy public artifact", () => {
       defaultLevel: "adaptive",
     });
   });
+
+  it("exposes the full GPT-5.6 reasoning profile", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "opencode",
+        modelId: "gpt-5.6-luna",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "max" },
+      ],
+      defaultLevel: "medium",
+    });
+  });
 });

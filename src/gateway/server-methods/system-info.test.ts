@@ -1,6 +1,9 @@
 /** Gateway system.info method tests. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { validateSystemInfoResult } from "../../../packages/gateway-protocol/src/index.js";
+import { getGatewayProcessInstanceId } from "../process-instance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -28,8 +31,14 @@ describe("system.info", () => {
       },
     } as unknown as GatewayRequestHandlerOptions;
 
-    await systemHandlers["system.info"](request);
-    await systemHandlers["system.info"](request);
+    await expectDefined(
+      systemHandlers["system.info"],
+      'systemHandlers["system.info"] test invariant',
+    )(request);
+    await expectDefined(
+      systemHandlers["system.info"],
+      'systemHandlers["system.info"] test invariant',
+    )(request);
 
     expect(respond).toHaveBeenCalledTimes(2);
     expect(mocks.resolveAdvertisedLanHost).toHaveBeenCalledTimes(1);
@@ -41,6 +50,8 @@ describe("system.info", () => {
     }
     expect(payload.cpuCount).toBeGreaterThanOrEqual(1);
     expect(payload.memoryTotalBytes).toBeGreaterThan(0);
+    expect(payload.processInstanceId).toBe(getGatewayProcessInstanceId());
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
+    expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
   });
 });

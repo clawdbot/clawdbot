@@ -80,6 +80,27 @@ function shortenGroupId(value?: string) {
   return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
 }
 
+/**
+ * Builds a human-readable group/channel title from stored chat metadata.
+ * Prefers the native channel name (#general) or the chat subject verbatim;
+ * returns undefined when only opaque route ids are available so callers can
+ * fall back to the compact token form below.
+ */
+export function buildGroupDisplayTitle(params: {
+  subject?: string;
+  groupChannel?: string;
+  space?: string;
+}): string | undefined {
+  const subject = normalizeOptionalString(params.subject);
+  const groupChannel = normalizeOptionalString(params.groupChannel);
+  const space = normalizeOptionalString(params.space);
+  if (groupChannel) {
+    const channelLabel = groupChannel.startsWith("#") ? groupChannel : `#${groupChannel}`;
+    return space ? `${space} ${channelLabel}` : channelLabel;
+  }
+  return subject ?? space ?? undefined;
+}
+
 /** Builds a compact display label for group sessions from channel metadata or ids. */
 export function buildGroupDisplayName(params: {
   provider?: string;

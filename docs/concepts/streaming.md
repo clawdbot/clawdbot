@@ -15,6 +15,21 @@ token-delta streaming** to channel messages today:
 - **Preview streaming (Telegram/Discord/Slack/Matrix/Mattermost/MS Teams):**
   update a temporary **preview message** while generating (send + edits/appends).
 
+## Control UI startup status
+
+After `chat.send` acknowledges an active run, the Gateway can send a typed,
+coarse startup status before assistant text or tool activity is visible. The
+Control UI shows this status beside the working indicator, with stages for
+workspace preparation, environment provisioning, context preparation, and
+model startup.
+
+The first assistant delta or tool start permanently replaces startup status for
+that run. Approval status takes precedence while a tool is waiting for operator
+action. Worktree creation and initial cloud dispatch happen before a chat run
+exists, so their pre-run RPC progress is not presented as run startup status;
+environment provisioning appears here only when an active run reprovisions a
+reclaimed worker.
+
 ## Block streaming (channel messages)
 
 Block streaming sends assistant output in coarse chunks as it becomes available.
@@ -41,14 +56,20 @@ Model output
 | `blockStreamingBreak`                                        | `"text_end"` / `"message_end"`                                          | -          |
 | `blockStreamingChunk`                                        | `{ minChars, maxChars, breakPreference? }`                              | -          |
 | `blockStreamingCoalesce`                                     | `{ minChars?, maxChars?, idleMs? }` (merge streamed blocks before send) | -          |
-| `*.blockStreaming` (channel override)                        | `true` / `false`, forces block streaming per channel (and per account)  | -          |
+| `*.streaming.block.enabled` (channel override)               | `true` / `false`, forces block streaming per channel (and per account)  | -          |
 | `*.textChunkLimit` (e.g. `channels.whatsapp.textChunkLimit`) | number, hard cap                                                        | 4000       |
-| `*.chunkMode`                                                | `"length"` / `"newline"`                                                | `"length"` |
+| `*.streaming.chunkMode`                                      | `"length"` / `"newline"`                                                | `"length"` |
 | `channels.discord.maxLinesPerMessage`                        | number, soft line cap that splits tall replies to avoid UI clipping     | 17         |
 
-`chunkMode: "newline"` splits on blank lines (paragraph boundaries), not every
-newline, before falling back to length chunking once the text exceeds the
-limit.
+`streaming.chunkMode: "newline"` splits on blank lines (paragraph boundaries),
+not every newline, before falling back to length chunking once the text
+exceeds the limit.
+
+Bundled channels spell these overrides as
+`channels.<id>.streaming.{chunkMode,block.enabled,block.coalesce}`. The flat
+`*.chunkMode` / `*.blockStreaming` / `*.blockStreamingCoalesce` spellings are
+rejected everywhere. `openclaw doctor --fix` migrates legacy configs into the
+nested shape.
 
 **Boundary semantics** for `blockStreamingBreak`:
 
@@ -96,7 +117,7 @@ progressive output.
   (final flush always sends remaining text).
 - Joiner is derived from `blockStreamingChunk.breakPreference`: `paragraph` ->
   `\n\n`, `newline` -> `\n`, `sentence` -> space.
-- Channel overrides are available via `*.blockStreamingCoalesce` (including
+- Channel overrides are available via `*.streaming.block.coalesce` (including
   per-account configs).
 - Discord, Signal, and Slack default coalesce to `{ minChars: 1500, idleMs: 1000 }`
   unless overridden.
@@ -112,26 +133,29 @@ replies, after the first block, so multi-bubble responses feel more natural.
 | `natural`                         | 800-2500ms random pause |
 | `custom`                          | `minMs`/`maxMs`         |
 
-Override per agent via `agents.list[].humanDelay`. Applies only to **block
+Override per agent via `agents.entries.*.humanDelay`. Applies only to **block
 replies**, not final replies or tool summaries.
 
 ## "Stream chunks or everything"
 
 - **Stream chunks:** `blockStreamingDefault: "on"` + `blockStreamingBreak: "text_end"`
-  (emit as you go). Non-Telegram channels also need `*.blockStreaming: true`.
+  (emit as you go). Non-Telegram channels also need
+  `*.streaming.block.enabled: true`.
 - **Stream everything at end:** `blockStreamingBreak: "message_end"` (flush
   once, possibly multiple chunks if very long).
 - **No block streaming:** `blockStreamingDefault: "off"` (only final reply).
 
-Block streaming is **off unless** `*.blockStreaming` is explicitly set to
-`true`. Channels can stream a live preview (`channels.<channel>.streaming`)
-without block replies. The `blockStreaming*` defaults live under
-`agents.defaults`, not the config root.
+Block streaming is **off unless** `*.streaming.block.enabled` is explicitly
+set to `true` (exception: QQ Bot has no `streaming.block` keys and streams
+block replies unless `channels.qqbot.streaming.mode` is `"off"`). Channels can
+stream a live preview (`channels.<channel>.streaming.mode`) without block
+replies. The `blockStreaming*` defaults live under `agents.defaults`, not the
+config root.
 
 ## Preview streaming modes
 
-Canonical key: `channels.<channel>.streaming` (nested `{ mode, ... }`; a
-top-level boolean is a legacy alias).
+Canonical key: `channels.<channel>.streaming` (nested `{ mode, ... }`; legacy
+top-level boolean/string spellings are rewritten by `openclaw doctor --fix`).
 
 | Mode       | Behavior                                                              |
 | ---------- | --------------------------------------------------------------------- |
@@ -142,11 +166,14 @@ top-level boolean is a legacy alias).
 
 `streaming.mode: "block"` is a preview-streaming mode for edit-capable
 channels such as Discord and Telegram; it does not by itself enable channel
-block delivery there. Use `streaming.block.enabled` (or the legacy
-`blockStreaming` channel key) for normal block replies. Microsoft Teams is the
+block delivery there. Use `streaming.block.enabled` for normal block replies.
+Microsoft Teams is the
 exception: it has no draft-preview block transport, so `streaming.mode:
 "block"` disables native streaming entirely and the reply lands as regular
-block delivery instead of native partial/progress streaming.
+block delivery instead of native partial/progress streaming. Mattermost also
+differs: in `block` mode it rotates the preview between completed text and
+tool-activity blocks, so earlier blocks stay visible as separate posts
+instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
@@ -174,11 +201,14 @@ Slack-only:
 
 ### Legacy key migration
 
-| Channel  | Legacy keys                                                 | Status                                                                                                                                                       |
-| -------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Telegram | `streamMode`, scalar/boolean `streaming`                    | Detected and migrated to `streaming.mode` by doctor/config compatibility paths                                                                               |
-| Discord  | `streamMode`, boolean `streaming`                           | Runtime aliases for the `streaming` enum; run `openclaw doctor --fix` to rewrite persisted config                                                            |
-| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Runtime aliases for `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms); run `openclaw doctor --fix` to rewrite persisted config |
+| Channel  | Legacy keys                                                 | Status                                                                                                                                               |
+| -------- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Telegram | `streamMode`, scalar/boolean `streaming`                    | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
+| Discord  | `streamMode`, boolean `streaming`                           | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
+| Slack    | `streamMode`; boolean `streaming`; legacy `nativeStreaming` | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/legacy forms) by `openclaw doctor --fix`; not read at runtime         |
+| Matrix   | scalar/boolean `streaming`                                  | Rewritten to `streaming.mode` (including Matrix's `"quiet"` mode) by `openclaw doctor --fix`; not read at runtime                                    |
+| Feishu   | boolean `streaming`                                         | Rewritten to `streaming.mode` by `openclaw doctor --fix`; not read at runtime                                                                        |
+| QQ Bot   | boolean `streaming`; `streaming.c2cStreamApi`               | Rewritten to `streaming.mode` (and `streaming.nativeTransport` for the boolean/`c2cStreamApi` forms) by `openclaw doctor --fix`; not read at runtime |
 
 ## Runtime behavior
 
@@ -218,6 +248,11 @@ Slack-only:
 - `block` mode uses draft chunking (`draftChunk`).
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
+- `progress` mode appends a small `-#` activity receipt (thought/tool-call
+  counts and elapsed time) to the final answer and deletes the status draft
+  once that answer is delivered, so busy channels keep no orphaned tool log
+  above the reply. Error finals keep the draft as the record of the failed
+  turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 
@@ -237,8 +272,12 @@ Slack-only:
 
 ### Mattermost
 
-- Streams thinking, tool activity, and partial reply text into a single draft
+- In `partial` mode, streams thinking and partial reply text into a single draft
   preview post that finalizes in place when the final answer is safe to send.
+- In `progress` mode, streams thinking and tool activity into a single status
+  preview that finalizes in place when the final answer is safe to send.
+- In `block` mode, rotates between completed text and tool-activity posts;
+  parallel and consecutive tool updates share the current tool-activity post.
 - Falls back to sending a fresh final post if the preview post was deleted or
   is otherwise unavailable at finalize time.
 - Final media/error payloads cancel pending preview updates before normal
@@ -276,8 +315,9 @@ Supported surfaces:
   personal chats.
 - Telegram has shipped with tool-progress preview updates enabled since
   `v2026.4.22`; keeping them enabled preserves that released behavior.
-- **Mattermost** already folds tool activity into its single draft preview post
-  (see above).
+- **Mattermost** folds tool activity into one preview post in `partial` and
+  `progress` modes, or one tool-activity post between text blocks in `block`
+  mode (see above).
 - Tool-progress edits follow the active preview streaming mode; they are
   skipped when preview streaming is `off` or when block streaming has taken
   over the message. On Telegram, `streaming.mode: "off"` is final-only: generic
@@ -313,7 +353,10 @@ in the draft:
 
 - **`streaming.progress.commentary`** - render the model's pre-tool
   **commentary** (a short "I'll check... then..." narration) interleaved with
-  tool lines in the progress draft.
+  tool lines in the progress draft. On Discord and Telegram in progress mode,
+  the same preamble supplies the status headline even when this optional lane
+  is off; other channels keep their existing progress behavior. See
+  [Progress drafts](/concepts/progress-drafts#status-headline).
 
 ```json
 {

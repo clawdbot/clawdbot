@@ -1,5 +1,8 @@
 // Cron model override tests cover model selection overrides for scheduled runs.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SessionEntry } from "../../config/sessions.js";
 import {
   clearFastTestEnv,
   loadRunCronIsolatedAgentTurn,
@@ -13,7 +16,7 @@ import {
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
   runWithModelFallbackMock,
-  updateSessionStoreMock,
+  patchSessionEntryMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -100,8 +103,6 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
-    updateSessionStoreMock.mockResolvedValue(undefined);
-
     cronSession = makeCronSession({
       sessionEntry: makeFreshSessionEntry(),
     });
@@ -140,18 +141,36 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       modelProvider?: string;
       systemSent?: boolean;
     }> = [];
-    // One persistent store across persist calls: the lifecycle claim guard
-    // treats a store that lost the entry between calls as a foreign owner.
-    const persistentStore: Record<string, unknown> = {};
-    updateSessionStoreMock.mockImplementation(
-      async (_path: string, cb: (s: Record<string, unknown>) => void) => {
-        cb(persistentStore);
-        const entry = Object.values(persistentStore)[0] as
-          | { model?: string; modelProvider?: string; systemSent?: boolean }
-          | undefined;
-        if (entry) {
-          persistedSnapshots.push(structuredClone(entry));
+    // The cron persist path calls patchSessionEntry(scope, updater, options);
+    // the committed row is the updater's return, so snapshot that. Thread the
+    // previously committed row forward as existingEntry so the lifecycle claim
+    // guard proves ownership across the run's successive persists.
+    const committedRows = new Map<string, SessionEntry>();
+    patchSessionEntryMock.mockImplementation(
+      async (
+        scope: { storePath?: string; sessionKey: string },
+        update: (
+          entry: SessionEntry,
+          context: { existingEntry: SessionEntry | undefined },
+        ) => SessionEntry | null,
+        options: { fallbackEntry?: SessionEntry } = {},
+      ) => {
+        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+        const committedRow = committedRows.get(key);
+        const writeBase = committedRow ?? options.fallbackEntry;
+        if (!writeBase) {
+          return null;
         }
+        const committed = update(structuredClone(writeBase), {
+          existingEntry: committedRow ? structuredClone(committedRow) : undefined,
+        });
+        if (committed) {
+          committedRows.set(key, structuredClone(committed));
+          if (!scope.sessionKey.includes(":run:")) {
+            persistedSnapshots.push(structuredClone(committed));
+          }
+        }
+        return committed;
       },
     );
 
@@ -163,7 +182,10 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // [2] post-run telemetry.  Index 1 is what a concurrent sessions_list
     // would read while the agent run is in flight.
     expect(persistedSnapshots.length).toBeGreaterThanOrEqual(3);
-    const preRunSnapshot = persistedSnapshots[1];
+    const preRunSnapshot = expectDefined(
+      persistedSnapshots[1],
+      "persistedSnapshots[1] test invariant",
+    );
     expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
     expect(preRunSnapshot.modelProvider).toBe("anthropic");
     expect(preRunSnapshot.systemSent).toBe(true);
@@ -230,13 +252,35 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // Persist ordering: [1] skills snapshot, [2] pre-run, [3] post-run.
     // Only the pre-run persist (call 2) should fail — the skills snapshot
     // persist is pre-existing code without a try-catch guard.
-    let callCount = 0;
-    updateSessionStoreMock.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 2) {
-        throw new Error("ENOSPC: no space left on device");
-      }
-    });
+    let basePersistCount = 0;
+    const committedRows = new Map<string, SessionEntry>();
+    patchSessionEntryMock.mockImplementation(
+      async (
+        scope: { storePath?: string; sessionKey: string },
+        update: (
+          entry: SessionEntry,
+          context: { existingEntry: SessionEntry | undefined },
+        ) => SessionEntry | null,
+        options: { fallbackEntry?: SessionEntry } = {},
+      ) => {
+        if (!scope.sessionKey.includes(":run:") && ++basePersistCount === 2) {
+          throw new Error("ENOSPC: no space left on device");
+        }
+        const key = `${scope.storePath ?? ""}\0${scope.sessionKey}`;
+        const current = committedRows.get(key);
+        const writeBase = current ?? options.fallbackEntry;
+        if (!writeBase) {
+          return null;
+        }
+        const committed = update(structuredClone(writeBase), {
+          existingEntry: current ? structuredClone(current) : undefined,
+        });
+        if (committed) {
+          committedRows.set(key, structuredClone(committed));
+        }
+        return committed;
+      },
+    );
 
     runWithModelFallbackMock.mockResolvedValueOnce(makeSuccessfulRunResult());
 

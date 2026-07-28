@@ -1,8 +1,7 @@
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { visibleSessionMatches, type SessionScopeHost } from "../../lib/sessions/index.ts";
-import type { ChatEventPayload } from "./chat-history.ts";
-import { readChatQueueForSession } from "./chat-queue.ts";
-import type { ChatSendAck, ChatSendTimingEntry } from "./chat-send-contract.ts";
+import { readChatQueueForScope } from "./chat-queue.ts";
+import type { ChatSendAck, ChatSendTimingEntry } from "./chat-send-ack.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -22,8 +21,6 @@ type ChatSendTimingPhase =
   | "server-first-assistant-event"
   | "server-dispatch-completed"
   | "server-post-dispatch-completed"
-  | "first-assistant-visible"
-  | "terminal-before-delta"
   | "queued-busy"
   | "waiting-model"
   | "waiting-reconnect"
@@ -33,7 +30,7 @@ type ChatSendTimingHost = SessionScopeHost & {
   sessionKey: string;
   chatStream: string | null;
   chatQueue: ChatQueueItem[];
-  chatQueueBySession?: Record<string, ChatQueueItem[]>;
+  chatQueueByScope?: Record<string, ChatQueueItem[]>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   eventLogBuffer?: unknown[];
   renderLifecycle?: RenderLifecycle;
@@ -241,99 +238,11 @@ export function chatSendAckServerTimingEventFields(ack: ChatSendAck): Record<str
   };
 }
 
-function chatEventHasVisibleTerminalPayload(payload: ChatEventPayload): boolean {
-  if (payload.state === "error" && payload.errorMessage?.trim()) {
-    return true;
-  }
-  return Boolean(payload.message && typeof payload.message === "object");
-}
-
-function resolveFirstAssistantTimingPhase(
-  host: ChatSendTimingHost,
-  payload: ChatEventPayload,
-  entry: ChatSendTimingEntry,
-): Extract<ChatSendTimingPhase, "first-assistant-visible" | "terminal-before-delta"> | null {
-  if (entry.firstAssistantVisibleRecorded) {
-    return null;
-  }
-  if (payload.state === "delta") {
-    return typeof host.chatStream === "string" && host.chatStream.trim()
-      ? "first-assistant-visible"
-      : null;
-  }
-  if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
-    return chatEventHasVisibleTerminalPayload(payload) ? "terminal-before-delta" : null;
-  }
-  return null;
-}
-
-export function recordFirstAssistantChatTiming(
-  host: ChatSendTimingHost,
-  payload: ChatEventPayload | undefined,
-  handledState: ChatEventPayload["state"] | null,
-) {
-  if (!payload || !handledState || typeof payload.runId !== "string") {
-    return;
-  }
-  const runId = payload.runId.trim();
-  const entry = runId ? host.chatSendTimingsByRun?.get(runId) : undefined;
-  if (!entry) {
-    return;
-  }
-  const phase = resolveFirstAssistantTimingPhase(host, payload, entry);
-  if (!phase) {
-    if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
-      host.chatSendTimingsByRun?.delete(runId);
-    }
-    return;
-  }
-
-  const eventAtMs = controlUiNowMs();
-  entry.firstAssistantVisibleRecorded = true;
-  scheduleControlUiAfterPaint(host, () => {
-    const paintedAtMs = controlUiNowMs();
-    const durationMs = roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs);
-    const slow = durationMs >= CHAT_SEND_SLOW_FIRST_ASSISTANT_MS;
-    recordControlUiPerformanceEvent(
-      host as Parameters<typeof recordControlUiPerformanceEvent>[0],
-      "control-ui.chat.send",
-      {
-        phase,
-        durationMs,
-        runId,
-        sessionKey: entry.sessionKey ?? payload.sessionKey,
-        agentId: entry.agentId ?? payload.agentId,
-        sendAttempts: entry.sendAttempts,
-        sendState: entry.sendState,
-        ackStatus: entry.ackStatus,
-        eventState: payload.state,
-        firstAssistantPaintMs: roundedControlUiDurationMs(paintedAtMs - eventAtMs),
-        ...(entry.requestStartedAtMs != null
-          ? {
-              requestToFirstAssistantEventMs: roundedControlUiDurationMs(
-                eventAtMs - entry.requestStartedAtMs,
-              ),
-            }
-          : {}),
-        ...(entry.ackAtMs != null
-          ? {
-              ackToFirstAssistantEventMs: roundedControlUiDurationMs(eventAtMs - entry.ackAtMs),
-            }
-          : {}),
-        ...(slow ? { slow: true } : {}),
-      },
-      { console: slow, warn: slow, maxBufferedEventsForType: 40 },
-    );
-    if (phase === "terminal-before-delta") {
-      host.chatSendTimingsByRun?.delete(runId);
-    }
-  });
-}
-
 function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
   return (
     typeof item.sendSubmittedAtMs === "number" &&
     (item.sendState === "waiting-model" ||
+      item.sendState === "waiting-idle" ||
       item.sendState === "sending" ||
       item.sendState === "waiting-reconnect")
   );
@@ -353,7 +262,7 @@ export function schedulePendingSendPaintTiming(
     if (!visibleSessionMatches(host, sessionKey, item.agentId)) {
       return;
     }
-    const queued = readChatQueueForSession(host, sessionKey).find(
+    const queued = readChatQueueForScope(host, sessionKey, item.agentId).find(
       (entry) => entry.id === item.id && entry.sendRunId === sendRunId,
     );
     if (!queued || !shouldRecordPendingSendPaint(queued)) {

@@ -7,6 +7,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildInstallManifest,
   parseWorkspaceDependencyDirs,
+  resolveNpmEnvironment,
+  resolveRuntimePackEnvironment,
+  resolveRuntimePackPlan,
   resolveWorkspaceInstallPlan,
   rewriteWorkspaceDependencyVersions,
 } from "../../scripts/ocm-npm-workspace-deps.mjs";
@@ -16,6 +19,68 @@ const adapterPath = fileURLToPath(
 );
 
 describe("OCM npm workspace dependency adapter", () => {
+  it("allows Unreleased notes only for non-publishing pack commands", () => {
+    const env = { KEEP: "value" };
+    expect(resolveNpmEnvironment(["install"], env)).toBe(env);
+    expect(resolveNpmEnvironment(["pack", "--silent"], env)).toEqual({
+      KEEP: "value",
+      OCM_INTERNAL_NPM_BIN: adapterPath,
+      OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG: "1",
+    });
+  });
+
+  it("uses a prepared runtime-only pack for the diagnostic build profile", () => {
+    expect(
+      resolveRuntimePackPlan(["pack", "--pack-destination", "/tmp/out"], {
+        OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "sourcePerformance",
+      }),
+    ).toEqual({
+      profile: "sourcePerformance",
+      packArgs: ["pack", "--pack-destination", "/tmp/out", "--ignore-scripts"],
+    });
+  });
+
+  it("keeps normal package builds on the full prepack path", () => {
+    expect(resolveRuntimePackPlan(["pack"], {})).toBeNull();
+    expect(
+      resolveRuntimePackPlan(["install"], {
+        OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "sourcePerformance",
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects unsupported runtime build profiles", () => {
+    expect(() =>
+      resolveRuntimePackPlan(["pack"], {
+        OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: "qaRuntime",
+      }),
+    ).toThrow("invalid OPENCLAW_OCM_RUNTIME_BUILD_PROFILE: qaRuntime");
+  });
+
+  it("pins one timestamp and commit across the prepared runtime pack", () => {
+    const env = resolveRuntimePackEnvironment(
+      { KEEP: "value" },
+      () => new Date("2026-07-11T12:34:56.000Z"),
+      () => "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    );
+
+    expect(env).toMatchObject({
+      KEEP: "value",
+      GIT_COMMIT: "abcdef0123456789abcdef0123456789abcdef01",
+      OPENCLAW_BUILD_TIMESTAMP: "2026-07-11T12:34:56.000Z",
+    });
+  });
+
+  it("rejects ambiguous runtime pack commits", () => {
+    expect(() =>
+      resolveRuntimePackEnvironment(
+        { GITHUB_SHA: "abc123" },
+        () => new Date("2026-07-11T12:34:56.000Z"),
+        () => null,
+      ),
+    ).toThrow("runtime pack commit must be a full 40-character hexadecimal SHA");
+  });
+
   it("resolves workspace package directories", () => {
     expect(
       parseWorkspaceDependencyDirs(["packages/ai", "extensions/example"].join(delimiter), "/repo"),

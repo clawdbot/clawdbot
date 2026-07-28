@@ -3,15 +3,19 @@ import { describe, expect, it } from "vitest";
 import {
   applyQwenNativeStreamingUsageCompat,
   buildQwenProvider,
+  buildQwenTokenPlanProvider,
   QWEN_BASE_URL,
   QWEN_36_FLASH_MODEL_ID,
   QWEN_37_MAX_MODEL_ID,
   QWEN_37_PLUS_MODEL_ID,
   QWEN_STANDARD_GLOBAL_BASE_URL,
   QWEN_DEFAULT_MODEL_ID,
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  resolveQwenTokenPlanBaseUrl,
 } from "./api.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { buildQwenOAuthProvider } from "./provider-catalog.js";
 
 type QwenProvider = ReturnType<typeof buildQwenProvider>;
 
@@ -70,23 +74,6 @@ describe("qwen provider catalog", () => {
     });
   });
 
-  it("keeps unsupported Qwen models out of the portal catalog", () => {
-    const portal = buildQwenOAuthProvider();
-    const portalQwen36 = portal.models.find((model) => model.id === "qwen3.6-plus");
-    const manifestQwen36 = manifest.modelCatalog.providers["qwen-oauth"].models.find(
-      (model) => model.id === "qwen3.6-plus",
-    );
-
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(
-      manifest.modelCatalog.providers["qwen-oauth"].models.map((model) => model.id),
-    ).not.toContain(QWEN_36_FLASH_MODEL_ID);
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_37_MAX_MODEL_ID);
-    expect(getQwenModelIds(portal)).not.toContain(QWEN_37_PLUS_MODEL_ID);
-    expect(portalQwen36?.reasoning).toBe(true);
-    expect(manifestQwen36?.reasoning).toBe(portalQwen36?.reasoning);
-  });
-
   it("opts native Qwen baseUrls into streaming usage only inside the extension", () => {
     const nativeProvider = applyQwenNativeStreamingUsageCompat(buildQwenProvider());
     expect(nativeProvider.models.length).toBeGreaterThan(0);
@@ -109,4 +96,72 @@ describe("qwen provider catalog", () => {
       ),
     ).toBe(false);
   });
+});
+
+describe("qwen token plan provider catalog", () => {
+  it("ships the curated six-row Global catalog through manifest and runtime", () => {
+    const provider = buildQwenTokenPlanProvider();
+    const models = provider.models;
+    const modelIds = models.map((model) => model.id);
+
+    expect(provider.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
+    expect(provider.api).toBe("openai-completions");
+    expect(modelIds).toEqual([
+      QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+      "qwen3.6-plus",
+      "qwen3-coder-next",
+      "kimi-k2.5",
+      "glm-5",
+      "MiniMax-M2.5",
+    ]);
+    const manifestModels = manifest.modelCatalog.providers["qwen-token-plan"].models as Array<
+      Record<string, unknown>
+    >;
+    expect(manifestModels.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
+      status: "deprecated",
+      replacedBy: QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+    });
+    expect(models.every((model) => model.reasoning)).toBe(true);
+    expect(manifestModels.map((model) => model.id)).toEqual(modelIds);
+    expect(manifest.modelCatalog.discovery["qwen-token-plan"]).toBe("refreshable");
+  });
+
+  it("uses region-scoped endpoints with the documented Qwen3.7-Plus window", () => {
+    expect(resolveQwenTokenPlanBaseUrl("global")).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
+    expect(resolveQwenTokenPlanBaseUrl("cn")).toBe(QWEN_TOKEN_PLAN_CN_BASE_URL);
+
+    const globalProvider = buildQwenTokenPlanProvider();
+    const cnProvider = buildQwenTokenPlanProvider({ baseUrl: QWEN_TOKEN_PLAN_CN_BASE_URL });
+    expect(globalProvider.models.find((model) => model.id === "qwen3.7-plus")?.contextWindow).toBe(
+      1_000_000,
+    );
+    expect(cnProvider.models.find((model) => model.id === "qwen3.7-plus")?.contextWindow).toBe(
+      1_000_000,
+    );
+  });
+
+  it("uses current model limits instead of the stale contributor catalog", () => {
+    const models = buildQwenTokenPlanProvider().models;
+
+    expect(models.find((model) => model.id === "qwen3-coder-next")).toMatchObject({
+      contextWindow: 262_144,
+      maxTokens: 65_536,
+    });
+    expect(models.find((model) => model.id === "kimi-k2.5")?.maxTokens).toBe(98_304);
+    expect(models.find((model) => model.id === "MiniMax-M2.5")).toMatchObject({
+      contextWindow: 196_608,
+      maxTokens: 32_768,
+    });
+  });
+
+  it.each([QWEN_TOKEN_PLAN_GLOBAL_BASE_URL, QWEN_TOKEN_PLAN_CN_BASE_URL])(
+    "opts Token Plan endpoint %s into native streaming usage",
+    (baseUrl) => {
+      const provider = applyQwenNativeStreamingUsageCompat(buildQwenTokenPlanProvider({ baseUrl }));
+      expect(provider.models).toHaveLength(6);
+      expect(
+        provider.models.every((model) => model.compat?.supportsUsageInStreaming === true),
+      ).toBe(true);
+    },
+  );
 });

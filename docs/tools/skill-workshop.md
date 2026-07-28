@@ -4,15 +4,15 @@ read_when:
   - You want the agent to create or update a skill from chat
   - You need to review, apply, reject, or quarantine a generated skill draft
   - You are configuring Skill Workshop approval, autonomy, storage, or limits
+  - You want to understand where self-learning proposals are reviewed
 title: "Skill Workshop"
 sidebarTitle: "Skill Workshop"
 ---
 
 Skill Workshop is OpenClaw's governed path for creating and updating workspace
-skills. Agents and operators never write `SKILL.md` directly through this
-path — they create a **proposal** (pending draft with content, target
-binding, scanner state, hashes, and rollback metadata) that becomes a live
-skill only when applied.
+skills. Through this path, agents and operators create a **proposal** (pending
+draft with content, target binding, scanner state, hashes, and rollback
+metadata) that becomes a live skill only when applied.
 
 Skill Workshop writes workspace skills only. It never touches bundled,
 plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
@@ -28,7 +28,9 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
-- **Scanner gated:** apply reruns the security scanner before writing.
+- **Scanner gated:** apply reruns the security scanner before writing. Only
+  critical findings block apply; warn-level findings remain visible but do not
+  block it.
 - **Recoverable:** apply writes rollback metadata before touching live files.
 - **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
@@ -48,11 +50,11 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 ## Lifecycle curation
 
 The Gateway tracks aggregate skill usage in the shared state database. Once a
-day, it reviews skills created and applied by Skill Workshop. Skills unused for
-more than 30 days become `stale`; after 90 days they become `archived` and are
-left out of new agent skill snapshots. Archived skill files remain unchanged on
-disk. Manually authored skills are never curated; only skills created by Skill
-Workshop proposals enter lifecycle curation.
+day, it reviews applied skills created through agent autocapture. Skills unused
+for more than 30 days become `stale`; after 90 days they become `archived` and
+are left out of new agent skill snapshots. Archived skill files remain
+unchanged on disk. Operator-created skills, including proposals created through
+the CLI or Gateway/Control UI, are treated as manual and never curated.
 
 Pinned skills bypass lifecycle transitions. A stale skill returns to `active`
 after it is used and the next sweep runs. Archived skills return only through an
@@ -115,15 +117,15 @@ Revise it to also flag anything marked urgent.
 Apply the morning-catchup proposal.
 ```
 
-Agent-initiated `apply`, `reject`, and `quarantine` show an approval prompt by
-default. Set `skills.workshop.approvalPolicy` to `"auto"` to skip it in
-trusted environments.
+Agent-initiated `apply`, `reject`, and `quarantine` run without an additional
+approval prompt by default. Set `skills.workshop.approvalPolicy` to `"pending"`
+to require operator approval before those actions.
 
-The prompt identifies the proposal id and target skill, and shows the proposal
-description, support-file count, and body size. Approval requests are bounded
-to finish before the agent tool watchdog. If no decision arrives before the
-prompt expires, the lifecycle action does not run: the proposal stays pending
-and unchanged. Decide later in the Skill Workshop UI or run
+When approval is required, the prompt identifies the proposal id and target
+skill, and shows the proposal description, support-file count, and body size.
+Approval requests are bounded to finish before the agent tool watchdog. If no
+decision arrives before the prompt expires, the lifecycle action does not run:
+the proposal stays pending and unchanged. Decide later in the Skill Workshop UI or run
 `openclaw skills workshop apply|reject|quarantine <proposal-id>`. Agents should
 not retry an expired lifecycle action in a loop.
 
@@ -214,9 +216,9 @@ Other parameters apply depending on the action:
 | `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
 | `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
 
-Agents must use `skill_workshop` for generated skill work. They must not
-create or change proposal files through `write`, `edit`, `exec`, shell
-commands, or direct filesystem operations.
+Agents must use `skill_workshop` for generated skill work and must not create or
+change skill or proposal files directly. This rule is advisory and
+prompt-enforced. A hard guard is not currently possible at the tool-policy seam.
 
 <Note>
 `skill_workshop` is a built-in agent tool and is included in
@@ -234,7 +236,43 @@ OpenClaw detects durable instructions such as “next time,” “remember to,�
 when an interactive turn ends, including failed turns. On the next turn, the agent offers to save
 the most recent detected workflow through `skill_workshop`; the user decides whether to create a
 proposal. This built-in suggestion does not create or change a skill by itself. Enable
-`skills.workshop.autonomous.enabled` to create pending proposals directly instead.
+`skills.workshop.autonomous.enabled` to create pending proposals directly instead. In the Control
+UI, the Workshop tab offers the same setting as a **Self-learning** toggle in the page header, and
+as an enable button on the empty proposal board.
+
+### Scan past sessions
+
+The Control UI can review older work without enabling autonomous self-learning.
+Open **Plugins → Workshop** and select **Find skill ideas**. The scan starts with
+the newest eligible sessions and reviews a bounded window of substantial work.
+It skips cron, heartbeat, hook, subagent, ACP, plugin-owned, and internal review
+sessions, plus conversations with fewer than six model turns.
+
+The reviewer uses the selected agent's configured model and receives a
+secret-redacted, size-bounded transcript bundle. It applies the same conservative
+bar as experience review: a concrete recovery pattern or a stable procedure that
+would remove at least two future model or tool calls. Routine work and one-off
+facts should produce no proposal.
+
+One scan can create or revise at most three pending proposals. It cannot apply,
+reject, quarantine, or edit a live skill. The Workshop shows cumulative coverage,
+for example **20 sessions reviewed · Jun 18–today · 2 ideas found**. Select
+**Scan earlier work** to continue from the persisted oldest-session cursor. After
+the available history is exhausted, the action becomes **Scan new work**.
+
+Historical review is manual even when
+`skills.workshop.autonomous.enabled` is `false`. Each click starts a model run,
+so provider pricing and data-handling terms apply. The cursor and coverage counts
+are stored in the shared OpenClaw state database; transcript content is not copied
+into scan state.
+
+With autonomous capture enabled, OpenClaw can also perform a conservative review after successful,
+substantial work and after the whole agent system becomes idle. That isolated review can create or
+revise at most one pending proposal. It cannot update a live skill or apply, reject, or quarantine a
+proposal, even when `approvalPolicy` is `"auto"`.
+
+See [Self-learning](/tools/self-learning) for enablement, eligibility, privacy and cost details,
+the proposal threshold, and troubleshooting.
 
 ## Approval and autonomy
 
@@ -246,7 +284,7 @@ proposal. This built-in suggestion does not create or change a skill by itself. 
         enabled: false,
       },
       allowSymlinkTargetWrites: false,
-      approvalPolicy: "pending",
+      approvalPolicy: "auto",
       maxPending: 50,
       maxSkillBytes: 40000,
     },
@@ -254,18 +292,29 @@ proposal. This built-in suggestion does not create or change a skill by itself. 
 }
 ```
 
-| Setting                    | Default     | Effect                                                                                                                                                                 |
-| -------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autonomous.enabled`       | `false`     | Creates pending proposals directly instead of offering the most recent detected workflow on the next turn.                                                             |
-| `allowSymlinkTargetWrites` | `false`     | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                    |
-| `approvalPolicy`           | `"pending"` | `"pending"` requires an approval prompt before agent-initiated `apply`, `reject`, or `quarantine`. `"auto"` skips the prompt (the agent still has to call the action). |
-| `maxPending`               | `50`        | Caps pending and quarantined proposals per workspace (1-200).                                                                                                          |
-| `maxSkillBytes`            | `40000`     | Caps proposal body size in bytes (1024-200000).                                                                                                                        |
+| Setting                    | Default  | Effect                                                                                                                                                              |
+| -------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autonomous.enabled`       | `false`  | Creates pending proposals from explicit corrections and, after an idle delay, substantial completed work with reusable recovery or meaningful round-trip savings.   |
+| `allowSymlinkTargetWrites` | `false`  | Lets apply write through workspace skill symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.                                                 |
+| `approvalPolicy`           | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval. |
+| `maxPending`               | `50`     | Caps pending and quarantined proposals per workspace (1-200).                                                                                                       |
+| `maxSkillBytes`            | `40000`  | Caps proposal body size in bytes (1024-200000).                                                                                                                     |
 
 Autonomous capture recognizes prospective rules (for example, “from now on”) and reactive
 corrections (for example, “that’s not what I asked”). It groups new instructions by topic into up
 to three proposals per turn, routes vocabulary matches to existing writable workspace skills, and
 revises its own pending proposal when another correction targets the same skill.
+
+For successful substantial work without an explicit correction, an isolated run of the selected
+model decides whether the completed trajectory clears the conservative proposal bar. The
+foreground model is not prompted to learn before it replies. The background reviewer preserves the
+foreground run as proposal provenance, cannot access general agent tools, and cannot make lifecycle
+decisions. The review starts only when the foreground runtime reports both its exact resolved model
+and that `skill_workshop` was actually available. Restrictive or unknown tool policy therefore
+fails closed and creates no proposal.
+
+See [Self-learning](/tools/self-learning) for the complete autonomous review behavior and safety
+model.
 
 Proposal descriptions are always capped at 160 bytes, independent of
 `maxSkillBytes`.
@@ -276,6 +325,8 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | ---------------------------------- | ---------------- |
 | `skills.proposals.list`            | `operator.read`  |
 | `skills.proposals.inspect`         | `operator.read`  |
+| `skills.proposals.historyStatus`   | `operator.read`  |
+| `skills.proposals.historyScan`     | `operator.admin` |
 | `skills.proposals.create`          | `operator.admin` |
 | `skills.proposals.update`          | `operator.admin` |
 | `skills.proposals.revise`          | `operator.admin` |
@@ -293,15 +344,17 @@ forwards free-text revision instructions to the owning agent's chat session
 instead of replacing `PROPOSAL.md` directly, for UIs that ask the agent to
 revise rather than submit literal new content.
 
+`historyStatus` and `historyScan` are Control UI support methods. `historyScan`
+accepts `direction: "older" | "newer"`; it always leaves results as pending
+proposals.
+
 ## Storage
 
 ```text
-<OPENCLAW_STATE_DIR>/skill-workshop/
-  proposals.json
-  proposals/<proposal-id>/
-    proposal.json
+<OPENCLAW_STATE_DIR>/
+  state/openclaw.sqlite
+  skill-workshop/proposals/<proposal-id>/
     PROPOSAL.md
-    rollback.json
     assets/
     examples/
     references/
@@ -311,20 +364,24 @@ revise rather than submit literal new content.
 
 Default state directory: `~/.openclaw`.
 
-- `proposal.json`: canonical proposal record.
-- `proposals.json`: fast listing index, rebuildable from proposal folders.
+- `state/openclaw.sqlite`: canonical proposal records, lifecycle status, origin attribution, and apply rollback metadata.
 - `PROPOSAL.md`: pending skill proposal.
-- `rollback.json`: recovery metadata written before apply changes live files.
+- Support files remain beside `PROPOSAL.md` so operators can review the proposed skill as a normal directory.
+
+`openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
+`rollback.json` metadata into SQLite after verifying each proposal, then removes
+the migrated JSON files. If an agent's configured workspace changes, its earlier
+proposals remain listed with a previous-workspace marker instead of disappearing.
 
 ## Limits
 
-| Limit                           | Value                                                                |
-| ------------------------------- | -------------------------------------------------------------------- |
-| Description                     | 160 bytes                                                            |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
-| Support files                   | 64 per proposal                                                      |
-| Support file size               | 256 KiB each, 2 MiB total                                            |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
+| Limit                           | Value                                                                        |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| Description                     | 160 bytes                                                                    |
+| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
+| Support files                   | 64 per proposal                                                              |
+| Support file size               | 256 KiB each, 2 MiB total                                                    |
+| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
 
 ## Troubleshooting
 
@@ -351,6 +408,7 @@ Workshop is built in and prints the same policy hint when applicable.
 ## Related
 
 - [Skills](/tools/skills) for load order, precedence, and visibility
+- [Self-learning](/tools/self-learning) for conservative post-run skill proposals
 - [Creating skills](/tools/creating-skills) for hand-written `SKILL.md`
   basics
 - [Skills config](/tools/skills-config) for the full `skills.workshop` schema

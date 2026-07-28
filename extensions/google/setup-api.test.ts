@@ -103,6 +103,55 @@ describe("google setup entry", () => {
 });
 
 describe("google gemini cli backend config", () => {
+  it.each([
+    {
+      phase: "fresh",
+      key: "args" as const,
+      expected: [
+        "--skip-trust",
+        "--approval-mode",
+        "auto_edit",
+        "--output-format",
+        "stream-json",
+        "--prompt",
+        "{prompt}",
+      ],
+    },
+    {
+      phase: "resume",
+      key: "resumeArgs" as const,
+      expected: [
+        "--skip-trust",
+        "--approval-mode",
+        "auto_edit",
+        "--resume",
+        "{sessionId}",
+        "--output-format",
+        "stream-json",
+        "--prompt",
+        "{prompt}",
+      ],
+    },
+  ])("preserves the legacy $phase command bytes in plugin code", ({ key, expected }) => {
+    const backend = buildGoogleGeminiCliBackend();
+
+    expect(backend.config.command).toBe("gemini");
+    expect(backend.config[key]).toEqual(expected);
+    expect(backend.config.env).toBeUndefined();
+    expect(backend.config.clearEnv).toBeUndefined();
+  });
+
+  it("declares its bundled package implementation boundary", () => {
+    const backend = buildGoogleGeminiCliBackend();
+    expect(backend.runtimeArtifact).toEqual({
+      kind: "bundled-package-tree",
+      packageName: "@google/gemini-cli",
+      entrypoint: "command",
+    });
+    expect(backend.nativeToolMode).toBe("selectable");
+    expect(backend.toolAvailabilityEnforcement).toBe("prepare-execution");
+  });
+
   it("keeps legacy json output overrides on the json parser", () => {
     const backend = buildGoogleGeminiCliBackend();
     const normalized = backend.normalizeConfig?.({
@@ -145,6 +194,134 @@ describe("google gemini cli backend config", () => {
 });
 
 describe("google gemini cli backend auth bridge", () => {
+  it.each([
+    { auth: "ambient", allowed: ["memory_search"] },
+    { auth: "ambient", allowed: [] },
+    { auth: "oauth", allowed: ["memory_search"] },
+    { auth: "oauth", allowed: [] },
+    { auth: "api-key", allowed: ["memory_search"] },
+    { auth: "api-key", allowed: [] },
+  ] as const)(
+    "enforces exact system policy for $auth auth with $allowed",
+    async ({ auth, allowed }) => {
+      await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+        const backend = buildGoogleGeminiCliBackend();
+        const inheritedSettingsPath = path.join(workspaceDir, "generated-mcp-settings.json");
+        await fs.writeFile(
+          inheritedSettingsPath,
+          `${JSON.stringify({
+            tools: {
+              core: ["run_shell_command"],
+              allowed: ["*"],
+              discoveryCommand: "hostile-discovery",
+              callCommand: "hostile-call",
+            },
+            mcp: { allowed: ["openclaw", "hostile"], serverCommand: "hostile-mcp" },
+            mcpServers: {
+              openclaw: {
+                url: "http://127.0.0.1:23119/mcp",
+                headers: { authorization: "Bearer loopback-token" },
+              },
+              hostile: { command: "hostile-server" },
+            },
+            experimental: { enableAgents: true },
+            agents: {
+              overrides: {
+                codebase_investigator: { enabled: true, custom: "preserved" },
+                cli_help: { enabled: true },
+              },
+            },
+            hooksConfig: { enabled: true, marker: "preserved" },
+            skills: { enabled: true, marker: "preserved" },
+          })}\n`,
+          "utf8",
+        );
+        const context: GeminiPrepareContext =
+          auth === "oauth"
+            ? buildGeminiOAuthPrepareContext(workspaceDir)
+            : auth === "api-key"
+              ? buildGeminiApiKeyPrepareContext(workspaceDir)
+              : {
+                  workspaceDir,
+                  provider: "google-gemini-cli",
+                  modelId: "gemini-3.1-pro-preview",
+                };
+        context.env = { GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath };
+        context.toolAvailability = {
+          native: [],
+          openClaw: [...allowed],
+          mcp: allowed.map((toolName) => `mcp__openclaw__${toolName}`),
+        };
+        const prepared = await backend.prepareExecution?.(context);
+        try {
+          expect(prepared?.toolAvailabilityEnforced).toBe(true);
+          await stageGeminiPreparedExecution(prepared);
+          const systemSettingsPath = prepared?.env?.GEMINI_CLI_SYSTEM_SETTINGS_PATH;
+          expect(systemSettingsPath).toBeTruthy();
+          const settings = JSON.parse(await fs.readFile(systemSettingsPath ?? "", "utf8")) as {
+            tools?: {
+              core?: string[];
+              discoveryCommand?: string;
+              callCommand?: string;
+            };
+            mcp?: { allowed?: string[]; serverCommand?: string };
+            mcpServers?: Record<string, Record<string, unknown>>;
+            experimental?: { enableAgents?: boolean };
+            agents?: { overrides?: Record<string, Record<string, unknown>> };
+            hooksConfig?: Record<string, unknown>;
+            skills?: Record<string, unknown>;
+            security?: { auth?: { selectedType?: string } };
+          };
+          expect(settings.tools?.core).toEqual(["mcp_openclaw_*"]);
+          expect(settings.tools).not.toHaveProperty("allowed");
+          expect(settings.tools?.discoveryCommand).toBe("");
+          expect(settings.tools?.callCommand).toBe("");
+          expect(settings.mcp?.allowed).toEqual(["openclaw"]);
+          expect(settings.mcp?.serverCommand).toBe("");
+          expect(settings.mcpServers?.openclaw).toMatchObject({
+            url: "http://127.0.0.1:23119/mcp",
+            headers: { authorization: "Bearer loopback-token" },
+            includeTools: [...allowed],
+          });
+          expect(settings.mcpServers?.hostile).toBeUndefined();
+          expect(settings.experimental?.enableAgents).toBe(false);
+          expect(settings.agents?.overrides?.codebase_investigator).toEqual({
+            enabled: false,
+            custom: "preserved",
+          });
+          expect(settings.agents?.overrides?.cli_help?.enabled).toBe(false);
+          expect(settings.hooksConfig).toEqual({ enabled: false, marker: "preserved" });
+          expect(settings.skills).toEqual({ enabled: false, marker: "preserved" });
+          expect(settings.security?.auth?.selectedType).toBe(
+            auth === "oauth" ? "oauth-personal" : auth === "api-key" ? "gemini-api-key" : undefined,
+          );
+        } finally {
+          await prepared?.cleanup?.();
+        }
+      });
+    },
+  );
+
+  it("rejects native tools because Gemini exact policy only exposes OpenClaw MCP", async () => {
+    await withTempDir("openclaw-test-workspace-", async (workspaceDir) => {
+      const inheritedSettingsPath = path.join(workspaceDir, "generated-mcp-settings.json");
+      await fs.writeFile(
+        inheritedSettingsPath,
+        JSON.stringify({ mcpServers: { openclaw: { url: "http://127.0.0.1/mcp" } } }),
+        "utf8",
+      );
+      await expect(
+        buildGoogleGeminiCliBackend().prepareExecution?.({
+          workspaceDir,
+          provider: "google-gemini-cli",
+          modelId: "gemini-3.1-pro-preview",
+          env: { GEMINI_CLI_SYSTEM_SETTINGS_PATH: inheritedSettingsPath },
+          toolAvailability: { native: ["run_shell_command"], openClaw: [], mcp: [] },
+        }),
+      ).rejects.toThrow("cannot expose backend-native tools");
+    });
+  });
+
   it("materializes selected OpenClaw OAuth credentials into a persistent profile-scoped Gemini CLI home", async () => {
     const backend = buildGoogleGeminiCliBackend();
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-workspace-"));

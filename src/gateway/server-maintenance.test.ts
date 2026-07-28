@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { HealthSummary } from "../commands/health.js";
-import { CURATOR_INITIAL_DELAY_MS, CURATOR_SWEEP_INTERVAL_MS } from "../skills/workshop/curator.js";
+const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
+const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
@@ -41,6 +42,7 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     runWorktreeGc: vi.fn(async () => undefined),
+    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
   };
 }
 
@@ -51,42 +53,51 @@ function staleRunTimestamp(): number {
 }
 
 function seedStaleRunBuffers(deps: MaintenanceTimerDeps, runId: string): void {
-  deps.chatRunBuffers.set(runId, "buffer");
-  deps.chatRunState.rawBuffers.set(runId, "raw buffer");
-  deps.chatRunState.bufferUpdatedAt.set(runId, staleRunTimestamp());
-  deps.chatDeltaSentAt.set(runId, staleRunTimestamp());
-  deps.chatDeltaLastBroadcastLen.set(runId, 6);
-  deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
+  Object.assign(deps.chatRunState.getOrCreate(runId), {
+    buffer: "buffer",
+    rawBuffer: "raw buffer",
+    bufferUpdatedAt: staleRunTimestamp(),
+    deltaSentAt: staleRunTimestamp(),
+    deltaLastBroadcastLen: 6,
+    deltaLastBroadcastText: "buffer",
+  });
 }
 
 function expectStaleRunBuffersPresent(deps: MaintenanceTimerDeps, runId: string): void {
-  expect(deps.chatRunBuffers.get(runId)).toBe("buffer");
-  expect(deps.chatRunState.rawBuffers.get(runId)).toBe("raw buffer");
-  expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(true);
-  expect(deps.chatDeltaSentAt.has(runId)).toBe(true);
-  expect(deps.chatDeltaLastBroadcastLen.get(runId)).toBe(6);
-  expect(deps.chatRunState.deltaLastBroadcastText.get(runId)).toBe("buffer");
+  expect(deps.chatRunState.runs.get(runId)).toMatchObject({
+    buffer: "buffer",
+    rawBuffer: "raw buffer",
+    bufferUpdatedAt: expect.any(Number),
+    deltaSentAt: expect.any(Number),
+    deltaLastBroadcastLen: 6,
+    deltaLastBroadcastText: "buffer",
+  });
 }
 
 function expectStaleRunBuffersSwept(deps: MaintenanceTimerDeps, runId: string): void {
-  expect(deps.chatRunBuffers.has(runId)).toBe(false);
-  expect(deps.chatRunState.rawBuffers.has(runId)).toBe(false);
-  expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(false);
-  expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
-  expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
-  expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
+  const run = deps.chatRunState.runs.get(runId);
+  expect(run?.buffer).toBeUndefined();
+  expect(run?.rawBuffer).toBeUndefined();
+  expect(run?.bufferUpdatedAt).toBeUndefined();
+  expect(run?.deltaSentAt).toBeUndefined();
+  expect(run?.deltaLastBroadcastLen).toBeUndefined();
+  expect(run?.deltaLastBroadcastText).toBeUndefined();
 }
 
-function seedBufferedAgentEvent(deps: MaintenanceTimerDeps, key: string, runId = key): void {
-  deps.chatRunState.bufferedAgentEvents.set(key, {
-    payload: {
-      runId,
-      seq: 1,
-      stream: "assistant",
-      ts: Date.now(),
-      data: { text: "buffer", delta: "buffer" },
+function seedBufferedAgentEvent(deps: MaintenanceTimerDeps, runId: string): void {
+  deps.chatRunState.getOrCreate(runId).agentText = {
+    assistant: {
+      bufferedEvent: {
+        payload: {
+          runId,
+          seq: 1,
+          stream: "assistant",
+          ts: Date.now(),
+          data: { text: "buffer", delta: "buffer" },
+        },
+      },
     },
-  });
+  };
 }
 
 function seedStableDedupeEntries(deps: MaintenanceTimerDeps, now: number): void {
@@ -156,6 +167,20 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("runs queue media cleanup at startup and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -207,7 +232,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     await Promise.resolve();
 
-    expect(gc).toHaveBeenCalledWith({ isOwnerActive: expect.any(Function) });
+    expect(gc).toHaveBeenCalledWith({ shouldProtectOwner: expect.any(Function), limits: {} });
     stopMaintenanceTimers(timers);
   });
 
@@ -347,18 +372,18 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-agent-orphaned";
-    const throttleKey = `${runId}:assistant`;
-    deps.chatRunState.agentDeltaSentAt.set(throttleKey, staleRunTimestamp());
-    seedBufferedAgentEvent(deps, throttleKey, runId);
+    seedBufferedAgentEvent(deps, runId);
+    const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
+    expect(agentText).toBeDefined();
+    if (agentText) {
+      agentText.lastSentAt = staleRunTimestamp();
+    }
 
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.chatRunState.agentDeltaSentAt.has(runId)).toBe(false);
-    expect(deps.chatRunState.agentDeltaSentAt.has(throttleKey)).toBe(false);
-    expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
-    expect(deps.chatRunState.bufferedAgentEvents.has(throttleKey)).toBe(false);
+    expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
 
     stopMaintenanceTimers(timers);
   });
@@ -369,19 +394,22 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-aborted";
-    deps.chatRunState.abortedRuns.set(runId, staleRunTimestamp());
+    deps.chatRunState.getOrCreate(runId).abortMarker = staleRunTimestamp();
     seedStaleRunBuffers(deps, runId);
-    deps.chatRunState.agentDeltaSentAt.set(runId, staleRunTimestamp());
     seedBufferedAgentEvent(deps, runId);
+    const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
+    expect(agentText).toBeDefined();
+    if (agentText) {
+      agentText.lastSentAt = staleRunTimestamp();
+    }
 
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.chatRunState.abortedRuns.has(runId)).toBe(false);
+    expect(deps.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
     expectStaleRunBuffersSwept(deps, runId);
-    expect(deps.chatRunState.agentDeltaSentAt.has(runId)).toBe(false);
-    expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
+    expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
 
     stopMaintenanceTimers(timers);
   });
@@ -392,17 +420,17 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-raw-only";
-    deps.chatRunState.rawBuffers.set(runId, "suppressed raw buffer");
-    deps.chatRunState.bufferUpdatedAt.set(runId, staleRunTimestamp());
-    deps.chatRunState.deltaLastBroadcastText.set(runId, "suppressed raw buffer");
+    Object.assign(deps.chatRunState.getOrCreate(runId), {
+      rawBuffer: "suppressed raw buffer",
+      bufferUpdatedAt: staleRunTimestamp(),
+      deltaLastBroadcastText: "suppressed raw buffer",
+    });
 
     const timers = startGatewayMaintenanceTimers(deps);
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(deps.chatRunState.rawBuffers.has(runId)).toBe(false);
-    expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(false);
-    expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
+    expect(deps.chatRunState.runs.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });

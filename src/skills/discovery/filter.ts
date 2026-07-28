@@ -12,7 +12,7 @@ export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): stri
   return normalizeStringEntries(skillFilter);
 }
 
-export function normalizeSkillFilterForComparison(
+function normalizeSkillFilterForComparison(
   skillFilter?: ReadonlyArray<unknown>,
 ): string[] | undefined {
   const normalized = normalizeSkillFilter(skillFilter);

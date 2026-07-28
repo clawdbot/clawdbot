@@ -11,19 +11,36 @@ const model = {
   compat: { requiresOpenAiAnthropicToolPayload: true },
 } as unknown as Model<"anthropic-messages">;
 
-function runWrapper(payload: Record<string, unknown>) {
+function runWrapper(payload: Record<string, unknown>, nextModel = model) {
   const payloads: Array<Record<string, unknown>> = [];
-  const baseStreamFn: StreamFn = (nextModel, context, options) => {
-    options?.onPayload?.(payload, nextModel);
+  const baseStreamFn: StreamFn = (streamModel, context, options) => {
+    options?.onPayload?.(payload, streamModel);
     payloads.push(structuredClone(payload));
     return createAssistantMessageEventStream();
   };
   const wrapped = createOpenAIAnthropicToolPayloadCompatibilityWrapper(baseStreamFn);
-  void wrapped(model, { messages: [] }, {});
+  void wrapped(nextModel, { messages: [] }, {});
   return payloads[0];
 }
 
 describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
+  it("disables GPT-5.6 reasoning when projecting function tools", () => {
+    const payload = runWrapper(
+      {
+        reasoning_effort: "low",
+        tools: [
+          {
+            name: "lookup",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      { ...model, id: "gpt-5.6-luna" },
+    );
+
+    expect(payload?.reasoning_effort).toBe("none");
+  });
+
   it("skips unreadable schemas while preserving a healthy pinned tool", () => {
     const payload = runWrapper({
       tools: [

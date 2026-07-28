@@ -1,3 +1,5 @@
+import { expectDefined } from "./expect.js";
+
 type ByteSizeUnit = "byte" | "kilo" | "mega" | "giga" | "tera";
 type ByteSizeStyle = "iec" | "legacy-binary";
 
@@ -26,16 +28,17 @@ export function formatByteSize(bytes: number, options: ByteSizeFormatOptions): s
     unitIndex += 1;
   }
 
-  const unit = BYTE_SIZE_UNITS[unitIndex];
+  const unit = expectDefined(BYTE_SIZE_UNITS[unitIndex], "byte-size unit");
+  const label = expectDefined(labels[unitIndex], "byte-size label");
   const fractionDigits =
     typeof options.fractionDigits === "function"
       ? options.fractionDigits(value, unit)
       : options.fractionDigits;
   if (fractionDigits === null) {
-    return `${value}${options.separator}${labels[unitIndex]}`;
+    return `${value}${options.separator}${label}`;
   }
   if (options.floorUnits?.includes(unit)) {
     value = Math.floor(value * 10 ** fractionDigits) / 10 ** fractionDigits;
   }
-  return `${value.toFixed(fractionDigits)}${options.separator}${labels[unitIndex]}`;
+  return `${value.toFixed(fractionDigits)}${options.separator}${label}`;
 }

@@ -5,61 +5,6 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-private enum OnboardingStep: Int, CaseIterable {
-    case intro
-    case welcome
-    case mode
-    case connect
-    case auth
-    case success
-
-    var previous: Self? {
-        Self(rawValue: rawValue - 1)
-    }
-
-    /// Progress label for the manual setup flow (mode → connect → auth → success).
-    var manualProgressTitle: String {
-        let manualSteps: [OnboardingStep] = [.mode, .connect, .auth, .success]
-        guard let idx = manualSteps.firstIndex(of: self) else { return "" }
-        return "Step \(idx + 1) of \(manualSteps.count)"
-    }
-
-    var title: LocalizedStringKey {
-        switch self {
-        case .intro: "Welcome"
-        case .welcome: "Connect Gateway"
-        case .mode: "Gateway Setup"
-        case .connect: "Gateway Details"
-        case .auth: "Gateway Status"
-        case .success: "Connected"
-        }
-    }
-
-    var canGoBack: Bool {
-        self != .intro && self != .welcome && self != .success
-    }
-}
-
-struct GatewaySetupLinkStaging {
-    private(set) var link: GatewayConnectDeepLink?
-
-    mutating func stage(_ link: GatewayConnectDeepLink) {
-        self.link = link
-    }
-
-    mutating func take() -> GatewayConnectDeepLink? {
-        defer { self.link = nil }
-        return self.link
-    }
-
-    @discardableResult
-    mutating func cancel() -> Bool {
-        guard self.link != nil else { return false }
-        self.link = nil
-        return true
-    }
-}
-
 private enum OnboardingFocusedField: Hashable {
     case setupCode
     case manualHost
@@ -67,13 +12,6 @@ private enum OnboardingFocusedField: Hashable {
     case discoveryDomain
     case gatewayToken
     case gatewayPassword
-}
-
-private enum OnboardingConnectPhase {
-    case connecting(detail: String)
-    case failed(GatewayConnectionProblem)
-    case failedStatus(message: String, allowsRetry: Bool)
-    case ready
 }
 
 struct OnboardingWizardView: View {
@@ -95,7 +33,7 @@ struct OnboardingWizardView: View {
     @State private var connectMessage: String?
     @State private var localConnectionFailure: String?
     @State private var statusLine: String = ""
-    @State private var connectingGatewayID: String?
+    @State private var connectingGateway: OnboardingGatewayConnectionAttempt?
     @State private var issue: GatewayConnectionIssue = .none
     @State private var didMarkCompleted = false
     @State private var pairingRequestId: String?
@@ -136,7 +74,7 @@ struct OnboardingWizardView: View {
     }
 
     private var isFullScreenStep: Bool {
-        self.step == .intro || self.step == .welcome || self.step == .success
+        self.step == .intro || self.step == .permissions || self.step == .welcome || self.step == .success
     }
 
     private var currentProblem: GatewayConnectionProblem? {
@@ -144,22 +82,19 @@ struct OnboardingWizardView: View {
     }
 
     private var connectPhase: OnboardingConnectPhase {
-        if self.connectingGatewayID != nil {
-            return .connecting(detail: self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
-        }
-        if let message = self.localConnectionFailure {
-            return .failedStatus(message: message, allowsRetry: false)
-        }
-        if let problem = self.currentProblem {
-            return .failed(problem)
-        }
-        if self.issue != .none {
-            let message = self.connectMessage
-                ?? (self.statusLine.isEmpty ? nil : self.statusLine)
-                ?? self.issueFallbackMessage
-            return .failedStatus(message: message, allowsRetry: true)
-        }
-        return .ready
+        let connectingDetail = self.connectingGateway == nil
+            ? nil
+            : (self.statusLine.isEmpty ? "Connecting…" : self.statusLine)
+        let retryableFailure = self.issue == .none
+            ? nil
+            : self.connectMessage
+            ?? (self.statusLine.isEmpty ? nil : self.statusLine)
+            ?? self.issueFallbackMessage
+        return OnboardingConnectPhase.resolve(
+            problem: self.currentProblem,
+            connectingDetail: connectingDetail,
+            localFailure: self.localConnectionFailure,
+            retryableFailure: retryableFailure)
     }
 
     private var issueFallbackMessage: String {
@@ -168,6 +103,8 @@ struct OnboardingWizardView: View {
             ""
         case .tokenMissing:
             "Gateway auth token is missing."
+        case .passwordMissing:
+            self.connectMessage ?? self.statusLine
         case .unauthorized:
             "Gateway rejected credentials."
         case let .pairingRequired(requestId):
@@ -202,6 +139,8 @@ struct OnboardingWizardView: View {
                 switch self.step {
                 case .intro:
                     self.introStep
+                case .permissions:
+                    self.permissionsStep
                 case .welcome:
                     self.welcomeStep
                 case .success:
@@ -253,90 +192,91 @@ struct OnboardingWizardView: View {
         .gatewayTrustPromptAlert()
         .alert("QR Scanner Unavailable", isPresented: Binding(
             get: { self.scannerError != nil },
-            set: { if !$0 { self.scannerError = nil } }))
-        {
-            Button(role: .cancel) {} label: {
-                Text("OK")
-                    .font(OpenClawType.subheadSemiBold)
-            }
+            set: {
+                if !$0 { self.scannerError = nil }
+            })) {
+                Button(role: .cancel) {} label: {
+                    Text("OK")
+                        .font(OpenClawType.subheadSemiBold)
+                }
         } message: {
             Text(self.scannerError ?? "")
                 .font(OpenClawType.subhead)
         }
         .sheet(
-                isPresented: self.$showQRScanner,
-                onDismiss: {
-                    self.processQueuedScannerResult()
-                },
-                content: {
-                    self.qrScannerSheet
-                })
-            .sheet(isPresented: self.$showGatewayProblemDetails) {
-                if let currentProblem = self.currentProblem {
-                    GatewayProblemDetailsSheet(
-                        problem: currentProblem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(currentProblem),
-                        onPrimaryAction: {
-                            Task { await self.handleGatewayProblemPrimaryAction(currentProblem) }
-                        })
-                }
+            isPresented: self.$showQRScanner,
+            onDismiss: {
+                self.processQueuedScannerResult()
+            },
+            content: {
+                self.qrScannerSheet
+            })
+        .sheet(isPresented: self.$showGatewayProblemDetails) {
+            if let currentProblem = self.currentProblem {
+                GatewayProblemDetailsSheet(
+                    problem: currentProblem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(currentProblem),
+                    onPrimaryAction: {
+                        Task { await self.handleGatewayProblemPrimaryAction(currentProblem) }
+                    })
             }
-            .onAppear {
-                self.initializeState()
-                self.applyPendingGatewaySetupLinkIfNeeded()
-                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
+        }
+        .onAppear {
+            self.initializeState()
+            self.applyPendingGatewaySetupLinkIfNeeded()
+            self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
+        }
+        .onDisappear {
+            self.invalidateSetupAttempt()
+            self.discoveryRestartTask?.cancel()
+            self.discoveryRestartTask = nil
+            self.scannerResultHandoff.cancel()
+            self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
+        }
+        .onChange(of: self.discoveryDomain) { _, _ in
+            self.scheduleDiscoveryRestart()
+        }
+        .onChange(of: self.manualPortText) { _, newValue in
+            let digits = newValue.filter(\.isNumber)
+            if digits != newValue {
+                self.manualPortText = digits
+                return
             }
-            .onDisappear {
-                self.invalidateSetupAttempt()
-                self.discoveryRestartTask?.cancel()
-                self.discoveryRestartTask = nil
-                self.scannerResultHandoff.cancel()
-                self.pendingTargetSuppression.resumeAutoConnect(controller: self.gatewayController)
+            guard let parsed = Int(digits), parsed > 0 else {
+                self.manualPort = 0
+                return
             }
-            .onChange(of: self.discoveryDomain) { _, _ in
-                self.scheduleDiscoveryRestart()
+            self.manualPort = min(parsed, 65535)
+        }
+        .onChange(of: self.manualPort) { _, newValue in
+            let normalized = newValue > 0 ? String(newValue) : ""
+            if self.manualPortText != normalized {
+                self.manualPortText = normalized
             }
-            .onChange(of: self.manualPortText) { _, newValue in
-                let digits = newValue.filter(\.isNumber)
-                if digits != newValue {
-                    self.manualPortText = digits
-                    return
-                }
-                guard let parsed = Int(digits), parsed > 0 else {
-                    self.manualPort = 0
-                    return
-                }
-                self.manualPort = min(parsed, 65535)
+        }
+        .onChange(of: self.setupCode) { _, newValue in
+            guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            self.clearStagedGatewaySetupLink()
+        }
+        .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
+            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
+        }
+        .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+            self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
+        }
+        .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
+            self.applyPendingGatewaySetupLinkIfNeeded()
+        }
+        .onChange(of: self.appModel.gatewayServerName) { _, newValue in
+            guard newValue != nil, self.setupLinkStaging.link == nil else { return }
+            self.showQRScanner = false
+            self.statusLine = "Connected."
+            if !self.didMarkCompleted, let selectedMode {
+                OnboardingStateStore.markCompleted(mode: selectedMode)
+                self.didMarkCompleted = true
             }
-            .onChange(of: self.manualPort) { _, newValue in
-                let normalized = newValue > 0 ? String(newValue) : ""
-                if self.manualPortText != normalized {
-                    self.manualPortText = normalized
-                }
-            }
-            .onChange(of: self.setupCode) { _, newValue in
-                guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                self.clearStagedGatewaySetupLink()
-            }
-            .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
-                self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
-            }
-            .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
-                self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
-            }
-            .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
-                self.applyPendingGatewaySetupLinkIfNeeded()
-            }
-            .onChange(of: self.appModel.gatewayServerName) { _, newValue in
-                guard newValue != nil, self.setupLinkStaging.link == nil else { return }
-                self.showQRScanner = false
-                self.statusLine = "Connected."
-                if !self.didMarkCompleted, let selectedMode {
-                    OnboardingStateStore.markCompleted(mode: selectedMode)
-                    self.didMarkCompleted = true
-                }
-                self.navigate(to: .success)
-            }
+            self.navigate(to: .success)
+        }
     }
 
     private var qrScannerSheet: some View {
@@ -463,10 +403,14 @@ struct OnboardingWizardView: View {
         OnboardingIntroStep(onContinue: self.advanceFromIntro)
     }
 
+    private var permissionsStep: some View {
+        OnboardingPermissionsStep(onContinue: self.advanceFromPermissions)
+    }
+
     private var welcomeStep: some View {
         OnboardingWelcomeStep(
             statusLine: self.statusLine,
-            isConnecting: self.connectingGatewayID != nil,
+            isConnecting: self.connectingGateway != nil,
             onScanQRCode: {
                 self.openQRScannerFromOnboarding()
             },
@@ -480,104 +424,21 @@ struct OnboardingWizardView: View {
     @ViewBuilder
     private var modeStep: some View {
         self.setupCodeSection
-
-        Section {
-            OnboardingModeRow(
-                title: "Home Network",
-                subtitle: "LAN or Tailscale host",
-                symbol: "house.and.flag",
-                selected: self.selectedMode == .homeNetwork)
-            {
-                self.selectMode(.homeNetwork)
-            }
-
-            OnboardingModeRow(
-                title: "Remote Domain",
-                subtitle: "VPS with domain",
-                symbol: "globe",
-                selected: self.selectedMode == .remoteDomain)
-            {
-                self.selectMode(.remoteDomain)
-            }
-
-            if self.developerModeEnabled {
-                self.developerModeToggleRow
-
-                OnboardingModeRow(
-                    title: "Same Machine (Dev)",
-                    subtitle: "For local iOS app development",
-                    symbol: "wrench.and.screwdriver",
-                    selected: self.selectedMode == .developerLocal)
-                {
-                    self.selectMode(.developerLocal)
-                }
-            }
-        } header: {
-            Text("Manual Connection")
-                .font(OpenClawType.footnoteSemiBold)
-                .padding(.top, 12)
-        }
-        .disabled(self.connectingGatewayID != nil)
-
-        Section {
-            Button {
-                self.navigate(to: .connect)
-            } label: {
-                Text("Continue")
-                    .font(OpenClawType.subheadSemiBold)
-            }
-            .disabled(self.selectedMode == nil || self.connectingGatewayID != nil)
-            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48, cornerRadius: 16))
-            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-            .listRowBackground(Color.clear)
-            .listRowSeparator(.hidden)
-        }
-    }
-
-    private var developerModeToggleRow: some View {
-        self.onboardingButtonToggle(
-            "Developer mode",
-            symbol: "wrench.and.screwdriver",
-            isOn: Binding(
+        OnboardingModeSelectionSections(
+            selectedMode: self.selectedMode,
+            developerModeEnabled: Binding(
                 get: { self.developerModeEnabled },
                 set: { enabled in
                     self.developerModeEnabled = enabled
                     if !enabled, self.selectedMode == .developerLocal {
                         self.selectedMode = nil
                     }
-                }))
-    }
-
-    private func onboardingButtonToggle(
-        _ title: LocalizedStringKey,
-        symbol: String? = nil,
-        isOn: Binding<Bool>) -> some View
-    {
-        Toggle(isOn: isOn) {
-            HStack(spacing: 12) {
-                if let symbol {
-                    OnboardingModeIcon(symbol: symbol, selected: false)
-                }
-
-                Text(title)
-                    .font(OpenClawType.subheadSemiBold)
-                    .foregroundStyle(.primary)
-            }
-            .frame(minHeight: 52)
-        }
-        .tint(OpenClawBrand.activationPrimaryAction)
-        .contentShape(Rectangle())
-        .overlay {
-            Button {
-                isOn.wrappedValue.toggle()
-            } label: {
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityHidden(true)
-        }
+                }),
+            isConnecting: self.connectingGateway != nil,
+            onSelectMode: self.selectMode,
+            onContinue: {
+                self.navigate(to: .connect)
+            })
     }
 
     @ViewBuilder
@@ -618,155 +479,44 @@ struct OnboardingWizardView: View {
         }
     }
 
-    @ViewBuilder
     private var connectPhaseView: some View {
-        switch self.connectPhase {
-        case let .connecting(detail):
-            HStack(spacing: 10) {
-                ProgressView()
-                    .progressViewStyle(.circular)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Connecting…")
-                        .font(OpenClawType.subheadSemiBold)
-                    Text(verbatim: detail)
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .accessibilityElement(children: .combine)
-        case let .failed(problem):
-            let actionTitle = self.gatewayProblemPrimaryActionTitle(problem)
-            GatewayProblemBanner(
-                problem: problem,
-                primaryActionTitle: actionTitle ?? (problem.retryable ? "Retry" : nil),
-                onPrimaryAction: {
-                    if actionTitle != nil {
-                        Task { await self.handleGatewayProblemPrimaryAction(problem) }
-                    } else {
-                        Task { await self.retryLastAttempt() }
-                    }
-                },
-                onShowDetails: {
-                    self.showGatewayProblemDetails = true
-                })
-        case let .failedStatus(message, allowsRetry):
-            let onRetry: (() -> Void)? = allowsRetry
-                ? { Task { await self.retryLastAttempt() } }
-                : nil
-            OpenClawNoticeBanner(
-                icon: "exclamationmark.triangle.fill",
-                title: "Connection Failed",
-                message: message,
-                ownerLabel: "Needs attention",
-                tint: OpenClawBrand.danger,
-                primaryActionTitle: allowsRetry ? "Retry" : nil,
-                onPrimaryAction: onRetry)
-        case .ready:
-            OpenClawStatusBadge(label: "Ready to Connect", tone: .muted)
-        }
+        OnboardingConnectPhaseView(
+            phase: self.connectPhase,
+            primaryActionTitle: self.gatewayProblemPrimaryActionTitle,
+            onHandleProblem: { problem in
+                Task { await self.handleGatewayProblemPrimaryAction(problem) }
+            },
+            onRetry: {
+                Task { await self.retryLastAttempt() }
+            },
+            onShowDetails: {
+                self.showGatewayProblemDetails = true
+            })
     }
 
     private func stagedGatewaySetupSection(_ link: GatewayConnectDeepLink) -> some View {
-        Section {
-            self.onboardingLabeledContent("Host", value: link.host)
-            self.onboardingLabeledContent("Port", value: String(link.port))
-            self.onboardingLabeledContent("Security", value: link.tls ? "TLS" : "Plaintext (local network)")
-
-            Button {
+        OnboardingStagedGatewaySetupSection(
+            link: link,
+            isConnecting: self.connectingGateway == .manual,
+            isBusy: self.connectingGateway != nil,
+            onConnect: {
                 Task { await self.connectStagedGatewaySetupLink() }
-            } label: {
-                if self.connectingGatewayID == "manual" {
-                    HStack(spacing: 8) {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                        Text("Connecting…")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                } else {
-                    Text("Connect")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-            }
-            .font(OpenClawType.subheadSemiBold)
-            .disabled(self.connectingGatewayID != nil)
-
-            Button {
-                self.clearStagedGatewaySetupLink()
-            } label: {
-                Text("Use Manual Setup")
-                    .font(OpenClawType.subheadSemiBold)
-            }
-            .font(OpenClawType.subheadSemiBold)
-            .disabled(self.connectingGatewayID != nil)
-        } header: {
-            Text("Setup Link")
-                .font(OpenClawType.footnoteSemiBold)
-        } footer: {
-            Text(link.tls
-                ? "Review this endpoint. Credentials are applied only after you tap Connect."
-                :
-                "Plaintext may expose credentials. Continue only if you trust this local network and host.")
-                .font(OpenClawType.footnote)
-        }
+            },
+            onUseManualSetup: self.clearStagedGatewaySetupLink)
     }
 
+    @ViewBuilder
     private var homeNetworkConnectSection: some View {
-        Group {
-            Section {
-                if self.gatewayController.gateways.isEmpty {
-                    Text("No gateways found yet.")
-                        .font(OpenClawType.body)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(self.gatewayController.gateways) { gateway in
-                        let hasHost = self.gatewayHasResolvableHost(gateway)
+        OnboardingDiscoveredGatewaysSection(
+            gateways: self.gatewayController.gateways,
+            gatewayController: self.gatewayController,
+            connectingGateway: self.connectingGateway,
+            onConnect: { gateway in
+                Task { await self.connectDiscoveredGateway(gateway) }
+            },
+            onRestartDiscovery: self.gatewayController.restartDiscovery)
 
-                        HStack {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(gateway.name)
-                                    .font(OpenClawType.body)
-                                if let host = gateway.lanHost ?? gateway.tailnetDns {
-                                    Text(host)
-                                        .font(OpenClawType.footnote)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            Button {
-                                Task { await self.connectDiscoveredGateway(gateway) }
-                            } label: {
-                                if self.connectingGatewayID == gateway.id {
-                                    ProgressView()
-                                        .progressViewStyle(.circular)
-                                } else if !hasHost {
-                                    Text("Resolving…")
-                                        .font(OpenClawType.subheadSemiBold)
-                                } else {
-                                    Text("Connect")
-                                        .font(OpenClawType.subheadSemiBold)
-                                }
-                            }
-                            .font(OpenClawType.subheadSemiBold)
-                            .disabled(self.connectingGatewayID != nil || !hasHost)
-                        }
-                    }
-                }
-
-                Button {
-                    self.gatewayController.restartDiscovery()
-                } label: {
-                    Text("Restart Discovery")
-                        .font(OpenClawType.subheadSemiBold)
-                }
-                .font(OpenClawType.subheadSemiBold)
-                .disabled(self.connectingGatewayID != nil)
-            } header: {
-                Text("Discovered Gateways")
-                    .font(OpenClawType.footnoteSemiBold)
-            }
-
-            self.manualConnectionFieldsSection(title: "Manual Fallback")
-        }
+        self.manualConnectionFieldsSection(title: "Manual Fallback")
     }
 
     private var remoteDomainConnectSection: some View {
@@ -789,97 +539,106 @@ struct OnboardingWizardView: View {
         }
     }
 
+    @ViewBuilder
     private var authStep: some View {
-        Group {
-            Section {
-                self.onboardingSecureField(
-                    "Gateway Auth Token",
-                    text: self.gatewayTokenBinding,
-                    focusedField: .gatewayToken)
-                self.onboardingSecureField(
-                    "Gateway Password",
-                    text: self.gatewayPasswordBinding,
-                    focusedField: .gatewayPassword)
+        Section {
+            self.onboardingSecureField(
+                "Gateway Auth Token",
+                text: self.gatewayTokenBinding,
+                focusedField: .gatewayToken)
+            self.onboardingSecureField(
+                "Gateway Password",
+                text: self.gatewayPasswordBinding,
+                focusedField: .gatewayPassword)
 
-                if let problem = self.currentProblem {
-                    GatewayProblemBanner(
-                        problem: problem,
-                        primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
-                        onPrimaryAction: {
-                            Task { await self.handleGatewayProblemPrimaryAction(problem) }
-                        },
-                        onShowDetails: {
-                            self.showGatewayProblemDetails = true
-                        })
-                } else if self.issue.needsAuthToken {
-                    Text("Gateway rejected credentials. Scan a fresh setup code or update token/password.")
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("OpenClaw is checking gateway and node access.")
-                        .font(OpenClawType.footnote)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text(self.gatewayStatusSectionTitle)
-                    .font(OpenClawType.footnoteSemiBold)
+            if let problem = self.currentProblem {
+                GatewayProblemBanner(
+                    problem: problem,
+                    primaryActionTitle: self.gatewayProblemPrimaryActionTitle(problem),
+                    onPrimaryAction: {
+                        Task { await self.handleGatewayProblemPrimaryAction(problem) }
+                    },
+                    onShowDetails: {
+                        self.showGatewayProblemDetails = true
+                    })
+            } else if self.issue == .unauthorized {
+                Text("Gateway rejected credentials. Scan a fresh setup code or update token/password.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            } else if self.issue.needsAuthCredentials {
+                Text(verbatim: self.connectMessage ?? self.statusLine)
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("OpenClaw is checking gateway and node access.")
+                    .font(OpenClawType.footnote)
+                    .foregroundStyle(.secondary)
             }
+        } header: {
+            Text(self.gatewayStatusSectionTitle)
+                .font(OpenClawType.footnoteSemiBold)
+        }
 
-            if self.issue.needsPairing {
-                Section {
-                    Button {
-                        self.resumeAfterPairingApproval()
-                    } label: {
-                        Label("Resume After Approval", systemImage: "arrow.clockwise")
-                            .font(OpenClawType.subheadSemiBold)
-                    }
-                    .font(OpenClawType.subheadSemiBold)
-                    .disabled(self.connectingGatewayID != nil)
-                } header: {
-                    Text("Pairing Approval")
-                        .font(OpenClawType.footnoteSemiBold)
-                } footer: {
-                    let requestLine: String = {
-                        if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
-                            return "Request ID: \(id)"
-                        }
-                        return "Request ID: check `openclaw devices list`."
-                    }()
-                    let commandLine = self.currentProblem?.actionCommand ?? "openclaw devices approve <requestId>"
-                    Text(
-                        "Approve this device on the gateway.\n"
-                            + "1) `\(commandLine)`\n"
-                            + "2) `/pair approve` in your OpenClaw chat\n"
-                            + "\(requestLine)\n"
-                            + "OpenClaw will also retry automatically when you return to this app.")
-                        .font(OpenClawType.caption)
-                }
-            }
-
+        if self.issue.needsPairing {
             Section {
                 Button {
-                    self.openQRScannerFromOnboarding()
+                    self.resumeAfterPairingApproval()
                 } label: {
-                    Label("Scan Setup Code Again", systemImage: "qrcode.viewfinder")
+                    Label("Resume After Approval", systemImage: "arrow.clockwise")
                         .font(OpenClawType.subheadSemiBold)
                 }
                 .font(OpenClawType.subheadSemiBold)
-                .disabled(self.connectingGatewayID != nil)
-
-                Button {
-                    Task { await self.retryLastAttempt() }
-                } label: {
-                    if self.connectingGatewayID == "retry" {
-                        ProgressView()
-                            .progressViewStyle(.circular)
-                    } else {
-                        Text("Retry Connection")
-                            .font(OpenClawType.subheadSemiBold)
+                .disabled(self.connectingGateway != nil)
+            } header: {
+                Text("Pairing Approval")
+                    .font(OpenClawType.footnoteSemiBold)
+            } footer: {
+                let requestLine: String = {
+                    if let id = self.currentProblem?.requestId ?? self.issue.requestId, !id.isEmpty {
+                        return String(
+                            format: String(localized: "Request ID: %@"),
+                            id)
                     }
-                }
-                .font(OpenClawType.subheadSemiBold)
-                .disabled(self.connectingGatewayID != nil)
+                    return String(localized: "Request ID: check `openclaw devices list`.")
+                }()
+                let commandLine = self.currentProblem?.actionCommand ?? "openclaw devices approve <requestId>"
+                Text(verbatim: String(
+                    format: String(localized: """
+                    Approve this device on the gateway.
+                    1) `%1$@`
+                    2) `/pair approve` in your OpenClaw chat
+                    %2$@
+                    OpenClaw will also retry automatically when you return to this app.
+                    """),
+                    commandLine,
+                    requestLine))
+                    .font(OpenClawType.caption)
             }
+        }
+
+        Section {
+            Button {
+                self.openQRScannerFromOnboarding()
+            } label: {
+                Label("Scan Setup Code Again", systemImage: "qrcode.viewfinder")
+                    .font(OpenClawType.subheadSemiBold)
+            }
+            .font(OpenClawType.subheadSemiBold)
+            .disabled(self.connectingGateway != nil)
+
+            Button {
+                Task { await self.retryLastAttempt() }
+            } label: {
+                if self.connectingGateway == .retry {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                } else {
+                    Text("Retry Connection")
+                        .font(OpenClawType.subheadSemiBold)
+                }
+            }
+            .font(OpenClawType.subheadSemiBold)
+            .disabled(self.connectingGateway != nil)
         }
     }
 
@@ -896,7 +655,7 @@ extension OnboardingWizardView {
         if self.issue.needsPairing || self.currentProblem?.needsPairingApproval == true {
             return "Gateway Approval"
         }
-        if self.issue.needsAuthToken || self.currentProblem != nil {
+        if self.issue.needsAuthCredentials || self.currentProblem != nil {
             return "Authentication"
         }
         return "Gateway Status"
@@ -916,7 +675,7 @@ extension OnboardingWizardView {
                 Button {
                     Task { await self.applySetupCodeAndConnect() }
                 } label: {
-                    if self.connectingGatewayID == "setup-code" {
+                    if self.connectingGateway == .setupCode {
                         ProgressView()
                             .progressViewStyle(.circular)
                             .controlSize(.small)
@@ -949,7 +708,7 @@ extension OnboardingWizardView {
 
     private var canApplySetupCode: Bool {
         !self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && self.connectingGatewayID == nil
+            && self.connectingGateway == nil
     }
 
     private func manualConnectionFieldsSection(title: LocalizedStringKey) -> some View {
@@ -996,13 +755,16 @@ extension OnboardingWizardView {
 
     @ViewBuilder
     private var manualConnectionSecurityRows: some View {
-        Picker("Connection security", selection: self.manualTLSBinding) {
+        Picker(selection: self.manualTLSBinding) {
             Text("Unencrypted")
                 .font(OpenClawType.captionSemiBold)
                 .tag(false)
             Text("Secure (TLS)")
                 .font(OpenClawType.captionSemiBold)
                 .tag(true)
+        } label: {
+            Text("Connection security")
+                .font(OpenClawType.captionSemiBold)
         }
         .pickerStyle(.segmented)
         .disabled(self.manualTransport.requiresTLS)
@@ -1067,7 +829,7 @@ extension OnboardingWizardView {
         Button {
             Task { await self.connectManual() }
         } label: {
-            if self.connectingGatewayID == "manual" {
+            if self.connectingGateway == .manual {
                 HStack(spacing: 8) {
                     ProgressView()
                         .progressViewStyle(.circular)
@@ -1080,7 +842,9 @@ extension OnboardingWizardView {
             }
         }
         .font(OpenClawType.subheadSemiBold)
-        .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+        .disabled(!self.canConnectManual || self.connectingGateway != nil)
     }
 
     private func applySetupCodeAndConnect() async {
@@ -1179,7 +943,7 @@ extension OnboardingWizardView {
     }
 
     private func connectStagedGatewaySetupLink() async {
-        guard self.connectingGatewayID == nil else { return }
+        guard self.connectingGateway == nil else { return }
         guard let link = self.setupLinkStaging.link else { return }
         guard link.isValidEndpoint else {
             let message = "Setup link has an invalid gateway endpoint."
@@ -1187,9 +951,9 @@ extension OnboardingWizardView {
             self.setConnectionFailure(message)
             return
         }
-        self.connectingGatewayID = "manual"
+        self.connectingGateway = .manual
         self.localConnectionFailure = nil
-        defer { self.connectingGatewayID = nil }
+        defer { self.connectingGateway = nil }
         let lease = self.gatewayController.cancelPendingConnectionAttempts()
         self.pendingTargetSuppression.replace(owner: .setupLink, lease: lease)
         defer { self.pendingTargetSuppression.resumeAutoConnect(.setupLink, controller: self.gatewayController) }
@@ -1224,11 +988,17 @@ extension OnboardingWizardView {
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         self.gatewayCredentialFieldStableID = setupAuth.targetStableID
         if setupAuth.hasBootstrapToken {
-            await GatewayOnboardingReset.prepareForBootstrapPairing(
+            guard await GatewayOnboardingReset.prepareForBootstrapPairing(
                 appModel: self.appModel,
                 instanceId: GatewaySettingsStore.currentInstanceID(),
                 gatewayStableID: setupAuth.targetStableID,
                 disconnectGateway: disconnectExistingGatewayForBootstrap)
+            else {
+                let message = "Could not safely replace the gateway's offline data. Try again."
+                self.connectMessage = message
+                self.statusLine = message
+                return
+            }
         }
         self.gatewayToken = setupAuth.token
         self.gatewayPassword = setupAuth.password
@@ -1266,7 +1036,7 @@ extension OnboardingWizardView {
         _ = self.setupLinkStaging.cancel()
         self.pendingTargetSuppression.replace(owner: .qrScanner, lease: lease)
         self.scannerScanID = self.scannerResultHandoff.beginScan()
-        self.connectingGatewayID = nil
+        self.connectingGateway = nil
         self.localConnectionFailure = nil
         self.connectMessage = nil
         self.issue = .none
@@ -1301,7 +1071,7 @@ extension OnboardingWizardView {
         guard self.scenePhase == .active else { return }
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
-        guard self.connectingGatewayID == nil else { return }
+        guard self.connectingGateway == nil else { return }
 
         let now = Date()
         if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
@@ -1312,6 +1082,7 @@ extension OnboardingWizardView {
     }
 
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
+        let wasOnAuthStep = self.step == .auth
         let next = GatewayConnectionIssue.detect(problem: problem)
         let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
@@ -1322,7 +1093,7 @@ extension OnboardingWizardView {
             self.issue = .pairingRequired(requestId: mergedRequestId)
         } else if self.issue.needsPairing, !fallback.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthToken, !fallback.needsAuthToken, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
@@ -1333,13 +1104,24 @@ extension OnboardingWizardView {
             self.pairingRequestId = requestId
         }
 
-        if self.issue.needsAuthToken || self.issue.needsPairing || problem?.pauseReconnect == true {
+        if self.issue.needsAuthCredentials || self.issue.needsPairing || problem?.pauseReconnect == true {
             self.step = .auth
+            // Focus only on the transition; repeated status updates must not steal an edited field.
+            if !wasOnAuthStep {
+                switch self.issue {
+                case .passwordMissing:
+                    self.focusedField = .gatewayPassword
+                case .tokenMissing:
+                    self.focusedField = .gatewayToken
+                default:
+                    break
+                }
+            }
         }
 
         if let problem {
-            self.connectMessage = problem.message
-            self.statusLine = problem.message
+            self.connectMessage = problem.localizedMessage
+            self.statusLine = problem.localizedMessage
             return
         }
 
@@ -1366,6 +1148,13 @@ extension OnboardingWizardView {
     }
 
     private func advanceFromIntro() {
+        self.statusLine = ""
+        self.navigate(to: .permissions)
+    }
+
+    private func advanceFromPermissions() {
+        // Marked here, not on the intro Continue: an interrupted first run must
+        // replay intro + permissions on relaunch instead of skipping them forever.
         OnboardingStateStore.markFirstRunIntroSeen()
         self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = ""
@@ -1373,7 +1162,9 @@ extension OnboardingWizardView {
     }
 
     private func requestLocalNetworkAccessIfPastIntro(reason: String) {
-        guard self.step != .intro else { return }
+        // The local-network prompt waits until pairing starts so it never stacks
+        // on top of the permission prompts users trigger on the permissions step.
+        guard self.step != .intro, self.step != .permissions else { return }
         self.requestLocalNetworkAccess(reason: reason)
     }
 
@@ -1411,10 +1202,10 @@ extension OnboardingWizardView {
     }
 
     private func beginSetupAttempt() -> UUID? {
-        guard self.connectingGatewayID == nil else { return nil }
+        guard self.connectingGateway == nil else { return nil }
         let attemptID = UUID()
         self.setupAttemptID = attemptID
-        self.connectingGatewayID = "setup-code"
+        self.connectingGateway = .setupCode
         return attemptID
     }
 
@@ -1425,7 +1216,7 @@ extension OnboardingWizardView {
 
     private func invalidateSetupAttempt() {
         self.setupAttemptID = nil
-        self.connectingGatewayID = nil
+        self.connectingGateway = nil
     }
 
     private var canConnectManual: Bool {
@@ -1536,7 +1327,9 @@ extension OnboardingWizardView {
             set: { value in
                 let previousStableID = self.currentManualGatewayStableID
                 self.manualHost = value
-                if previousStableID != self.currentManualGatewayStableID {
+                if GatewayStableIdentifier.key(previousStableID) !=
+                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+                {
                     self.clearManualCredentialFields()
                 }
             })
@@ -1550,7 +1343,9 @@ extension OnboardingWizardView {
                 let digits = value.filter(\.isNumber)
                 self.manualPortText = digits
                 self.manualPort = min(Int(digits) ?? 0, 65535)
-                if previousStableID != self.currentManualGatewayStableID {
+                if GatewayStableIdentifier.key(previousStableID) !=
+                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+                {
                     self.clearManualCredentialFields()
                 }
             })
@@ -1599,7 +1394,7 @@ extension OnboardingWizardView {
 
     private func selectGatewayCredentialTarget(_ stableID: String, allowManualOverride: Bool) {
         let instanceId = GatewaySettingsStore.currentInstanceID()
-        if self.gatewayCredentialFieldStableID != stableID {
+        if !GatewayStableIdentifier.matches(self.gatewayCredentialFieldStableID, stableID) {
             let credentials = GatewaySettingsStore.loadGatewayCredentials(
                 instanceId: instanceId,
                 gatewayStableID: stableID)
@@ -1620,13 +1415,15 @@ extension OnboardingWizardView {
 
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {
         self.selectGatewayCredentialTarget(gateway.stableID, allowManualOverride: false)
-        self.connectingGatewayID = gateway.id
+        self.connectingGateway = .gateway(gateway.id)
         self.localConnectionFailure = nil
         self.issue = .none
         self.connectMessage = "Connecting to \(gateway.name)…"
         self.statusLine = "Connecting to \(gateway.name)…"
-        defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connect(gateway)
+        defer { self.connectingGateway = nil }
+        if let message = await self.gatewayController.connectWithDiagnostics(gateway) {
+            self.setConnectionFailure(message)
+        }
     }
 
     private func selectMode(_ mode: OnboardingConnectionMode) {
@@ -1637,7 +1434,9 @@ extension OnboardingWizardView {
     private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
         let previousStableID = self.currentManualGatewayStableID
         defer {
-            if previousStableID != self.currentManualGatewayStableID {
+            if GatewayStableIdentifier.key(previousStableID) !=
+                GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+            {
                 self.clearManualCredentialFields()
             }
         }
@@ -1660,13 +1459,6 @@ extension OnboardingWizardView {
         }
     }
 
-    private func gatewayHasResolvableHost(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) -> Bool {
-        let lanHost = gateway.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !lanHost.isEmpty { return true }
-        let tailnetDns = gateway.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return !tailnetDns.isEmpty
-    }
-
     private func connectManual(setupAttemptID: UUID? = nil) async {
         if let setupAttemptID {
             guard self.setupAttemptID == setupAttemptID else { return }
@@ -1675,12 +1467,12 @@ extension OnboardingWizardView {
         }
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !host.isEmpty, let port = self.resolvedManualPort(host: host) else { return }
-        self.connectingGatewayID = "manual"
+        self.connectingGateway = .manual
         self.localConnectionFailure = nil
         self.issue = .none
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(port)…"
-        defer { self.connectingGatewayID = nil }
+        defer { self.connectingGateway = nil }
         await self.connectCurrentManualGateway(host: host, port: port, forceReconnect: false)
     }
 
@@ -1689,13 +1481,19 @@ extension OnboardingWizardView {
             host: host,
             port: port)
         self.selectGatewayCredentialTarget(stableID, allowManualOverride: true)
-        if self.appModel.activeGatewayConnectConfig?.effectiveStableID == stableID,
-           self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
+        if GatewayStableIdentifier.matches(
+            self.appModel.activeGatewayConnectConfig?.effectiveStableID,
+            stableID),
+            self.appModel.activeGatewayConnectConfig?.nodeOptions.allowStoredDeviceAuth == true
         {
             self.pendingManualAuthOverride = nil
         }
-        let fieldsMatchTarget = self.gatewayCredentialFieldStableID == stableID
-        let pendingOverride = self.pendingManualAuthOverride?.targetStableID == stableID
+        let fieldsMatchTarget = GatewayStableIdentifier.matches(
+            self.gatewayCredentialFieldStableID,
+            stableID)
+        let pendingOverride = GatewayStableIdentifier.matches(
+            self.pendingManualAuthOverride?.targetStableID,
+            stableID)
             ? self.pendingManualAuthOverride
             : nil
         let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
@@ -1725,14 +1523,14 @@ extension OnboardingWizardView {
     }
 
     private func retryLastAttempt(silent: Bool = false) async {
-        self.connectingGatewayID = silent ? "retry-auto" : "retry"
+        self.connectingGateway = silent ? .retryAutomatically : .retry
         self.localConnectionFailure = nil
         // Keep current auth/pairing issue sticky while retrying to avoid Step 3 UI flip-flop.
         if !silent {
             self.connectMessage = "Retrying…"
             self.statusLine = "Retrying last connection…"
         }
-        defer { self.connectingGatewayID = nil }
+        defer { self.connectingGateway = nil }
 
         switch GatewaySettingsStore.activeGatewayEntry()?.kind {
         case .discovered:
@@ -1767,7 +1565,7 @@ extension OnboardingWizardView {
             self.gatewayPassword = ""
             self.gatewayCredentialFieldStableID = nil
             self.pendingManualAuthOverride = nil
-            self.connectingGatewayID = nil
+            self.connectingGateway = nil
             self.connectMessage = nil
             self.issue = .none
             self.pairingRequestId = nil
@@ -1776,10 +1574,10 @@ extension OnboardingWizardView {
             return
         }
         if problem.canTrustRotatedCertificate {
-            self.connectingGatewayID = "trust-certificate"
+            self.connectingGateway = .trustCertificate
             self.connectMessage = "Updating gateway certificate…"
             self.statusLine = "Updating gateway certificate…"
-            defer { self.connectingGatewayID = nil }
+            defer { self.connectingGateway = nil }
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }

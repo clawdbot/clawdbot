@@ -1,4 +1,5 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -53,7 +54,10 @@ describe("docsSearchCommand", () => {
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [url, init] = fetchMock.mock.calls[0];
+    const [url, init] = expectDefined(
+      fetchMock.mock.calls[0],
+      "fetchMock.mock.calls[0] test invariant",
+    );
     if (!(url instanceof URL)) {
       throw new Error("expected docs search to call fetch with a URL");
     }
@@ -61,13 +65,62 @@ describe("docsSearchCommand", () => {
     expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
-  it("fails loudly when the Cloudflare docs search API fails", async () => {
-    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 503 }));
+  it("cancels non-OK docs search response bodies and fails loudly", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unavailable"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 503 },
+    );
+    fetchMock.mockResolvedValueOnce(response);
     const runtime = makeRuntime();
 
     await docsSearchCommand(["browser", "existing-session"], runtime);
 
+    expect(cancelled).toBe(true);
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports malformed docs search JSON with CLI context", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response("{bad json", {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["bad-json"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Docs search failed: Docs search response is malformed JSON",
+    );
+    expect(runtime.error).toHaveBeenCalledTimes(1);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("reports docs search responses with invalid UTF-8 bytes as malformed", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"results":[{"title":"Plugin allow'),
+      0xff,
+      ...new TextEncoder().encode('list","link":"https://docs.openclaw.ai/plugins/allowlist"}]}'),
+    ]);
+    fetchMock.mockResolvedValueOnce(
+      new Response(body, { headers: { "Content-Type": "application/json" } }),
+    );
+    const runtime = makeRuntime();
+
+    await docsSearchCommand(["plugin"], runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Docs search failed: Docs search response is malformed JSON",
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

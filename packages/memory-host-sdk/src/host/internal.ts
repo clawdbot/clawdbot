@@ -4,7 +4,9 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { CANONICAL_ROOT_MEMORY_FILENAME } from "./config-utils.js";
+import { normalizeStringEntries, uniqueStrings } from "@openclaw/normalization-core";
+import { runWithConcurrency as runWithConcurrencyImpl } from "./concurrency.js";
+import { MEMORY_HOST_ROOT_FILENAME } from "./config-utils.js";
 import { estimateStructuredEmbeddingInputBytes } from "./embedding-input-limits.js";
 import { buildTextEmbeddingInput, type EmbeddingInput } from "./embedding-inputs.js";
 import {
@@ -24,7 +26,6 @@ import {
   CHARS_PER_TOKEN_ESTIMATE,
   detectMime,
   estimateStringChars,
-  runTasksWithConcurrency,
   truncateUtf16Safe,
 } from "./openclaw-runtime-io.js";
 import {
@@ -32,7 +33,7 @@ import {
   shouldSkipRootMemoryAuxiliaryPath,
 } from "./openclaw-runtime-memory.js";
 import { retryTransientMemoryRead } from "./read-retry.js";
-import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
+import type { MemoryEntryProvenance } from "./types.js";
 
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
@@ -56,6 +57,7 @@ export type MemoryChunk = {
   text: string;
   hash: string;
   embeddingInput?: EmbeddingInput;
+  provenance?: MemoryEntryProvenance;
 };
 
 type MultimodalMemoryChunk = {
@@ -69,10 +71,12 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
   maxFileBytes: 0,
 };
 
-export function ensureDir(dir: string): string {
+function ensureMemoryHostDir(dir: string): string {
   fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
+
+export { ensureMemoryHostDir as ensureDir };
 
 function normalizeRelPath(value: string): string {
   const trimmed = value.trim().replace(/^[./]+/, "");
@@ -106,7 +110,11 @@ export function isMemoryPath(relPath: string): boolean {
   if (!normalized) {
     return false;
   }
-  if (normalized === CANONICAL_ROOT_MEMORY_FILENAME || normalized.toLowerCase() === "dreams.md") {
+  if (
+    normalized === MEMORY_HOST_ROOT_FILENAME ||
+    normalized === "USER.md" ||
+    normalized.toLowerCase() === "dreams.md"
+  ) {
     return true;
   }
   return normalized.startsWith("memory/");
@@ -176,6 +184,7 @@ export async function listMemoryFiles(
   if (memoryFile) {
     await addMarkdownFile(memoryFile);
   }
+  await addMarkdownFile(path.join(workspaceDir, "USER.md"));
   try {
     const dirStat = await fs.lstat(memoryDir);
     if (!dirStat.isSymbolicLink() && dirStat.isDirectory()) {
@@ -455,11 +464,11 @@ export function chunkMarkdown(
       // Second pass: if a segment's *weighted* size still exceeds the budget
       // (happens for CJK-heavy text where 1 char ≈ 1 token), re-split it at
       // chunking.tokens so the chunk stays within the token budget.
-      for (let start = 0; start < line.length; ) {
+      for (let start = 0; start < line.length;) {
         const coarse = truncateUtf16Safe(line.slice(start), maxChars);
         if (estimateStringChars(coarse) > maxChars) {
           const fineStep = Math.max(1, chunking.tokens);
-          for (let j = 0; j < coarse.length; ) {
+          for (let j = 0; j < coarse.length;) {
             let end = Math.min(j + fineStep, coarse.length);
             const lastCodeUnit = coarse.charCodeAt(end - 1);
             if (lastCodeUnit >= 0xd800 && lastCodeUnit <= 0xdbff && end < coarse.length) {
@@ -539,17 +548,11 @@ export function cosineSimilarity(a: number[], b: number[]): number {
   return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-export async function runWithConcurrency<T>(
+export function runMemoryHostTasksWithConcurrency<T>(
   tasks: Array<() => Promise<T>>,
   limit: number,
 ): Promise<T[]> {
-  const { results, firstError, hasError } = await runTasksWithConcurrency({
-    tasks,
-    limit,
-    errorMode: "stop",
-  });
-  if (hasError) {
-    throw firstError;
-  }
-  return results;
+  return runWithConcurrencyImpl(tasks, limit);
 }
+
+export { runMemoryHostTasksWithConcurrency as runWithConcurrency };

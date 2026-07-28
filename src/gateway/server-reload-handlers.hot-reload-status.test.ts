@@ -6,6 +6,7 @@
  * itself already tracked "active"/"disabled" correctly.
  */
 import { describe, expect, it, vi } from "vitest";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-handlers.js";
@@ -33,6 +34,10 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       minimalTestGateway: false,
       initialConfig,
       initialCompareConfig: initialConfig,
+      initialSnapshotRawHash: null,
+      initialAuthoredConfig: {},
+      initialSnapshotValid: true,
+      initialSnapshotIssues: [],
       initialInternalWriteHash: null,
       watchPath: "/tmp/openclaw.json",
       readSnapshot: vi.fn() as never,
@@ -64,18 +69,25 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       logChannels: { info: vi.fn(), error: vi.fn() },
       logCron: { error: vi.fn() },
       logReload: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      cronReconciliation: {
+        arm: () => ({ complete: async () => {} }),
+        invalidate: vi.fn(),
+      },
       channelManager: {} as never,
       activateRuntimeSecrets: vi.fn(async (config: OpenClawConfig) => ({
         sourceConfig: config,
         config,
         authStores: [],
+        authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
         warnings: [],
         webTools: {},
       })) as never,
       resolveSharedGatewaySessionGenerationForConfig: () => undefined,
       sharedGatewaySessionGenerationState: { current: undefined, required: null },
+      prepareTerminalConfig: vi.fn(),
       reconcileTerminalSessions: vi.fn(),
       commitTerminalConfig: vi.fn(),
+      acceptTerminalConfig: vi.fn(),
       clients: [],
     });
 

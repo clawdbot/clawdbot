@@ -23,9 +23,7 @@ describe("scripts/dev/test-device-pair-telegram.ts", () => {
 
   it("rejects option tokens as device-pair Telegram values", () => {
     for (const flag of ["--chat", "-c", "--account", "-a"]) {
-      expect(() => parseDevicePairTelegramArgs([flag, "-h"])).toThrow(
-        `${flag} requires a value`,
-      );
+      expect(() => parseDevicePairTelegramArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
     }
     expect(() => parseDevicePairTelegramArgs(["--chat", "--help"])).toThrow(
       "--chat requires a value",

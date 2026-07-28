@@ -2,10 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import "../components/github-link-hovercard.ts";
+import "../components/github-link-hovercard-registration.ts";
 import type { GitHubLinkHovercardProvider } from "../components/github-link-hovercard.ts";
 import "../components/modal-dialog.ts";
-import { startNativeLinkRouting, type NativeLinkRouting } from "./native-link-routing.ts";
+import { startNativeLinkRouting } from "./native-link-routing.ts";
+
+type NativeLinkRouting = ReturnType<typeof startNativeLinkRouting>;
 
 type NativeMessage = { type: string; url: string; target: string };
 
@@ -63,7 +65,7 @@ function contextMenu(anchor: HTMLAnchorElement) {
 
 function menuItem(label: string): HTMLButtonElement {
   const item = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) => candidate.querySelector(".session-menu__text")?.textContent?.trim() === label,
   );
   if (!item) {
     throw new Error(`Expected menu item: ${label}`);
@@ -172,7 +174,9 @@ describe("native link routing", () => {
     const firstMenu = document.querySelector("openclaw-native-link-menu");
     await (firstMenu as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
     expect(
-      [...firstMenu!.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent?.trim()),
+      [...firstMenu!.querySelectorAll('[role="menuitem"]')].map((item) =>
+        item.querySelector(".session-menu__text")?.textContent?.trim(),
+      ),
     ).toEqual(["Open in Sidebar", "Open in Default Browser", "Copy Link"]);
     menuItem("Open in Default Browser").click();
     expect(bridge.messages.at(-1)).toEqual({
@@ -188,6 +192,32 @@ describe("native link routing", () => {
     await vi.waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("https://example.com/report?q=1"),
     );
+  });
+
+  it("ignores a stale hide event after replacing the context menu", async () => {
+    installBridge();
+    routing = startNativeLinkRouting();
+    const firstAnchor = appendLink("https://example.com/first");
+    const secondAnchor = appendLink("https://example.com/second");
+
+    contextMenu(firstAnchor);
+    const firstMenu = document.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
+      "openclaw-native-link-menu",
+    );
+    expect(firstMenu).not.toBeNull();
+    await firstMenu?.updateComplete;
+    const firstDropdown = firstMenu?.querySelector("wa-dropdown");
+    expect(firstDropdown).not.toBeNull();
+
+    contextMenu(secondAnchor);
+    const secondMenu = document.querySelector("openclaw-native-link-menu");
+    expect(secondMenu).not.toBe(firstMenu);
+
+    firstDropdown?.dispatchEvent(
+      new CustomEvent("wa-after-hide", { bubbles: true, composed: true }),
+    );
+
+    expect(document.querySelector("openclaw-native-link-menu")).toBe(secondMenu);
   });
 
   it("mounts a fallback menu inside an active dialog", async () => {

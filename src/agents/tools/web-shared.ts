@@ -3,14 +3,12 @@
  *
  * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
  */
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
-  resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-
 export type CacheEntry<T> = {
   value: T;
   expiresAt: number;
@@ -39,7 +37,9 @@ export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): numb
 }
 
 export function normalizeCacheKey(value: string): string {
-  return normalizeLowercaseStringOrEmpty(value);
+  // Request paths and query values can be case-sensitive; only surrounding
+  // whitespace is non-semantic when callers compose cache keys.
+  return value.trim();
 }
 
 export function readCache<T>(
@@ -85,33 +85,7 @@ export function writeCache<T>(
   });
 }
 
-export function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
-  if (timeoutMs <= 0) {
-    return signal ?? new AbortController().signal;
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), resolveTimerTimeoutMs(timeoutMs, 1));
-  if (signal) {
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        controller.abort();
-      },
-      { once: true },
-    );
-  }
-  controller.signal.addEventListener(
-    "abort",
-    () => {
-      clearTimeout(timer);
-    },
-    { once: true },
-  );
-  return controller.signal;
-}
-
-export type ReadResponseTextResult = {
+type ReadResponseTextResult = {
   text: string;
   truncated: boolean;
   bytesRead: number;
@@ -119,7 +93,6 @@ export type ReadResponseTextResult = {
 
 const RESPONSE_CHARSET_SCAN_BYTES = 4096;
 const latin1Decoder = new TextDecoder("latin1");
-const utf8Decoder = new TextDecoder("utf-8");
 
 function normalizeCharset(value: string | undefined): string | undefined {
   const normalized = value?.trim().replace(/^["']|["']$/g, "") ?? "";
@@ -215,13 +188,13 @@ function responseContentType(res: Response): string | null {
   return typeof headers?.get === "function" ? headers.get("content-type") : null;
 }
 
-function decodeResponseBytes(res: Response, bytes: Uint8Array): string {
+function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
   const contentType = responseContentType(res);
   const charset = readCharsetParam(contentType) ?? sniffCharset(contentType, bytes);
   try {
-    return new TextDecoder(charset ?? "utf-8").decode(bytes);
+    return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
   } catch {
-    return utf8Decoder.decode(bytes);
+    return decodeTextPrefix(bytes, { encoding: "utf-8", truncated });
   }
 }
 
@@ -312,7 +285,7 @@ export async function readResponseText(
     }
 
     const bytes = concatBytes(parts, bytesRead);
-    return { text: decodeResponseBytes(res, bytes), truncated, bytesRead };
+    return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
   }
 
   if (maxBytes) {

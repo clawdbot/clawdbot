@@ -11,6 +11,7 @@ import {
   browserScreenshotAction,
 } from "./client-actions.js";
 import {
+  browserCloseTabByRawTargetId,
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
@@ -390,6 +391,24 @@ describe("browser client", () => {
     expect(defaultScreenshotBody.timeoutMs).toBe(20_000);
   });
 
+  it("marks internally selected close targets as exact", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({ ok: true }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await browserCloseTabByRawTargetId("http://127.0.0.1:18791", "RAW_TARGET", {
+      profile: "openclaw",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] ?? [];
+    expect(url).toBe("http://127.0.0.1:18791/tabs/RAW_TARGET?targetIdMode=raw&profile=openclaw");
+    expect(init).toMatchObject({
+      method: "DELETE",
+    });
+    expect(init?.body).toBeUndefined();
+  });
+
   it("gives browser act requests enough client timeout for long waits", async () => {
     const calls: Array<{ url: string; init?: RequestInit & { timeoutMs?: number } }> = [];
     vi.stubGlobal(
@@ -403,14 +422,37 @@ describe("browser client", () => {
     await browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" });
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
-      timeMs: 70_000,
+      timeMs: 10_000,
+      text: "ready",
+      timeoutMs: 20_000,
     });
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
+      text: "ready",
       timeoutMs: 45_000,
     });
+    await browserAct("http://127.0.0.1:18791", {
+      kind: "batch",
+      actions: [
+        { kind: "wait", timeMs: 30_000 },
+        {
+          kind: "batch",
+          actions: [
+            { kind: "wait", timeMs: 30_000 },
+            { kind: "wait", timeMs: 30_000 },
+          ],
+        },
+      ],
+    });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      { kind: "wait", timeMs: 30_000 },
+      { timeoutMs: 12_345 },
+    );
 
-    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([60_000, 75_000, 50_000]);
+    expect(calls.map((call) => call.init?.timeoutMs)).toEqual([
+      65_000, 35_000, 50_000, 95_000, 12_345,
+    ]);
   });
 
   it("clamps oversized browser action timeouts before forwarding", async () => {
@@ -425,14 +467,21 @@ describe("browser client", () => {
 
     await browserAct("http://127.0.0.1:18791", {
       kind: "wait",
+      text: "ready",
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
+    await browserAct(
+      "http://127.0.0.1:18791",
+      { kind: "wait", text: "ready" },
+      { timeoutMs: Number.MAX_SAFE_INTEGER },
+    );
     await browserScreenshotAction("http://127.0.0.1:18791", {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    const act = calls.find((call) => call.url.endsWith("/act"));
-    expect(act?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    const actCalls = calls.filter((call) => call.url.endsWith("/act"));
+    expect(actCalls[0]?.init?.timeoutMs).toBe(125_000);
+    expect(actCalls[1]?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshot = calls.find((call) => call.url.endsWith("/screenshot"));
     expect(screenshot?.init?.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
     const screenshotBody = JSON.parse(

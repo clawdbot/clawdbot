@@ -2,6 +2,7 @@
 import type { Bot } from "grammy";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -89,7 +90,12 @@ function createBot(api: Record<string, unknown> = {}): Bot {
     sendRichMessage: vi.fn(
       (params: {
         chat_id: string | number;
-        rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+        rich_message: {
+          blocks?: unknown[];
+          markdown?: string;
+          html?: string;
+          skip_entity_detection?: boolean;
+        };
         [key: string]: unknown;
       }) => {
         const sendMessage = api.sendMessage;
@@ -102,7 +108,14 @@ function createBot(api: Record<string, unknown> = {}): Bot {
           ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
           ...richParams,
         };
-        const text = rich_message.markdown ?? rich_message.html ?? "";
+        const text = Array.isArray(rich_message.blocks)
+          ? rich_message.blocks
+              .map((block) => {
+                const blockText = (block as { text?: unknown }).text;
+                return typeof blockText === "string" ? blockText : "";
+              })
+              .join("\n")
+          : (rich_message.markdown ?? rich_message.html ?? "");
         const replyParameters = sendParams.reply_parameters;
         if (
           replyParameters &&
@@ -135,6 +148,19 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
     buffer: Buffer.from(data),
     contentType,
     fileName,
+  });
+}
+
+function createObservedPromptContextSequence(
+  record: (value: unknown) => void,
+  source?: { transcriptMessageId: string },
+) {
+  return createTelegramPromptContextProjectionSequence({
+    ...(source ? { source } : {}),
+    record: async (value) => {
+      record(value);
+      return true;
+    },
   });
 }
 
@@ -295,6 +321,28 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
     expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(firstMockCallArg(sendMessage, 1)).toBe("hello");
+  });
+
+  it("delivers prepared HTML without reparsing visible syntax as Markdown", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const records: unknown[] = [];
+    const promptContextSequence = createObservedPromptContextSequence((record) =>
+      records.push(record),
+    );
+
+    await deliverWith({
+      replies: [{ text: "<code>&lt;b&gt;x&lt;/b&gt;</code>" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+      textMode: "html",
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe("<code>&lt;b&gt;x&lt;/b&gt;</code>");
+    expectRecordFields(firstMockCallArg(sendMessage, 2), { parse_mode: "HTML" });
+    expect(records).toEqual([{ messageId: 1, text: "<b>x</b>" }]);
   });
 
   it("applies reaction-only replies without logging missing text/media", async () => {
@@ -480,7 +528,7 @@ describe("deliverReplies", () => {
     });
   });
 
-  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+  it("keeps presentation-only controls deliverable without duplicating button labels", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -499,12 +547,72 @@ describe("deliverReplies", () => {
 
     expect(runtime.error).not.toHaveBeenCalled();
     expect(firstMockCallArg(sendMessage, 0)).toBe("123");
-    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Choose an option.");
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
       reply_markup: {
         inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
       },
     });
+  });
+
+  it("keeps native Telegram button-only replies deliverable", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+            },
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe("Choose an option.");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
+  it("appends presentation tables to top-level text exactly once", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 5, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Quarterly results",
+          presentation: {
+            title: "FY25 outlook",
+            blocks: [
+              {
+                type: "table",
+                caption: "Pipeline",
+                headers: ["Account", "Stage"],
+                rows: [["Acme", "Won"]],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(firstMockCallArg(sendMessage, 1)).toBe(
+      "Quarterly results\n\nFY25 outlook\n\nPipeline (table)\n\n• Account: Acme; Stage: Won",
+    );
   });
 
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
@@ -1311,7 +1419,7 @@ describe("deliverReplies", () => {
     };
     const richMessage = raw.sendRichMessage.mock.calls[0]?.[0]?.rich_message;
     expect(richMessage).toEqual({
-      html: oauthProfileText,
+      blocks: [{ type: "paragraph", text: oauthProfileText }],
       skip_entity_detection: true,
     });
   });
@@ -1956,4 +2064,101 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
   });
+
+  it("detaches prompt-context provenance when message_sending rewrites content", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ content: "rewritten" });
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 304, chat: { id: "123" } });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer, {
+      transcriptMessageId: "assistant-1",
+    });
+
+    await deliverWith({
+      replies: [{ text: "original" }],
+      runtime,
+      bot: createBot({ sendMessage }),
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(firstSendText(sendMessage)).toBe("rewritten");
+    expect(observer).toHaveBeenCalledWith({ messageId: 304, text: "rewritten" });
+  });
+
+  it("records only concrete text chunks that Telegram accepted", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 301, chat: { id: "123" } })
+      .mockRejectedValueOnce(new Error("second chunk failed"));
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+
+    await expect(
+      deliverWith({
+        replies: [{ text: "chunk-one\n\nchunk-two" }],
+        runtime,
+        bot: createBot({ sendMessage }),
+        textLimit: 12,
+        promptContextSequence,
+      }),
+    ).rejects.toThrow("second chunk failed");
+    await promptContextSequence.fail();
+
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(observer).toHaveBeenCalledWith({ messageId: 301, text: "chunk-one\n\n" });
+  });
+
+  it("records the concrete Telegram media message", async () => {
+    const runtime = createRuntime();
+    const message = {
+      message_id: 302,
+      date: 1_779_425_460,
+      chat: { id: "123", type: "private" },
+      photo: [{ file_id: "photo-file", file_unique_id: "photo-unique", width: 10, height: 10 }],
+    };
+    const sendPhoto = vi.fn().mockResolvedValue(message);
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("photo.jpg", "image/jpeg", "photo");
+
+    await deliverWith({
+      replies: [{ text: "caption", mediaUrl: "https://example.com/photo.jpg" }],
+      runtime,
+      bot: createBot({ sendPhoto }),
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(observer).toHaveBeenCalledWith({ messageId: 302, message, text: "caption" });
+  });
+
+  it("records voice fallback text after the fallback send succeeds", async () => {
+    const { runtime, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: { message_id: 303, chat: { id: "123" } },
+    });
+    const observer = vi.fn();
+    const promptContextSequence = createObservedPromptContextSequence(observer);
+    mockMediaLoad("note.ogg", "audio/ogg", "voice");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrl: "https://example.com/note.ogg",
+          audioAsVoice: true,
+          spokenText: "Voice fallback",
+        },
+      ],
+      runtime,
+      bot,
+      promptContextSequence,
+    });
+    await promptContextSequence.finish();
+
+    expect(observer).toHaveBeenCalledWith({ messageId: 303, text: "Voice fallback" });
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

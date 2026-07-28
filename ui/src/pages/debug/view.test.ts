@@ -64,15 +64,13 @@ describe("renderDebug", () => {
       container,
     );
 
-    const command = container.querySelector<HTMLElement>(".callout .mono");
+    const command = container.querySelector<HTMLElement>(".settings-row__desc .mono");
     if (!command) {
       throw new Error("expected debug security audit command");
     }
-    const callout = container.querySelector(".callout");
-    expect(callout?.className).toBe("callout warn");
-    expect(normalizedText(callout)).toBe(
-      "安全审计: 1 个警告 · 2 条信息. 运行 openclaw security audit --deep 查看详情。",
-    );
+    const status = container.querySelector(".settings-status");
+    expect(status?.className).toContain("settings-status--warn");
+    expect(normalizedText(status)).toBe("1 个警告 · 2 条信息");
     expect(command.textContent).toBe("openclaw security audit --deep");
   });
 

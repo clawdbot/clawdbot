@@ -1,85 +1,21 @@
 // Feishu plugin module implements secret contract behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
-  collectSecretInputAssignment,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasConfiguredSecretInputValue,
   hasOwnProperty,
-  isBaseFieldActiveForChannelSurface,
   normalizeSecretStringValue,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
-  {
-    id: "channels.feishu.accounts.*.appSecret",
-    targetType: "channels.feishu.accounts.*.appSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.accounts.*.appSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.accounts.*.encryptKey",
-    targetType: "channels.feishu.accounts.*.encryptKey",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.accounts.*.encryptKey",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.accounts.*.verificationToken",
-    targetType: "channels.feishu.accounts.*.verificationToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.accounts.*.verificationToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.appSecret",
-    targetType: "channels.feishu.appSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.appSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.encryptKey",
-    targetType: "channels.feishu.encryptKey",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.encryptKey",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.feishu.verificationToken",
-    targetType: "channels.feishu.verificationToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.feishu.verificationToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "feishu",
+  account: ["appSecret", "encryptKey", "verificationToken"],
+  channel: ["appSecret", "encryptKey", "verificationToken"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
@@ -100,39 +36,27 @@ export function collectRuntimeConfigAssignments(params: {
     surface.channelEnabled &&
     hasConfiguredSecretInputValue(feishu.appId, params.defaults) &&
     hasConfiguredSecretInputValue(feishu.appSecret, params.defaults);
-  const topLevelAppSecretActive =
-    hasImplicitDefaultAccount || isBaseFieldActiveForChannelSurface(surface, "appSecret");
-  collectSecretInputAssignment({
-    value: feishu.appSecret,
-    path: "channels.feishu.appSecret",
-    expected: "string",
+  if (
+    hasImplicitDefaultAccount &&
+    surface.hasExplicitAccounts &&
+    !surface.accounts.some(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+  ) {
+    surface.accounts.push({ accountId: "default", account: {}, enabled: true });
+  }
+  collectConditionalChannelFieldAssignments({
+    channelKey: "feishu",
+    field: "appSecret",
+    channel: feishu,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: topLevelAppSecretActive,
-    inactiveReason: "no enabled account inherits this top-level Feishu appSecret.",
-    apply: (value) => {
-      feishu.appSecret = value;
-    },
+    topLevelActiveWithoutAccounts: surface.channelEnabled,
+    topLevelInheritedAccountActive: ({ account, enabled }) =>
+      enabled && !hasOwnProperty(account, "appSecret"),
+    accountActive: ({ enabled }) => enabled,
+    topInactiveReason: "no enabled account inherits this top-level Feishu appSecret.",
+    accountInactiveReason: "Feishu account is disabled.",
   });
-  if (surface.hasExplicitAccounts) {
-    for (const { accountId, account, enabled } of surface.accounts) {
-      if (!hasOwnProperty(account, "appSecret")) {
-        continue;
-      }
-      collectSecretInputAssignment({
-        value: account.appSecret,
-        path: `channels.feishu.accounts.${accountId}.appSecret`,
-        expected: "string",
-        defaults: params.defaults,
-        context: params.context,
-        active: enabled,
-        inactiveReason: "Feishu account is disabled.",
-        apply: (value) => {
-          account.appSecret = value;
-        },
-      });
-    }
-  }
   const baseConnectionMode =
     normalizeSecretStringValue(feishu.connectionMode) === "webhook" ? "webhook" : "websocket";
   const resolveAccountMode = (account: Record<string, unknown>) =>

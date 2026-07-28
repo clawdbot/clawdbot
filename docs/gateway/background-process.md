@@ -12,24 +12,24 @@ OpenClaw runs shell commands through the `exec` tool and keeps long-running task
 
 Parameters:
 
-| Parameter    | Description                                                                                                                                            |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `command`    | Required. Shell command to run.                                                                                                                        |
-| `workdir`    | Working directory; omit to use the default cwd.                                                                                                        |
-| `env`        | Extra environment variables for the command.                                                                                                           |
-| `yieldMs`    | Milliseconds to wait before backgrounding (default 10000).                                                                                             |
-| `background` | Run in background immediately.                                                                                                                         |
-| `timeout`    | Timeout in seconds (default `tools.exec.timeoutSec`); kills the process on expiry. Set `timeout: 0` to disable the exec process timeout for that call. |
-| `pty`        | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                            |
-| `elevated`   | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                          |
-| `host`       | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                  |
-| `node`       | Node id/name, used with `host: "node"`.                                                                                                                |
+| Parameter    | Description                                                                                                                                                |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`    | Required. Shell command to run.                                                                                                                            |
+| `workdir`    | Working directory; omit to use the default cwd.                                                                                                            |
+| `env`        | Extra environment variables for the command.                                                                                                               |
+| `yieldMs`    | Milliseconds to wait before backgrounding (default 10000).                                                                                                 |
+| `background` | Run in background immediately.                                                                                                                             |
+| `timeout`    | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeout: 0` to disable the exec process timeout for that call. |
+| `pty`        | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                |
+| `elevated`   | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                              |
+| `host`       | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                      |
+| `node`       | Node id/name, used with `host: "node"`.                                                                                                                    |
 
 Behavior:
 
 - Foreground runs return output directly.
 - When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
-- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSec` unless the call passes an explicit `timeout`.
+- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeout`.
 - Output stays in memory until the session is polled or cleared.
 - If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
@@ -52,7 +52,7 @@ Behavior:
 | Key                                   | Default | Effect                                                                          |
 | ------------------------------------- | ------- | ------------------------------------------------------------------------------- |
 | `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                               |
-| `tools.exec.timeoutSec`               | 1800    | Default per-call timeout.                                                       |
+| `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                       |
 | `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                             |
 | `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
 | `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
@@ -81,6 +81,8 @@ Actions:
 Notes:
 
 - Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
+- A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
+- `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
 - Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
 - Use `poll`/`log` for status, logs, or completion confirmation when automatic completion wake is unavailable.

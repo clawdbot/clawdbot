@@ -1,5 +1,6 @@
 // Covers silent-pairing approval provenance and superseded-record pruning.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   approveBootstrapDevicePairing,
@@ -8,13 +9,29 @@ import {
   listDevicePairing,
   pruneSupersededSilentPairedDevices,
   requestDevicePairing,
-  type PairedDeviceApprovalKind,
+  withPairedDeviceRecords,
 } from "./device-pairing.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-device-pairing-prune-" });
+type PairedDeviceApprovalKind = NonNullable<
+  Parameters<typeof approveDevicePairing>[1]["approvedVia"]
+>;
 
 async function makeBaseDir(): Promise<string> {
   return await suiteRootTracker.make("case");
+}
+
+// Rewrites a paired record without approvedVia to simulate approvals that
+// predate provenance tracking.
+async function stripApprovalProvenance(baseDir: string, deviceId: string): Promise<void> {
+  await withPairedDeviceRecords(baseDir, (pairedByDeviceId) => {
+    const device = pairedByDeviceId[deviceId];
+    if (!device) {
+      throw new Error(`expected paired device ${deviceId}`);
+    }
+    delete device.approvedVia;
+    return { value: undefined, persist: true };
+  });
 }
 
 // Ages every just-approved record past the recent-approval grace window.
@@ -61,6 +78,7 @@ describe("device pairing approval provenance", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
@@ -106,13 +124,7 @@ describe("device pairing approval provenance", () => {
   test("pre-provenance records stay unknown across a later silent re-approve", async () => {
     const baseDir = await makeBaseDir();
     const legacy = await pairDevice({ baseDir, deviceId: "device-legacy", approvedVia: "silent" });
-    // Simulate a record approved before provenance existed.
-    const { writeJson } = await import("./json-files.js");
-    const path = await import("node:path");
-    const { approvedVia: _approvedVia, ...legacyShape } = legacy;
-    await writeJson(path.join(baseDir, "devices", "paired.json"), {
-      [legacy.deviceId]: legacyShape,
-    });
+    await stripApprovalProvenance(baseDir, legacy.deviceId);
 
     const repaired = await pairDevice({
       baseDir,
@@ -129,6 +141,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     await suiteRootTracker.cleanup();
   });
 
@@ -254,13 +267,7 @@ describe("pruneSupersededSilentPairedDevices", () => {
   test("leaves legacy records without approval provenance untouched", async () => {
     const baseDir = await makeBaseDir();
     const legacy = await pairDevice({ baseDir, deviceId: "legacy", approvedVia: "silent" });
-    // Simulate a pre-provenance record by re-writing it without approvedVia.
-    const { writeJson } = await import("./json-files.js");
-    const path = await import("node:path");
-    const { approvedVia: _approvedVia, ...legacyShape } = legacy;
-    await writeJson(path.join(baseDir, "devices", "paired.json"), {
-      [legacy.deviceId]: legacyShape,
-    });
+    await stripApprovalProvenance(baseDir, legacy.deviceId);
     const anchor = await pairDevice({ baseDir, deviceId: "anchor", approvedVia: "silent" });
 
     const removed = await pruneSupersededSilentPairedDevices({

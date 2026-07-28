@@ -2,10 +2,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { withOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -42,7 +40,7 @@ export {
 } from "./installed-plugin-index-store-path.js";
 
 /** Freshness state for the persisted installed plugin index. */
-export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
+type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
 export type InstalledPluginIndexStoreInspection = {
   state: InstalledPluginIndexStoreState;
@@ -88,6 +86,11 @@ const InstalledPluginIndexRecordSchema = z.object({
   installRecordHash: z.string().optional(),
   packageInstall: z.unknown().optional(),
   packageChannel: z.unknown().optional(),
+  packageBuild: z
+    .object({
+      bundledDist: z.boolean().optional(),
+    })
+    .optional(),
   manifestPath: z.string(),
   manifestHash: z.string(),
   manifestFile: InstalledPluginFileSignatureSchema.optional(),
@@ -289,21 +292,20 @@ function readPersistedInstalledPluginIndexFromSqlite(
     return null;
   }
   try {
-    const database = openOpenClawStateDatabase(
-      resolveInstalledPluginIndexStateDatabaseOptions(options),
-    );
-    const row = database.db
-      .prepare(
-        `
-          SELECT version, warning, host_contract_version, compat_registry_version,
-                 migration_version, policy_hash, generated_at_ms, refresh_reason,
-                 install_records_json, plugins_json, diagnostics_json
-            FROM installed_plugin_index
-           WHERE index_key = ?
-        `,
-      )
-      .get(INSTALLED_PLUGIN_INDEX_SQLITE_KEY) as InstalledPluginIndexSqliteRow | undefined;
-    return parseInstalledPluginIndexSqliteRow(row);
+    return withOpenClawStateDatabaseReadOnly(({ db }) => {
+      const row = db
+        .prepare(
+          `
+            SELECT version, warning, host_contract_version, compat_registry_version,
+                   migration_version, policy_hash, generated_at_ms, refresh_reason,
+                   install_records_json, plugins_json, diagnostics_json
+              FROM installed_plugin_index
+             WHERE index_key = ?
+          `,
+        )
+        .get(INSTALLED_PLUGIN_INDEX_SQLITE_KEY) as InstalledPluginIndexSqliteRow | undefined;
+      return parseInstalledPluginIndexSqliteRow(row);
+    }, resolveInstalledPluginIndexStateDatabaseOptions(options));
   } catch {
     return null;
   }

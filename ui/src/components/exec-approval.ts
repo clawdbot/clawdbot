@@ -1,235 +1,189 @@
-// Control UI component renders exec approval.
-import { html, nothing } from "lit";
-import { property } from "lit/decorators.js";
-import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
-import type {
-  ExecApprovalDecision,
-  ExecApprovalRequest,
-  ExecApprovalRequestPayload,
-} from "../app/exec-approval.ts";
-import "./modal-dialog.ts";
+// Control UI modal queues approvals that are not currently inline in chat.
+import { html, nothing, type PropertyValues } from "lit";
+import { property, query, state } from "lit/decorators.js";
+import { modalApprovalQueue } from "../app/approval-presentation.ts";
+import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
-
-const DEFAULT_EXEC_APPROVAL_DECISIONS = [
-  "allow-once",
-  "allow-always",
-  "deny",
-] as const satisfies readonly ExecApprovalDecision[];
+import {
+  approvalRemainingLabel,
+  approvalTitle,
+  formatApprovalCountdown,
+  renderExecApprovalCard,
+  resolveApprovalDecisions,
+} from "./exec-approval-card.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.ts";
+import "./modal-dialog.ts";
 
 type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];
   busy: boolean;
-  error: string | null;
-  onDecision: (decision: ExecApprovalDecision) => void | Promise<void>;
+  errors: ReadonlyMap<string, string>;
+  nowMs: number;
+  inlineApprovalId?: string | null;
+  onDecision: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
 };
 
-function formatRemaining(ms: number): string {
-  const remaining = Math.max(0, ms);
-  const totalSeconds = Math.floor(remaining / 1000);
-  if (totalSeconds < 60) {
-    return `${totalSeconds}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h`;
+function compactCommand(command: string): string {
+  const singleLine = command.replace(/\s+/g, " ").trim();
+  return singleLine.length > 64 ? `${singleLine.slice(0, 61)}…` : singleLine;
 }
 
-function renderMetaRow(label: string, value?: string | null, opts?: { path?: boolean }) {
-  if (!value) {
+function renderApprovalQueueList(params: {
+  queue: readonly ExecApprovalRequest[];
+  activeId: string;
+  nowMs: number;
+  onSelect: (approvalId: string) => void;
+}) {
+  const others = params.queue.filter((entry) => entry.id !== params.activeId);
+  if (others.length === 0) {
     return nothing;
   }
-  const displayValue = opts?.path ? formatApprovalDisplayPath(value) : value;
-  return html`<div class="exec-approval-meta-row">
-    <span>${label}</span><span>${displayValue}</span>
-  </div>`;
-}
-
-function renderCommandWithSpans(request: ExecApprovalRequestPayload) {
-  const commandSpans = [...(request.commandSpans ?? [])]
-    .filter(
-      (span) =>
-        Number.isSafeInteger(span.startIndex) &&
-        Number.isSafeInteger(span.endIndex) &&
-        span.startIndex >= 0 &&
-        span.endIndex > span.startIndex &&
-        span.endIndex <= request.command.length,
-    )
-    .toSorted((a, b) => a.startIndex - b.startIndex || b.endIndex - a.endIndex);
-  const accepted: typeof commandSpans = [];
-  let cursor = 0;
-  for (const span of commandSpans) {
-    if (span.startIndex < cursor) {
-      continue;
-    }
-    accepted.push(span);
-    cursor = span.endIndex;
-  }
-  if (accepted.length === 0) {
-    return html`<div class="exec-approval-command mono">${request.command}</div>`;
-  }
-  const parts = [];
-  cursor = 0;
-  for (const span of accepted) {
-    if (span.startIndex > cursor) {
-      parts.push(request.command.slice(cursor, span.startIndex));
-    }
-    parts.push(
-      html`<mark class="exec-approval-command-span"
-        >${request.command.slice(span.startIndex, span.endIndex)}</mark
-      >`,
-    );
-    cursor = span.endIndex;
-  }
-  if (cursor < request.command.length) {
-    parts.push(request.command.slice(cursor));
-  }
-  return html`<div class="exec-approval-command mono">${parts}</div>`;
-}
-
-function renderExecBody(request: ExecApprovalRequestPayload) {
   return html`
-    ${renderCommandWithSpans(request)}
-    <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.host"), request.host)}
-      ${renderMetaRow(t("execApproval.labels.agent"), request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), request.sessionKey)}
-      ${renderMetaRow(t("execApproval.labels.cwd"), request.cwd, {
-        path: true,
+    <div class="exec-approval-list" aria-label=${t("execApproval.otherPending")}>
+      <div class="exec-approval-list__heading">${t("execApproval.otherPending")}</div>
+      ${others.map((entry) => {
+        const command = compactCommand(entry.request.command);
+        const agent = entry.request.agentId?.trim() || "—";
+        const countdown = formatApprovalCountdown(entry.expiresAtMs, params.nowMs);
+        return html`
+          <button
+            class="exec-approval-list__item"
+            type="button"
+            aria-label=${t("execApproval.reviewRequest", { agent, command })}
+            @click=${() => params.onSelect(entry.id)}
+          >
+            <span class="exec-approval-list__agent">${agent}</span>
+            <span class="exec-approval-list__command mono">${command}</span>
+            <span class="exec-approval-list__expiry" aria-hidden="true">${countdown}</span>
+          </button>
+        `;
       })}
-      ${renderMetaRow(t("execApproval.labels.resolved"), request.resolvedPath, { path: true })}
-      ${renderMetaRow(t("execApproval.labels.security"), request.security)}
-      ${renderMetaRow(t("execApproval.labels.ask"), request.ask)}
     </div>
   `;
 }
 
-function renderPluginBody(active: ExecApprovalRequest) {
-  return html`
-    ${active.pluginDescription
-      ? html`<pre class="exec-approval-command mono" style="white-space:pre-wrap">
-${active.pluginDescription}</pre
-        >`
-      : nothing}
-    <div class="exec-approval-meta">
-      ${renderMetaRow(t("execApproval.labels.severity"), active.pluginSeverity)}
-      ${renderMetaRow(t("execApproval.labels.plugin"), active.pluginId)}
-      ${renderMetaRow(t("execApproval.labels.agent"), active.request.agentId)}
-      ${renderMetaRow(t("execApproval.labels.session"), active.request.sessionKey)}
-    </div>
-  `;
+function keyEventComesFromTextEntry(event: KeyboardEvent): boolean {
+  return event
+    .composedPath()
+    .some(
+      (target) =>
+        target instanceof Element &&
+        target.closest("input, textarea, [contenteditable]:not([contenteditable='false'])") !==
+          null,
+    );
 }
 
-function approvalDecisionLabel(decision: ExecApprovalDecision): string {
-  switch (decision) {
-    case "allow-once":
-      return t("execApproval.allowOnce");
-    case "allow-always":
-      return t("execApproval.alwaysAllow");
-    case "deny":
-      return t("execApproval.deny");
+// Authorization shortcuts require a Ctrl/Cmd chord: the modal steals focus
+// when it opens, so a bare letter typed mid-sentence into the composer could
+// otherwise approve a command the user never read.
+function shortcutDecision(event: KeyboardEvent): ExecApprovalDecision | null {
+  const hasModChord = (event.metaKey || event.ctrlKey) && !event.altKey;
+  if (!hasModChord || keyEventComesFromTextEntry(event)) {
+    return null;
   }
-  return t("execApproval.deny");
-}
-
-function approvalDecisionClass(decision: ExecApprovalDecision): string {
-  switch (decision) {
-    case "allow-once":
-      return "btn primary";
-    case "allow-always":
-      return "btn";
-    case "deny":
-      return "btn danger";
+  if (event.key === "Enter") {
+    return event.shiftKey ? "allow-always" : "allow-once";
   }
-  return "btn danger";
-}
-
-function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApprovalDecision[] {
-  if (active.request.allowedDecisions?.length) {
-    return active.request.allowedDecisions;
-  }
-  if (active.kind === "exec" && active.request.ask === "always") {
-    return ["allow-once", "deny"];
-  }
-  return DEFAULT_EXEC_APPROVAL_DECISIONS;
-}
-
-function renderUnavailableDecisionWarning(
-  active: ExecApprovalRequest,
-  decisions: readonly ExecApprovalDecision[],
-) {
-  return active.kind !== "exec" || decisions.includes("allow-always")
-    ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
-}
-
-function renderExecApprovalPrompt(props: ExecApprovalProps) {
-  const active = props.queue[0];
-  if (!active) {
-    return nothing;
-  }
-  const request = active.request;
-  const remainingMs = active.expiresAtMs - Date.now();
-  const remaining =
-    remainingMs > 0
-      ? t("execApproval.expiresIn", { time: formatRemaining(remainingMs) })
-      : t("execApproval.expired");
-  const queueCount = props.queue.length;
-  const isPlugin = active.kind === "plugin";
-  const title = isPlugin
-    ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
-    : t("execApproval.execApprovalNeeded");
-  const titleId = "exec-approval-title";
-  const descriptionId = "exec-approval-description";
-  const decisions = resolveApprovalDecisions(active);
-  const handleCancel = () => {
-    if (!props.busy && decisions.includes("deny")) {
-      void props.onDecision("deny");
-    }
-  };
-  return html`
-    <openclaw-modal-dialog label=${title} description=${remaining} @modal-cancel=${handleCancel}>
-      <div class="exec-approval-card">
-        <div class="exec-approval-header">
-          <div>
-            <div id=${titleId} class="exec-approval-title">${title}</div>
-            <div id=${descriptionId} class="exec-approval-sub">${remaining}</div>
-          </div>
-          ${queueCount > 1
-            ? html`<div class="exec-approval-queue">
-                ${t("execApproval.pending", { count: String(queueCount) })}
-              </div>`
-            : nothing}
-        </div>
-        ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
-        ${renderUnavailableDecisionWarning(active, decisions)}
-        ${props.error ? html`<div class="exec-approval-error">${props.error}</div>` : nothing}
-        <div class="exec-approval-actions">
-          ${decisions.map(
-            (decision) => html`
-              <button
-                class=${approvalDecisionClass(decision)}
-                ?disabled=${props.busy}
-                @click=${() => props.onDecision(decision)}
-              >
-                ${approvalDecisionLabel(decision)}
-              </button>
-            `,
-          )}
-        </div>
-      </div>
-    </openclaw-modal-dialog>
-  `;
+  return !event.shiftKey && event.key.toLowerCase() === "d" ? "deny" : null;
 }
 
 class ExecApproval extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: ExecApprovalProps;
+  @query("openclaw-modal-dialog") private dialog?: OpenClawModalDialog;
+  @state() private selectedApprovalId: string | null = null;
+  @state() private forceShowAll = false;
+
+  show(): void {
+    this.forceShowAll = true;
+    void this.updateComplete.then(() => this.dialog?.show());
+  }
+
+  private displayedQueue(): readonly ExecApprovalRequest[] {
+    const props = this.props;
+    if (!props) {
+      return [];
+    }
+    return this.forceShowAll
+      ? props.queue
+      : modalApprovalQueue(props.queue, props.inlineApprovalId);
+  }
+
+  private activeApproval(queue: readonly ExecApprovalRequest[]): ExecApprovalRequest | null {
+    return queue.find((entry) => entry.id === this.selectedApprovalId) ?? queue.at(0) ?? null;
+  }
+
+  private handleKeydown(event: KeyboardEvent, active: ExecApprovalRequest): void {
+    // A held chord auto-repeats: once a decision settles and the queue
+    // advances, the repeat would apply the same decision to the next request.
+    if (event.defaultPrevented || event.repeat || this.props?.busy) {
+      return;
+    }
+    const decision = shortcutDecision(event);
+    if (!decision || !resolveApprovalDecisions(active).includes(decision)) {
+      return;
+    }
+    event.preventDefault();
+    void this.props?.onDecision(active.id, decision);
+  }
+
+  protected override willUpdate(changedProperties: PropertyValues<this>): void {
+    const previousProps = changedProperties.get("props") as ExecApprovalProps | undefined;
+    if (previousProps?.queue.length && !this.props?.queue.length) {
+      this.forceShowAll = false;
+      this.selectedApprovalId = null;
+      return;
+    }
+    // Pin the presented request: late-arriving older approvals re-sort the
+    // queue, and swapping the card mid-read (or mid-decision) could attach the
+    // user's answer or a failure message to a request they never saw.
+    const displayedQueue = this.displayedQueue();
+    if (!displayedQueue.some((entry) => entry.id === this.selectedApprovalId)) {
+      this.selectedApprovalId = displayedQueue.at(0)?.id ?? null;
+    }
+  }
 
   override render() {
-    return this.props ? renderExecApprovalPrompt(this.props) : nothing;
+    const props = this.props;
+    const queue = this.displayedQueue();
+    const active = this.activeApproval(queue);
+    if (!props || !active) {
+      return nothing;
+    }
+    const decisions = resolveApprovalDecisions(active);
+    const handleCancel = () => {
+      if (!props.busy && decisions.includes("deny")) {
+        void props.onDecision(active.id, "deny");
+      }
+    };
+    return html`
+      <openclaw-modal-dialog
+        label=${approvalTitle(active)}
+        description=${approvalRemainingLabel(active.expiresAtMs, props.nowMs)}
+        @keydown=${(event: KeyboardEvent) => this.handleKeydown(event, active)}
+        @modal-cancel=${handleCancel}
+      >
+        <div class="exec-approval-modal-stack">
+          ${renderExecApprovalCard({
+            approval: active,
+            busy: props.busy,
+            error: props.errors.get(active.id) ?? null,
+            nowMs: props.nowMs,
+            variant: "modal",
+            queueCount: queue.length,
+            onDecision: props.onDecision,
+          })}
+          ${renderApprovalQueueList({
+            queue,
+            activeId: active.id,
+            nowMs: props.nowMs,
+            onSelect: (approvalId) => {
+              this.selectedApprovalId = approvalId;
+            },
+          })}
+        </div>
+      </openclaw-modal-dialog>
+    `;
   }
 }
 

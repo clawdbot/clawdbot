@@ -112,7 +112,7 @@ function resolveExaConfig(searchConfig?: SearchConfigRecord): ExaConfig {
 
 function resolveExaApiKey(exa?: ExaConfig): string | undefined {
   return (
-    readConfiguredSecretString(exa?.apiKey, "tools.web.search.exa.apiKey") ??
+    readConfiguredSecretString(exa?.apiKey, "plugins.entries.exa.config.webSearch.apiKey") ??
     readProviderEnvValue(["EXA_API_KEY"])
   );
 }
@@ -438,7 +438,7 @@ function missingExaKeyPayload() {
   return {
     error: "missing_exa_api_key",
     message:
-      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure tools.web.search.exa.apiKey.",
+      "web_search (exa) needs an Exa API key. Set EXA_API_KEY in the Gateway environment, or configure plugins.entries.exa.config.webSearch.apiKey.",
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }
@@ -453,6 +453,8 @@ function buildExaCacheKey(params: {
   dateBefore?: string;
   contents?: ExaContentsArgs;
 }): string {
+  const contents = params.contents ?? { highlights: true };
+
   return buildSearchCacheKey([
     "exa",
     params.endpoint,
@@ -462,9 +464,7 @@ function buildExaCacheKey(params: {
     params.freshness,
     params.dateAfter,
     params.dateBefore,
-    params.contents?.highlights ? JSON.stringify(params.contents.highlights) : undefined,
-    params.contents?.text ? JSON.stringify(params.contents.text) : undefined,
-    params.contents?.summary ? JSON.stringify(params.contents.summary) : undefined,
+    JSON.stringify(contents),
   ]);
 }
 

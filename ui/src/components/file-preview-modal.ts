@@ -1,9 +1,11 @@
 // Control UI component implements the file preview modal element.
 import { css, html, type PropertyValues } from "lit";
 import { property, query } from "lit/decorators.js";
+import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { icons } from "./icons.ts";
+import "./modal-dialog.ts";
 
 type FilePreviewModalFile = {
   path: string;
@@ -15,14 +17,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   @property({ attribute: false }) files: FilePreviewModalFile[] = [];
   @property() activePath = "";
   @property() query = "";
-  @property() label = "Support files";
-  @property() listLabel = "Files";
-  @property() searchPlaceholder = "Search files...";
+  @property() label = "";
+  @property() listLabel = "";
+  @property() searchPlaceholder = "";
   @property() contextLabel = "";
-  @property() readOnlyLabel = "read-only";
-  @property() emptyTitle = "No files match";
-  @property() emptySubtitle = "Try another file name or content search.";
-  @property() copyLabel = "Copy file";
+  @property() readOnlyLabel = "";
+  @property() emptyTitle = "";
+  @property() emptySubtitle = "";
+  @property() copyLabel = "";
   @query(".search") private searchInput?: HTMLInputElement;
   @query(".detail-body") private detailBody?: HTMLElement;
 
@@ -37,46 +39,11 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
   static override styles = css`
     :host {
-      position: fixed;
-      inset: 0;
-      z-index: 50;
-      display: block;
-    }
-
-    .backdrop {
-      position: absolute;
-      inset: 0;
-      background: rgba(0, 0, 0, 0.6);
-      backdrop-filter: blur(6px);
-      animation: fade 140ms ease-out;
-    }
-
-    @keyframes fade {
-      from {
-        opacity: 0;
-      }
-      to {
-        opacity: 1;
-      }
-    }
-
-    @keyframes pop {
-      from {
-        transform: translate(-50%, -48%) scale(0.97);
-        opacity: 0;
-      }
-      to {
-        transform: translate(-50%, -50%) scale(1);
-        opacity: 1;
-      }
+      display: contents;
     }
 
     .modal {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      transform: translate(-50%, -50%);
-      width: min(1100px, 92vw);
+      width: 100%;
       height: min(780px, 86vh);
       background: var(--bg);
       border: 1px solid var(--border-strong);
@@ -85,7 +52,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       display: flex;
       flex-direction: column;
       overflow: hidden;
-      animation: pop 160ms ease-out;
     }
 
     .head {
@@ -177,7 +143,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border: none;
       background: transparent;
       color: var(--text);
-      cursor: pointer;
       font: inherit;
       outline: none;
       text-align: left;
@@ -296,7 +261,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border-radius: var(--radius-md);
       background: var(--bg-elevated);
       color: var(--muted);
-      cursor: pointer;
     }
 
     .chat-copy-btn:hover {
@@ -452,7 +416,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       background: var(--bg-elevated);
       color: var(--text);
       font-weight: 600;
-      cursor: pointer;
     }
 
     .button:hover {
@@ -504,59 +467,64 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     const activeFile = this.activeFile;
     const fileCount =
       filteredFiles.length === this.files.length
-        ? `${this.files.length} files`
-        : `${filteredFiles.length}/${this.files.length} files`;
+        ? t("filePreview.fileCount", { count: String(this.files.length) })
+        : t("filePreview.filteredFileCount", {
+            count: String(filteredFiles.length),
+            total: String(this.files.length),
+          });
+    const label = this.label || t("filePreview.label");
+    const listLabel = this.listLabel || t("filePreview.listLabel");
+    const searchPlaceholder = this.searchPlaceholder || t("filePreview.searchPlaceholder");
 
     return html`
-      <div class="backdrop" @click=${this.emitClose}></div>
-      <div
-        class="modal"
-        role="dialog"
-        aria-label=${this.label}
-        aria-modal="true"
-        tabindex="-1"
+      <openclaw-modal-dialog
+        label=${label}
+        style="--openclaw-modal-width: min(1100px, 92vw); --openclaw-modal-max-height: 86vh;"
+        @modal-cancel=${this.emitClose}
         @keydown=${this.handleKeydown}
       >
-        <header class="head">
-          <span class="search-icon">⌕</span>
-          <input
-            class="search"
-            placeholder=${this.searchPlaceholder}
-            .value=${this.query}
-            @input=${this.handleQueryInput}
-          />
-          <span class="state">${fileCount}</span>
-        </header>
-        <div class="body">
-          <aside class="list">
-            <div class="list-section">${this.listLabel} · ${filteredFiles.length}</div>
-            ${filteredFiles.length === 0
-              ? html`<div class="empty-list">No files match.</div>`
-              : filteredFiles.map(
-                  (file) => html`
-                    <button
-                      class="item ${file.path === activeFile?.path ? "is-active" : ""}"
-                      @pointerdown=${this.preventItemPointerFocus}
-                      @mousedown=${this.preventItemPointerFocus}
-                      @click=${() => this.emitSelect(file.path)}
-                    >
-                      <span class="item-icon">${iconForFile(file.path)}</span>
-                      <span class="item-name">${file.path}</span>
-                      <span class="item-meta">${file.size}</span>
-                    </button>
-                  `,
-                )}
-          </aside>
-          ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+        <div class="modal">
+          <header class="head">
+            <span class="search-icon">⌕</span>
+            <input
+              class="search"
+              placeholder=${searchPlaceholder}
+              .value=${this.query}
+              @input=${this.handleQueryInput}
+            />
+            <span class="state">${fileCount}</span>
+          </header>
+          <div class="body">
+            <aside class="list">
+              <div class="list-section">${listLabel} · ${filteredFiles.length}</div>
+              ${filteredFiles.length === 0
+                ? html`<div class="empty-list">${t("filePreview.noMatches")}</div>`
+                : filteredFiles.map(
+                    (file) => html`
+                      <button
+                        class="item ${file.path === activeFile?.path ? "is-active" : ""}"
+                        @pointerdown=${this.preventItemPointerFocus}
+                        @mousedown=${this.preventItemPointerFocus}
+                        @click=${() => this.emitSelect(file.path)}
+                      >
+                        <span class="item-icon">${iconForFile(file.path)}</span>
+                        <span class="item-name">${file.path}</span>
+                        <span class="item-meta">${file.size}</span>
+                      </button>
+                    `,
+                  )}
+            </aside>
+            ${activeFile ? this.renderFile(activeFile) : this.renderEmpty()}
+          </div>
+          <footer class="foot">
+            <span class="foot-group"><span class="kbd">↑↓</span> ${t("filePreview.navigate")}</span>
+            <span class="spacer"></span>
+            <button class="button" @click=${this.emitClose}>
+              ${t("common.close")} <span class="kbd">esc</span>
+            </button>
+          </footer>
         </div>
-        <footer class="foot">
-          <span class="foot-group"><span class="kbd">↑↓</span> navigate</span>
-          <span class="spacer"></span>
-          <button class="button" @click=${this.emitClose}>
-            Close <span class="kbd">esc</span>
-          </button>
-        </footer>
-      </div>
+      </openclaw-modal-dialog>
     `;
   }
 
@@ -566,12 +534,14 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
         <div class="detail-head">
           <div class="detail-title-row">
             <h2 class="title">${file.path}</h2>
-            ${file.contents ? renderCopyButton(file.contents, this.copyLabel) : ""}
+            ${file.contents
+              ? renderCopyButton(file.contents, this.copyLabel || t("filePreview.copyFile"))
+              : ""}
           </div>
           <div class="chips">
             <span class="chip accent">${fileKind(file.path)}</span>
             <span class="chip">${file.size}</span>
-            <span class="chip">${this.readOnlyLabel}</span>
+            <span class="chip">${this.readOnlyLabel || t("filePreview.readOnly")}</span>
             ${this.contextLabel ? html`<span class="chip ok">${this.contextLabel}</span>` : ""}
           </div>
         </div>
@@ -589,8 +559,8 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   private renderEmpty() {
     return html`
       <section class="detail empty">
-        <p class="empty-title">${this.emptyTitle}</p>
-        <p class="empty-subtitle">${this.emptySubtitle}</p>
+        <p class="empty-title">${this.emptyTitle || t("filePreview.emptyTitle")}</p>
+        <p class="empty-subtitle">${this.emptySubtitle || t("filePreview.emptySubtitle")}</p>
       </section>
     `;
   }
@@ -746,10 +716,6 @@ function fileKind(path: string): string {
     sh: "Shell",
   };
   return map[ext] ?? (ext ? ext.toUpperCase() : "File");
-}
-
-if (!customElements.get("openclaw-file-preview-modal")) {
-  customElements.define("openclaw-file-preview-modal", OpenClawFilePreviewModal);
 }
 
 const CODE_EXTENSIONS = new Set([

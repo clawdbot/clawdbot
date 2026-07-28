@@ -12,6 +12,7 @@ declare module "../../scripts/watch-node.mjs" {
     cwd?: string;
     args?: string[];
     env?: NodeJS.ProcessEnv;
+    fs?: { existsSync: (path: string) => boolean };
     now?: () => number;
     sleep?: (ms: number) => Promise<void>;
     signalProcess?: (pid: number, signal: NodeJS.Signals | 0) => void;

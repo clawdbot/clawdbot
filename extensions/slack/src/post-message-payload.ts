@@ -1,6 +1,6 @@
 // Slack plugin module builds shared chat.postMessage payloads.
 import type { MessageMetadata } from "@slack/types";
-import type { Block, KnownBlock } from "@slack/web-api";
+import type { Block, ChatPostMessageArguments, KnownBlock } from "@slack/web-api";
 
 export type SlackUnfurlOptions = {
   unfurlLinks?: boolean;
@@ -26,9 +26,14 @@ export type SlackBasePostMessagePayload = SlackPostThreadPayload & {
   text: string;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  mrkdwn?: boolean;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
 };
+
+// Every payload built here carries accessible text even though Slack's upstream
+// argument type is a union where some members do not expose `text` or `blocks`.
+export type SlackPostMessagePayload = ChatPostMessageArguments & SlackBasePostMessagePayload;
 
 function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
   return {
@@ -47,6 +52,7 @@ export function buildSlackPostMessagePayload(params: {
   replyBroadcast?: boolean;
   blocks?: (Block | KnownBlock)[];
   metadata?: MessageMetadata;
+  mrkdwn?: boolean;
   unfurl?: SlackUnfurlOptions;
 }): SlackBasePostMessagePayload {
   const threadPayload =
@@ -62,6 +68,7 @@ export function buildSlackPostMessagePayload(params: {
       text: params.text,
       blocks: params.blocks,
       ...(params.metadata ? { metadata: params.metadata } : {}),
+      ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
       ...threadPayload,
       ...unfurlPayload,
     };
@@ -70,6 +77,7 @@ export function buildSlackPostMessagePayload(params: {
     channel: params.channelId,
     text: params.text,
     ...(params.metadata ? { metadata: params.metadata } : {}),
+    ...(typeof params.mrkdwn === "boolean" ? { mrkdwn: params.mrkdwn } : {}),
     ...threadPayload,
     ...unfurlPayload,
   };

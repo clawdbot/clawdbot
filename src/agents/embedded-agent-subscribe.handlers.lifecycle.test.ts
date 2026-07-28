@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createHookRunner } from "../plugins/hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "../plugins/hooks.test-fixtures.js";
 import { handleAgentEnd, handleAgentStart } from "./embedded-agent-subscribe.handlers.lifecycle.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 
@@ -26,12 +26,15 @@ const BEFORE_AGENT_FINALIZE_EVENT = {
 
 vi.mock("../infra/agent-events.js", () => ({
   emitAgentEvent: emitAgentEventMock,
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
 function createContext(
   lastAssistant: unknown,
   overrides?: {
-    onAgentEvent?: (event: unknown) => void;
+    onAgentEvent?: (event: unknown) => void | Promise<void>;
     onBeforeLifecycleTerminal?: () => void | Promise<void>;
     onBeforeTerminalDelivery?: () => void | Promise<void>;
     onBlockReply?: ((payload: unknown) => void) | undefined;
@@ -117,6 +120,18 @@ function firstWarnMeta(ctx: EmbeddedAgentSubscribeContext): Record<string, unkno
 }
 
 describe("handleAgentEnd", () => {
+  it("contains rejected lifecycle start event callbacks", async () => {
+    const onAgentEvent = vi.fn().mockRejectedValue(new Error("progress failed"));
+    const ctx = createContext(undefined, { onAgentEvent });
+
+    handleAgentStart(ctx);
+    await Promise.resolve();
+
+    expect(ctx.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("lifecycle agent event callback failed"),
+    );
+  });
+
   it("keeps explicit session and agent identity on lifecycle start events", () => {
     emitAgentEventMock.mockClear();
     const ctx = createContext(undefined);
@@ -1158,3 +1173,4 @@ describe("handleAgentEnd", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

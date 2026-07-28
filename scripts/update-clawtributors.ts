@@ -1,7 +1,10 @@
 // Update Clawtributors script supports OpenClaw repository automation.
-import { execFileSync, execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import pMap, { pMapSkip } from "p-map";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { execPlainGh } from "./lib/plain-gh.mjs";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
 const REPO = "openclaw/openclaw";
@@ -10,6 +13,9 @@ const AVATAR_PROBE_SIZE = 40;
 const AVATAR_PROBE_MAX_BYTES = 256 * 1024;
 const AVATAR_PROBE_TIMEOUT_MS = 8000;
 const AVATAR_SIZE = 48;
+// The 5,000-PR history query can take about a minute; preserve healthy pagination
+// headroom while bounding a stalled GitHub CLI process.
+const GH_COMMAND_TIMEOUT_MS = 120_000;
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
 const CLAWTRIBUTORS_HIDDEN_START = "<!-- clawtributors:hidden:start";
@@ -28,7 +34,7 @@ const seedCommit = mapConfig.seedCommit ?? null;
 const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
 const currentReadme = readFileSync(readmePath, "utf8");
 const hiddenReadmeLogins = new Set(parseHiddenReadmeLogins(currentReadme));
-const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
+const raw = runGh(["api", `repos/${REPO}/contributors?per_page=100&anon=1`, "--paginate"]);
 const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
 const contributionsByLogin = new Map<string, number>();
@@ -42,6 +48,7 @@ for (const item of contributors) {
     contributionsByLogin.set(item.login.toLowerCase(), item.contributions);
   }
   apiByLogin.set(item.login.toLowerCase(), {
+    id: item.id,
     login: item.login,
     html_url: item.html_url,
     avatar_url: normalizeAvatar(item.avatar_url),
@@ -99,13 +106,13 @@ for (const line of log.split("\n")) {
   }
 
   // Skip docs paths so bulk-generated i18n scaffolds don't inflate rankings
-  const filePath = parts[2];
+  const filePath = expectDefined(parts[2], "git numstat file path");
   if (filePath.startsWith("docs/")) {
     continue;
   }
 
-  const adds = parseCount(parts[0]);
-  const dels = parseCount(parts[1]);
+  const adds = parseCount(expectDefined(parts[0], "git numstat additions"));
+  const dels = parseCount(expectDefined(parts[1], "git numstat deletions"));
   const total = adds + dels;
   if (!total) {
     continue;
@@ -127,9 +134,20 @@ for (const login of ensureLogins) {
 }
 
 const prsByLogin = new Map<string, number>();
-const prRaw = run(
-  `gh pr list -R ${REPO} --state merged --limit 5000 --json author --jq '.[].author.login'`,
-);
+const prRaw = runGh([
+  "pr",
+  "list",
+  "-R",
+  REPO,
+  "--state",
+  "merged",
+  "--limit",
+  "5000",
+  "--json",
+  "author",
+  "--jq",
+  ".[].author.login",
+]);
 for (const login of prRaw.split("\n")) {
   const trimmed = login.trim().toLowerCase();
   if (!trimmed) {
@@ -166,16 +184,36 @@ const entriesByKey = new Map<string, Entry>();
 
 for (const seed of seedEntries) {
   const login =
-    loginFromUrl(seed.html_url) ??
+    (seed.html_url ? loginFromUrl(seed.html_url) : null) ??
     resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
-  if (!login) {
+  const accountId = accountIdFromAvatarUrl(seed.avatar_url);
+  if (!login && !accountId) {
     continue;
   }
-  const key = login.toLowerCase();
-  const user = apiByLogin.get(key) ?? fetchUser(login);
+  const loginKey = login?.toLowerCase();
+  const userByLogin = loginKey ? apiByLogin.get(loginKey) : undefined;
+  // Avatar account IDs survive renames and cannot be claimed by a handle squatter.
+  const user = accountId
+    ? userByLogin?.id === accountId
+      ? userByLogin
+      : fetchUserByAccountId(accountId)
+    : (userByLogin ?? (login ? fetchUser(login) : null));
   if (!user) {
+    const key = accountId ? `github-id:${accountId}` : expectDefined(loginKey, "seed login key");
+    entriesByKey.set(key, {
+      key,
+      display: seed.display,
+      html_url: null,
+      avatar_url: normalizeAvatar(seed.avatar_url),
+      lines: 0,
+      commits: 0,
+      prs: 0,
+      score: 0,
+      firstCommitDate: loginKey ? (firstCommitByLogin.get(loginKey) ?? "") : "",
+    });
     continue;
   }
+  const key = user.login.toLowerCase();
   apiByLogin.set(key, user);
   const existing = entriesByKey.get(key);
   if (!existing) {
@@ -297,7 +335,12 @@ const markdownLines: string[] = [];
 for (let i = 0; i < visibleEntries.length; i += PER_LINE) {
   const chunk = visibleEntries.slice(i, i + PER_LINE);
   const parts = chunk.map((entry) => {
-    return `[![${escapeMarkdownLabel(entry.display)}](${entry.avatar_url})](${entry.html_url})`;
+    // Fixed 48px tiles: GitHub's avatar resizer sometimes ignores `s=48`
+    // (default identicons come back 420px) and never upscales tiny source
+    // avatars, so markdown images render off-grid without explicit sizing.
+    const alt = escapeHtmlAttribute(entry.display);
+    const image = `<img src="${entry.avatar_url}" width="48" height="48" alt="${alt}">`;
+    return entry.html_url ? `<a href="${entry.html_url}">${image}</a>` : image;
   });
   markdownLines.push(parts.join(" "));
 }
@@ -344,6 +387,16 @@ function run(cmd: string): string {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 1024 * 1024 * 200,
+  }).trim();
+}
+
+function runGh(args: string[]): string {
+  return execPlainGh(args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 200,
+    timeout: GH_COMMAND_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   }).trim();
 }
 
@@ -415,28 +468,68 @@ function normalizeAvatar(url: string): string {
   }
 }
 
+function accountIdFromAvatarUrl(url: string): number | null {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "avatars.githubusercontent.com") {
+      return null;
+    }
+    const match = /^\/u\/(\d+)\/?$/u.exec(parsed.pathname);
+    const accountId = match?.[1] ? Number(match[1]) : Number.NaN;
+    return Number.isSafeInteger(accountId) && accountId > 0 ? accountId : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseUser(responseText: string): User | null {
+  const parsed = JSON.parse(responseText);
+  if (!parsed?.login || !parsed?.html_url || !parsed?.avatar_url) {
+    return null;
+  }
+  return {
+    id: typeof parsed.id === "number" ? parsed.id : undefined,
+    login: parsed.login,
+    html_url: parsed.html_url,
+    avatar_url: normalizeAvatar(parsed.avatar_url),
+  };
+}
+
 function fetchUser(login: string): User | null {
   const normalized = normalizeLogin(login);
   if (!normalized) {
     return null;
   }
   try {
-    const data = execFileSync("gh", ["api", `users/${normalized}`], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    const parsed = JSON.parse(data);
-    if (!parsed?.login || !parsed?.html_url || !parsed?.avatar_url) {
+    return parseUser(runGh(["api", `users/${normalized}`]));
+  } catch (error) {
+    if (isGitHubMissing(error)) {
       return null;
     }
-    return {
-      login: parsed.login,
-      html_url: parsed.html_url,
-      avatar_url: normalizeAvatar(parsed.avatar_url),
-    };
-  } catch {
-    return null;
+    throw error;
   }
+}
+
+function fetchUserByAccountId(accountId: number): User | null {
+  try {
+    return parseUser(runGh(["api", `user/${accountId}`]));
+  } catch (error) {
+    if (isGitHubMissing(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isGitHubMissing(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  const stderr = (error as { stderr?: unknown } | null)?.stderr;
+  const stderrText = Buffer.isBuffer(stderr)
+    ? stderr.toString("utf8")
+    : typeof stderr === "string"
+      ? stderr
+      : "";
+  return /\bHTTP (?:404|410)\b/u.test(`${message}\n${stderrText}`);
 }
 
 function isDefaultGitHubAvatar(login: string): Promise<boolean> {
@@ -624,36 +717,21 @@ async function filterVisibleEntries(
   entriesResult: Entry[],
   hiddenLogins: ReadonlySet<string>,
 ): Promise<Entry[]> {
-  const results = await mapConcurrent(entriesResult, 8, async (entry) => {
-    const login = entry.login ?? entry.key;
-    if (!login) {
-      return entry;
-    }
-    const normalized = normalizeLogin(login)?.toLowerCase();
-    if (normalized && hiddenLogins.has(normalized)) {
-      return null;
-    }
-    return (await isDefaultGitHubAvatar(login)) ? null : entry;
-  });
-  return results.filter((entry): entry is Entry => entry !== null);
-}
-
-async function mapConcurrent<T, R>(
-  items: T[],
-  limit: number,
-  mapper: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+  return await pMap(
+    entriesResult,
+    async (entry) => {
+      const login = entry.login ?? entry.key;
+      if (!login) {
+        return entry;
+      }
+      const normalized = normalizeLogin(login)?.toLowerCase();
+      if (normalized && hiddenLogins.has(normalized)) {
+        return pMapSkip;
+      }
+      return (await isDefaultGitHubAvatar(login)) ? pMapSkip : entry;
+    },
+    { concurrency: 8, stopOnError: true },
+  );
 }
 
 function readImageDimensions(buffer: Buffer): { width: number; height: number } | null {
@@ -702,7 +780,7 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } |
       continue;
     }
 
-    const marker = buffer[offset + 1];
+    const marker = expectDefined(buffer[offset + 1], `JPEG marker at byte ${offset + 1}`);
     offset += 2;
 
     if (marker === 0xd8 || marker === 0xd9) {
@@ -759,13 +837,15 @@ function resolveLogin(
   }
 
   if (email && email.endsWith("@users.noreply.github.com")) {
-    const local = email.split("@", 1)[0];
-    const login = local.includes("+") ? local.split("+")[1] : local;
+    const local = expectDefined(email.split("@", 1)[0], "GitHub noreply email local part");
+    const login = local.includes("+")
+      ? expectDefined(local.split("+")[1], "GitHub noreply email login suffix")
+      : local;
     return normalizeLogin(login);
   }
 
   if (email && email.endsWith("@github.com")) {
-    const login = email.split("@", 1)[0];
+    const login = expectDefined(email.split("@", 1)[0], "GitHub email local part");
     if (apiByLoginValue.has(login.toLowerCase())) {
       return normalizeLogin(login);
     }
@@ -825,19 +905,27 @@ function normalizeIdentifier(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-function escapeMarkdownLabel(value: string): string {
-  return value.replace(/([\\[\]])/g, "\\$1");
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
 }
 
 function parseReadmeEntries(
   content: string,
-): Array<{ display: string; html_url: string; avatar_url: string }> {
+): Array<{ display: string; html_url: string | null; avatar_url: string }> {
   const rangeValue = findClawtributorsRange(content);
   if (!rangeValue) {
     return [];
   }
   const blockValue = content.slice(rangeValue.start, rangeValue.end);
-  const entriesValue: Array<{ display: string; html_url: string; avatar_url: string }> = [];
+  const entriesValue: Array<{
+    display: string;
+    html_url: string | null;
+    avatar_url: string;
+  }> = [];
   const markdown = /\[!\[([^\]]+)\]\(([^)]+)\)\]\(([^)]+)\)/g;
   for (const match of blockValue.matchAll(markdown)) {
     const [, alt, src, href] = match;
@@ -867,7 +955,7 @@ function parseReadmeEntries(
     if (entriesValue.some((entry) => entry.display === alt && entry.avatar_url === src)) {
       continue;
     }
-    entriesValue.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
+    entriesValue.push({ html_url: null, avatar_url: src, display: alt });
   }
   return entriesValue;
 }
@@ -946,11 +1034,6 @@ function loginFromUrl(url: string): string | null {
     return null;
   }
   return login;
-}
-
-function fallbackHref(value: string): string {
-  const encoded = encodeURIComponent(value.trim());
-  return encoded ? `https://github.com/search?q=${encoded}` : "https://github.com";
 }
 
 function pickDisplay(

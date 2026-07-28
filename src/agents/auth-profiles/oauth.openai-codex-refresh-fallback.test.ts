@@ -6,6 +6,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_LOCK_TIMEOUT_ERROR_CODE, resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
@@ -222,6 +223,27 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
+  it("fails closed when provider refresh returns an unchanged expired credential", async () => {
+    const profileId = "openai:default";
+    saveAuthProfileStore(
+      createExpiredOauthStore({
+        profileId,
+        provider: "openai",
+      }),
+      agentDir,
+      { filterExternalAuthProfiles: false, syncExternalCli: false },
+    );
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) =>
+      requireOAuthContext(params?.context),
+    );
+
+    await expect(resolveOpenAICodexProfile({ profileId, agentDir })).rejects.toThrow(
+      /OAuth token refresh failed for openai/,
+    );
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+    expect(getOAuthApiKeyMock).not.toHaveBeenCalled();
+  });
+
   it("surfaces refresh contention once without local lock details", async () => {
     const profileId = "openai:default";
     saveAuthProfileStore(createExpiredOauthStore({ profileId, provider: "openai" }), agentDir, {
@@ -382,11 +404,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     const persisted = await readPersistedStore(agentDir);
-    expectPersistedOpenAICodexProfile(persisted.profiles[profileId], {
-      access: "rotated-access-token",
-      refresh: "rotated-refresh-token",
-      accountId: "acct-rotated",
-    });
+    expectPersistedOpenAICodexProfile(
+      expectDefined(persisted.profiles[profileId], "persisted.profiles[profileId] test invariant"),
+      {
+        access: "rotated-access-token",
+        refresh: "rotated-refresh-token",
+        accountId: "acct-rotated",
+      },
+    );
   });
 
   it("refreshes imported Codex credentials into the canonical auth store without writing back to .codex", async () => {
@@ -435,11 +460,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
       email: undefined,
     });
     const persisted = await readPersistedStore(agentDir);
-    expectPersistedOpenAICodexProfile(persisted.profiles[profileId], {
-      access: "rotated-cli-access-token",
-      refresh: "rotated-cli-refresh-token",
-      accountId: "acct-rotated",
-    });
+    expectPersistedOpenAICodexProfile(
+      expectDefined(persisted.profiles[profileId], "persisted.profiles[profileId] test invariant"),
+      {
+        access: "rotated-cli-access-token",
+        refresh: "rotated-cli-refresh-token",
+        accountId: "acct-rotated",
+      },
+    );
   });
 
   it("ignores mismatched fresh Codex CLI credentials when canonical local auth is bound to another account", async () => {
@@ -492,11 +520,14 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     const persisted = await readPersistedStore(agentDir);
-    expectPersistedOpenAICodexProfile(persisted.profiles[profileId], {
-      access: "fresh-local-access-token",
-      refresh: "fresh-local-refresh-token",
-      accountId: "acct-local",
-    });
+    expectPersistedOpenAICodexProfile(
+      expectDefined(persisted.profiles[profileId], "persisted.profiles[profileId] test invariant"),
+      {
+        access: "fresh-local-access-token",
+        refresh: "fresh-local-refresh-token",
+        accountId: "acct-local",
+      },
+    );
     const persistedProfile = requireOAuthProfile(persisted, profileId);
     expect(persistedProfile.accountId).toBe("acct-local");
   });
@@ -554,10 +585,13 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     });
 
     const persisted = await readPersistedStore(agentDir);
-    expectPersistedOpenAICodexProfile(persisted.profiles[profileId], {
-      access: "fresh-access-token",
-      refresh: "fresh-refresh-token",
-    });
+    expectPersistedOpenAICodexProfile(
+      expectDefined(persisted.profiles[profileId], "persisted.profiles[profileId] test invariant"),
+      {
+        access: "fresh-access-token",
+        refresh: "fresh-refresh-token",
+      },
+    );
   });
 
   it("does not use same-account Codex CLI credentials after forced local refresh fails", async () => {
@@ -1149,10 +1183,13 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
 
     expect(getOAuthApiKeyMock).toHaveBeenCalledTimes(2);
     const persisted = await readPersistedStore(agentDir);
-    expectPersistedOpenAICodexProfile(persisted.profiles[profileId], {
-      access: "retried-access-token",
-      refresh: "retried-refresh-token",
-    });
+    expectPersistedOpenAICodexProfile(
+      expectDefined(persisted.profiles[profileId], "persisted.profiles[profileId] test invariant"),
+      {
+        access: "retried-access-token",
+        refresh: "retried-refresh-token",
+      },
+    );
   });
 
   it("keeps throwing for non-codex providers on the same refresh error", async () => {
@@ -1196,3 +1233,4 @@ describe("resolveApiKeyForProfile openai refresh fallback", () => {
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

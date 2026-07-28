@@ -1,4 +1,5 @@
 // Tests usage-line formatting for agent runner completion summaries.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
@@ -21,13 +22,15 @@ describe("appendUsageLine", () => {
     const [updated] = appendUsageLine([payload], "Usage: 12 in / 3 out");
 
     expect(updated).toEqual({ text: "message tool reply\nUsage: 12 in / 3 out" });
-    expect(getReplyPayloadMetadata(updated)).toMatchObject({
-      deliverDespiteSourceReplySuppression: true,
-      sourceReplyTranscriptMirror: {
-        sessionKey: "agent:main:telegram:direct:123",
-        idempotencyKey: "run-1:internal-source-reply:0",
-        text: "message tool reply\nUsage: 12 in / 3 out",
+    expect(getReplyPayloadMetadata(expectDefined(updated, "updated test invariant"))).toMatchObject(
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main:telegram:direct:123",
+          idempotencyKey: "run-1:internal-source-reply:0",
+          text: "message tool reply\nUsage: 12 in / 3 out",
+        },
       },
-    });
+    );
   });
 });

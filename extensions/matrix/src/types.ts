@@ -72,15 +72,11 @@ type MatrixThreadBindingsConfig = {
   maxAgeHours?: number;
   spawnSessions?: boolean;
   defaultSpawnContext?: "isolated" | "fork";
-  /** @deprecated Use spawnSessions instead. */
-  spawnSubagentSessions?: boolean;
-  /** @deprecated Use spawnSessions instead. */
-  spawnAcpSessions?: boolean;
 };
 
 type MatrixExecApprovalTarget = "dm" | "channel" | "both";
 
-export type MatrixExecApprovalConfig = {
+type MatrixExecApprovalConfig = {
   /** If true, deliver exec approvals through Matrix-native prompts. */
   enabled?: boolean;
   /** Optional approver Matrix user IDs. Falls back to dm.allowFrom. */
@@ -98,6 +94,10 @@ export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 export type MatrixStreamingConfig = {
   /** Preview streaming mode for Matrix replies. Default: "off". */
   mode?: MatrixStreamingMode;
+  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
+  chunkMode?: "length" | "newline";
+  /** Block streaming delivery controls (separate from the preview mode). Default: disabled. */
+  block?: import("openclaw/plugin-sdk/channel-outbound").ChannelStreamingBlockConfig;
   progress?: import("openclaw/plugin-sdk/channel-outbound").ChannelStreamingProgressConfig;
   preview?: {
     /** Show tool/progress activity in the live draft preview. Default: true. */
@@ -161,13 +161,6 @@ export type MatrixConfig = {
   mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
-  /**
-   * Enable shared block-streaming replies for Matrix.
-   *
-   * Default: false. Matrix keeps `streaming: "off"` as final-only delivery
-   * unless block streaming is explicitly enabled.
-   */
-  blockStreaming?: boolean;
   /** Allowlist for group senders (matrix user IDs). */
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
@@ -176,8 +169,6 @@ export type MatrixConfig = {
   threadReplies?: "off" | "inbound" | "always";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /** Ack reaction emoji override for this channel/account. */
@@ -215,7 +206,7 @@ export type MatrixConfig = {
   /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
   /**
-   * Streaming mode for Matrix replies.
+   * Streaming config for Matrix replies (`streaming.mode`):
    * - `"partial"`: edit a single draft message in place for the current
    *   assistant block as the model generates text using normal Matrix text
    *   messages. This preserves legacy preview-first notification behavior.
@@ -224,18 +215,18 @@ export type MatrixConfig = {
    * - `"progress"`: edit a single draft status message with shared progress
    *   labels and optional tool/task lines until the final answer is ready.
    * - `"off"`: deliver the full reply once the model finishes.
-   * - Use `blockStreaming: true` when you want completed assistant blocks to
-   *   stay visible as separate progress messages. When combined with
+   * - Use `streaming.block.enabled: true` when you want completed assistant
+   *   blocks to stay visible as separate progress messages. When combined with
    *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
    * - `streaming.progress.toolProgress: false` hides interim tool/progress
    *   lines in progress mode. `streaming.preview.toolProgress: false` keeps
    *   legacy answer preview edits but hides interim tool/progress lines.
-   * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
-   *   compatibility. Object form uses `streaming.mode`.
-   * Default: `"off"`.
+   * Legacy scalar/boolean spellings and the flat `blockStreaming`/`chunkMode`
+   * keys migrate via `openclaw doctor --fix`.
+   * Default: `mode: "off"`.
    */
-  streaming?: MatrixStreamingMode | MatrixStreamingConfig | boolean;
+  streaming?: MatrixStreamingConfig;
 };
 
 export type CoreConfig = {
@@ -247,9 +238,7 @@ export type CoreConfig = {
       botLoopProtection?: ChannelBotLoopProtectionConfig;
     };
   };
-  commands?: {
-    useAccessGroups?: boolean;
-  };
+  commands?: OpenClawConfig["commands"];
   session?: {
     store?: string;
     dmScope?: NonNullable<OpenClawConfig["session"]>["dmScope"];

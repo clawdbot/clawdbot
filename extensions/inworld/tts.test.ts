@@ -1,4 +1,5 @@
 // Inworld tests cover tts plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
@@ -175,7 +176,7 @@ describe("listInworldVoices", () => {
 
     const voices = await listInworldVoices({ apiKey: "test-key" });
     expect(voices).toHaveLength(1);
-    expect(voices[0].id).toBe("Dennis");
+    expect(expectDefined(voices[0], "Inworld voice").id).toBe("Dennis");
   });
 
   it("returns empty array when no voices present", async () => {
@@ -191,6 +192,22 @@ describe("listInworldVoices", () => {
     await listInworldVoices({ apiKey: "test-key", language: "EN_US" });
 
     expect(lastGuardRequest().url).toBe("https://api.inworld.ai/voices/v1/voices?languages=EN_US");
+  });
+
+  it("defaults to a bounded timeout for voice list requests", async () => {
+    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
+
+    await listInworldVoices({ apiKey: "test-key" });
+
+    expect(lastGuardRequest().timeoutMs).toBe(30_000);
+  });
+
+  it("preserves an explicit timeout for voice list requests", async () => {
+    queueGuardedResponse(new Response(JSON.stringify({ voices: [] }), { status: 200 }));
+
+    await listInworldVoices({ apiKey: "test-key", timeoutMs: 5_000 });
+
+    expect(lastGuardRequest().timeoutMs).toBe(5_000);
   });
 });
 
@@ -217,6 +234,15 @@ describe("inworldTTS", () => {
 
     expect(buffer).toEqual(
       Buffer.concat([Buffer.from("audio-chunk-1"), Buffer.from("audio-chunk-2")]),
+    );
+  });
+
+  it("rejects malformed base64 audio chunks", async () => {
+    const body = JSON.stringify({ result: { audioContent: "not-base64!" } });
+    queueGuardedResponse(new Response(body, { status: 200 }));
+
+    await expect(inworldTTS({ text: "test", apiKey: "fixture-api-key" })).rejects.toThrow(
+      "Inworld TTS returned malformed base64 audio data",
     );
   });
 

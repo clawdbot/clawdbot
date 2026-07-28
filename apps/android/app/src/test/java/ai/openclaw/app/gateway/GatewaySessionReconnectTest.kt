@@ -15,6 +15,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Request
@@ -127,6 +128,11 @@ private data class ReconnectHarness(
   val sessionJob: Job,
 )
 
+private data class TerminalCallbackObservation(
+  val inFlightHandlerCompleted: Boolean,
+  val issuedTokenPersisted: Boolean,
+)
+
 private data class ReconnectServer(
   val server: MockWebServer,
   val sockets: ConcurrentLinkedQueue<WebSocket>,
@@ -149,6 +155,89 @@ private data class ReconnectServer(
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionReconnectTest {
+  @Test
+  fun capturedRequestLeaseRejectsReplacementSocketBeforeEnqueue() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val reconnected = CompletableDeferred<Unit>()
+      val connectionCount = AtomicInteger()
+      val unexpectedRequest = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(connectResponseFrame(id))
+          } else {
+            unexpectedRequest.complete(Unit)
+          }
+        }
+      val harness =
+        createReconnectHarness(
+          onConnected = {
+            if (connectionCount.incrementAndGet() == 1) {
+              connected.complete(Unit)
+            } else {
+              reconnected.complete(Unit)
+            }
+          },
+        )
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+        val lease =
+          requireNotNull(
+            harness.session.captureRequestLease("manual|127.0.0.1|${server.port}"),
+          )
+        assertTrue(lease.isCurrent())
+        harness.session.reconnect()
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { reconnected.await() }
+        assertFalse(lease.isCurrent())
+        var committed = false
+        assertFalse(lease.commitIfCurrent { committed = true })
+        assertFalse(committed)
+        val result =
+          runCatching {
+            lease.request(
+              method = "sessions.patch",
+              paramsJson = "{}",
+            )
+          }
+
+        assertTrue(result.exceptionOrNull() is GatewayRequestNotEnqueued)
+        assertNull(withTimeoutOrNull(200) { unexpectedRequest.await() })
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun connectedHelloPublishesCanonicalAndLegacyApprovalMethods() =
+    runBlocking {
+      val catalogs =
+        listOf(
+          setOf("approval.get", "approval.resolve"),
+          setOf("exec.approval.get", "exec.approval.resolve"),
+        )
+
+      for (methods in catalogs) {
+        val json = Json { ignoreUnknownKeys = true }
+        val hello = CompletableDeferred<GatewayHelloSummary>()
+        val server =
+          startGatewayServer(json = json) { webSocket, id, method ->
+            if (method == "connect") webSocket.send(connectResponseFrame(id, methods))
+          }
+        val harness = createReconnectHarness(onHello = hello::complete)
+
+        try {
+          connectNodeSession(harness.session, server.port)
+          assertEquals(methods, withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { hello.await() }.methods)
+        } finally {
+          shutdownReconnectHarness(harness, server)
+        }
+      }
+    }
+
   @Test
   fun disconnectAndJoinWaitsForNaturalFailureCallback() =
     runBlocking {
@@ -281,14 +370,16 @@ class GatewaySessionReconnectTest {
     }
 
   @Test
-  fun failureDrainsAcceptedConnectResponseBeforeCancellingOwnedWork() =
+  fun failureOrdersDisconnectAfterInFlightHandlerAndAcceptedConnectResponse() =
     runBlocking {
       val json = Json { ignoreUnknownKeys = true }
       val authStore = RecordingDeviceAuthStore()
       val connectRequestId = CompletableDeferred<String>()
       val blockEventStarted = CountDownLatch(1)
       val allowBlockEvent = CountDownLatch(1)
-      val terminalCallback = CompletableDeferred<Unit>()
+      val blockEventCompleted = AtomicBoolean()
+      val terminalCallback = CompletableDeferred<TerminalCallbackObservation>()
+      val allowTerminalCallback = CountDownLatch(1)
       val retiredInvokeCount = AtomicInteger()
       val server =
         startGatewayServer(json = json) { _, id, method ->
@@ -297,13 +388,25 @@ class GatewaySessionReconnectTest {
       val harness =
         createReconnectHarness(
           onDisconnected = { message ->
-            if (message.startsWith("Gateway error:")) terminalCallback.complete(Unit)
+            if (message.startsWith("Gateway error:")) {
+              terminalCallback.complete(
+                TerminalCallbackObservation(
+                  inFlightHandlerCompleted = blockEventCompleted.get(),
+                  issuedTokenPersisted = authStore.savedToken.isCompleted,
+                ),
+              )
+              allowTerminalCallback.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            }
           },
           deviceAuthStore = authStore,
           onEvent = { event, _ ->
             if (event == "block") {
               blockEventStarted.countDown()
-              allowBlockEvent.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+              try {
+                allowBlockEvent.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+              } finally {
+                blockEventCompleted.set(true)
+              }
             }
           },
           onInvoke = {
@@ -329,15 +432,23 @@ class GatewaySessionReconnectTest {
           """{"type":"res","id":"$requestId","ok":true,"payload":{"auth":{"deviceToken":"issued-token","role":"node","scopes":[]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}""",
         )
         listener.onFailure(socket, IOException("test failure"), null)
-        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { terminalCallback.await() }
+        assertNull(withTimeoutOrNull(100) { terminalCallback.await() })
 
         allowBlockEvent.countDown()
 
+        val observation = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { terminalCallback.await() }
+        assertTrue(observation.inFlightHandlerCompleted)
+        assertTrue(observation.issuedTokenPersisted)
         assertEquals("issued-token", withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { authStore.savedToken.await() })
         assertEquals(0, retiredInvokeCount.get())
+        val messagePumpJob = readField<Job>(connection, "messagePumpJob")
+        assertTrue(withTimeoutOrNull(1_000) { messagePumpJob.join() } != null)
+
+        allowTerminalCallback.countDown()
         withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { harness.session.disconnectAndJoin() }
       } finally {
         allowBlockEvent.countDown()
+        allowTerminalCallback.countDown()
         shutdownReconnectHarness(harness, server)
       }
     }
@@ -547,7 +658,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -574,7 +685,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,
@@ -600,7 +711,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -637,7 +748,7 @@ class GatewaySessionReconnectTest {
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = code,
               canRetryWithDeviceToken = false,
               recommendedNextStep = null,
@@ -674,7 +785,7 @@ class GatewaySessionReconnectTest {
           code = "INVALID_REQUEST",
           message = "authentication failed",
           details =
-            GatewayConnectErrorDetails(
+            GatewayErrorDetails(
               code = "AUTH_UNAUTHORIZED",
               canRetryWithDeviceToken = nextStep == "retry_with_device_token",
               recommendedNextStep = nextStep,
@@ -700,7 +811,7 @@ class GatewaySessionReconnectTest {
         code = "INVALID_REQUEST",
         message = "authentication rate limited",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "AUTH_RATE_LIMITED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = "wait_then_retry",
@@ -725,7 +836,7 @@ class GatewaySessionReconnectTest {
         code = "INVALID_REQUEST",
         message = "protocol mismatch",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PROTOCOL_MISMATCH",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,
@@ -754,7 +865,7 @@ class GatewaySessionReconnectTest {
         code = "NOT_PAIRED",
         message = "pairing required",
         details =
-          GatewayConnectErrorDetails(
+          GatewayErrorDetails(
             code = "PAIRING_REQUIRED",
             canRetryWithDeviceToken = false,
             recommendedNextStep = null,
@@ -874,8 +985,44 @@ class GatewaySessionReconnectTest {
       }
     }
 
+  @Test
+  fun methodFailurePreservesMissingScopeDetails() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connected = CompletableDeferred<Unit>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          when (method) {
+            "connect" -> webSocket.send(connectResponseFrame(id))
+            "question.list" ->
+              webSocket.send(
+                """
+                {"type":"res","id":"$id","ok":false,"error":{"code":"FORBIDDEN","message":"permission denied","details":{"code":"MISSING_SCOPE","missingScope":"operator.questions","requiredScopes":["operator.questions"]}}}
+                """.trimIndent(),
+              )
+          }
+        }
+      val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+
+        val result = harness.session.requestDetailed("question.list", "{}")
+
+        assertFalse(result.ok)
+        assertEquals("MISSING_SCOPE", result.error?.details?.code)
+        assertEquals("operator.questions", result.error?.details?.missingScope)
+        assertEquals(listOf("operator.questions"), result.error?.details?.requiredScopes)
+        assertEquals("operator.questions", result.error?.missingScope())
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
   private fun createReconnectHarness(
     onConnected: () -> Unit = {},
+    onHello: (GatewayHelloSummary) -> Unit = {},
     onDisconnected: (String) -> Unit = {},
     deviceAuthStore: DeviceAuthTokenStore = ReconnectDeviceAuthStore(),
     onEvent: (String, String?) -> Unit = { _, _ -> },
@@ -889,9 +1036,12 @@ class GatewaySessionReconnectTest {
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
-        identityStore = DeviceIdentityStore(app),
+        identityStore = testDeviceIdentityStore(app),
         deviceAuthStore = deviceAuthStore,
-        onConnected = { onConnected() },
+        onConnected = { summary ->
+          onConnected()
+          onHello(summary)
+        },
         onDisconnected = onDisconnected,
         onConnectFailure = onConnectFailure,
         onEvent = onEvent,
@@ -948,7 +1098,13 @@ class GatewaySessionReconnectTest {
     servers.forEach { it.shutdown() }
   }
 
-  private fun connectResponseFrame(id: String): String = """{"type":"res","id":"$id","ok":true,"payload":{"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+  private fun connectResponseFrame(
+    id: String,
+    methods: Set<String> = emptySet(),
+  ): String {
+    val encodedMethods = methods.joinToString(",") { JsonPrimitive(it).toString() }
+    return """{"type":"res","id":"$id","ok":true,"payload":{"features":{"methods":[$encodedMethods]},"snapshot":{"sessionDefaults":{"mainSessionKey":"main"}}}}"""
+  }
 
   private fun startGatewayServer(
     json: Json,

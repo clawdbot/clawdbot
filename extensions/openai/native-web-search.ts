@@ -63,9 +63,7 @@ function raiseMinimalReasoningForOpenAINativeWebSearch(payload: Record<string, u
   reasoning.effort = "low";
 }
 
-export function patchOpenAINativeWebSearchPayload(
-  payload: unknown,
-): OpenAINativeWebSearchPatchResult {
+function patchOpenAINativeWebSearchPayload(payload: unknown): OpenAINativeWebSearchPatchResult {
   if (!isRecord(payload)) {
     return "payload_not_object";
   }

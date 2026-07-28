@@ -15,16 +15,23 @@ export {
   isSessionArchiveArtifactName,
   isSilentReplyPayloadText,
   isUsageCountedSessionTranscriptFileName,
+  loadTranscriptEventsSync,
   listSessionEntries,
+  listSessionTranscriptInstances,
   onSessionTranscriptUpdate,
+  parseSqliteSessionFileMarker,
   parseUsageCountedSessionIdFromFileName,
+  readTranscriptContentRevisionSync,
+  readTranscriptStatsSync,
   resolveSessionFilePath,
   resolveStorePath,
+  resolveTranscriptSessionKeyBySessionId,
   resolveSessionAgentId,
   resolveSessionTranscriptsDirForAgent,
   stripInboundMetadata,
   stripInternalRuntimeContext,
   type SessionEntry,
+  type SessionTranscriptInstance,
 } from "./openclaw-runtime.js";
 
 /** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 /**
  * Channel ingress identity adapter helpers.
  *
@@ -112,7 +113,7 @@ export function createIdentityAdapter(
           return [
             adapterEntry({
               identity,
-              field: fields[0],
+              field: expectDefined(fields[0], "fields entry at 0"),
               fieldIndex: 0,
               entry,
               entryIndex,

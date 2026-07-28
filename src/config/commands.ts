@@ -5,7 +5,6 @@ import { resolveReadOnlyChannelCommandDefaults } from "../channels/plugins/read-
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { NativeCommandsSetting } from "./types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-export { isCommandFlagEnabled, isRestartEnabled } from "./commands.flags.js";
 
 function resolveAutoDefault(
   providerId: ChannelId | undefined,

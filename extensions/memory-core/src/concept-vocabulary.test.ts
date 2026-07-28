@@ -1,10 +1,6 @@
 // Memory Core tests cover concept vocabulary plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  classifyConceptTagScript,
-  deriveConceptTags,
-  summarizeConceptTagScriptCoverage,
-} from "./concept-vocabulary.js";
+import { deriveConceptTags, summarizeConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
 describe("concept vocabulary", () => {
   it("extracts Unicode-aware concept tags for common European languages", () => {
@@ -72,12 +68,6 @@ describe("concept vocabulary", () => {
     ]);
     expect(tags).not.toContain("ルー");
     expect(tags).not.toContain("ター");
-  });
-
-  it("classifies concept tags by script family", () => {
-    expect(classifyConceptTagScript("routeur")).toBe("latin");
-    expect(classifyConceptTagScript("路由器")).toBe("cjk");
-    expect(classifyConceptTagScript("qmd路由器")).toBe("mixed");
   });
 
   it("drops chat scaffolding stop words from derived concept tags", () => {

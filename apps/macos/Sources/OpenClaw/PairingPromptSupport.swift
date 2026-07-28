@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawKit
 import OSLog
+import UserNotifications
 
 /// Shared plumbing for the node/device pairing prompters: gateway push
 /// subscription lifecycle and approve/reject RPC logging.
@@ -70,6 +71,38 @@ enum PairingPromptSupport {
             logger.error("approve failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
+    }
+
+    /// Human-readable subject for pairing notifications: display name when
+    /// present, otherwise the raw node/device id.
+    static func subjectLabel(displayName: String?, fallback: String) -> String {
+        let name = displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name?.isEmpty == false ? name! : fallback
+    }
+
+    static func notificationsAuthorized() async -> Bool {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        return settings.authorizationStatus == .authorized ||
+            settings.authorizationStatus == .provisional
+    }
+
+    /// Decisions resolve the card optimistically before the RPC returns; when
+    /// the RPC then fails the card comes back and this explains why. A failed
+    /// RPC does not prove the gateway rejected the decision (it may have
+    /// committed before a timeout), so the copy claims only lost confirmation;
+    /// resolved events / reconcile report the authoritative outcome.
+    static func notifyDecisionFailed(
+        kind: PairingApprovalCenter.Kind,
+        decision: PairingApprovalCenter.Decision,
+        subject: String) async
+    {
+        guard await self.notificationsAuthorized() else { return }
+        let action = decision == .approve ? "approval" : "rejection"
+        _ = await NotificationManager().send(
+            title: "\(kind == .node ? "Node" : "Device") pairing \(action) not confirmed",
+            body: "\(subject)\nThe gateway did not confirm the \(action); the request may still be pending.",
+            sound: nil,
+            priority: .active)
     }
 
     @discardableResult

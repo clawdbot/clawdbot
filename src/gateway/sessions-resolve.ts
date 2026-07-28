@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Gateway sessions.resolve implementation helper.
 // Resolves key/sessionId/label selectors into one canonical session key.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -261,10 +262,13 @@ export async function resolveSessionKeyFromResolveParams(params: {
     };
   }
 
-  const labelKey = list.sessions[0].key;
+  const labelKey = expectDefined(list.sessions[0], "sessions entry at 0").key;
   const agentCheckLabel = validateSessionAgentExists(cfg, labelKey, store[labelKey]);
   if (agentCheckLabel) {
     return agentCheckLabel;
   }
-  return { ok: true, key: list.sessions[0].key };
+  return {
+    ok: true,
+    key: expectDefined(list.sessions[0], "sessions entry at 0").key,
+  };
 }

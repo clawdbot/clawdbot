@@ -16,6 +16,7 @@ import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resolveSlackEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
@@ -25,7 +26,7 @@ import { authorizeAndResolveSlackSystemEventContext } from "./system-event-conte
 // workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
 const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
 
-export function formatSlackInboundLogLine(params: {
+function formatSlackInboundLogLine(params: {
   workspaceId: string;
   channelId: string;
   channelType: string;
@@ -154,6 +155,9 @@ function resolveAssistantMessageChangedInbound(params: {
     attachments: Array.isArray(message.attachments)
       ? (message.attachments as SlackMessageEvent["attachments"])
       : undefined,
+    blocks: Array.isArray(message.blocks)
+      ? (message.blocks as SlackMessageEvent["blocks"])
+      : undefined,
   };
 }
 
@@ -173,6 +177,7 @@ export function registerSlackMessageEvents(params: {
       body: args.body,
       context: args.context,
       client: args.client,
+      clientOptions: ctx.app.webClientOptions,
     });
     if (!resolved.ok) {
       logVerbose(`slack: drop event (${resolved.reason})`);
@@ -192,6 +197,7 @@ export function registerSlackMessageEvents(params: {
     context: AllMiddlewareArgs["context"];
     client: AllMiddlewareArgs["client"];
   }) => {
+    const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
     try {
       const eventScope = resolveEventScope({ body, context, client });
       if (eventScope === null) {
@@ -202,6 +208,9 @@ export function registerSlackMessageEvents(params: {
       }
 
       const message = event as SlackMessageEvent;
+      // Subtype handlers do not enter the regular message pipeline. Observe any explicit
+      // type here so edits and deletes share the same authoritative conversation cache.
+      ctx.rememberSlackChannelType(message.channel, message.channel_type, eventScope);
       if (eventScope && isBotAuthoredEnterpriseEvent(message)) {
         logVerbose("slack: drop enterprise bot-authored message");
         return;
@@ -217,7 +226,9 @@ export function registerSlackMessageEvents(params: {
       if (assistantChangedInbound) {
         await handleSlackMessage(assistantChangedInbound, {
           source: "message",
-          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+          ...(eventScope ? { eventScope } : {}),
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
         return;
       }
@@ -257,9 +268,14 @@ export function registerSlackMessageEvents(params: {
 
       await handleSlackMessage(message, {
         source: "message",
-        ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+        ...(eventScope ? { eventScope } : {}),
+        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+        ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
       });
     } catch (err) {
+      if (turnAdoptionLifecycle) {
+        throw err;
+      }
       ctx.runtime.error?.(danger(`slack handler failed: ${formatErrorMessage(err)}`));
     }
   };
@@ -281,6 +297,7 @@ export function registerSlackMessageEvents(params: {
     "app_mention",
     async (args: SlackEventMiddlewareArgs<"app_mention"> & AllMiddlewareArgs) => {
       const { event, body, context, client } = args;
+      const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
       try {
         const eventScope = resolveEventScope({ body, context, client });
         if (eventScope === null) {
@@ -321,9 +338,14 @@ export function registerSlackMessageEvents(params: {
         await handleSlackMessage(mention as unknown as SlackMessageEvent, {
           source: "app_mention",
           wasMentioned: true,
-          ...(eventScope ? { eventScope, awaitDispatch: true } : {}),
+          ...(eventScope ? { eventScope } : {}),
+          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
         });
       } catch (err) {
+        if (turnAdoptionLifecycle) {
+          throw err;
+        }
         ctx.runtime.error?.(danger(`slack mention handler failed: ${formatErrorMessage(err)}`));
       }
     },

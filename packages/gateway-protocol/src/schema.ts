@@ -4,35 +4,5 @@
  * Runtime validators import canonical TypeBox schemas from their owning modules;
  * this barrel gives package consumers one stable path for schema-level imports.
  */
-export * from "./schema/primitives.js";
-export * from "./schema/agent.js";
-export * from "./schema/agents-models-skills.js";
-export * from "./schema/agents-workspace.js";
-export * from "./schema/artifacts.js";
-export * from "./schema/audit.js";
-export * from "./schema/channels.js";
-export * from "./schema/commands.js";
-export * from "./schema/config.js";
-export * from "./schema/crestodian.js";
-export * from "./schema/cron.js";
-export * from "./schema/error-codes.js";
-export * from "./schema/environments.js";
-export * from "./schema/exec-approvals.js";
-export * from "./schema/devices.js";
-export * from "./schema/frames.js";
-export * from "./schema/logs-chat.js";
-export * from "./schema/nodes.js";
+export * from "./schema-modules.js";
 export * from "./schema/protocol-schemas.js";
-export * from "./schema/push.js";
-export * from "./schema/secrets.js";
-export * from "./schema/sessions.js";
-export * from "./schema/snapshot.js";
-export * from "./schema/system-info.js";
-export * from "./schema/task-suggestions.js";
-export * from "./schema/tasks.js";
-export * from "./schema/terminal.js";
-export * from "./schema/types.js";
-export * from "./schema/plugin-approvals.js";
-export * from "./schema/plugins.js";
-export * from "./schema/wizard.js";
-export * from "./schema/worktrees.js";

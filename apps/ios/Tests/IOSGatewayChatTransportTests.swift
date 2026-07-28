@@ -6,42 +6,47 @@ import Testing
 @testable import OpenClaw
 
 struct IOSGatewayChatTransportTests {
-    private func object(from json: String) throws -> [String: Any] {
-        let data = try #require(json.data(using: .utf8))
-        let value = try JSONSerialization.jsonObject(with: data)
-        return try #require(value as? [String: Any])
+    private actor RequestRecorder {
+        private var requests: [OpenClawChatGatewayRequest] = []
+
+        func record(_ request: OpenClawChatGatewayRequest) -> Data {
+            self.requests.append(request)
+            if request.method == "sessions.create" {
+                return Data(#"{"key":"forked"}"#.utf8)
+            }
+            return Data(#"{"entry":{}}"#.utf8)
+        }
+
+        func record(_ request: OpenClawChatGatewayRequest, response: Data) -> Data {
+            self.requests.append(request)
+            return response
+        }
+
+        func all() -> [OpenClawChatGatewayRequest] {
+            self.requests
+        }
     }
 
-    @Test func `agent wait treats success as completion`() {
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("success"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus(" ok "))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("completed"))
-        #expect(IOSGatewayChatTransport.isAgentWaitCompletionStatus("succeeded"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("timeout"))
-        #expect(!IOSGatewayChatTransport.isAgentWaitCompletionStatus("failed"))
-    }
+    @Test func `model patch result decodes authoritative Luna thinking state`() throws {
+        let data = Data(
+            #"""
+            {
+              "entry":{"thinkingLevel":"ultra"},
+              "resolved":{
+                "modelProvider":"openai",
+                "model":"gpt-5.6-luna",
+                "thinkingLevel":"max",
+                "thinkingLevels":[{"id":"off","label":"off"},{"id":"max","label":"max"}]
+              }
+            }
+            """#.utf8)
 
-    @Test func `agent wait timeout adds gateway margin`() {
-        #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1) == 6)
-        #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 1000) == 6)
-        #expect(IOSGatewayChatTransport.agentWaitRequestTimeoutSeconds(timeoutMs: 30000) == 35)
-    }
+        let result = try IOSGatewayChatTransport.decodeModelPatchResult(data)
 
-    @Test func `compaction leaves terminal timeout to gateway`() {
-        #expect(IOSGatewayChatTransport.compactionRequestTimeoutSeconds == 0)
-    }
-
-    @Test func `agent wait completion decodes fallback run id`() throws {
-        let data = Data(#"{"status":"completed"}"#.utf8)
-        let completion = try IOSGatewayChatTransport.decodeAgentWaitCompletion(data, fallbackRunId: "run-local")
-        #expect(completion.runId == "run-local")
-        #expect(completion.status == "completed")
-        #expect(completion.completed)
-    }
-
-    @Test func `routing contract decodes gateway main semantics`() throws {
-        let data = Data(#"{"defaultId":"Ops","mainKey":"Work","scope":"global","agents":[]}"#.utf8)
-        #expect(try IOSGatewayChatTransport.decodeSessionRoutingContract(data) == "global|work|ops")
+        #expect(result.modelProvider == "openai")
+        #expect(result.model == "gpt-5.6-luna")
+        #expect(result.thinkingLevel == "max")
+        #expect(result.thinkingLevels?.map(\.id) == ["off", "max"])
     }
 
     @Test func `live routing guard permits an identity still loading`() {
@@ -69,196 +74,200 @@ struct IOSGatewayChatTransportTests {
 
     @Test func `hello advertises guarded chat send capability`() throws {
         let data = Data(
-            #"{"type":"hello-ok","protocol":4,"server":{"version":"test","connId":"test"},"features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},"snapshot":{"presence":[],"health":{},"stateVersion":{"presence":0,"health":0},"uptimeMs":0},"auth":{},"policy":{}}"#
-                .utf8)
+            #"""
+            {
+              "type":"hello-ok",
+              "protocol":4,
+              "server":{"version":"test","connId":"test"},
+              "features":{"methods":[],"events":[],"capabilities":["chat-send-routing-contract"]},
+              "snapshot":{
+                "presence":[],
+                "health":{},
+                "stateVersion":{"presence":0,"health":0},
+                "uptimeMs":0
+              },
+              "auth":{},
+              "policy":{}
+            }
+            """#.utf8)
         let hello = try JSONDecoder().decode(HelloOk.self, from: data)
         #expect(hello.supportsServerCapability(.chatSendRoutingContract))
     }
 
-    @Test func `list sessions params include global sessions but not unknown`() throws {
-        let params = try object(from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12))
-        #expect(params["includeGlobal"] as? Bool == true)
-        #expect(params["includeUnknown"] as? Bool == false)
-        #expect(params["limit"] as? Int == 12)
-        #expect(params["archived"] == nil)
+    @Test func `session mutations dispatch normalized selected agent targets`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        for key in ["Matrix:Channel:Room", "global", "agent:ops:main"] {
+            try await transport.patchSession(key: key, pinned: true)
+            try await transport.deleteSession(key: key)
+            _ = try await transport.forkSession(parentKey: key)
+        }
+
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == Array(
+            repeating: ["sessions.patch", "sessions.delete", "sessions.create"],
+            count: 3).flatMap(\.self))
+        #expect(requests.map(\.timeoutMs) == Array(repeating: 15000, count: 9))
+
+        for (offset, expectedKey, expectedMutationAgentID, expectedForkAgentID) in [
+            (0, "agent:reviewer:Matrix:Channel:Room", nil, "reviewer"),
+            (3, "global", "reviewer", "reviewer"),
+            (6, "agent:ops:main", nil, "ops"),
+        ] as [(Int, String, String?, String?)] {
+            let patch = requests[offset].params
+            #expect(patch["key"]?.value as? String == expectedKey)
+            #expect(patch["agentId"]?.value as? String == expectedMutationAgentID)
+            #expect(patch["pinned"]?.value as? Bool == true)
+
+            let delete = requests[offset + 1].params
+            #expect(delete["key"]?.value as? String == expectedKey)
+            #expect(delete["agentId"]?.value as? String == expectedMutationAgentID)
+            #expect(delete["deleteTranscript"]?.value as? Bool == true)
+
+            let fork = requests[offset + 2].params
+            #expect(fork["parentSessionKey"]?.value as? String == expectedKey)
+            #expect(fork["agentId"]?.value as? String == expectedForkAgentID)
+            #expect(fork["fork"]?.value as? Bool == true)
+        }
     }
 
-    @Test func `list sessions params request archived sessions explicitly`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeListSessionsParamsJSON(limit: 12, archived: true))
-        #expect(params["archived"] as? Bool == true)
+    @Test func `thinking changes dispatch through selected agent session target`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        try await transport.setSessionThinking(sessionKey: "global", thinkingLevel: "high")
+
+        let request = try #require(await recorder.all().first)
+        #expect(request.method == "sessions.patch")
+        #expect(request.params["key"]?.value as? String == "global")
+        #expect(request.params["agentId"]?.value as? String == "reviewer")
+        #expect(request.params["thinkingLevel"]?.value as? String == "high")
     }
 
-    @Test func `patch session params preserve explicit null clearing`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
-                key: "session-1",
-                label: .some(nil),
-                category: .some(nil),
-                pinned: true,
-                unread: false))
-        #expect(params["key"] as? String == "session-1")
-        #expect(params["label"] is NSNull)
-        #expect(params["category"] is NSNull)
-        #expect(params["pinned"] as? Bool == true)
-        #expect(params["unread"] as? Bool == false)
-        #expect(params["archived"] == nil)
+    @Test func `advanced session creation forwards agent worktree and base ref`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        let created = try await transport.createSession(
+            key: "agent:builder:ios-new",
+            label: "Build",
+            agentID: " Builder ",
+            parentSessionKey: "agent:builder:main",
+            worktree: true,
+            worktreeBaseRef: " origin/release ")
+
+        #expect(created.key == "forked")
+        let request = try #require(await recorder.all().first)
+        #expect(request.method == "sessions.create")
+        #expect(request.params["key"]?.value as? String == "agent:builder:ios-new")
+        #expect(request.params["label"]?.value as? String == "Build")
+        #expect(request.params["agentId"]?.value as? String == "builder")
+        #expect(request.params["parentSessionKey"]?.value as? String == "agent:builder:main")
+        #expect(request.params["worktree"]?.value as? Bool == true)
+        #expect(request.params["worktreeBaseRef"]?.value as? String == "origin/release")
     }
 
-    @Test func `patch session params include selected global agent`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makePatchSessionParamsJSON(
-                key: "global",
-                agentId: "reviewer",
-                unread: false))
-        #expect(params["key"] as? String == "global")
-        #expect(params["agentId"] as? String == "reviewer")
-        #expect(params["unread"] as? Bool == false)
+    @Test func `verbosity patches preserve set and clear values`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some("full")))
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(verboseLevel: .some(nil)))
+
+        let requests = await recorder.all()
+        #expect(requests.count == 2)
+        #expect(requests.allSatisfy { $0.method == "sessions.patch" })
+        #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+        #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+        #expect(requests[0].params["verboseLevel"]?.value as? String == "full")
+        #expect(requests[1].params["verboseLevel"]?.value is NSNull)
+        #expect(requests.allSatisfy { $0.params["model"] == nil })
+        #expect(requests.allSatisfy { $0.params["thinkingLevel"] == nil })
     }
 
-    @Test func `fork session params preserve parent agent`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeForkSessionParamsJSON(
-                parentKey: "agent:reviewer:telegram:group:1",
-                agentId: "reviewer"))
-        #expect(params["parentSessionKey"] as? String == "agent:reviewer:telegram:group:1")
-        #expect(params["fork"] as? Bool == true)
-        #expect(params["agentId"] as? String == "reviewer")
+    @Test func `fast mode patches preserve boolean and explicit null`() async throws {
+        let recorder = RequestRecorder()
+        let transport = IOSGatewayChatTransport(
+            gateway: GatewayNodeSession(),
+            globalAgentId: " Reviewer ",
+            sessionMutationRequest: { request in
+                await recorder.record(request)
+            })
+
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(fastMode: .some(.on)))
+        _ = try await transport.patchSessionSettings(
+            sessionKey: "global",
+            agentID: nil,
+            patch: OpenClawChatSessionSettingsPatch(fastMode: .some(nil)))
+
+        let requests = await recorder.all()
+        #expect(requests.count == 2)
+        #expect(requests[0].params["fastMode"]?.value as? Bool == true)
+        #expect(requests[1].params["fastMode"]?.value is NSNull)
+        #expect(requests.allSatisfy { $0.params["verboseLevel"] == nil })
     }
 
-    @Test func `session model patch params include model and selected agent`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
-                sessionKey: "global",
-                agentId: "reviewer",
-                model: "anthropic/claude-opus-4"))
-        #expect(params["key"] as? String == "global")
-        #expect(params["agentId"] as? String == "reviewer")
-        #expect(params["model"] as? String == "anthropic/claude-opus-4")
-    }
+    @Test func `session groups lease uses the supplied pinned request path`() async throws {
+        let recorder = RequestRecorder()
+        let lease = IOSGatewayChatTransport.makeSessionGroupsRouteLease { request in
+            let response = if request.method == "sessions.groups.list" {
+                Data(#"{"groups":[{"name":"Work","position":0}]}"#.utf8)
+            } else {
+                Data(#"{"ok":true,"groups":[{"name":"Projects","position":0}]}"#.utf8)
+            }
+            return await recorder.record(request, response: response)
+        }
 
-    @Test func `session model patch params encode default model as null`() throws {
-        let params = try self.object(
-            from: IOSGatewayChatTransport.makeSessionPatchModelParamsJSON(
-                sessionKey: "agent:main:main",
-                model: nil))
-        #expect(params["key"] as? String == "agent:main:main")
-        #expect(params["agentId"] == nil)
-        #expect(params["model"] is NSNull)
-    }
+        let listed = try await lease.listGroups()
+        let put = try await lease.putGroups(names: ["Work", "Personal"])
+        let renamed = try await lease.renameGroup(name: "Work", to: "Projects")
+        let deleted = try await lease.deleteGroup(name: "Personal")
 
-    @Test func `models list response decodes choices reasoning and blank names`() throws {
-        let data = Data(
-            #"""
-            {"models":[
-              {"id":"claude-opus-4","name":"Claude Opus 4","provider":"anthropic","contextWindow":200000,"reasoning":true},
-              {"id":"gpt-5","name":"  ","provider":"openai","extra":"ignored"}
-            ]}
-            """#.utf8)
-        let choices = try IOSGatewayChatTransport.decodeModelChoices(data)
-
-        #expect(choices.count == 2)
-        #expect(choices[0].modelID == "claude-opus-4")
-        #expect(choices[0].name == "Claude Opus 4")
-        #expect(choices[0].provider == "anthropic")
-        #expect(choices[0].contextWindow == 200_000)
-        #expect(choices[0].reasoning == true)
-        #expect(choices[1].modelID == "gpt-5")
-        #expect(choices[1].name == "gpt-5")
-        #expect(choices[1].provider == "openai")
-        #expect(choices[1].contextWindow == nil)
-        #expect(choices[1].reasoning == nil)
-    }
-
-    @Test func `commands list params request text scope with args`() throws {
-        let params = try object(from: IOSGatewayChatTransport.makeCommandsListParamsJSON())
-        #expect(params["scope"] as? String == "text")
-        #expect(params["includeArgs"] as? Bool == true)
-        #expect(params["agentId"] == nil)
-    }
-
-    @Test func `commands list params include agent for agent scoped session`() throws {
-        let params = try object(
-            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(sessionKey: "agent:reviewer:ios-main"))
-        #expect(params["scope"] as? String == "text")
-        #expect(params["includeArgs"] as? Bool == true)
-        #expect(params["agentId"] as? String == "reviewer")
-    }
-
-    @Test func `commands list params use explicit agent for selected global session`() throws {
-        let params = try object(
-            from: IOSGatewayChatTransport.makeCommandsListParamsJSON(
-                sessionKey: "global",
-                agentId: "reviewer"))
-        #expect(params["agentId"] as? String == "reviewer")
-    }
-
-    @Test func `create session params include selected global agent`() throws {
-        let params = try object(
-            from: IOSGatewayChatTransport.makeCreateSessionParamsJSON(
-                key: "agent:reviewer:ios-new",
-                agentId: "reviewer",
-                label: nil,
-                parentSessionKey: "global",
-                worktree: true))
-        #expect(params["key"] as? String == "agent:reviewer:ios-new")
-        #expect(params["agentId"] as? String == "reviewer")
-        #expect(params["parentSessionKey"] as? String == "global")
-        #expect(params["worktree"] as? Bool == true)
-    }
-
-    @Test func `chat send params omit empty attachments and keep session fields`() throws {
-        let params = try object(
-            from: IOSGatewayChatTransport.makeChatSendParamsJSON(
-                sessionKey: "agent:main",
-                message: "hello",
-                thinking: "low",
-                idempotencyKey: "send-1",
-                attachments: []))
-        #expect(params["sessionKey"] as? String == "agent:main")
-        #expect(params["message"] as? String == "hello")
-        #expect(params["thinking"] as? String == "low")
-        #expect(params["idempotencyKey"] as? String == "send-1")
-        #expect(params["timeoutMs"] as? Int == IOSGatewayChatTransport.defaultChatSendTimeoutMs)
-        #expect(params["attachments"] == nil)
-    }
-
-    @Test func `chat send params include selected global agent`() throws {
-        let params = try object(
-            from: IOSGatewayChatTransport.makeChatSendParamsJSON(
-                sessionKey: "global",
-                agentId: "reviewer",
-                expectedSessionRoutingContract: "per-sender|main|reviewer",
-                message: "hello",
-                thinking: "low",
-                idempotencyKey: "send-1",
-                attachments: []))
-        #expect(params["sessionKey"] as? String == "global")
-        #expect(params["agentId"] as? String == "reviewer")
-        #expect(params["expectedSessionRoutingContract"] as? String == "per-sender|main|reviewer")
-    }
-
-    @Test func `unscoped live routes use the selected agent`() {
-        #expect(IOSGatewayChatTransport.sessionTarget(
-            for: "Matrix:Channel:!MixedRoom:example.org",
-            selectedAgentID: " Reviewer ") == .init(
-            sessionKey: "agent:reviewer:Matrix:Channel:!MixedRoom:example.org",
-            agentID: nil))
-        #expect(IOSGatewayChatTransport.sessionTarget(
-            for: "main",
-            selectedAgentID: "main") == .init(sessionKey: "agent:main:main", agentID: nil))
-        #expect(IOSGatewayChatTransport.sessionTarget(
-            for: "agent:ops:main",
-            selectedAgentID: "reviewer") == .init(sessionKey: "agent:ops:main", agentID: nil))
-        #expect(IOSGatewayChatTransport.sessionTarget(
-            for: "global",
-            selectedAgentID: "reviewer") == .init(sessionKey: "global", agentID: "reviewer"))
-        #expect(IOSGatewayChatTransport.sessionTarget(
-            for: "unknown",
-            selectedAgentID: "reviewer") == .init(sessionKey: "unknown", agentID: nil))
-        #expect(IOSGatewayChatTransport.sessionTarget(
-            for: "agent::main",
-            selectedAgentID: "reviewer") == .init(sessionKey: "agent::main", agentID: nil))
+        #expect(listed?.groups.map(\.name) == ["Work"])
+        #expect(put.groups.map(\.name) == ["Projects"])
+        #expect(renamed.groups.map(\.name) == ["Projects"])
+        #expect(deleted.groups.map(\.name) == ["Projects"])
+        let requests = await recorder.all()
+        #expect(requests.map(\.method) == [
+            "sessions.groups.list",
+            "sessions.groups.put",
+            "sessions.groups.rename",
+            "sessions.groups.delete",
+        ])
+        #expect(requests[1].params["names"]?.value as? [String] == ["Work", "Personal"])
+        #expect(requests[2].params["name"]?.value as? String == "Work")
+        #expect(requests[2].params["to"]?.value as? String == "Projects")
+        #expect(requests[3].params["name"]?.value as? String == "Personal")
     }
 
     @Test func `requests fail fast when gateway not connected`() async {
@@ -335,7 +344,7 @@ struct IOSGatewayChatTransportTests {
             payload: payload,
             seq: 1,
             stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
 
         switch mapped {
         case let .sessionMessage(message):
@@ -350,6 +359,30 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test func `maps sessions changed event to authoritative refresh signal`() {
+        let payload = AnyCodable([
+            "sessionKey": AnyCodable("agent:main:main"),
+            "agentId": AnyCodable("main"),
+            "reason": AnyCodable("command-metadata"),
+        ])
+        let frame = EventFrame(
+            type: "event",
+            event: "sessions.changed",
+            payload: payload,
+            seq: 1,
+            stateversion: nil)
+
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
+        guard case let .sessionsChanged(change) = mapped else {
+            Issue.record("expected .sessionsChanged, got \(String(describing: mapped))")
+            return
+        }
+        #expect(change == .init(
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            reason: "command-metadata"))
+    }
+
     @Test func `maps chat event to chat`() {
         let payload = AnyCodable([
             "runId": AnyCodable("run-1"),
@@ -357,7 +390,7 @@ struct IOSGatewayChatTransportTests {
             "state": AnyCodable("final"),
         ])
         let frame = EventFrame(type: "event", event: "chat", payload: payload, seq: 1, stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
 
         switch mapped {
         case let .chat(chat):
@@ -376,7 +409,7 @@ struct IOSGatewayChatTransportTests {
             payload: AnyCodable(["a": AnyCodable(1)]),
             seq: 1,
             stateversion: nil)
-        let mapped = IOSGatewayChatTransport.mapEventFrame(frame)
+        let mapped = OpenClawChatGatewayPayloadCodec.event(from: frame)
         #expect(mapped == nil)
     }
 }

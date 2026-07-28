@@ -20,7 +20,7 @@ const nestedGitEnvKeys = [
 ] as const;
 
 function createNestedGitEnv(): NodeJS.ProcessEnv {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
@@ -93,24 +93,17 @@ describe("report-test-temp-creations", () => {
         reason: "new mkdtemp temp directory creation",
         source: bareTempSource,
       },
-      {
-        file: "test/helper.test-support.mjs",
+      ...[
+        "test/helper.test-support.mjs",
+        "test/helpers/temp-fixture.ts",
+        "packages/foo/__tests__/helper.ts",
+        "extensions/discord/src/monitor/message-handler.test-helpers.ts",
+      ].map((file) => ({
+        file,
         line: 2,
         reason: "new mkdtemp temp directory creation",
         source: mkdtempSource,
-      },
-      {
-        file: "test/helpers/temp-fixture.ts",
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      },
-      {
-        file: "packages/foo/__tests__/helper.ts",
-        line: 2,
-        reason: "new mkdtemp temp directory creation",
-        source: mkdtempSource,
-      },
+      })),
     ]);
   });
 
@@ -506,5 +499,50 @@ describe("report-test-temp-creations", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("test/helpers/case.ts");
+  });
+
+  it("falls back to a two-dot diff when refs have no merge base", () => {
+    const root = tempDirs.make("openclaw-temp-report-no-merge-base-");
+    const env = createNestedGitEnv();
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args],
+        { cwd: root, env },
+      );
+    git("init", "-q", "--initial-branch=main");
+    git("commit", "--allow-empty", "-q", "-m", "base");
+    git("checkout", "--orphan", "feature", "-q");
+    fs.mkdirSync(path.join(root, "test", "scripts"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "test", "scripts", "feature.test.ts"),
+      'const tempRoot = fs.mkdtempSync("case-");\n',
+      "utf8",
+    );
+    git("add", "test/scripts/feature.test.ts");
+    git("commit", "-q", "-m", "feature");
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.join(repoRoot, "scripts", "report-test-temp-creations.mjs"),
+        "--base",
+        "main",
+        "--head",
+        "feature",
+        "--json",
+      ],
+      { cwd: root, encoding: "utf8", env },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual([
+      {
+        file: "test/scripts/feature.test.ts",
+        line: 1,
+        reason: "new mkdtemp temp directory creation",
+        source: 'const tempRoot = fs.mkdtempSync("case-");',
+      },
+    ]);
   });
 });

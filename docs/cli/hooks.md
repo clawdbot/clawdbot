@@ -90,19 +90,19 @@ Hook packs install through the unified plugins installer/updater; `openclaw hook
 - Bare specs and `@latest` stay on the stable track; if npm resolves to a prerelease, OpenClaw stops and asks you to opt in explicitly (`@beta`, `@rc`, or an exact prerelease version).
 - Supported archives: `.zip`, `.tgz`, `.tar.gz`, `.tar`.
 - `-l, --link` links a local directory instead of copying it (adds it to `hooks.internal.load.extraDirs`); linked hook packs are managed hooks from an operator-configured directory, not workspace hooks.
-- `--pin` records npm installs as an exact resolved `name@version` in `hooks.internal.installs`.
-- Install copies the pack into `~/.openclaw/hooks/<id>`, enables its hooks under `hooks.internal.entries.*`, and records the install under `hooks.internal.installs`.
+- `--pin` records npm installs as an exact resolved `name@version` in shared SQLite state.
+- Install copies the pack into `~/.openclaw/hooks/<id>`, enables its hooks under `hooks.internal.entries.*`, and records install provenance in shared SQLite state.
 - If a stored integrity hash no longer matches the fetched artifact, OpenClaw warns and prompts before continuing; pass global `--yes` to bypass the prompt (for example in CI).
 
 ## Bundled hooks
 
-| Hook                  | Events                                            | What it does                                                                                       |
-| --------------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                                  |
-| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) during agent bootstrap |
-| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                             |
-| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                             |
-| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                              |
+| Hook                  | Events                                            | What it does                                                                            |
+| --------------------- | ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| boot-md               | `gateway:startup`                                 | Runs `BOOT.md` at gateway startup for each configured agent scope                       |
+| bootstrap-extra-files | `agent:bootstrap`                                 | Injects extra bootstrap files (for example monorepo `AGENTS.md`) during agent bootstrap |
+| command-logger        | `command`                                         | Logs command events to `~/.openclaw/logs/commands.log`                                  |
+| compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts and finishes                  |
+| session-memory        | `command:new`, `command:reset`                    | Saves session context to memory on `/new` or `/reset`                                   |
 
 Enable any bundled hook with `openclaw hooks enable <hook-name>`. Full details, config keys, and defaults: [Bundled hooks](/automation/hooks#bundled-hooks).
 

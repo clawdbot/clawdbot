@@ -1,5 +1,5 @@
 // Tests CLI entrypoint argument handling and startup behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { tryHandlePrecomputedCommandHelpFastPath, tryHandleRootHelpFastPath } from "./entry.js";
 
 describe("entry root help fast path", () => {
@@ -63,6 +63,41 @@ describe("entry root help fast path", () => {
     expect(handled).toBe(true);
     expect(outputPrecomputedRootHelpTextCalls).toBe(0);
     expect(outputRootHelpOptions).toEqual([liveOptions]);
+  });
+
+  it("structures root help rendering failures for JSON console style", async () => {
+    const logging = await import("./logging.js");
+    logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true as unknown as ReturnType<typeof process.stderr.write>);
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit ${String(code)}`);
+    }) as typeof process.exit);
+
+    try {
+      await expect(
+        tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+          env: {},
+          loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => ({
+            config: {},
+            env: {},
+          }),
+          outputRootHelp: () => {
+            throw new Error("render failed");
+          },
+        }),
+      ).rejects.toThrow("exit 1");
+      const line = stderrSpy.mock.calls.map(([value]) => String(value)).join("");
+      expect(JSON.parse(line)).toMatchObject({
+        level: "error",
+        message: expect.stringContaining("Failed to display help"),
+      });
+      expect(exitSpy).toHaveBeenCalledWith(1);
+    } finally {
+      logging.resetLogger();
+      vi.restoreAllMocks();
+    }
   });
 
   it("ignores non-root help invocations", async () => {
@@ -155,7 +190,7 @@ describe("entry precomputed command help fast path", () => {
     expect(outputPrecomputedNodesHelpTextCalls).toBe(1);
   });
 
-  it.each(["doctor", "sessions", "tasks"])(
+  it.each(["doctor", "gateway", "plugins", "sessions", "tasks"])(
     "renders precomputed %s help from startup metadata without importing the full program",
     async (commandName) => {
       const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
@@ -196,10 +231,15 @@ describe("entry precomputed command help fast path", () => {
 
   it("keeps subcommand help fast path strict for extra or mixed flags", async () => {
     const invocations = [
+      ["node", "openclaw", "doctor", "--version"],
+      ["node", "openclaw", "gateway", "-V"],
+      ["node", "openclaw", "doctor", "--help", "--version"],
       ["node", "openclaw", "doctor", "--help", "--bogus"],
       ["node", "openclaw", "doctor", "--help", "extra"],
       ["node", "openclaw", "doctor", "--version", "-h"],
       ["node", "openclaw", "--bogus", "doctor", "--help"],
+      ["node", "openclaw", "gateway", "status", "--help"],
+      ["node", "openclaw", "status", "--help"],
     ];
     let outputPrecomputedSubcommandHelpTextCalls = 0;
 
@@ -247,6 +287,34 @@ describe("entry precomputed command help fast path", () => {
       {
         env: {},
         outputPrecomputedSecretsHelpText: () => false,
+      },
+    );
+
+    expect(handled).toBe(false);
+  });
+
+  it("falls through when startup metadata loading fails", async () => {
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "secrets", "--help"],
+      {
+        env: {},
+        outputPrecomputedSecretsHelpText: () => {
+          throw new Error("startup metadata failed");
+        },
+      },
+    );
+
+    expect(handled).toBe(false);
+  });
+
+  it("falls through when the nodes live-config probe fails", async () => {
+    const handled = await tryHandlePrecomputedCommandHelpFastPath(
+      ["node", "openclaw", "nodes", "--help"],
+      {
+        env: {},
+        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => {
+          throw new Error("live config failed");
+        },
       },
     );
 

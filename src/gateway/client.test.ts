@@ -10,6 +10,13 @@ import {
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 type MockLoggingConfig = {
   redactPatterns?: string[];
   redactSensitive?: "off" | "tools";
@@ -276,6 +283,10 @@ beforeAll(async () => {
   await loadGatewayClientModule();
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("GatewayClient security checks", () => {
   const envSnapshot = captureEnv([
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
@@ -467,7 +478,6 @@ describe("GatewayClient security checks", () => {
   it("proxies ws:// loopback addresses when active proxy loopbackMode is proxy", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "proxy",
     });
@@ -492,7 +502,6 @@ describe("GatewayClient security checks", () => {
   it("blocks ws:// loopback addresses when active proxy loopbackMode is block", async () => {
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const handle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });
@@ -822,25 +831,21 @@ describe("GatewayClient close handling", () => {
 
   it("keeps a managed reconnect timer after gateway restart closes", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-      });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
 
-      client.start();
-      getLatestWs().emitClose(1012, "service restart");
+    client.start();
+    getLatestWs().emitClose(1012, "service restart");
 
-      expect(wsInstances).toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(999);
-      expect(wsInstances).toHaveLength(1);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(wsInstances).toHaveLength(1);
 
-      await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(1);
 
-      expect(wsInstances).toHaveLength(2);
-      client.stop();
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(wsInstances).toHaveLength(2);
+    client.stop();
   });
 
   it("reconnects quietly after one clean pre-hello close with a pending connect", async () => {
@@ -987,99 +992,86 @@ describe("GatewayClient close handling", () => {
 
   it("clears pending reconnect timers on stop", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-      });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
 
-      client.start();
-      getLatestWs().emitClose(1012, "service restart");
-      client.stop();
+    client.start();
+    getLatestWs().emitClose(1012, "service restart");
+    client.stop();
 
-      await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
-      expect(wsInstances).toHaveLength(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(wsInstances).toHaveLength(1);
   });
 
   it("force-terminates a lingering socket after stop", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-      });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
 
-      client.start();
-      const ws = getLatestWs();
-      ws.autoCloseOnClose = false;
+    client.start();
+    const ws = getLatestWs();
+    ws.autoCloseOnClose = false;
 
-      client.stop();
+    client.stop();
 
-      expect(ws.closeCalls).toBe(1);
-      expect(ws.terminateCalls).toBe(0);
+    expect(ws.closeCalls).toBe(1);
+    expect(ws.terminateCalls).toBe(0);
 
-      await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(250);
 
-      expect(ws.terminateCalls).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(ws.terminateCalls).toBe(1);
   });
 
   it("does not force-terminate a socket that closes during stop", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-      });
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onClose,
+    });
 
-      client.start();
-      const ws = getLatestWs();
+    client.start();
+    const ws = getLatestWs();
 
-      client.stop();
+    client.stop();
 
-      expect(ws.closeCalls).toBe(1);
-      await vi.advanceTimersByTimeAsync(250);
+    expect(ws.closeCalls).toBe(1);
+    expect(onClose).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(250);
 
-      expect(ws.terminateCalls).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(ws.terminateCalls).toBe(0);
   });
 
   it("waits for a lingering socket to terminate in stopAndWait", async () => {
     vi.useFakeTimers();
-    try {
-      const client = new GatewayClient({
-        url: "ws://127.0.0.1:18789",
-      });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
 
-      client.start();
-      const ws = getLatestWs();
-      ws.autoCloseOnClose = false;
+    client.start();
+    const ws = getLatestWs();
+    ws.autoCloseOnClose = false;
 
-      let settled = false;
-      const stopPromise = client.stopAndWait().then(() => {
-        settled = true;
-      });
+    let settled = false;
+    const stopPromise = client.stopAndWait().then(() => {
+      settled = true;
+    });
 
-      expect(ws.closeCalls).toBe(1);
-      expect(settled).toBe(false);
+    expect(ws.closeCalls).toBe(1);
+    expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(249);
-      expect(ws.terminateCalls).toBe(0);
-      expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(ws.terminateCalls).toBe(0);
+    expect(settled).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1);
-      await stopPromise;
+    await vi.advanceTimersByTimeAsync(1);
+    await stopPromise;
 
-      expect(ws.terminateCalls).toBe(1);
-      expect(settled).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(ws.terminateCalls).toBe(1);
+    expect(settled).toBe(true);
   });
 
   it("does not clear persisted device auth when explicit shared token is provided", () => {
@@ -1212,6 +1204,18 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("does not advertise node plugin tools in the initial connect frame", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: null,
+    });
+
+    const { connect } = startClientAndConnect({ client });
+
+    expect(connect.params).not.toHaveProperty("nodePluginTools");
+    client.stop();
+  });
+
   function emitConnectChallenge(ws: MockWebSocket, nonce = "nonce-1") {
     ws.emitMessage(
       JSON.stringify({
@@ -1327,7 +1331,7 @@ describe("GatewayClient connect auth payload", () => {
       const { ws, connect } = startClientAndConnect({ client });
 
       expect(() => emitHelloOk(ws, connect.id)).not.toThrow();
-      await vi.waitFor(() => {
+      await waitForFast(() => {
         expect(onHelloOk).toHaveBeenCalledOnce();
       });
       expect(onConnectError).not.toHaveBeenCalled();
@@ -1335,6 +1339,8 @@ describe("GatewayClient connect auth payload", () => {
       expect(logDebugMock).toHaveBeenCalledWith(
         "gateway client hello-ok handler error: Error: hello callback failed",
       );
+      ws.emitClose(1012, "service restart");
+      expect(onConnectError).not.toHaveBeenCalled();
     } finally {
       client.stop();
     }
@@ -1386,7 +1392,7 @@ describe("GatewayClient connect auth payload", () => {
       params.failureDetails,
       params.failureMessage,
     );
-    await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
+    await waitForFast(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
     const ws = getLatestWs();
     ws.emitOpen();
     emitConnectChallenge(ws, "nonce-2");
@@ -1524,6 +1530,23 @@ describe("GatewayClient connect auth payload", () => {
     client.stop();
   });
 
+  it("reports a transport close while the connect request is pending", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onConnectError,
+    });
+
+    const { ws } = startClientAndConnect({ client });
+    ws.emitClose(1006, "socket lost");
+
+    expect(firstMockArg(onConnectError, "connect error")).toMatchObject({
+      message: "gateway closed (1006): socket lost",
+    });
+    client.stop();
+  });
+
   it("logs stopped connect handshakes at debug level during teardown", async () => {
     const onConnectError = vi.fn();
     const client = new GatewayClient({
@@ -1536,7 +1559,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.autoCloseOnClose = false;
     client.stop();
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const error = firstMockArg(onConnectError, "connect error") as Error;
       expect(error?.message).toBe("gateway client stopped");
     });
@@ -1564,7 +1587,7 @@ describe("GatewayClient connect auth payload", () => {
       "Authorization: Bearer sk-testsecret1234567890abcd wss://user:pass@gateway.example/ws?token=secret-token", // pragma: allowlist secret
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
     });
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
@@ -1590,7 +1613,7 @@ describe("GatewayClient connect auth payload", () => {
       "wss://gateway.example/ws?token=secret-token failed with 401 from remote gateway", // pragma: allowlist secret
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
     });
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
@@ -1616,7 +1639,7 @@ describe("GatewayClient connect auth payload", () => {
       "Authorization: Bearer sk-disabledredaction1234567890abcd", // pragma: allowlist secret
     );
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(logErrorMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
     });
     const logged = String(logErrorMock.mock.calls.at(-1)?.[0] ?? "");
@@ -2107,3 +2130,4 @@ describe("GatewayClient connect auth payload", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

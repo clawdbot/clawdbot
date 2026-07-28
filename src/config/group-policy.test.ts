@@ -1,5 +1,5 @@
 // Verifies group-policy normalization and runtime resolution.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import {
   resolveChannelGroupPolicy,
@@ -411,5 +411,43 @@ describe("resolveToolsBySender", () => {
     const [warningMessage, warningMeta] = firstWarningCall(warningSpy);
     expect(String(warningMessage)).toContain(`toolsBySender key "${legacyKey}"`);
     expect(warningMeta?.code).toBe("OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY");
+  });
+
+  describe("legacy key warning dedupe cache", () => {
+    let resolveToolsBySenderFn: typeof resolveToolsBySender;
+
+    const resolveFreshConfig = (legacyKey: string) => {
+      resolveToolsBySenderFn({
+        toolsBySender: { [legacyKey]: { allow: ["read"] }, "*": { deny: ["exec"] } },
+        senderId: "some-id",
+      });
+    };
+
+    beforeEach(async () => {
+      vi.resetModules();
+      const mod = await import("./group-policy.js");
+      resolveToolsBySenderFn = mod.resolveToolsBySender;
+    });
+
+    it("refreshes recent keys across config snapshots and re-warns evicted keys", () => {
+      const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+      for (let i = 0; i < 4096; i++) {
+        resolveFreshConfig(`legacy-key-${i}`);
+      }
+      expect(warningSpy).toHaveBeenCalledTimes(4096);
+
+      resolveFreshConfig("legacy-key-0");
+      expect(warningSpy).toHaveBeenCalledTimes(4096);
+
+      resolveFreshConfig("overflow-key");
+      expect(warningSpy).toHaveBeenCalledTimes(4097);
+
+      resolveFreshConfig("legacy-key-0");
+      expect(warningSpy).toHaveBeenCalledTimes(4097);
+
+      resolveFreshConfig("legacy-key-1");
+      expect(warningSpy).toHaveBeenCalledTimes(4098);
+    });
   });
 });

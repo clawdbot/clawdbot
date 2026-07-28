@@ -1,6 +1,7 @@
 ---
-summary: "Quick examples for listing, installing, updating, inspecting, and uninstalling OpenClaw plugins"
+summary: "Manage OpenClaw plugins from the Control UI or CLI"
 read_when:
+  - You want to browse, install, enable, or disable plugins in the Control UI
   - You want quick plugin list, install, update, inspect, or uninstall examples
   - You want to choose a plugin install source
   - You want the right reference for publishing plugin packages
@@ -9,12 +10,56 @@ sidebarTitle: "Manage plugins"
 doc-schema-version: 1
 ---
 
-Common plugin management commands. For the full command contract, flags,
-source-selection rules, and edge cases, see [`openclaw plugins`](/cli/plugins).
+The Control UI covers the common discovery, install, enable, and disable
+workflow. The CLI adds update, uninstall, advanced configuration, and explicit
+install-source controls. For its full command contract, flags, source-selection
+rules, and edge cases, see [`openclaw plugins`](/cli/plugins).
 
-Typical workflow: find a package, install it from ClawHub, npm, git, or a
-local path, let the managed Gateway auto-restart (or restart it manually),
-then verify the plugin's runtime registrations.
+Typical CLI workflow: find a package, install it from ClawHub, npm, git, or a
+local path, let the managed Gateway auto-restart (or restart it manually), then
+verify the plugin's runtime registrations.
+
+## Use the Control UI
+
+Open **Plugins** in the Control UI, or use `/settings/plugins` relative to the
+configured Control UI base path. For example, a base path of `/openclaw` uses
+`/openclaw/settings/plugins`. The page has two tabs:
+
+- **Installed** shows the full local inventory grouped by category (channels,
+  model providers, memory, tools). Each row opens a detail view; its overflow
+  (`…`) menu enables or disables the plugin and, for externally installed
+  plugins, offers **Remove**. The tab also lists the configured
+  [MCP servers](/cli/mcp) with the same menu-driven enable, disable, and remove
+  actions, editing `mcp.servers` in the Gateway configuration.
+- **Discover** is the store: featured plugins included with OpenClaw, official
+  external plugins, and a curated connector shelf. Connector cards either add a
+  hosted MCP server in one click (GitHub, Notion, Linear, Sentry,
+  Home Assistant) or jump into a prefilled ClawHub search. Typing in the search
+  box queries [ClawHub](https://clawhub.ai/plugins) inline and appends a **From
+  ClawHub** section with download counts and source-verification badges.
+
+Included plugins do not need a package install. Their menu action is **Enable**
+or **Disable**. Workboard, for example, is included with OpenClaw and disabled
+by default, so choose **Enable** to turn it on. Bundled plugins cannot be
+removed, only disabled.
+
+Catalog and search access require `operator.read`. Install, enable, disable,
+remove, and MCP server changes require `operator.admin`. A ClawHub install is
+performed by the Gateway and preserves its trust, integrity, and plugin-install
+policy checks. Enabling an installed plugin as an administrator also records
+that explicit trust by adding the selected plugin to an existing restrictive
+`plugins.allow` list. An explicit `plugins.deny` entry remains authoritative and
+must be removed before enabling the plugin.
+
+Installing or removing plugin code requires a Gateway restart. Enablement
+changes can be applied without a restart when the installed plugin and current
+Gateway runtime support it; otherwise the UI tells you a restart is required.
+OAuth-backed MCP connectors still need a one-time `openclaw mcp login <name>`
+from the CLI after they are added.
+
+The Control UI does not install from arbitrary npm, git, or local-path sources,
+update plugins, or expose rich plugin configuration. Use the CLI workflows
+below for those operations.
 
 ## List and search plugins
 
@@ -81,12 +126,22 @@ openclaw plugins install --link ./my-plugin
 Bare package specs install from npm during the launch cutover, unless the
 name matches a bundled or official plugin id, in which case OpenClaw uses
 that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
-`npm-pack:` for deterministic source selection.
+`npm-pack:` for deterministic source selection. OpenClaw's bundled and official
+catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
+git, local path/archive, `npm-pack:`, or marketplace sources require
+`--force` in noninteractive installs after you review
+and trust the source.
 
-Use `--force` only to overwrite an existing install target from a different
-source. For routine upgrades of a tracked npm, ClawHub, or hook-pack install,
-use `openclaw plugins update` instead; `--force` is not supported with
-`--link`.
+`--force` confirms a non-ClawHub source without prompting and overwrites an
+existing install target when needed. For routine upgrades of a tracked npm,
+ClawHub, or hook-pack install, use `openclaw plugins update` instead. With
+`--link`, `--force` only confirms the source; the linked directory is not
+copied or overwritten.
+
+If a newly installed plugin requires configuration that is not present yet,
+OpenClaw records the install but leaves the plugin disabled. Configure
+`plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an
+existing config entry is present but invalid, install fails without rewriting it.
 
 ## Restart and inspect
 

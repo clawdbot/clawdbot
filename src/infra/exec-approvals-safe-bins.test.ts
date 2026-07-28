@@ -15,11 +15,7 @@ import {
   normalizeSafeBins,
   resolveSafeBins,
 } from "./exec-approvals.js";
-import {
-  SAFE_BIN_PROFILE_FIXTURES,
-  SAFE_BIN_PROFILES,
-  resolveSafeBinProfiles,
-} from "./exec-safe-bin-policy.js";
+import { resolveSafeBinProfiles } from "./exec-safe-bin-policy.js";
 import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
@@ -34,6 +30,7 @@ describe("exec approvals safe bins", () => {
     rawExecutable?: string;
     cwd?: string;
     setup?: (cwd: string) => void;
+    trusted?: boolean;
   };
 
   function buildDeniedFlagVariantCases(params: {
@@ -279,6 +276,7 @@ describe("exec approvals safe bins", () => {
       resolvedPath: "/tmp/evil-bin/jq",
       expected: false,
       cwd: "/tmp",
+      trusted: false,
     },
     ...deniedFlagCases,
     {
@@ -321,6 +319,70 @@ describe("exec approvals safe bins", () => {
       safeBins: ["tr"],
       executableName: "tr",
     },
+    {
+      name: "keeps tail -fn 1 follow mode approval-gated",
+      argv: ["tail", "-fn", "1"],
+      resolvedPath: "/usr/bin/tail",
+      expected: false,
+      safeBins: ["tail"],
+      executableName: "tail",
+    },
+    {
+      name: "auto-allows cut only-delimited mode with a field selector",
+      argv: ["cut", "-s", "-f", "1"],
+      resolvedPath: "/usr/bin/cut",
+      expected: true,
+      safeBins: ["cut"],
+      executableName: "cut",
+    },
+    {
+      name: "auto-allows head quiet mode",
+      argv: ["head", "-q"],
+      resolvedPath: "/usr/bin/head",
+      expected: true,
+      safeBins: ["head"],
+      executableName: "head",
+    },
+    {
+      name: "auto-allows tail quiet mode",
+      argv: ["tail", "-q"],
+      resolvedPath: "/usr/bin/tail",
+      expected: true,
+      safeBins: ["tail"],
+      executableName: "tail",
+    },
+    {
+      name: "auto-allows wc line count via boolean flag",
+      argv: ["wc", "-l"],
+      resolvedPath: "/usr/bin/wc",
+      expected: true,
+      safeBins: ["wc"],
+      executableName: "wc",
+    },
+    {
+      name: "auto-allows wc word count via boolean long flag",
+      argv: ["wc", "--words"],
+      resolvedPath: "/usr/bin/wc",
+      expected: true,
+      safeBins: ["wc"],
+      executableName: "wc",
+    },
+    {
+      name: "auto-allows uniq count via boolean flag",
+      argv: ["uniq", "-c"],
+      resolvedPath: "/usr/bin/uniq",
+      expected: true,
+      safeBins: ["uniq"],
+      executableName: "uniq",
+    },
+    {
+      name: "auto-allows tr delete via boolean flag",
+      argv: ["tr", "-d", "abc"],
+      resolvedPath: "/usr/bin/tr",
+      expected: true,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
   ];
 
   it.runIf(process.platform !== "win32").each(cases)("$name", (testCase) => {
@@ -337,6 +399,8 @@ describe("exec approvals safe bins", () => {
       },
       safeBins: normalizeSafeBins(testCase.safeBins ?? [executableName]),
       safeBinProfiles: testCase.safeBinProfiles,
+      // This table isolates argv policy. Dedicated cases below exercise real path trust.
+      isTrustedSafeBinPathFn: () => testCase.trusted ?? true,
     });
     expect(ok).toBe(testCase.expected);
   });
@@ -436,23 +500,6 @@ describe("exec approvals safe bins", () => {
         isTrustedSafeBinPathFn: () => false,
       }),
     ).toBe(false);
-  });
-
-  it("keeps safe-bin profile fixtures aligned with compiled profiles", () => {
-    for (const [name, fixture] of Object.entries(SAFE_BIN_PROFILE_FIXTURES)) {
-      const profile = SAFE_BIN_PROFILES[name];
-      if (profile === undefined) {
-        throw new Error(`missing compiled safe-bin profile fixture ${name}`);
-      }
-      const fixtureDeniedFlags = fixture.deniedFlags ?? [];
-      const compiledDeniedFlags = profile.deniedFlags ?? new Set<string>();
-      for (const deniedFlag of fixtureDeniedFlags) {
-        expect(compiledDeniedFlags.has(deniedFlag)).toBe(true);
-      }
-      expect(Array.from(compiledDeniedFlags).toSorted()).toEqual(
-        [...fixtureDeniedFlags].toSorted(),
-      );
-    }
   });
 
   it("does not include sort/grep in default safeBins", () => {

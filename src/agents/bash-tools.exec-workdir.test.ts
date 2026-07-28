@@ -595,12 +595,23 @@ describe("resolveExecWorkdir", () => {
     ).resolves.toEqual({ kind: "node" });
   });
 
+  it("uses the node-only default cwd when node workdir is omitted", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        defaultCwd: "/gateway/default",
+        nodeCwd: "/remote/node/default",
+      }),
+    ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/default" });
+  });
+
   it("forwards explicit node cwd without local validation", async () => {
     await expect(
       resolveExecWorkdir({
         host: "node",
         workdir: "/remote/node/workspace",
         defaultCwd: "/gateway/default",
+        nodeCwd: "/remote/node/default",
       }),
     ).resolves.toEqual({ kind: "node", remoteCwd: "/remote/node/workspace" });
   });

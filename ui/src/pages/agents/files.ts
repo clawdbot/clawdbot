@@ -110,7 +110,11 @@ export async function saveAgentFile(
     if (res?.file && isCurrent()) {
       state.agentFilesList = mergeFileEntry(state.agentFilesList, res.file);
       state.agentFileContents = { ...state.agentFileContents, [name]: content };
-      state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+      // The response establishes the saved base, but must not discard text
+      // entered after this save started.
+      if (!Object.hasOwn(state.agentFileDrafts, name) || state.agentFileDrafts[name] === content) {
+        state.agentFileDrafts = { ...state.agentFileDrafts, [name]: content };
+      }
     }
   } catch (err) {
     if (isCurrent()) {

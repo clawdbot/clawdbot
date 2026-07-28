@@ -34,7 +34,7 @@ struct CLIInstallerTests {
 
     @Test func `installer command runs the signed bundled script without a shell pipeline`() {
         let command = CLIInstaller.installScriptCommand(
-            version: "2026.7.3-beta.1",
+            target: .exact("2026.7.3-beta.1"),
             prefix: "/Users/Test User/.openclaw",
             scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh")
 
@@ -49,6 +49,130 @@ struct CLIInstallerTests {
             "2026.7.3-beta.1",
         ])
         #expect(!command.contains("curl"))
+    }
+
+    @Test func `dev installer uses a managed git main checkout`() {
+        let command = CLIInstaller.installScriptCommand(
+            target: .channel(.dev),
+            prefix: "/Users/Test User/.openclaw",
+            scriptPath: "/Applications/OpenClaw.app/Contents/Resources/install-cli.sh")
+
+        #expect(command.suffix(6) == [
+            "--version",
+            "main",
+            "--install-method",
+            "git",
+            "--git-dir",
+            "/Users/Test User/.openclaw/dev/openclaw",
+        ])
+    }
+
+    @Test func `managed update uses the canonical updater without accepting downgrades`() {
+        let command = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4")
+
+        #expect(command == [
+            "/Users/Test User/.openclaw/bin/openclaw",
+            "update",
+            "--tag",
+            "2026.7.4",
+            "--json",
+            "--timeout",
+            "900",
+        ])
+        #expect(!command.contains("--yes"))
+
+        let withoutRestart = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4",
+            restartGateway: false)
+        #expect(withoutRestart == command + ["--no-restart"])
+
+        let repair = CLIInstaller.managedUpdateCommand(
+            executable: "/Users/Test User/.openclaw/bin/openclaw",
+            targetVersion: "2026.7.4",
+            restartGateway: false,
+            repair: true)
+        #expect(repair == [
+            "/Users/Test User/.openclaw/bin/openclaw",
+            "update",
+            "repair",
+            "--json",
+            "--timeout",
+            "900",
+            "--yes",
+            "--no-restart",
+        ])
+    }
+
+    @Test func `managed update parses structured updater diagnostics`() throws {
+        let summary = try #require(CLIInstaller.parseManagedUpdateSummary("""
+        {
+          "status": "error",
+          "mode": "npm",
+          "reason": "package-update-failed",
+          "before": { "version": "2026.7.3" },
+          "after": { "version": "2026.7.3" },
+          "steps": [
+            { "name": "package update", "exitCode": 1, "stderrTail": "registry unavailable" }
+          ],
+          "durationMs": 42
+        }
+        """))
+
+        #expect(summary.status == "error")
+        #expect(summary.reason == "package-update-failed")
+        #expect(summary.before?.version == "2026.7.3")
+        #expect(summary.steps?.first?.name == "package update")
+        #expect(summary.steps?.first?.stderrTail == "registry unavailable")
+    }
+
+    @Test func `release builds install exact while unreleased builds choose a channel`() {
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2",
+            isDebug: false) == .exact("2026.7.2"))
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2-1",
+            isDebug: false) == .exact("2026.7.2-1"))
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2-beta.1",
+            isDebug: false) == nil)
+        #expect(CLIInstaller.automaticInstallTarget(
+            appVersion: "2026.7.2",
+            isDebug: true) == nil)
+        #expect(CLIInstaller.suggestedChannel(
+            appVersion: "2026.7.2-beta.1",
+            isDebug: false) == .beta)
+        #expect(CLIInstaller.suggestedChannel(
+            appVersion: "2026.7.2",
+            isDebug: true) == .dev)
+    }
+
+    @Test func `channel policy accepts the selected channel version`() throws {
+        let suite = "CLIInstallerTests.channel-policy.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        #expect(CLIInstallPolicy.storedPolicy(defaults: defaults) == nil)
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2",
+            isDebug: true,
+            defaults: defaults) == "2026.7.2")
+        defaults.set("beta", forKey: cliInstallPolicyKey)
+        #expect(CLIInstallPolicy.storedPolicy(defaults: defaults) == "beta")
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2",
+            isDebug: true,
+            defaults: defaults) == nil)
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2-beta.1",
+            isDebug: false,
+            defaults: defaults) == nil)
+        #expect(CLIInstallPolicy.requiredGatewayVersionString(
+            appVersion: "2026.7.2",
+            isDebug: false,
+            defaults: defaults) == "2026.7.2")
     }
 
     @Test func `managed setup requires a parseable compatible version`() {
@@ -68,6 +192,34 @@ struct CLIInstallerTests {
             expectedVersion: "2026.7.3") == .incompatible(
             location: location,
             found: "2026.6.1",
+            required: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-beta.1\n",
+            expectedVersion: "2026.7.3-beta.2") == .incompatible(
+            location: location,
+            found: "2026.7.3-beta.1",
+            required: "2026.7.3-beta.2"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-beta.2\n",
+            expectedVersion: "2026.7.3") == .incompatible(
+            location: location,
+            found: "2026.7.3-beta.2",
+            required: "2026.7.3"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3\n",
+            expectedVersion: "2026.7.3-beta.2") == .incompatible(
+            location: location,
+            found: "2026.7.3",
+            required: "2026.7.3-beta.2"))
+        #expect(CLIInstaller.classifyVersion(
+            location: location,
+            output: "2026.7.3-alpha.1\n",
+            expectedVersion: "2026.7.3") == .incompatible(
+            location: location,
+            found: "2026.7.3-alpha.1",
             required: "2026.7.3"))
     }
 

@@ -1,7 +1,6 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -57,65 +56,24 @@ vi.mock("./runtime.js", () => ({
   }),
 }));
 
-let buildStructuredCard: typeof import("./send.js").buildStructuredCard;
 let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendMarkdownCardFeishu: typeof import("./send.js").sendMarkdownCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
-
-describe("buildFeishuPostMessagePayload", () => {
-  it("prepends structured mention targets as native post at elements", () => {
-    const payload = buildFeishuPostMessagePayload({
-      messageText: "hello **world**",
-      mentions: [
-        { openId: "ou_alice", name: "Alice", key: "@_user_1" },
-        { openId: " ou_bob ", name: " Bob ", key: "@_user_2" },
-      ],
-    });
-
-    expect(payload.msgType).toBe("post");
-    expect(JSON.parse(payload.content)).toEqual({
-      zh_cn: {
-        content: [
-          [
-            { tag: "at", user_id: "ou_alice", user_name: "Alice" },
-            { tag: "at", user_id: "ou_bob", user_name: "Bob" },
-            { tag: "md", text: "hello **world**" },
-          ],
-        ],
-      },
-    });
-  });
-
-  it("leaves body-supplied at tags literal in the markdown element", () => {
-    const payload = buildFeishuPostMessagePayload({
-      messageText: 'please keep <at user_id="ou_body">Body User</at> literal',
-      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
-    });
-
-    expect(JSON.parse(payload.content)).toEqual({
-      zh_cn: {
-        content: [
-          [
-            { tag: "at", user_id: "ou_target", user_name: "Target User" },
-            { tag: "md", text: 'please keep <at user_id="ou_body">Body User</at> literal' },
-          ],
-        ],
-      },
-    });
-  });
-});
+let sendStructuredCardFeishu: typeof import("./send.js").sendStructuredCardFeishu;
 
 describe("getMessageFeishu", () => {
   beforeAll(async () => {
     ({
-      buildStructuredCard,
       editMessageFeishu,
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      sendMarkdownCardFeishu,
       sendMessageFeishu,
+      sendStructuredCardFeishu,
     } = await import("./send.js"));
   });
 
@@ -216,6 +174,34 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("materializes prose soft breaks in the public post send path", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_newlines" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "first line\nsecond line\n\n```ts\nconst value = 1\n```",
+    });
+
+    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    const element = JSON.parse(request?.data?.content ?? "null").zh_cn.content[0][0];
+    expect(element).toEqual({
+      tag: "md",
+      text: "first line  \nsecond line\n\n```ts\nconst value = 1\n```",
+    });
+  });
+
   it("sends automatic mentions as native post elements without rewriting body text", async () => {
     const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_mentions" } });
     mockCreateFeishuClient.mockReturnValue({
@@ -290,6 +276,52 @@ describe("getMessageFeishu", () => {
           },
         ],
       },
+    });
+  });
+
+  it.each([
+    {
+      name: "structured",
+      send: () =>
+        sendStructuredCardFeishu({
+          cfg: {} as ClawdbotConfig,
+          to: "oc_card",
+          text: "hello",
+          header: { title: "Agent", template: "space lobster" },
+        }),
+      expectedHeader: {
+        title: { tag: "plain_text", content: "Agent" },
+        template: "blue",
+      },
+    },
+    {
+      name: "markdown",
+      send: () =>
+        sendMarkdownCardFeishu({ cfg: {} as ClawdbotConfig, to: "oc_card", text: "hello" }),
+      expectedHeader: undefined,
+    },
+  ])("sends $name cards with schema-2.0 width config", async ({ send, expectedHeader }) => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await send();
+
+    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    expect(JSON.parse(request?.data?.content ?? "null")).toEqual({
+      schema: "2.0",
+      config: { width_mode: "fill" },
+      body: { elements: [{ tag: "markdown", content: "hello" }] },
+      ...(expectedHeader ? { header: expectedHeader } : {}),
     });
   });
 
@@ -714,6 +746,32 @@ describe("editMessageFeishu", () => {
     expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
   });
 
+  it("normalizes post edits and accepts content beyond the delivery chunk size", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+    const text = `${"a".repeat(4_500)}\nsecond line`;
+
+    await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit",
+      text,
+    });
+
+    const request = mockClientPatch.mock.calls[0]?.[0] as { data?: { content?: string } };
+    const element = JSON.parse(request.data?.content ?? "null").zh_cn.content[0][0];
+    expect(element.text).toBe(`${"a".repeat(4_500)}  \nsecond line`);
+  });
+
+  it("rejects edits that exceed the rich-post byte envelope", async () => {
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_edit",
+        text: "界".repeat(11_000),
+      }),
+    ).rejects.toThrow("Feishu message edit exceeds the 30 KB rich-post API limit");
+    expect(mockClientPatch).not.toHaveBeenCalled();
+  });
+
   it("patches interactive content for card edits", async () => {
     mockClientPatch.mockResolvedValueOnce({ code: 0 });
 
@@ -742,53 +800,69 @@ describe("resolveFeishuCardTemplate", () => {
     expect(resolveFeishuCardTemplate("space lobster")).toBeUndefined();
   });
 });
+describe("Feishu card-mode newline preservation", () => {
+  function createCardClient() {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    return create;
+  }
 
-function expectSchema2WidthConfig(card: unknown) {
-  const typedCard = card as {
-    config: {
-      width_mode?: string;
-      enable_forward?: boolean;
-      wide_screen_mode?: boolean;
+  function parseCardContent(create: ReturnType<typeof vi.fn>) {
+    const request = create.mock.calls[0]?.[0] as { data?: { content?: string } } | undefined;
+    return JSON.parse(request?.data?.content ?? "null") as {
+      body: { elements: Array<{ tag: string; content: string }> };
     };
-  };
+  }
 
-  expect(typedCard.config.width_mode).toBe("fill");
-  expect(typedCard.config.enable_forward).toBeUndefined();
-  expect(typedCard.config.wide_screen_mode).toBeUndefined();
-}
-
-describe("Feishu card schema config", () => {
-  it.each([
-    {
-      name: "structured card",
-      build: () => buildStructuredCard("hello"),
-    },
-    {
-      name: "markdown card",
-      build: () => buildMarkdownCard("hello"),
-    },
-  ])("$name uses schema-2.0 width config instead of legacy wide screen mode", ({ build }) => {
-    expectSchema2WidthConfig(build());
+  it("preserves single newlines in markdown card text", async () => {
+    const create = createCardClient();
+    await sendMarkdownCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "line one\nline two\nline three",
+    });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe(
+      "line one\nline two\nline three",
+    );
   });
-});
 
-describe("buildStructuredCard", () => {
-  it("falls back to blue when the header template is unsupported", () => {
-    const card = buildStructuredCard("hello", {
-      header: {
-        title: "Agent",
-        template: "space lobster",
-      },
+  it("preserves single newlines in structured card text", async () => {
+    const create = createCardClient();
+    await sendStructuredCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "first\nsecond\nthird",
     });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("first\nsecond\nthird");
+  });
 
-    expect(card).toEqual({
-      schema: "2.0",
-      config: { width_mode: "fill" },
-      body: { elements: [{ tag: "markdown", content: "hello" }] },
-      header: {
-        title: { tag: "plain_text", content: "Agent" },
-        template: "blue",
-      },
+  it("keeps existing double newlines unchanged in markdown card text", async () => {
+    const create = createCardClient();
+    await sendMarkdownCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "para a\n\npara b",
     });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("para a\n\npara b");
+  });
+
+  it("keeps existing double newlines unchanged in structured card text", async () => {
+    const create = createCardClient();
+    await sendStructuredCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_card",
+      text: "section 1\n\nsection 2",
+    });
+    expect(parseCardContent(create).body.elements[0]?.content).toBe("section 1\n\nsection 2");
   });
 });

@@ -1,54 +1,61 @@
-import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  buildRemoteGatewayRelayUrl,
-  registerBrowserExtensionCommands,
-} from "./browser-cli-extension.js";
-import { defaultRuntime } from "./core-api.js";
+import { createCliRuntimeCapture } from "../../test-support.js";
+import { resolveLocalPairingGatewayUrl } from "./browser-cli-extension-pairing.js";
+import * as cliCoreApiModule from "./core-api.js";
 
-afterEach(() => vi.restoreAllMocks());
+const relayMocks = vi.hoisted(() => ({ ensureExtensionRelayToken: vi.fn(() => "pair-token") }));
 
-describe("buildRemoteGatewayRelayUrl", () => {
-  it("builds the direct relay route and preserves a proxy base path", () => {
-    expect(buildRemoteGatewayRelayUrl("wss://gateway.example.com")).toBe(
-      "wss://gateway.example.com/browser/extension",
-    );
-    expect(buildRemoteGatewayRelayUrl("wss://gateway.example.com/openclaw/")).toBe(
-      "wss://gateway.example.com/openclaw/browser/extension",
+vi.mock("../browser/extension-relay/relay-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../browser/extension-relay/relay-auth.js")>()),
+  ensureExtensionRelayToken: relayMocks.ensureExtensionRelayToken,
+}));
+
+const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
+
+describe("browser extension pairing Gateway URL", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetRuntimeCapture();
+  });
+
+  it("uses loopback only for a plaintext local Gateway", () => {
+    expect(resolveLocalPairingGatewayUrl({ gatewayPort: 18789, tlsEnabled: false })).toBe(
+      "ws://127.0.0.1:18789",
     );
   });
 
-  it("allows plaintext WebSockets only on loopback", () => {
-    expect(buildRemoteGatewayRelayUrl("ws://127.0.0.1:18789")).toBe(
-      "ws://127.0.0.1:18789/browser/extension",
+  it("requires the certificate hostname for a TLS Gateway", () => {
+    expect(() => resolveLocalPairingGatewayUrl({ gatewayPort: 18789, tlsEnabled: true })).toThrow(
+      "--gateway-url wss://<certificate-host>",
     );
-    expect(() => buildRemoteGatewayRelayUrl("ws://gateway.example.com")).toThrow("must use wss://");
+    expect(
+      resolveLocalPairingGatewayUrl({
+        configuredRemote: "wss://gateway.example",
+        gatewayPort: 18789,
+        tlsEnabled: true,
+      }),
+    ).toBe("wss://gateway.example");
   });
 
-  it("rejects non-WebSocket and ambiguous credential-bearing URLs", () => {
-    expect(() => buildRemoteGatewayRelayUrl("https://gateway.example.com")).toThrow(
-      "must use wss://",
-    );
-    expect(() => buildRemoteGatewayRelayUrl("wss://user@gateway.example.com")).toThrow(
-      "must not include credentials",
-    );
-    expect(() => buildRemoteGatewayRelayUrl("wss://gateway.example.com?token=secret")).toThrow(
-      "must not include credentials",
-    );
-  });
-});
-
-describe("browser extension path", () => {
-  it("resolves the copied extension from the registered plugin root", async () => {
+  it("writes explicit JSON output through the raw machine-output sink", async () => {
+    vi.spyOn(cliCoreApiModule, "getRuntimeConfig").mockReturnValue({});
+    const logSpy = vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(runtime.log);
+    const writeJsonSpy = vi
+      .spyOn(cliCoreApiModule.defaultRuntime, "writeJson")
+      .mockImplementation(runtime.writeJson);
+    const { registerBrowserExtensionCommands } = await import("./browser-cli-extension.js");
     const program = new Command();
     const browser = program.command("browser");
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const pluginRoot = path.join("/opt", "openclaw", "dist", "extensions", "browser");
-    registerBrowserExtensionCommands(browser, () => ({}), pluginRoot);
+    registerBrowserExtensionCommands(browser, () => ({}));
 
-    await program.parseAsync(["browser", "extension", "path"], { from: "user" });
+    await program.parseAsync(["browser", "extension", "pair", "--json"], { from: "user" });
 
-    expect(log).toHaveBeenCalledWith(path.join(pluginRoot, "chrome-extension"));
+    expect(writeJsonSpy).toHaveBeenCalledWith({
+      pairingString: expect.stringContaining("#pair-token"),
+      relayPort: 18799,
+      remote: false,
+    });
+    expect(logSpy).not.toHaveBeenCalled();
   });
 });

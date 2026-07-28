@@ -47,7 +47,11 @@ export function setCliSessionBinding(
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
+      ...(normalizeOptionalString(binding.resumeCheckpointId)
+        ? { resumeCheckpointId: normalizeOptionalString(binding.resumeCheckpointId) }
+        : {}),
       ...(binding.forceReuse === true ? { forceReuse: true } : {}),
+      ...(binding.forkNextResume === true ? { forkNextResume: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
         ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
         : {}),

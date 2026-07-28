@@ -12,22 +12,17 @@ import {
 } from "../plugins/bundle-mcp.js";
 import { isRecord } from "../utils.js";
 import {
-  applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
+  normalizeBundleMcpServerConfig,
   normalizeStringRecord,
-} from "./cli-runner/bundle-mcp-adapter-shared.js";
+} from "./bundle-mcp-adapter.js";
 import type {
   CodexBundleMcpThreadConfig,
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
-
-export type {
-  CodexBundleMcpThreadConfig,
-  CodexMcpServersConfig,
-  LoadCodexBundleMcpThreadConfigParams,
-} from "./codex-mcp-config.types.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig): boolean {
   return (
@@ -66,13 +61,58 @@ function resolveCodexDefaultToolsApprovalMode(
   );
 }
 
+function normalizeToolFilterList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function assertCodexExactToolFilters(
+  serverName: string,
+  fieldName: "include" | "exclude",
+  patterns: string[],
+): void {
+  const wildcard = patterns.find((pattern) => pattern.includes("*"));
+  if (!wildcard) {
+    return;
+  }
+  const codexFieldName = fieldName === "include" ? "enabled_tools" : "disabled_tools";
+  throw new Error(
+    `Cannot project mcp.servers.${serverName}.toolFilter.${fieldName} pattern "${wildcard}" into Codex ${codexFieldName}: Codex MCP projection only supports exact tool names.`,
+  );
+}
+
+function applyCodexToolFilter(
+  next: Record<string, unknown>,
+  name: string,
+  server: BundleMcpServerConfig,
+): void {
+  if (!isRecord(server.toolFilter)) {
+    return;
+  }
+  const include = normalizeToolFilterList(server.toolFilter.include);
+  const exclude = normalizeToolFilterList(server.toolFilter.exclude);
+  assertCodexExactToolFilters(name, "include", include);
+  assertCodexExactToolFilters(name, "exclude", exclude);
+  if (include.length > 0) {
+    next.enabled_tools = include;
+  }
+  if (exclude.length > 0) {
+    next.disabled_tools = exclude;
+  }
+}
+
 /** Normalizes one bundle MCP server into Codex's mcp_servers shape. */
 export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
 ): Record<string, unknown> {
-  const next: Record<string, unknown> = {};
-  applyCommonServerConfig(next, server);
+  const next = normalizeBundleMcpServerConfig(server);
+  applyCodexToolFilter(next, name, server);
   const defaultToolsApprovalMode = resolveCodexDefaultToolsApprovalMode(server);
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
@@ -108,10 +148,15 @@ export function normalizeCodexMcpServerConfig(
   return next;
 }
 
-/** Build Codex `mcp_servers` config from normalized bundle MCP config. */
+/**
+ * Build Codex `mcp_servers` config from normalized bundle MCP config.
+ * Requester-scoped servers are excluded: harness-native MCP clients are
+ * session-shared and must never dial placeholder or requester-bound URLs.
+ */
 export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpServersConfig {
+  const { staticServers } = partitionMcpServersByConnectionScope(config.mcpServers);
   return Object.fromEntries(
-    Object.entries(config.mcpServers).map(([name, server]) => [
+    Object.entries(staticServers).map(([name, server]) => [
       name,
       normalizeCodexMcpServerConfig(name, server),
     ]),

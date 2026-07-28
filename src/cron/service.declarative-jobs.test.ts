@@ -64,6 +64,7 @@ describe("CronService declarative jobs", () => {
         declarationKey: "agent:ops:daily-report",
         displayName: "Daily report",
         owner: { agentId: "ops", sessionKey: "agent:ops:main" },
+        payload: { toolsAllow: ["*"] },
       });
 
       const identical = declarativeResult(await cron.add(declaration(), { enabledExplicit: true }));
@@ -248,7 +249,7 @@ describe("CronService declarative jobs", () => {
     );
     for (const id of ["nested/job", "..\\job", "nul\0job"]) {
       await expect(writer.add(declaration({ declarationKey: undefined, id }))).rejects.toThrow(
-        "invalid cron run log job id",
+        "invalid cron task run job id",
       );
     }
     writer.stop();

@@ -89,7 +89,7 @@ function runWriteConfig(root: string, env: Record<string, string> = {}) {
       ...process.env,
       OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
       OPENCLAW_GATEWAY_TOKEN: "test-token",
-      OPENCLAW_OPENAI_CHAT_TOOLS_MODEL: "openai/gpt-5.5",
+      OPENCLAW_OPENAI_CHAT_TOOLS_MODEL: "openai/gpt-5.6-luna",
       OPENCLAW_STATE_DIR: path.join(root, "state"),
       OPENCLAW_TEST_WORKSPACE_DIR: path.join(root, "workspace"),
       PORT: "18789",

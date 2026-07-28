@@ -45,7 +45,7 @@ type RestSchedulerLaneOptions = {
   weight: number;
 };
 
-export type RestSchedulerOptions = {
+type RestSchedulerOptions = {
   lanes: Record<RequestPriority, RestSchedulerLaneOptions>;
   maxConcurrency: number;
   maxQueueSize: number;

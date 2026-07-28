@@ -91,12 +91,6 @@ export type GoogleChatEvent = {
   };
 };
 
-export type GoogleChatReaction = {
-  name?: string;
-  user?: GoogleChatUser;
-  emoji?: { unicode?: string };
-};
-
 type GoogleChatTextParagraphWidget = {
   textParagraph: {
     text: string;

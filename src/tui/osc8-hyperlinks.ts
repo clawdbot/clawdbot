@@ -1,4 +1,5 @@
 // Regex patterns for ANSI escape sequences (constructed from strings to
+import { expectDefined } from "@openclaw/normalization-core";
 // satisfy the no-control-regex lint rule).
 const SGR_PATTERN = "\\x1b\\[[0-9;]*m";
 const OSC8_PATTERN = "\\x1b\\]8;;.*?(?:\\x07|\\x1b\\\\)";
@@ -32,7 +33,10 @@ function trimUnbalancedTrailingParens(url: string): string {
 }
 
 function hasUrlContent(url: string): boolean {
-  const authority = url.slice(url.indexOf("://") + 3).split(/[/?#]/, 1)[0];
+  const authority = expectDefined(
+    url.slice(url.indexOf("://") + 3).split(/[/?#]/, 1)[0],
+    'url.slice(url.index of("://") + 3).split(/[/?#]/, 1) entry at 0',
+  );
   return /[\p{L}\p{N}]/u.test(authority) || /^\[[0-9a-f:.]+\](?::\d+)?$/i.test(authority);
 }
 
@@ -50,8 +54,8 @@ export function extractUrls(markdown: string): string[] {
   );
   let m: RegExpExecArray | null;
   while ((m = mdLinkRe.exec(markdown)) !== null) {
-    if (hasUrlContent(m[1])) {
-      urls.add(m[1]);
+    if (hasUrlContent(expectDefined(m[1], "m capture group 1"))) {
+      urls.add(expectDefined(m[1], "m capture group 1"));
     }
   }
 
@@ -284,7 +288,12 @@ export function addOsc8Hyperlinks(lines: string[], urls: string[]): string[] {
   const visibleLines = lines.map(stripAnsi);
 
   return lines.map((line, index) => {
-    const result = findUrlRanges(visibleLines[index], urls, pending, visibleLines[index + 1]);
+    const result = findUrlRanges(
+      expectDefined(visibleLines[index], "visible lines entry at index"),
+      urls,
+      pending,
+      visibleLines[index + 1],
+    );
     pending = result.pending;
     return applyOsc8Ranges(line, result.ranges);
   });

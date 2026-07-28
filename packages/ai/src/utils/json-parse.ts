@@ -37,7 +37,7 @@ export function repairJson(json: string): string {
   let stringValuePrefix = "";
 
   for (let index = 0; index < json.length; index++) {
-    const char = json[index];
+    const char = json.charAt(index);
 
     if (!inString) {
       repaired += char;
@@ -56,8 +56,8 @@ export function repairJson(json: string): string {
     }
 
     if (char === "\\") {
-      const nextChar = json[index + 1];
-      if (nextChar === undefined) {
+      const nextChar = json.charAt(index + 1);
+      if (!nextChar) {
         repaired += "\\\\";
         continue;
       }
@@ -105,11 +105,7 @@ export function repairJson(json: string): string {
 }
 
 export function parseJsonWithRepair(json: string): unknown {
-  const repairedJson = repairJson(json);
-  if (repairedJson !== json) {
-    return JSON.parse(repairedJson) as unknown;
-  }
-  return JSON.parse(json) as unknown;
+  return JSON.parse(repairJson(json)) as unknown;
 }
 
 function looksLikeWindowsPathPrefix(prefix: string): boolean {
@@ -139,12 +135,10 @@ export function parseStreamingJson(partialJson: string | undefined): Record<stri
     return asStreamingJsonRecord(parseJsonWithRepair(partialJson));
   } catch {
     try {
-      const result = partialParse(partialJson);
-      return asStreamingJsonRecord(result);
+      return asStreamingJsonRecord(partialParse(partialJson));
     } catch {
       try {
-        const result = partialParse(repairJson(partialJson));
-        return asStreamingJsonRecord(result);
+        return asStreamingJsonRecord(partialParse(repairJson(partialJson)));
       } catch {
         return {};
       }

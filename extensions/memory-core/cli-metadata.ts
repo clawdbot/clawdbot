@@ -9,7 +9,10 @@ export default definePluginEntry({
     api.registerCli(
       async ({ program }) => {
         const { registerMemoryCli } = await import("./cli.js");
-        registerMemoryCli(program);
+        registerMemoryCli(program, {
+          acquireLocalService: api.runtime.llm?.acquireLocalService,
+          withLease: api.runtime.state.withLease.bind(api.runtime.state),
+        });
       },
       {
         descriptors: [

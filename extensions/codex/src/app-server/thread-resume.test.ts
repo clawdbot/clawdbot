@@ -87,6 +87,26 @@ describe("resumeCodexAppServerThread", () => {
     expect(abandonClient).not.toHaveBeenCalled();
   });
 
+  it("keeps the shared client after cancellation before the resume write", async () => {
+    const rejection = Object.assign(new Error("thread/resume aborted"), {
+      code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+      mayHaveWritten: false,
+    });
+    const { client } = createClient(async () => {
+      throw rejection;
+    });
+    const abandonClient = vi.fn(async () => undefined);
+
+    await expect(
+      resumeCodexAppServerThread({
+        client,
+        abandonClient,
+        request: { threadId: "thread-1", excludeTurns: true },
+      }),
+    ).rejects.toBe(rejection);
+    expect(abandonClient).not.toHaveBeenCalled();
+  });
+
   it("retires the exact client when resume acceptance is indeterminate", async () => {
     const { client } = createClient(async () => {
       throw new Error("thread/resume timed out");

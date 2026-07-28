@@ -1,6 +1,8 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ChatImageCodecTest {
@@ -14,5 +16,10 @@ class ChatImageCodecTest {
   fun normalizeAttachmentFileNameForcesJpegExtension() {
     assertEquals("photo.jpg", normalizeAttachmentFileName("photo.png"))
     assertEquals("image.jpg", normalizeAttachmentFileName(""))
+  }
+
+  @Test
+  fun decodeBase64BitmapRejectsOversizedInputBeforeDecode() {
+    assertNull(decodeBase64Bitmap("A".repeat(CHAT_IMAGE_MAX_BASE64_CHARS + 1)))
   }
 }

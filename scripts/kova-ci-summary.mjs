@@ -32,7 +32,6 @@ const keyMetricIds = [
 ];
 const rssMetricIds = ["peakRssMb", "resourcePeakGatewayRssMb"];
 const cpuMetricIds = ["cpuPercentMax"];
-
 const reportPath = path.resolve(args.report);
 const report = JSON.parse(await readFile(reportPath, "utf8"));
 const invalidReport = validateKovaSummaryReport(report);
@@ -79,32 +78,39 @@ function renderSummary(reportLocal, options) {
   const groups = Array.isArray(reportLocal.performance?.groups)
     ? reportLocal.performance.groups
     : [];
-  if (groups.length > 0) {
+  const metricRows = [];
+  for (const group of groups) {
+    for (const metricId of keyMetricIds) {
+      const metric = group.metrics?.[metricId];
+      if (!hasPositiveSampleCount(metric)) {
+        continue;
+      }
+      metricRows.push(
+        [
+          value(group.scenario),
+          value(group.state),
+          value(metric.title || metricId),
+          formatMetric(metric.median, metric.unit),
+          formatMetric(metric.p95, metric.unit),
+          formatMetric(metric.max, metric.unit),
+        ]
+          .join(" | ")
+          .replace(/^/, "| ")
+          .replace(/$/, " |"),
+      );
+    }
+  }
+  if (metricRows.length > 0) {
     lines.push("## Key metrics");
     lines.push("");
     lines.push("| Scenario | State | Metric | Median | p95 | Max |");
     lines.push("| --- | --- | --- | ---: | ---: | ---: |");
-    for (const group of groups) {
-      for (const metricId of keyMetricIds) {
-        const metric = group.metrics?.[metricId];
-        if (!hasPositiveSampleCount(metric)) {
-          continue;
-        }
-        lines.push(
-          [
-            value(group.scenario),
-            value(group.state),
-            value(metric.title || metricId),
-            formatMetric(metric.median, metric.unit),
-            formatMetric(metric.p95, metric.unit),
-            formatMetric(metric.max, metric.unit),
-          ]
-            .join(" | ")
-            .replace(/^/, "| ")
-            .replace(/$/, " |"),
-        );
-      }
-    }
+    lines.push(...metricRows);
+    lines.push("");
+  } else if (groups.length > 0) {
+    lines.push("## Key metrics");
+    lines.push("");
+    lines.push("- No sampled key metrics were available; inspect the blocking records below.");
     lines.push("");
   }
 
@@ -180,7 +186,11 @@ function validateKovaSummaryReport(reportLocal) {
   if (records.length === 0 && groups.length === 0) {
     return "missing records or performance groups";
   }
-  if (groups.length > 0 && !hasExplicitResourceCollectionSkip(reportLocal)) {
+  if (
+    groups.length > 0 &&
+    reportHasOnlyPassingStatuses(statuses) &&
+    !hasExplicitResourceCollectionSkip(reportLocal)
+  ) {
     if (!groups.some((group) => hasSampledMetric(group, rssMetricIds))) {
       return "missing sampled RSS metric in performance groups";
     }
@@ -191,16 +201,20 @@ function validateKovaSummaryReport(reportLocal) {
   return null;
 }
 
+function reportHasOnlyPassingStatuses(statuses) {
+  const populated = Object.entries(statuses).filter(([, count]) => Number(count) > 0);
+  return (
+    populated.length > 0 && populated.every(([status]) => status.trim().toUpperCase() === "PASS")
+  );
+}
+
 function hasExplicitResourceCollectionSkip(reportLocal) {
   const reason = reportLocal.performance?.resourceCollectionSkippedReason;
   return typeof reason === "string" && reason.trim().length > 0;
 }
 
 function hasSampledMetric(group, metricIds) {
-  return metricIds.some((metricId) => {
-    const metric = group?.metrics?.[metricId];
-    return hasPositiveSampleCount(metric);
-  });
+  return metricIds.some((metricId) => hasPositiveSampleCount(group?.metrics?.[metricId]));
 }
 
 function hasPositiveSampleCount(metric) {

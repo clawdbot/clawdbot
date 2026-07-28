@@ -208,7 +208,7 @@ export async function handleStructuredPayload(
 type StructuredPayloadMediaType = "image" | "video" | "file";
 
 function formatMediaTypeLabel(mediaType: StructuredPayloadMediaType): string {
-  return mediaType[0].toUpperCase() + mediaType.slice(1);
+  return mediaType.charAt(0).toUpperCase() + mediaType.slice(1);
 }
 
 function validateStructuredPayloadLocalPath(

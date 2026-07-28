@@ -20,6 +20,7 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import {
   handleProcessSendKeys,
   type WritableStdin,
@@ -357,6 +358,12 @@ export function createProcessTool(
             result: failedResult(`Session ${params.sessionId} is not backgrounded.`),
           };
         }
+        if (scopedSession.finalizing) {
+          return {
+            ok: false as const,
+            result: failedResult(`Session ${params.sessionId} is finalizing.`),
+          };
+        }
         const stdin = resolveSessionStdin(scopedSession);
         if (!isWritableStdin(stdin)) {
           return {
@@ -388,16 +395,18 @@ export function createProcessTool(
                 content: [
                   {
                     type: "text",
-                    text:
+                    text: appendExecTimeoutRetryGuidance(
                       (scopedFinished.tail ||
                         `(no output recorded${
                           scopedFinished.truncated ? " — truncated to cap" : ""
                         })`) +
-                      `\n\nProcess exited with ${
-                        scopedFinished.exitSignal
-                          ? `signal ${scopedFinished.exitSignal}`
-                          : `code ${scopedFinished.exitCode ?? 0}`
-                      }.`,
+                        `\n\nProcess exited with ${
+                          scopedFinished.exitSignal
+                            ? `signal ${scopedFinished.exitSignal}`
+                            : `code ${scopedFinished.exitCode ?? 0}`
+                        }.`,
+                      scopedFinished.exitReason,
+                    ),
                   },
                 ],
                 details: {
@@ -469,13 +478,15 @@ export function createProcessTool(
             content: [
               {
                 type: "text",
-                text:
+                text: appendExecTimeoutRetryGuidance(
                   (output || "(no new output)") +
-                  (exited
-                    ? `\n\nProcess exited with ${
-                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                      }.`
-                    : buildInputWaitHint(runtime) || "\n\nProcess still running."),
+                    (exited
+                      ? `\n\nProcess exited with ${
+                          exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
+                        }.`
+                      : buildInputWaitHint(runtime) || "\n\nProcess still running."),
+                  exited ? scopedSession.exitReason : undefined,
+                ),
               },
             ],
             details: {
@@ -593,7 +604,7 @@ export function createProcessTool(
           }
           return runningSessionResult(
             resolved.session,
-            `Wrote ${(params.data ?? "").length} bytes to session ${params.sessionId}${
+            `Wrote ${Buffer.byteLength(params.data ?? "", "utf8")} bytes to session ${params.sessionId}${
               params.eof ? " (stdin closed)" : ""
             }.`,
           );
@@ -657,6 +668,9 @@ export function createProcessTool(
           if (!scopedSession.backgrounded) {
             return failText(`Session ${params.sessionId} is not backgrounded.`);
           }
+          if (scopedSession.finalizing) {
+            return failText(`Session ${params.sessionId} is finalizing.`);
+          }
           const canceled = cancelManagedSession(scopedSession.id);
           if (!canceled) {
             const terminated = terminateSessionFallback(scopedSession);
@@ -706,6 +720,9 @@ export function createProcessTool(
 
         case "remove": {
           if (scopedSession) {
+            if (scopedSession.finalizing) {
+              return failText(`Session ${params.sessionId} is finalizing.`);
+            }
             const canceled = cancelManagedSession(scopedSession.id);
             if (canceled) {
               // Keep remove semantics deterministic: drop from process registry now.
@@ -767,3 +784,4 @@ export function createProcessTool(
 
 /** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

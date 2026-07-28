@@ -16,6 +16,7 @@ import { normalizeAgentId } from "../../routing/session-key.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 import {
+  decodeUtf8Strict,
   listWorkspacePath,
   normalizeRelativePath,
   readWorkspaceFile,
@@ -99,18 +100,6 @@ function resolveWorkspaceScopeOrRespond(
     return null;
   }
   return { agentId, workspaceDir, browserPath };
-}
-
-function decodeUtf8Strict(buffer: Buffer): string | undefined {
-  // NUL bytes are valid UTF-8 but mark binary payloads we refuse to inline.
-  if (buffer.includes(0)) {
-    return undefined;
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
-  } catch {
-    return undefined;
-  }
 }
 
 /** Gateway handlers for read-only agent workspace browsing. */

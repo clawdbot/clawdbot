@@ -68,9 +68,10 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               isRemote: ctx.isRemote,
               openUrl: ctx.openUrl,
               log: (msg) => ctx.runtime.log(msg),
-              note: ctx.prompter.note,
+              note: (message, title) => ctx.prompter.note(message, title),
               prompt: async (message) => ctx.prompter.text({ message }),
               progress: spin,
+              ...(ctx.signal ? { signal: ctx.signal } : {}),
             });
 
             spin.stop("Gemini CLI OAuth complete");
@@ -114,7 +115,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
       setup: {
         choiceId: "google-gemini-cli",
         choiceLabel: "Gemini CLI OAuth",
-        choiceHint: "Google OAuth with project-aware token payload",
+        choiceHint: "Sign in with your Google account (opens a browser)",
         methodId: "oauth",
       },
     },

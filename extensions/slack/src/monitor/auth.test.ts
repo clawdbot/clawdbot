@@ -5,7 +5,6 @@ import type { SlackMonitorContext } from "./context.js";
 const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
 let authorizeSlackBotRoomMessage: typeof import("./auth.js").authorizeSlackBotRoomMessage;
 let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
-let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
 let resolveSlackCommandIngress: typeof import("./auth.js").resolveSlackCommandIngress;
 
@@ -31,6 +30,7 @@ function makeSlackCtx(allowFrom: string[]): SlackMonitorContext {
 function makeAuthorizeCtx(params?: {
   allowFrom?: string[];
   channelsConfig?: Record<string, { users?: string[] }>;
+  dmPolicy?: SlackMonitorContext["dmPolicy"];
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
   resolveChannelName?: (
     channelId: string,
@@ -39,7 +39,7 @@ function makeAuthorizeCtx(params?: {
   return {
     allowFrom: params?.allowFrom ?? [],
     accountId: "main",
-    dmPolicy: "open",
+    dmPolicy: params?.dmPolicy ?? "open",
     dmEnabled: true,
     allowNameMatching: false,
     channelsConfig: params?.channelsConfig ?? {},
@@ -57,16 +57,12 @@ function makeAuthorizeCtx(params?: {
 
 describe("resolveSlackEffectiveAllowFrom", () => {
   beforeAll(async () => {
-    ({
-      authorizeSlackSystemEventSender,
-      clearSlackAllowFromCacheForTest,
-      resolveSlackEffectiveAllowFrom,
-    } = await import("./auth.js"));
+    ({ authorizeSlackSystemEventSender, resolveSlackEffectiveAllowFrom } =
+      await import("./auth.js"));
   });
 
   beforeEach(() => {
     readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
-    clearSlackAllowFromCacheForTest();
   });
 
   it("falls back to channel config allowFrom when pairing store throws", async () => {
@@ -111,15 +107,11 @@ describe("resolveSlackEffectiveAllowFrom", () => {
 
 describe("authorizeSlackSystemEventSender", () => {
   beforeAll(async () => {
-    ({
-      authorizeSlackBotRoomMessage,
-      authorizeSlackSystemEventSender,
-      clearSlackAllowFromCacheForTest,
-    } = await import("./auth.js"));
+    ({ authorizeSlackBotRoomMessage, authorizeSlackSystemEventSender } = await import("./auth.js"));
   });
 
   beforeEach(() => {
-    clearSlackAllowFromCacheForTest();
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockReset();
     delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
   });
 
@@ -283,6 +275,44 @@ describe("authorizeSlackSystemEventSender", () => {
       allowed: true,
       channelType: "channel",
       channelName: "general",
+    });
+  });
+
+  it("does not use pairing-store allowFrom for MPIM system events", async () => {
+    readChannelIngressStoreAllowFromForDmPolicyMock.mockResolvedValue(["U_ATTACKER"]);
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: [],
+        dmPolicy: "pairing",
+        resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "U_ATTACKER",
+      channelId: "G_MPIM",
+    });
+
+    expect(result).toEqual({
+      allowed: false,
+      reason: "sender-not-allowlisted",
+      channelType: "mpim",
+      channelName: "group-dm",
+    });
+    expect(readChannelIngressStoreAllowFromForDmPolicyMock).not.toHaveBeenCalled();
+  });
+
+  it("allows MPIM system-event senders in the configured allowFrom", async () => {
+    const result = await authorizeSlackSystemEventSender({
+      ctx: makeAuthorizeCtx({
+        allowFrom: ["U_OWNER"],
+        resolveChannelName: async () => ({ name: "group-dm", type: "mpim" }),
+      }),
+      senderId: "U_OWNER",
+      channelId: "G_MPIM",
+    });
+
+    expect(result).toEqual({
+      allowed: true,
+      channelType: "mpim",
+      channelName: "group-dm",
     });
   });
 
@@ -454,11 +484,7 @@ describe("authorizeSlackSystemEventSender", () => {
 
 describe("resolveSlackCommandIngress", () => {
   beforeAll(async () => {
-    ({ resolveSlackCommandIngress, clearSlackAllowFromCacheForTest } = await import("./auth.js"));
-  });
-
-  beforeEach(() => {
-    clearSlackAllowFromCacheForTest();
+    ({ resolveSlackCommandIngress } = await import("./auth.js"));
   });
 
   it("does not authorize commands when sender denial stops before the command gate", async () => {
@@ -479,16 +505,41 @@ describe("resolveSlackCommandIngress", () => {
     expect(result.commandAccess.authorized).toBe(false);
     expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
   });
+
+  it("blocks MPIM senders outside the configured allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_ATTACKER",
+      channelType: "mpim",
+      channelId: "G_MPIM",
+      ownerAllowFromLower: ["u_owner"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.senderAccess.decision).toBe("block");
+    expect(result.senderAccess.gate?.allowed).toBe(false);
+  });
+
+  it("allows MPIM senders in the configured allowFrom", async () => {
+    const result = await resolveSlackCommandIngress({
+      ctx: makeAuthorizeCtx(),
+      senderId: "U_OWNER",
+      channelType: "mpim",
+      channelId: "G_MPIM",
+      ownerAllowFromLower: ["u_owner"],
+      allowTextCommands: false,
+      hasControlCommand: false,
+    });
+
+    expect(result.senderAccess.decision).toBe("allow");
+    expect(result.senderAccess.gate?.allowed).toBe(true);
+  });
 });
 
 describe("authorizeSlackSystemEventSender interactiveEvent", () => {
   beforeAll(async () => {
-    ({ authorizeSlackSystemEventSender, clearSlackAllowFromCacheForTest } =
-      await import("./auth.js"));
-  });
-
-  beforeEach(() => {
-    clearSlackAllowFromCacheForTest();
+    ({ authorizeSlackSystemEventSender } = await import("./auth.js"));
   });
 
   it("rejects interactive events when expectedSenderId is not provided", async () => {

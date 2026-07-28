@@ -3,13 +3,13 @@ title: WebChat direct reply routing
 scenario:
   id: webchat-direct-reply-routing
   surface: qa-channel
-  runtimeParityTier: live-only
+  runtimePairLane: core
   coverage:
     primary:
-      - runtime.direct-reply-routing
+      - control-ui.chat-send-lifecycle-direct-reply-routing
     secondary:
-      - tools.message
-      - channels.webchat
+      - control-ui.chat-send-lifecycle-message
+      - control-ui.chat-send-lifecycle-webchat
   objective: Verify a current-chat reply is delivered as assistant text, not by calling `message(action=send)` and ending with `Sent.`.
   gatewayConfigPatch:
     session:
@@ -27,6 +27,7 @@ scenario:
     kind: flow
     summary: Run a direct current-chat reply and inspect the actual transcript for self-message routing.
     config:
+      requiredProviderMode: live-frontier
       conversationId: qa-operator
       expectedMarker: WEBCHAT-DIRECT-REPLY-OK
       promptSnippet: Reply exactly
@@ -56,9 +57,9 @@ flow:
         - set: startIndex
           value:
             expr: state.getSnapshot().messages.length
-        - set: requestCountBefore
+        - set: requestCursorBefore
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
         - sendInbound:
             conversation:
               id:
@@ -76,7 +77,7 @@ flow:
                 args:
                   - lambda:
                       async: true
-                      expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : true"
+                      expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).find((request) => String(request.allInputText ?? '').includes(config.promptSnippet)) : true"
                   - expr: liveTurnTimeoutMs(env, 60000)
                   - 500
               - call: waitForOutboundMessage
@@ -93,14 +94,23 @@ flow:
             catch:
               - set: directReplyDebugRequests
                 value:
-                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(requestCountBefore).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputText: String(request.allInputText ?? '').slice(0, 400), finalText: String(request.finalText ?? '').slice(0, 200), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 200) : null })) : []"
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, allInputText: String(request.allInputText ?? '').slice(0, 400), finalText: String(request.finalText ?? '').slice(0, 200), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 200) : null })) : []"
               - throw:
                   expr: "`direct reply marker missing: ${directReplyError?.message ?? directReplyError}; transcript=${formatTransportTranscript(state, { conversationId })}; requests=${JSON.stringify(directReplyDebugRequests)}`"
-        - set: transcriptSummary
-          value:
-            expr: "await readSessionTranscriptSummary(env, sessionKey)"
+        - call: waitForCondition
+          saveAs: transcriptSummary
+          args:
+            - lambda:
+                async: true
+                expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => summary.hasDirectReplySelfMessage || normalizeLowercaseStringOrEmpty(summary.finalText).includes(normalizeLowercaseStringOrEmpty(config.expectedMarker)) ? summary : undefined).catch((error) => { const message = formatErrorMessage(error); return ((error && typeof error === 'object' && error.code === 'ENOENT') || message.includes('session transcript entry not found') || message.includes('session transcript is empty')) ? undefined : Promise.reject(error); })"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 250
         - assert:
             expr: "!transcriptSummary.hasDirectReplySelfMessage"
             message:
               expr: "`assistant self-sent direct reply through message(action=send); finalText=${transcriptSummary.finalText}`"
+        - assert:
+            expr: "normalizeLowercaseStringOrEmpty(transcriptSummary.finalText).includes(normalizeLowercaseStringOrEmpty(config.expectedMarker))"
+            message:
+              expr: "`persisted assistant transcript missing direct reply marker ${config.expectedMarker}; finalText=${transcriptSummary.finalText}`"
       detailsExpr: outbound.text

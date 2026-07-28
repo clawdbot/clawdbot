@@ -28,7 +28,6 @@ paths:
   - extensions/codex/src/app-server/sandbox-exec-server
   - extensions/codex/src/app-server/transport-stdio.ts
   - extensions/codex/src/node-cli-sessions.ts
-  - extensions/codex-supervisor/src/json-rpc-client.ts
   - extensions/file-transfer/src
   - extensions/google-meet/src
   - extensions/imessage/src

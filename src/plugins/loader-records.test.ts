@@ -1,8 +1,13 @@
 /** Verifies plugin loader records expose stable metadata for registered plugin surfaces. */
-import { describe, expect, it } from "vitest";
-import { createPluginRecord } from "./loader-records.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginRecord, recordPluginError } from "./loader-records.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 
 describe("plugin loader records", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("preserves manifest-declared channel ids before runtime registration", () => {
     const record = createPluginRecord({
       id: "kitchen-sink",
@@ -69,5 +74,37 @@ describe("plugin loader records", () => {
     expect(record.webSearchProviderIds).toEqual(["kitchen-sink-web-search-provider"]);
     expect(record.migrationProviderIds).toEqual(["kitchen-sink-migration-provider"]);
     expect(record.memoryEmbeddingProviderIds).toEqual(["kitchen-sink-memory-provider"]);
+  });
+
+  it.each([
+    { diagnostics: "", expected: "Error: boom" },
+    { diagnostics: "1", expected: "Error: boom\n    at plugin-entry.ts:1:1" },
+  ])("uses lifecycle tracing for loader error stacks", ({ diagnostics, expected }) => {
+    vi.stubEnv("OPENCLAW_PLUGIN_LIFECYCLE_TRACE", diagnostics);
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "broken-plugin",
+      source: "/tmp/broken-plugin/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const error = new Error("boom");
+    error.stack = "Error: boom\n    at plugin-entry.ts:1:1";
+
+    recordPluginError({
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      registry,
+      record,
+      seenIds: new Map(),
+      pluginId: record.id,
+      origin: record.origin,
+      phase: "load",
+      error,
+      logPrefix: "",
+      diagnosticMessagePrefix: "",
+    });
+
+    expect(record.error).toBe(expected);
   });
 });

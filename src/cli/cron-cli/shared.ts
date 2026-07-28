@@ -3,10 +3,9 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
@@ -22,8 +21,9 @@ import { formatTimestamp } from "../../logging/timestamps.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 
-export function parseCronCommandArgv(value: unknown): string[] | undefined {
+function parseCronArgv(value: unknown, flag: string): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
@@ -31,16 +31,24 @@ export function parseCronCommandArgv(value: unknown): string[] | undefined {
   try {
     parsed = JSON.parse(value);
   } catch {
-    throw new Error("--command-argv must be a JSON array of strings");
+    throw new Error(`${flag} must be a JSON array of strings`);
   }
   if (
     !Array.isArray(parsed) ||
     parsed.length === 0 ||
     parsed.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
-    throw new Error("--command-argv must be a non-empty JSON array of non-empty strings");
+    throw new Error(`${flag} must be a non-empty JSON array of non-empty strings`);
   }
   return parsed;
+}
+
+export function parseCronCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--command-argv");
+}
+
+export function parseCronStreamCommandArgv(value: unknown): string[] | undefined {
+  return parseCronArgv(value, "--stream-command");
 }
 
 export function parseCronCommandEnv(values: unknown): Record<string, string> | undefined {
@@ -220,37 +228,16 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   }
 }
 
-export function parseDurationMs(input: string): number | null {
-  const raw = input.trim();
-  if (!raw) {
+export function parsePositiveCronDurationMs(input: string): number | null {
+  try {
+    const result = parseSharedDurationMs(input);
+    if (result <= 0) {
+      return null;
+    }
+    return result;
+  } catch {
     return null;
   }
-  const match = raw.match(/^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/i);
-  if (!match) {
-    return null;
-  }
-  const n = Number.parseFloat(match[1] ?? "");
-  if (!Number.isFinite(n) || n <= 0) {
-    return null;
-  }
-  const unit = normalizeLowercaseStringOrEmpty(match[2] ?? "");
-  const factor =
-    unit === "ms"
-      ? 1
-      : unit === "s"
-        ? 1000
-        : unit === "m"
-          ? 60_000
-          : unit === "h"
-            ? 3_600_000
-            : 86_400_000;
-  const result = Math.floor(n * factor);
-  if (!Number.isFinite(result) || result <= 0) {
-    // A finite mantissa can still overflow to Infinity for a large unit (e.g. a long
-    // pure-digit string with "d"); tiny positive values can also floor to 0ms.
-    return null;
-  }
-  return result;
 }
 
 export function parseCronStaggerMs(params: {
@@ -263,7 +250,7 @@ export function parseCronStaggerMs(params: {
   if (!params.staggerRaw) {
     return undefined;
   }
-  const parsed = parseDurationMs(params.staggerRaw);
+  const parsed = parsePositiveCronDurationMs(params.staggerRaw);
   if (!parsed) {
     throw new Error("Invalid --stagger; use e.g. 30s, 1m, 5m");
   }
@@ -322,7 +309,7 @@ export function parseAt(input: string, tz?: string): string | null {
     return timestampMsToIsoString(absolute) ?? null;
   }
   const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
-  const dur = parseDurationMs(durationInput);
+  const dur = parsePositiveCronDurationMs(durationInput);
   if (dur !== null) {
     const expiresAt = resolveExpiresAtMsFromDurationMs(dur);
     return timestampMsToIsoString(expiresAt) ?? null;
@@ -342,6 +329,7 @@ const CRON_DELIVERY_PAD = 64;
 const CRON_AGENT_PAD = 10;
 const CRON_OWNER_PAD = 24;
 const CRON_MODEL_PAD = 20;
+const TRUNCATED_SUFFIX = "...";
 
 const stringifyCell = (value: unknown, fallback = "-") => {
   if (typeof value === "string") {
@@ -353,16 +341,16 @@ const stringifyCell = (value: unknown, fallback = "-") => {
   return fallback;
 };
 
-const pad = (value: unknown, width: number) => stringifyCell(value).padEnd(width);
-
-const truncate = (value: string, width: number) => {
-  if (value.length <= width) {
-    return value;
-  }
-  if (width <= 3) {
-    return value.slice(0, width);
-  }
-  return `${value.slice(0, width - 3)}...`;
+const formatCell = (value: unknown, width: number) => {
+  const text = sanitizeTerminalText(stringifyCell(value));
+  const truncated =
+    visibleWidth(text) <= width
+      ? text
+      : width <= TRUNCATED_SUFFIX.length
+        ? truncateToVisibleWidth(text, width)
+        : `${truncateToVisibleWidth(text, width - TRUNCATED_SUFFIX.length)}${TRUNCATED_SUFFIX}`;
+  const remaining = width - visibleWidth(truncated);
+  return remaining > 0 ? `${truncated}${" ".repeat(remaining)}` : truncated;
 };
 
 const formatIsoMinute = (iso: string) => {
@@ -408,6 +396,10 @@ const formatSchedule = (schedule: CronSchedule | undefined, hasTrigger = false) 
   if (schedule?.kind === "on-exit") {
     const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
     return `on-exit ${schedule.command}${cwd}`;
+  }
+  if (schedule?.kind === "stream") {
+    const cwd = schedule.cwd ? ` @ ${schedule.cwd}` : "";
+    return `stream ${schedule.command.join(" ")}${cwd}`;
   }
   if (schedule?.kind !== "cron") {
     return "-";
@@ -456,18 +448,18 @@ export function printCronList(
 
   const rich = isRich();
   const header = [
-    pad("ID", CRON_ID_PAD),
-    pad("Declaration", CRON_DECLARATION_PAD),
-    pad("Name", CRON_NAME_PAD),
-    pad("Schedule", CRON_SCHEDULE_PAD),
-    pad("Next", CRON_NEXT_PAD),
-    pad("Last", CRON_LAST_PAD),
-    pad("Status", CRON_STATUS_PAD),
-    pad("Target", CRON_TARGET_PAD),
-    pad("Delivery", CRON_DELIVERY_PAD),
-    pad("Agent ID", CRON_AGENT_PAD),
-    pad("Owner", CRON_OWNER_PAD),
-    pad("Model", CRON_MODEL_PAD),
+    formatCell("ID", CRON_ID_PAD),
+    formatCell("Declaration", CRON_DECLARATION_PAD),
+    formatCell("Name", CRON_NAME_PAD),
+    formatCell("Schedule", CRON_SCHEDULE_PAD),
+    formatCell("Next", CRON_NEXT_PAD),
+    formatCell("Last", CRON_LAST_PAD),
+    formatCell("Status", CRON_STATUS_PAD),
+    formatCell("Target", CRON_TARGET_PAD),
+    formatCell("Delivery", CRON_DELIVERY_PAD),
+    formatCell("Agent ID", CRON_AGENT_PAD),
+    formatCell("Owner", CRON_OWNER_PAD),
+    formatCell("Model", CRON_MODEL_PAD),
   ].join(" ");
 
   runtime.log(rich ? theme.heading(header) : header);
@@ -475,42 +467,30 @@ export function printCronList(
 
   for (const job of jobs) {
     const state = job.state ?? {};
-    const idLabel = pad(job.id, CRON_ID_PAD);
-    const declarationLabel = pad(
-      truncate(job.declarationKey ?? "-", CRON_DECLARATION_PAD),
-      CRON_DECLARATION_PAD,
-    );
-    const nameLabel = pad(
-      truncate(stringifyCell(job.displayName ?? job.name), CRON_NAME_PAD),
-      CRON_NAME_PAD,
-    );
-    const scheduleLabel = pad(
-      truncate(formatSchedule(job.schedule, job.trigger !== undefined), CRON_SCHEDULE_PAD),
+    const idLabel = formatCell(job.id, CRON_ID_PAD);
+    const declarationLabel = formatCell(job.declarationKey, CRON_DECLARATION_PAD);
+    const nameLabel = formatCell(job.displayName ?? job.name, CRON_NAME_PAD);
+    const scheduleLabel = formatCell(
+      formatSchedule(job.schedule, job.trigger !== undefined),
       CRON_SCHEDULE_PAD,
     );
-    const nextLabel = pad(
+    const nextLabel = formatCell(
       job.enabled ? formatRelative(state.nextRunAtMs, now) : "-",
       CRON_NEXT_PAD,
     );
-    const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
+    const lastLabel = formatCell(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
     const statusRaw = computeStatus(job);
-    const statusLabel = pad(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
-    const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
+    const statusLabel = formatCell(formatCronStatusForDisplay(job), CRON_STATUS_PAD);
+    const targetLabel = formatCell(job.sessionTarget, CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
     const deliveryText = deliveryPreview
       ? `${deliveryPreview.label} (${deliveryPreview.detail})`
       : "-";
-    const deliveryLabel = pad(truncate(deliveryText, CRON_DELIVERY_PAD), CRON_DELIVERY_PAD);
-    const agentLabel = pad(truncate(job.agentId ?? "-", CRON_AGENT_PAD), CRON_AGENT_PAD);
-    const ownerLabel = pad(
-      truncate(job.owner?.sessionKey ?? job.owner?.agentId ?? "-", CRON_OWNER_PAD),
-      CRON_OWNER_PAD,
-    );
-    const modelLabel = pad(
-      truncate(
-        (job.payload?.kind === "agentTurn" ? job.payload.model : undefined) ?? "-",
-        CRON_MODEL_PAD,
-      ),
+    const deliveryLabel = formatCell(deliveryText, CRON_DELIVERY_PAD);
+    const agentLabel = formatCell(job.agentId, CRON_AGENT_PAD);
+    const ownerLabel = formatCell(job.owner?.sessionKey ?? job.owner?.agentId, CRON_OWNER_PAD);
+    const modelLabel = formatCell(
+      job.payload?.kind === "agentTurn" ? job.payload.model : undefined,
       CRON_MODEL_PAD,
     );
 

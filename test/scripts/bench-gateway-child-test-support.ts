@@ -1,5 +1,4 @@
 // Gateway benchmark child test support simulates child process behavior for script tests.
-import type { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
 import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
@@ -137,7 +136,7 @@ export function registerStopChildBehaviorTests<TChild>(params: {
       params.stopChild(child as unknown as TChild, {
         killGraceMs: 1,
         platform: "win32",
-        runTaskkill,
+        runTaskkill: runTaskkill as unknown as typeof spawnSync,
         teardownGraceMs: 1,
       }),
     ).resolves.toEqual({
@@ -349,3 +348,4 @@ export function registerStopChildBehaviorTests<TChild>(params: {
     },
   );
 }
+import type { spawnSync } from "node:child_process";

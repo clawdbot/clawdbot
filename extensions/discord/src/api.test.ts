@@ -303,8 +303,8 @@ describe("fetchDiscord", () => {
   });
 
   it("caps oversized request timeouts before creating abort signals", async () => {
-    const timeoutController = new AbortController();
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     let request: RequestInit | undefined;
     const fetcher = withFetchPreconnect(async (_url, init) => {
       request = init;
@@ -317,14 +317,13 @@ describe("fetchDiscord", () => {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(request?.signal).toBe(timeoutController.signal);
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(request?.signal).toBeInstanceOf(AbortSignal);
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(setTimeoutSpy.mock.results[0]?.value);
   });
 
   it("throws DiscordApiError on malformed JSON success response body", async () => {
-    const fetcher = withFetchPreconnect(
-      async () => new Response("NOT JSON {{{", { status: 200 }),
-    );
+    const fetcher = withFetchPreconnect(async () => new Response("NOT JSON {{{", { status: 200 }));
 
     let error: unknown;
     try {
@@ -428,6 +427,31 @@ describe("fetchDiscord", () => {
       );
     } finally {
       await closeServer(server);
+    }
+  });
+
+  it("aborts promptly during 429 retry backoff when the caller signal fires", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = vi.fn(async () =>
+        jsonResponse({ message: "rate limited", retry_after: 30, global: false }, 429),
+      );
+      const controller = new AbortController();
+      const request = requestDiscord("/users/@me/guilds", "test-token", {
+        fetcher: withFetchPreconnect(fetcher),
+        retry: { attempts: 3 },
+        signal: controller.signal,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      controller.abort();
+
+      await expect(request).rejects.toThrow(/abort/i);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

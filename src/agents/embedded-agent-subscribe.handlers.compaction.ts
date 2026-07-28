@@ -5,7 +5,9 @@
  */
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { recordSessionCompacted } from "../sessions/session-state-events.js";
 import { stripStaleAssistantUsageBeforeLatestCompaction } from "./compaction-usage.js";
+import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
@@ -63,9 +65,14 @@ export function handleCompactionStart(
     stream: "compaction",
     data: { phase: "start" },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "compaction",
-    data: { phase: "start" },
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "start" },
+      }),
   });
 
   // Hooks are fire-and-forget so compaction state updates and liveness pauses
@@ -108,6 +115,12 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
         : undefined;
     ctx.noteCompactionTokensAfter(tokensAfter);
     const observedCompactionCount = ctx.getCompactionCount();
+    recordSessionCompacted({
+      sessionKey: ctx.params.sessionKey,
+      operationId: `${ctx.params.runId}:${observedCompactionCount}`,
+      agentId: ctx.params.agentId,
+      runId: ctx.params.runId,
+    });
     ctx.log.info(`embedded run ${kind} complete`, {
       event: "embedded_run_compaction_end",
       runId: ctx.params.runId,
@@ -153,9 +166,14 @@ export function handleCompactionEnd(ctx: EmbeddedAgentSubscribeContext, evt: Com
     stream: "compaction",
     data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
   });
-  void ctx.params.onAgentEvent?.({
-    stream: "compaction",
-    data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+  runBestEffortCallback({
+    label: "compaction agent event",
+    log: ctx.log,
+    callback: () =>
+      ctx.params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", willRetry, completed: hasResult && !wasAborted },
+      }),
   });
 
   // after_compaction runs only once the run will not retry, matching the visible
@@ -187,9 +205,8 @@ async function reconcileSessionStoreCompactionCountAfterSuccess(params: {
   observedCompactionCount: number;
   now?: number;
 }): Promise<number | undefined> {
-  const { default: reconcile } = await import(
-    "./embedded-agent-subscribe.handlers.compaction.runtime.js"
-  );
+  const { default: reconcile } =
+    await import("./embedded-agent-subscribe.handlers.compaction.runtime.js");
   return reconcile(params);
 }
 

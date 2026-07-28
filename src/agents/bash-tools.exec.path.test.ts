@@ -66,7 +66,11 @@ vi.mock("../infra/exec-approvals.js", async () => {
   const mod = await vi.importActual<typeof import("../infra/exec-approvals.js")>(
     "../infra/exec-approvals.js",
   );
-  return { ...mod, resolveExecApprovals: () => createExecApprovals() };
+  return {
+    ...mod,
+    resolveExecApprovals: () => createExecApprovals(),
+    resolveExecApprovalsLocked: async () => createExecApprovals(),
+  };
 });
 
 vi.mock("../process/supervisor/index.js", () => ({
@@ -111,7 +115,7 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
-let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let createExecTool: typeof import("./bash-tools.exec-run.js").createExecTool;
 
 function createExecApprovals(): ExecApprovalsResolved {
   return {
@@ -171,7 +175,7 @@ describe("exec PATH login shell merge", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ createExecTool } = await import("./bash-tools.exec-run.js"));
   });
 
   afterAll(() => {

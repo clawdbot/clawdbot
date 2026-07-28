@@ -84,18 +84,18 @@ them.
 Use this matrix for pre-release signoff. Record pass/fail, run URL/Testbox ID,
 package SHA/version, and skipped-live reason.
 
-| Surface | Proof | Preferred runner |
-| --- | --- | --- |
-| Package artifact | Package Acceptance `suite_profile=package` or custom lanes | GitHub Actions |
-| Bundled lifecycle | 8-shard `test:docker:bundled-plugin-install-uninstall` | Testbox or release Docker |
-| External plugins | `test:docker:plugins` and `plugins-offline` | Testbox/package acceptance |
-| Update no-op | `test:docker:plugin-update` | Testbox/package acceptance |
-| Channel runtime deps | `test:docker:bundled-channel-deps:fast` plus key channels | Testbox/package acceptance |
-| Doctor/fix | seeded bad configs + `doctor --fix --non-interactive` | new Docker/Testbox harness |
-| Config round-trip | `config set/get`, inspect, doctor, reload, diff hash | new Docker/Testbox harness |
-| Gateway bootstrap | clean `HOME`, plugin groups enabled/disabled, status JSON | new Docker/Testbox harness |
-| SDK compatibility | directory, tgz, and `file:` external plugins using SDK subpaths | `test:docker:plugins` plus new smoke |
-| Live-ish | redacted provider/channel probes only for present env | Testbox live lanes |
+| Surface              | Proof                                                           | Preferred runner                     |
+| -------------------- | --------------------------------------------------------------- | ------------------------------------ |
+| Package artifact     | Package Acceptance `suite_profile=package` or custom lanes      | GitHub Actions                       |
+| Bundled lifecycle    | 8-shard `test:docker:bundled-plugin-install-uninstall`          | Testbox or release Docker            |
+| External plugins     | `test:docker:plugins` and `plugins-offline`                     | Testbox/package acceptance           |
+| Update no-op         | `test:docker:plugin-update`                                     | Testbox/package acceptance           |
+| Channel runtime deps | `test:docker:bundled-channel-deps:fast` plus key channels       | Testbox/package acceptance           |
+| Doctor/fix           | seeded bad configs + `doctor --fix --non-interactive`           | new Docker/Testbox harness           |
+| Config round-trip    | `config set/get`, inspect, doctor, reload, diff hash            | new Docker/Testbox harness           |
+| Gateway bootstrap    | clean `HOME`, plugin groups enabled/disabled, status JSON       | new Docker/Testbox harness           |
+| SDK compatibility    | directory, tgz, and `file:` external plugins using SDK subpaths | `test:docker:plugins` plus new smoke |
+| Live-ish             | redacted provider/channel probes only for present env           | Testbox live lanes                   |
 
 ## Package Acceptance Plan
 
@@ -116,6 +116,57 @@ gh workflow run package-acceptance.yml \
 Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
 `workflow_ref` as trusted current harness code unless the release process says
 otherwise.
+
+For extended-stable, branch-owned Full Release Validation is publication
+evidence; Package Acceptance is a post-publish selector smoke:
+
+```bash
+gh workflow run package-acceptance.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f workflow_ref=main \
+  -f source=npm \
+  -f package_spec=openclaw@extended-stable \
+  -f suite_profile=package \
+  -f telegram_mode=mock-openai
+```
+
+Record the resolved version. Still verify every package and selector in the
+tag's `all-publishable` inventory; one smoke is not registry readback.
+
+## Plugin npm Artifact Preflight
+
+Use the trusted `main` workflow to prepare and read back a selected plugin npm
+artifact from an exact release SHA without entering any publish approval,
+environment, secret, OIDC, npm mutation, or ClawHub mutation path:
+
+```bash
+release_sha="$(git rev-parse origin/release/2026.7.1)"
+ghx workflow run plugin-npm-release.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f preflight_only=true \
+  -f publish_scope=selected \
+  -f plugins=@openclaw/meta-provider \
+  -f ref="${release_sha}" \
+  -f npm_dist_tag=default
+```
+
+Do not pass `release_publish_run_id`. Require the workflow to finish
+`verify_plugin_npm_preflight` successfully. Record the run URL, workflow SHA,
+and source SHA. The workflow first creates the staging/readback artifact
+`plugin-npm-package-source-<source-sha>-<extension-id>` containing
+`npm-pack.json`, `preflight-manifest.json`, and the tarball. It then uploads the
+final consumer artifact `plugin-npm-package-<extension-id>-<version>` containing
+the tarball and `plugin-npm-package-evidence.json`.
+
+Record the final artifact name and digest separately. In the v2 evidence,
+`publicationArtifact` binds the staging artifact id, name, digest, source and
+packed `package.json` hashes, and tarball hash. This proof is validation-only;
+it does not authorize or stage publication. For an already-published version,
+require npm `dist.integrity` and `dist.shasum` to match the verified tarball.
+Treat only missing or provably older dist-tags as repairable; newer or
+incomparable selectors are a blocker.
 
 ## New Testbox Harness Plan
 

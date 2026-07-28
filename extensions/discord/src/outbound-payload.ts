@@ -1,8 +1,9 @@
-// Discord plugin module implements outbound payload behavior.
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
+// Discord plugin module implements outbound payload behavior.
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   getReplyPayloadTtsSupplement,
   resolvePayloadMediaUrls,
@@ -101,7 +102,8 @@ export async function sendDiscordOutboundPayload(params: {
     let deliveredVoice = false;
     let lastResult: Awaited<ReturnType<DiscordPayloadSendContext["send"]>>;
     try {
-      lastResult = await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
+      const voiceUrl = expectDefined(mediaUrls.at(0), "non-empty Discord voice media URLs");
+      lastResult = await sendContext.sendVoice(sendContext.target, voiceUrl, {
         ...resolveDiscordDeliveryOptions(ctx, sendContext, voiceReply),
       });
       deliveredVoice = true;

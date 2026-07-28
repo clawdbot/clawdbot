@@ -286,7 +286,7 @@ fs.writeFileSync(
     {
       id: "brave",
       activation: { onStartup: false },
-      providerAuthEnvVars: { brave: ["BRAVE_API_KEY"] },
+      setup: { providers: [{ id: "brave", envVars: ["BRAVE_API_KEY"] }] },
       contracts: { webSearchProviders: ["brave"] },
       configSchema: {
         type: "object",
@@ -314,7 +314,8 @@ fs.writeFileSync(
 );
 NODE
   tar -czf "$tarball" -C "$fixture_root" package
-  node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+    node scripts/e2e/lib/plugins/npm-registry-server.mjs \
     "$port_file" \
     "@openclaw/brave-plugin" \
     "2026.5.2" \

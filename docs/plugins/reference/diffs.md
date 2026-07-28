@@ -16,4 +16,4 @@ OpenClaw read-only diff viewer plugin and file renderer for agents.
 
 ## Surface
 
-contracts: tools; skills
+contracts: `tools`; skills

@@ -151,7 +151,7 @@ describe("web tools defaults", () => {
         createTool: () => ({
           description: "custom runtime tool",
           parameters: {},
-          execute: async () => ({ ok: true }),
+          execute: async () => ({ query: "openclaw", results: [] }),
         }),
       },
     });
@@ -168,10 +168,16 @@ describe("web tools defaults", () => {
       },
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", {});
+    const result = await tool?.execute?.("call-runtime-provider", { query: "openclaw" });
 
-    expect(tool?.description).toContain("Search web");
-    expect((result?.details as { ok?: boolean } | undefined)?.ok).toBe(true);
+    expect(tool?.description).toContain("Search current web");
+    expect(result?.details).toMatchObject({
+      kind: "results",
+      provider: "custom",
+      query: "openclaw",
+      count: 0,
+      results: [],
+    });
   });
 
   it("keeps runtime provider discovery enabled when runtime web_search metadata is missing", async () => {
@@ -194,7 +200,7 @@ describe("web tools defaults", () => {
         createTool: () => ({
           description: "custom runtime tool",
           parameters: {},
-          execute: async () => ({ provider: "custom" }),
+          execute: async () => ({ query: "openclaw", results: [] }),
         }),
       },
     });
@@ -213,7 +219,9 @@ describe("web tools defaults", () => {
       sandboxed: true,
     });
 
-    const result = await tool?.execute?.("call-runtime-provider-without-metadata", {});
+    const result = await tool?.execute?.("call-runtime-provider-without-metadata", {
+      query: "openclaw",
+    });
 
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("custom");
     expect(runWebSearchCalls).toHaveLength(1);
@@ -243,7 +251,7 @@ describe("web tools defaults", () => {
           createTool: () => ({
             description: "stale runtime tool",
             parameters: {},
-            execute: async () => ({ provider: "stale" }),
+            execute: async () => ({ query: "openclaw", results: [] }),
           }),
         },
       },
@@ -265,7 +273,7 @@ describe("web tools defaults", () => {
           createTool: () => ({
             description: "fresh runtime tool",
             parameters: {},
-            execute: async () => ({ provider: "fresh" }),
+            execute: async () => ({ query: "openclaw", results: [] }),
           }),
         },
       },
@@ -303,7 +311,7 @@ describe("web tools defaults", () => {
       lateBindRuntimeConfig: true,
     });
 
-    const result = await tool?.execute?.("call-runtime-provider", {});
+    const result = await tool?.execute?.("call-runtime-provider", { query: "openclaw" });
 
     expect((result?.details as { provider?: string } | undefined)?.provider).toBe("fresh");
     expect(runWebSearchCalls).toHaveLength(1);

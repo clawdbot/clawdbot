@@ -1,4 +1,5 @@
 // Memory Host SDK module implements response snippet behavior.
+import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const DEFAULT_ERROR_BODY_MAX_BYTES = 8 * 1024;
@@ -26,7 +27,7 @@ type ResponsePrefix = {
 };
 
 /** Read a small collapsed text snippet from a response body. */
-export async function readResponseTextSnippet(
+export async function readMemoryHostResponseTextSnippet(
   res: Response,
   options: ResponseTextSnippetOptions = {},
 ): Promise<string> {
@@ -37,7 +38,9 @@ export async function readResponseTextSnippet(
     return "";
   }
 
-  const text = new TextDecoder().decode(joinChunks(prefix.bytes, prefix.length));
+  const text = decodeTextPrefix(joinChunks(prefix.bytes, prefix.length), {
+    truncated: prefix.truncated,
+  });
   const collapsed = text.replace(/\s+/g, " ").trim();
   if (!collapsed) {
     return "";
@@ -217,7 +220,7 @@ function parseContentLength(raw: string | null, errorPrefix: string): number | u
   if (!trimmed) {
     return undefined;
   }
-  if (!/^(0|[1-9]\d*)$/.test(trimmed)) {
+  if (!/^\d+$/.test(trimmed)) {
     throw new Error(`${errorPrefix}: invalid content-length header: ${raw}`);
   }
   const value = Number(trimmed);

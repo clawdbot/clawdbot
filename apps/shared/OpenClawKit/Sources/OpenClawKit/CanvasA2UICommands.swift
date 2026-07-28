@@ -11,10 +11,6 @@ public enum OpenClawCanvasA2UICommand: String, Codable, Sendable {
 
 public struct OpenClawCanvasA2UIPushParams: Codable, Sendable, Equatable {
     public var messages: [AnyCodable]
-
-    public init(messages: [AnyCodable]) {
-        self.messages = messages
-    }
 }
 
 public struct OpenClawCanvasA2UIPushJSONLParams: Codable, Sendable, Equatable {

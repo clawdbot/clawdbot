@@ -8,8 +8,12 @@ typealias OpenClawCameraClipResult = (format: String, base64: String, durationMs
 
 protocol CameraServicing: Sendable {
     func listDevices() async -> [CameraController.CameraDeviceInfo]
-    func snap(params: OpenClawCameraSnapParams) async throws -> OpenClawCameraSnapResult
-    func clip(params: OpenClawCameraClipParams) async throws -> OpenClawCameraClipResult
+    func snap(
+        params: OpenClawCameraSnapParams,
+        defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraSnapResult
+    func clip(
+        params: OpenClawCameraClipParams,
+        defaultFacing: OpenClawCameraFacing) async throws -> OpenClawCameraClipResult
 }
 
 protocol ScreenRecordingServicing: Sendable {
@@ -25,6 +29,7 @@ protocol ScreenRecordingServicing: Sendable {
 protocol LocationServicing: Sendable {
     func authorizationStatus() -> CLAuthorizationStatus
     func accuracyAuthorization() -> CLAccuracyAuthorization
+    func authorizationSnapshot() -> LocationAuthorizationSnapshot
     func ensureAuthorization(mode: OpenClawLocationMode) async -> CLAuthorizationStatus
     func currentLocation(
         params: OpenClawLocationGetParams,
@@ -33,9 +38,17 @@ protocol LocationServicing: Sendable {
         timeoutMs: Int?) async throws -> CLLocation
     func setBackgroundLocationUpdatesEnabled(_ enabled: Bool)
     func setAuthorizationChangeHandler(
-        _ handler: @escaping @MainActor @Sendable (CLAuthorizationStatus) -> Void)
+        _ handler: @escaping @MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)
     func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void)
     func stopMonitoringSignificantLocationChanges()
+}
+
+extension LocationServicing {
+    func authorizationSnapshot() -> LocationAuthorizationSnapshot {
+        LocationAuthorizationSnapshot(
+            authorizationStatus: self.authorizationStatus(),
+            accuracyAuthorization: self.accuracyAuthorization())
+    }
 }
 
 @MainActor
@@ -102,10 +115,31 @@ struct WatchExecApprovalResolveEvent: Codable, Equatable {
     var transport: String
 }
 
+struct WatchExecApprovalSnapshotRequestItem: Equatable {
+    var approvalId: String
+    var activeResolutionAttemptId: String?
+}
+
 struct WatchExecApprovalSnapshotRequestEvent: Equatable {
     var requestId: String
+    var gatewayStableID: String?
+    var heldApprovals: [WatchExecApprovalSnapshotRequestItem]
     var sentAtMs: Int64?
     var transport: String
+
+    init(
+        requestId: String,
+        gatewayStableID: String? = nil,
+        heldApprovals: [WatchExecApprovalSnapshotRequestItem] = [],
+        sentAtMs: Int64?,
+        transport: String)
+    {
+        self.requestId = requestId
+        self.gatewayStableID = gatewayStableID
+        self.heldApprovals = heldApprovals
+        self.sentAtMs = sentAtMs
+        self.transport = transport
+    }
 }
 
 struct WatchAppSnapshotRequestEvent: Equatable {
@@ -122,7 +156,7 @@ struct WatchAppCommandEvent: Codable, Equatable {
     var text: String?
     var sentAtMs: Int64?
     var transport: String
-    var messageKind: WatchMessageKind? = nil
+    var messageKind: WatchMessageKind?
 }
 
 struct WatchNotificationSendResult: Equatable {

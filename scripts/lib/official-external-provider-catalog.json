@@ -142,6 +142,55 @@
       }
     },
     {
+      "name": "@openclaw/baseten-provider",
+      "description": "OpenClaw Baseten provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "baseten",
+          "label": "Baseten"
+        },
+        "providers": [
+          {
+            "id": "baseten",
+            "name": "Baseten",
+            "docs": "/providers/baseten",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "BASETEN_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "baseten-api-key",
+                "choiceLabel": "Baseten API key",
+                "groupId": "baseten",
+                "groupLabel": "Baseten",
+                "groupHint": "Hosted Model APIs, including Inkling",
+                "optionKey": "basetenApiKey",
+                "cliFlag": "--baseten-api-key",
+                "cliOption": "--baseten-api-key <key>",
+                "cliDescription": "Baseten API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/baseten-provider",
+          "npmSpec": "@openclaw/baseten-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/cerebras-provider",
       "description": "OpenClaw Cerebras provider plugin.",
       "source": "official",
@@ -366,47 +415,6 @@
       }
     },
     {
-      "name": "@openclaw/codex",
-      "description": "OpenClaw Codex harness and model provider plugin",
-      "source": "official",
-      "kind": "provider",
-      "openclaw": {
-        "plugin": {
-          "id": "codex",
-          "label": "Codex"
-        },
-        "contracts": {
-          "migrationProviders": ["codex"]
-        },
-        "providers": [
-          {
-            "id": "codex",
-            "name": "Codex",
-            "docs": "/providers/models",
-            "categories": ["cloud", "llm"],
-            "authChoices": [
-              {
-                "method": "app-server",
-                "choiceId": "codex",
-                "choiceLabel": "Codex app-server",
-                "choiceHint": "Use the Codex app-server runtime and managed model catalog.",
-                "assistantPriority": -40,
-                "groupId": "codex",
-                "groupLabel": "Codex",
-                "groupHint": "Codex app-server model provider",
-                "onboardingScopes": ["text-inference"]
-              }
-            ]
-          }
-        ],
-        "install": {
-          "npmSpec": "@openclaw/codex",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.1-beta.1"
-        }
-      }
-    },
-    {
       "name": "@openclaw/deepinfra-provider",
       "description": "OpenClaw DeepInfra provider plugin.",
       "source": "official",
@@ -460,7 +468,7 @@
           "mediaUnderstandingProviders": [
             "deepinfra"
           ],
-          "memoryEmbeddingProviders": [
+          "embeddingProviders": [
             "deepinfra"
           ],
           "imageGenerationProviders": [
@@ -695,7 +703,7 @@
         "providerEndpoints": [
           {
             "endpointClass": "meta-native",
-            "hosts": ["api.ai.meta.com"]
+            "hosts": ["api.meta.ai"]
           }
         ],
         "providers": [
@@ -1003,13 +1011,9 @@
               "https://coding-intl.dashscope.aliyuncs.com/v1",
               "https://coding.dashscope.aliyuncs.com/v1",
               "https://dashscope.aliyuncs.com/compatible-mode/v1",
-              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-            ]
-          },
-          {
-            "endpointClass": "qwen-portal-native",
-            "baseUrls": [
-              "https://portal.qwen.ai/v1"
+              "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+              "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+              "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
             ]
           }
         ],
@@ -1112,37 +1116,58 @@
             ]
           },
           {
-            "id": "qwen-oauth",
-            "aliases": [
-              "qwen-portal",
-              "qwen-cli"
-            ],
-            "name": "Qwen Cloud qwen oauth",
+            "id": "qwen-token-plan",
+            "name": "Qwen Token Plan",
             "docs": "/providers/qwen",
             "categories": [
               "cloud",
               "llm"
             ],
             "envVars": [
-              "QWEN_API_KEY"
+              "QWEN_TOKEN_PLAN_API_KEY"
             ],
             "authChoices": [
               {
                 "method": "api-key",
-                "choiceId": "qwen-oauth",
-                "choiceLabel": "Qwen OAuth",
-                "choiceHint": "Portal token for portal.qwen.ai",
+                "choiceId": "qwen-token-plan",
+                "choiceLabel": "Qwen Token Plan (Global/Intl)",
+                "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
                 "groupId": "qwen",
                 "groupLabel": "Qwen Cloud",
-                "groupHint": "Standard / Coding Plan / OAuth",
-                "optionKey": "qwenOauthToken",
-                "cliFlag": "--qwen-oauth-token",
-                "cliOption": "--qwen-oauth-token <token>",
-                "cliDescription": "Qwen OAuth token",
+                "groupHint": "Standard / Coding Plan / Token Plan",
+                "optionKey": "qwenTokenPlanApiKey",
+                "cliFlag": "--qwen-token-plan-api-key",
+                "cliOption": "--qwen-token-plan-api-key <key>",
+                "cliDescription": "Qwen Token Plan API key (Global/Intl)",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              },
+              {
+                "method": "api-key-cn",
+                "choiceId": "qwen-token-plan-cn",
+                "choiceLabel": "Qwen Token Plan (China)",
+                "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
+                "groupId": "qwen",
+                "groupLabel": "Qwen Cloud",
+                "groupHint": "Standard / Coding Plan / Token Plan",
+                "optionKey": "qwenTokenPlanApiKeyCn",
+                "cliFlag": "--qwen-token-plan-api-key-cn",
+                "cliOption": "--qwen-token-plan-api-key-cn <key>",
+                "cliDescription": "Qwen Token Plan API key (China)",
                 "onboardingScopes": [
                   "text-inference"
                 ]
               }
+            ]
+          },
+          {
+            "id": "bailian-token-plan",
+            "name": "Alibaba Token Plan (legacy custom config)",
+            "docs": "/providers/qwen",
+            "categories": [
+              "cloud",
+              "llm"
             ]
           }
         ],
