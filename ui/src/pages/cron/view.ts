@@ -53,6 +53,7 @@ type CronProps = {
   basePath: string;
   agentId: string;
   loading: boolean;
+  /** Canonical gateway capability for every mutation-capable cron control. */
   canManage: boolean;
   jobsLoadingMore: boolean;
   status: CronStatus | null;
@@ -71,7 +72,6 @@ type CronProps = {
   jobsSortDir: CronSortDir;
   error: string | null;
   busy: boolean;
-  canManage: boolean;
   form: CronFormState;
   fieldErrors: CronFieldErrors;
   canSubmit: boolean;
