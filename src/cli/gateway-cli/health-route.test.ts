@@ -70,6 +70,31 @@ describe("runGatewayHealthJsonRoute", () => {
     );
   });
 
+  it("preserves the existing error contract when local config resolution fails", async () => {
+    const runtime = createRuntime();
+    const error = new Error("config unavailable");
+    const callGateway = vi.fn();
+
+    await runGatewayHealthJsonRoute(
+      {
+        rpc: { json: true, timeout: "10000" },
+        localPortOverride: 19083,
+      },
+      runtime as never,
+      {
+        callGateway,
+        readBestEffortConfig: vi.fn(async () => {
+          throw error;
+        }),
+      },
+    );
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(String(error));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
   it("preserves structured transport errors", async () => {
     const runtime = createRuntime();
     const error = new Error("gateway unavailable");

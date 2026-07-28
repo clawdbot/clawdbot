@@ -47,11 +47,17 @@ export async function runGatewayHealthJsonRoute(
   runtime: RuntimeEnv,
   deps: GatewayHealthRouteDependencies = {},
 ): Promise<void> {
-  const rpc = await resolveRouteRpcOptions(args, deps);
+  let rpc: GatewayRpcOpts | undefined;
   try {
+    rpc = await resolveRouteRpcOptions(args, deps);
     const callGateway = deps.callGateway ?? (await import("./call.js")).callGatewayCli;
     writeRuntimeJson(runtime, await callGateway("health", rpc));
   } catch (error) {
+    if (!rpc) {
+      runtime.error(String(error));
+      runtime.exit(1);
+      return;
+    }
     const [healthModule, configModule, callModule] = await Promise.all([
       deps.emitReachableGatewayAuthDiagnostic ? undefined : import("../../commands/health.js"),
       deps.readBestEffortConfig
