@@ -8,7 +8,6 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
-import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
@@ -21,6 +20,7 @@ import {
   createRecoveryPointManifest,
   recoveryPointOwnerInventorySchema,
   verifyRecoveryPoint,
+  verifyRecoveryPointOwnerInventory,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
   type RecoveryPointSqliteSnapshot,
@@ -142,7 +142,16 @@ export function parseFinalRecoveryPointRequest(raw: string): FinalRecoveryPointR
     );
   }
   assertCanonicalTimestamp(request.capturedAt);
-  assertAgentInventory(request.ownerInventory.agentIds);
+  try {
+    verifyRecoveryPointOwnerInventory(request.ownerInventory);
+  } catch (error) {
+    throw new FinalRecoveryPointError(
+      "final-capture.request-invalid",
+      "quarantine",
+      "Final recovery-point owner inventory is invalid.",
+      { cause: error },
+    );
+  }
   if (request.ownerInventory.sourceRuntimeGeneration !== request.sourceGeneration) {
     throw new FinalRecoveryPointError(
       "final-capture.request-invalid",
@@ -473,23 +482,6 @@ function assertCanonicalTimestamp(value: string): void {
       "final-capture.request-invalid",
       "quarantine",
       "Final recovery-point capturedAt must be a canonical timestamp.",
-    );
-  }
-}
-
-function assertAgentInventory(agentIds: readonly string[]): void {
-  const normalized = agentIds.map((agentId) => normalizeAgentId(agentId));
-  if (
-    normalized.some(
-      (agentId, index) => !isValidAgentId(agentIds[index]!) || agentId !== agentIds[index],
-    ) ||
-    new Set(normalized).size !== normalized.length ||
-    !isDeepStrictEqual(normalized, normalized.toSorted())
-  ) {
-    throw new FinalRecoveryPointError(
-      "final-capture.request-invalid",
-      "quarantine",
-      "Final recovery-point owner inventory agentIds must be unique, normalized, and sorted.",
     );
   }
 }
