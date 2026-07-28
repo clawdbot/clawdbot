@@ -51,7 +51,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Sandbox browser network migration:** reject Docker network mode `"none"` before sidecar startup, and have `openclaw doctor --fix` disable affected persisted sidecars while restoring the dedicated browser network instead of silently granting container egress.
 - **Dev-channel updates:** finish package-to-git switches in a fresh CLI process even when source SHA and version metadata are unchanged, preventing stale hashed chunks from loading after the global package root changes.
 - **Parallels release smoke:** preserve Windows installer reboot results across Parallels, wait for WSL MSI/default-version readiness, force explicit test-owned gateway stops, and reset Linux package, config, and cache state before install lanes, preventing false prerequisite, safety-gate, and stale-config failures.
 - **OpenAI Realtime Talk auth:** remove the non-public Codex OAuth realtime fallback and require an OpenAI Platform API key for Talk, Voice Call, and Discord realtime voice, preventing OAuth-only gateways from advertising a browser session that the live service rejects. Fixes #115021.
