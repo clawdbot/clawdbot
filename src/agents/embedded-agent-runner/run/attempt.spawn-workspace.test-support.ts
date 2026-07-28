@@ -158,6 +158,7 @@ function createSubscriptionMock(): SubscriptionMock {
     getLastToolError: () => undefined,
     getUsageTotals: () => undefined,
     getLastAssistantUsage: () => undefined,
+    getAssistantTurnCount: () => 0,
     getCompactionCount: () => 0,
     getLastCompactionTokensAfter: () => undefined,
     getItemLifecycle: () => ({ startedCount: 0, completedCount: 0, activeCount: 0 }),

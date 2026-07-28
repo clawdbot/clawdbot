@@ -229,7 +229,6 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 }));
 
 import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
@@ -2434,18 +2433,14 @@ describe("resolveModel", () => {
     });
   });
 
-  it("adds GitHub Copilot IDE headers to dynamic resolved model headers for native compaction", () => {
+  it("leaves dynamic GitHub Copilot request identity to runtime auth preparation", () => {
     const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent");
     const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(model.headers).toEqual({
-      ...buildCopilotIdeHeaders(),
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      "Openai-Organization": "github-copilot",
-    });
+    expect(model.headers).toBeUndefined();
   });
 
-  it("adds GitHub Copilot IDE headers to configured resolved model headers for native compaction", () => {
+  it("leaves configured GitHub Copilot request identity to runtime auth preparation", () => {
     const cfg = {
       models: {
         providers: {
@@ -2461,11 +2456,7 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("github-copilot", "gpt-5.5", "/tmp/agent", cfg);
     const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(model.headers).toEqual({
-      ...buildCopilotIdeHeaders(),
-      "Copilot-Integration-Id": COPILOT_INTEGRATION_ID,
-      "Openai-Organization": "github-copilot",
-    });
+    expect(model.headers).toBeUndefined();
   });
 
   it("includes provider headers in provider fallback model", () => {

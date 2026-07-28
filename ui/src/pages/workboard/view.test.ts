@@ -2,6 +2,7 @@
 import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { nextWorkboardCardPosition } from "../../lib/workboard/card-state.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
 import {
   createWorkboardCard,
@@ -90,6 +91,114 @@ function selectWorkboardAgent(select: Element | null | undefined, value: string)
   expect(control).not.toBeNull();
   control?.onSelect(value);
 }
+
+describe("nextWorkboardCardPosition", () => {
+  const opsCard = createWorkboardCard({
+    metadata: { automation: { boardId: "ops" } },
+  });
+  const runningOpsCard = createWorkboardCard({
+    id: "moving-ops-running",
+    status: "running",
+    position: 9000,
+    metadata: { automation: { boardId: "ops" } },
+  });
+
+  it.each([
+    {
+      name: "starts an empty board column at the canonical position",
+      card: opsCard,
+      cards: [],
+      position: 1000,
+    },
+    {
+      name: "appends after cards on the same board",
+      card: opsCard,
+      cards: [
+        createWorkboardCard({
+          id: "ops-running",
+          status: "running",
+          position: 2000,
+          metadata: { automation: { boardId: "ops" } },
+        }),
+      ],
+      position: 3000,
+    },
+    {
+      name: "does not count a card dropped back into its own empty column",
+      card: runningOpsCard,
+      cards: [runningOpsCard],
+      position: 1000,
+    },
+    {
+      name: "appends a same-column drop after its other cards only",
+      card: runningOpsCard,
+      cards: [
+        runningOpsCard,
+        createWorkboardCard({
+          id: "other-ops-running",
+          status: "running",
+          position: 2000,
+          metadata: { automation: { boardId: "ops" } },
+        }),
+      ],
+      position: 3000,
+    },
+    {
+      name: "ignores larger positions on another board",
+      card: opsCard,
+      cards: [
+        createWorkboardCard({
+          id: "product-running",
+          status: "running",
+          position: 9000,
+          metadata: { automation: { boardId: "product" } },
+        }),
+      ],
+      position: 1000,
+    },
+    {
+      name: "preserves archived positions on the same board",
+      card: opsCard,
+      cards: [
+        createWorkboardCard({
+          id: "archived-ops-running",
+          status: "running",
+          position: 3000,
+          metadata: { archivedAt: 10, automation: { boardId: "ops" } },
+        }),
+      ],
+      position: 4000,
+    },
+    {
+      name: "ignores a larger position in another status",
+      card: opsCard,
+      cards: [
+        createWorkboardCard({
+          id: "ops-done",
+          status: "done",
+          position: 9000,
+          metadata: { automation: { boardId: "ops" } },
+        }),
+      ],
+      position: 1000,
+    },
+    {
+      name: "normalizes explicit and implicit default board ids",
+      card: createWorkboardCard(),
+      cards: [
+        createWorkboardCard({
+          id: "default-running",
+          status: "running",
+          position: 1000,
+          metadata: { automation: { boardId: " default " } },
+        }),
+      ],
+      position: 2000,
+    },
+  ])("$name", ({ card, cards, position }) => {
+    expect(nextWorkboardCardPosition(cards, card, "running")).toBe(position);
+  });
+});
 
 describe("renderWorkboard", () => {
   it("shows a card dashboard only for linked cards while the plugin is active", () => {
@@ -479,6 +588,36 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector(".workboard-card--dragging")).toBeNull();
     expect(container.querySelector(".workboard-column--drop")).toBeNull();
+  });
+
+  it("moves the resolved active card when a drop has no transfer payload", async () => {
+    const { host, state } = createLoadedWorkboardState();
+    const card = createWorkboardCard({ title: "Fallback drag move" });
+    const moved = { ...card, status: "running" as const, position: 1000 };
+    state.cards = [card];
+    state.draggedCardId = card.id;
+    const request = vi.fn(async () => ({ card: moved }));
+    const container = document.createElement("div");
+
+    renderInto(
+      container,
+      createWorkboardRenderProps(host, {
+        client: { request } as unknown as GatewayBrowserClient,
+      }),
+    );
+
+    container
+      .querySelector(".workboard-column--running")
+      ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: card.id,
+      status: "running",
+      position: 1000,
+    });
+    expect(state.cards).toContainEqual(moved);
   });
 
   it("hides cached card mutation controls until a lifecycle teardown reload succeeds", async () => {
@@ -1714,6 +1853,55 @@ describe("renderWorkboard", () => {
     expect(state.cards[0]).toMatchObject({ status: "blocked", updatedAt: 2 });
   });
 
+  it("appends a status move after archived cards on its own board only", async () => {
+    const { host, state } = createLoadedWorkboardState();
+    const movingCard = createWorkboardCard({
+      title: "Move within Operations",
+      metadata: { automation: { boardId: "ops" } },
+    });
+    state.boardFilter = "ops";
+    state.cards = [
+      movingCard,
+      createWorkboardCard({
+        id: "archived-ops-running",
+        title: "Archived Operations run",
+        status: "running",
+        position: 3000,
+        metadata: { archivedAt: 10, automation: { boardId: "ops" } },
+      }),
+      createWorkboardCard({
+        id: "product-running",
+        title: "Unrelated Product run",
+        status: "running",
+        position: 9000,
+        metadata: { automation: { boardId: "product" } },
+      }),
+    ];
+    const moved = { ...movingCard, status: "running" as const, position: 4000 };
+    const request = vi.fn(async () => ({ card: moved }));
+    const container = document.createElement("div");
+
+    renderInto(
+      container,
+      createWorkboardRenderProps(host, {
+        client: { request } as unknown as GatewayBrowserClient,
+      }),
+    );
+    const moveSelect = container.querySelector<HTMLSelectElement>(".workboard-card__move-select");
+    expect(moveSelect).not.toBeNull();
+    moveSelect!.value = "running";
+    moveSelect!.dispatchEvent(new Event("change", { bubbles: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.move", {
+      id: movingCard.id,
+      status: "running",
+      position: 4000,
+    });
+    expect(state.cards).toContainEqual(moved);
+  });
+
   it("moves a focused status control with keyboard arrows", async () => {
     const { host, state } = createLoadedWorkboardState();
     state.cards = [
@@ -2520,6 +2708,49 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector(".workboard-detail")).toBeNull();
     expect(container.querySelectorAll<HTMLButtonElement>(".workboard-card__start")).toHaveLength(0);
+  });
+
+  it("keeps visible archived cards inspectable and restorable without move or drag controls", () => {
+    const { host, state } = createLoadedWorkboardState();
+    const archivedCard = createWorkboardCard({
+      title: "Archived historical task",
+      metadata: { archivedAt: 10 },
+    });
+    state.cards = [archivedCard];
+    state.showArchived = true;
+    const request = vi.fn();
+    const props = createWorkboardRenderProps(host, {
+      client: { request } as unknown as GatewayBrowserClient,
+    });
+    const container = document.createElement("div");
+
+    renderInto(container, props);
+
+    const article = container.querySelector<HTMLElement>(".workboard-card--archived");
+    expect(article).not.toBeNull();
+    expect(article?.getAttribute("draggable")).toBe("false");
+    expect(article?.querySelector(".workboard-card__move-select")).toBeNull();
+    expect(buttonByLabel(article!, "Restore from archive")).not.toBeNull();
+    expect(
+      article!.dispatchEvent(new Event("dragstart", { bubbles: true, cancelable: true })),
+    ).toBe(false);
+    expect(state.draggedCardId).toBeNull();
+
+    state.draggedCardId = archivedCard.id;
+    container
+      .querySelector(".workboard-column--running")
+      ?.dispatchEvent(new Event("drop", { bubbles: true, cancelable: true }));
+    expect(request).not.toHaveBeenCalled();
+
+    state.draggedCardId = null;
+    state.detailCardId = archivedCard.id;
+    renderInto(container, props);
+
+    const drawer = container.querySelector<HTMLElement>(".workboard-detail");
+    expect(drawer?.textContent).toContain(archivedCard.title);
+    expect(drawer?.querySelector(".workboard-card__move-select")).toBeNull();
+    expect(buttonByLabel(drawer!, "Restore from archive")).not.toBeNull();
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("shows stale lifecycle on executed linked cards", () => {
