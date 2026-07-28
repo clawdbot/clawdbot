@@ -17,6 +17,7 @@ import {
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
+import { shouldEscalateRecall } from "./escalation.js";
 import { buildMetadata, buildPromptPrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import {
@@ -45,7 +46,6 @@ import {
   lacksAdminToMutateActiveMemoryGlobal,
   resolveCommandSessionKey,
   setSessionActiveMemoryDisabled,
-  hasRememberAcrossConversationsAgent,
   shouldRememberAcrossConversations,
   shouldSkipActiveMemoryForHarnessSession,
   updateActiveMemoryGlobalEnabledInConfig,
@@ -66,6 +66,7 @@ import {
   createActiveMemoryHookDeadline,
   hasUsableMemoryResultInSessionRecord,
 } from "./transcript.js";
+import { resolveTriggerRecall } from "./trigger-recall.js";
 import {
   HOOK_TIMEOUT_RECOVERY_GRACE_MS,
   MAX_SETUP_GRACE_TIMEOUT_MS,
@@ -120,8 +121,7 @@ export default definePluginEntry({
         api.pluginConfig as Record<string, unknown>,
       );
       const liveConfig = readCurrentConfig();
-      const fallbackConfig =
-        liveConfig && hasRememberAcrossConversationsAgent(liveConfig) ? {} : { enabled: false };
+      const fallbackConfig = {};
       const effectivePluginConfig =
         liveConfig && !isActiveMemoryPluginEnabled(liveConfig)
           ? { enabled: false }
@@ -337,12 +337,50 @@ export default definePluginEntry({
               ...sessionContext,
               mainKey: liveConfig.session?.mainKey ?? api.config.session?.mainKey,
             };
-            const activeMemoryConfigured = isEnabledForAgent(invocationConfig, effectiveAgentId);
+            const recentTurns = extractRecentTurns(event.messages);
+            const searchQuery = buildSearchQuery({
+              latestUserMessage: event.prompt,
+              recentTurns,
+            });
+            const memorySlot = normalizePluginsConfig(liveConfig.plugins).slots.memory;
             const chatIdAllowed = isAllowedChatId(invocationConfig, {
               sessionKey: destinationContext.sessionKey,
               messageProvider: destinationContext.messageProvider,
               channelId: destinationContext.channelId,
             });
+            const activeMemoryConfigured = isEnabledForAgent(invocationConfig, effectiveAgentId);
+            let laneOne: { context?: string; hasStrongHit: boolean; injectedCount: number } = {
+              hasStrongHit: false,
+              injectedCount: 0,
+            };
+            if (
+              activeMemoryConfigured &&
+              effectiveAgentId &&
+              memorySlot === MEMORY_CORE_PLUGIN_ID &&
+              isPrivateRecallDestination(destinationContext) &&
+              chatIdAllowed
+            ) {
+              laneOne = await resolveTriggerRecall({
+                cfg: liveConfig,
+                agentId: effectiveAgentId,
+                query: searchQuery,
+                message: event.prompt,
+                signal: AbortSignal.timeout(HOOK_TIMEOUT_RECOVERY_GRACE_MS),
+              }).catch((error: unknown) => {
+                api.logger.debug?.(
+                  `active-memory: lane-1 trigger recall failed: ${toSingleLineLogValue(
+                    error instanceof Error ? error.message : String(error),
+                  )}`,
+                );
+                return { hasStrongHit: false, injectedCount: 0 };
+              });
+              if (laneOne.context && laneOne.injectedCount > 0 && invocationConfig.logging) {
+                api.logger.info?.(
+                  `active-memory: lane-1 injected ${laneOne.injectedCount} trigger-matched entries`,
+                );
+              }
+            }
+            const laneOneContext = laneOne.context;
             const activeMemoryAllowed =
               activeMemoryConfigured &&
               isAllowedChatType(invocationConfig, destinationContext) &&
@@ -354,7 +392,6 @@ export default definePluginEntry({
               isPrivateRecallDestination(destinationContext) &&
               chatIdAllowed,
             );
-            const memorySlot = normalizePluginsConfig(liveConfig.plugins).slots.memory;
             const productRecallEligible =
               productRecallRequested && memorySlot === MEMORY_CORE_PLUGIN_ID;
             if (productRecallRequested && !productRecallEligible) {
@@ -375,7 +412,16 @@ export default definePluginEntry({
                 agentId: effectiveAgentId,
                 sessionKey: resolvedSessionKey,
               });
-              return undefined;
+              return laneOneContext ? { prependContext: laneOneContext } : undefined;
+            }
+            if (
+              !shouldEscalateRecall({
+                mode: invocationConfig.mode,
+                message: event.prompt,
+                hasStrongLaneOneHit: laneOne.hasStrongHit,
+              })
+            ) {
+              return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
             const conversationRecall: ConversationRecallContext | undefined =
               productRecallAllowed && resolvedSessionKey
@@ -389,15 +435,10 @@ export default definePluginEntry({
               productRecallAllowed && !activeMemoryAllowed
                 ? { ...invocationConfig, toolsAllow: ["memory_search"] }
                 : invocationConfig;
-            const recentTurns = extractRecentTurns(event.messages);
             const query = buildQuery({
               latestUserMessage: event.prompt,
               recentTurns,
               config: recallConfig,
-            });
-            const searchQuery = buildSearchQuery({
-              latestUserMessage: event.prompt,
-              recentTurns,
             });
             // Start recall with its full configured budget. The preceding
             // session/config checks must not consume abort-settlement time.
@@ -420,14 +461,14 @@ export default definePluginEntry({
             });
             deadlineController.signal.throwIfAborted();
             if (!result.summary) {
-              return undefined;
+              return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
             const promptPrefix = buildPromptPrefix(result.summary);
             if (!promptPrefix) {
-              return undefined;
+              return laneOneContext ? { prependContext: laneOneContext } : undefined;
             }
             return {
-              prependContext: promptPrefix,
+              prependContext: [laneOneContext, promptPrefix].filter(Boolean).join("\n"),
             };
           } catch (error) {
             if (deadlineController.signal.aborted) {

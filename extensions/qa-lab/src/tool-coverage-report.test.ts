@@ -142,7 +142,7 @@ describe("qa tool coverage report", () => {
             capabilityLayer: "codex-native-workspace",
             required: true,
             tracking: "#80236",
-            reason: "tracked | runtime drift",
+            reason: String.raw`tracked \| runtime drift`,
             codexDefaultImpact: "P2 | default",
             qaImpact: "P1 | confidence",
             action: "fix | backfill",
@@ -158,7 +158,7 @@ describe("qa tool coverage report", () => {
     expect(markdown).toContain("P2 \\| default");
     expect(markdown).toContain("P1 \\| confidence");
     expect(markdown).toContain("fix \\| backfill");
-    expect(markdown).toContain("#80236 tracked \\| runtime drift");
+    expect(markdown).toContain(String.raw`#80236 tracked \\\| runtime drift`);
   });
 
   it("keeps tracking metadata independent from required coverage metrics", () => {

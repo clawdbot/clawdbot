@@ -33,6 +33,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import okio.Buffer
+import java.net.URI
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -51,6 +53,11 @@ data class GatewayClientInfo(
   val instanceId: String?,
   val deviceFamily: String?,
   val modelIdentifier: String?,
+)
+
+data class GatewayLoadedImage(
+  val bytes: ByteArray,
+  val mimeType: String,
 )
 
 /**
@@ -616,6 +623,38 @@ class GatewaySession(
     throw GatewayRequestRejected(res.error ?: ErrorShape("UNAVAILABLE", "request failed"))
   }
 
+  suspend fun loadImageArtifact(
+    expectedEndpointStableId: String?,
+    sessionKey: String,
+    agentId: String?,
+    artifactId: String,
+  ): GatewayLoadedImage? {
+    val conn = readyConnection(expectedEndpointStableId) ?: return null
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        agentId?.trim()?.takeIf(String::isNotEmpty)?.let { put("agentId", JsonPrimitive(it)) }
+        put("artifactId", JsonPrimitive(artifactId))
+      }
+    val response = conn.request(GatewayMethod.ArtifactsDownload.rawValue, params, timeoutMs = 15_000)
+    if (!response.ok) {
+      throw GatewayRequestRejected(response.error ?: ErrorShape("UNAVAILABLE", "artifact download failed"))
+    }
+    val ticketedPath =
+      response.payloadJson
+        ?.let(::parseJsonOrNull)
+        .asObjectOrNull()
+        ?.get("url")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?: return null
+    val loaded = conn.loadTicketedImage(ticketedPath) ?: return null
+    return synchronized(lifecycleLock) {
+      loaded.takeIf { currentConnection === conn && conn.isReady() }
+    }
+  }
+
   internal suspend fun requestForEndpoint(
     expectedEndpointStableId: String,
     method: String,
@@ -829,6 +868,46 @@ class GatewaySession(
         if (connectRequestId == id) connectRequestId = null
       }
     }
+
+    suspend fun loadTicketedImage(ticketedPath: String): GatewayLoadedImage? =
+      withContext(Dispatchers.IO) {
+        val uri = runCatching { URI(ticketedPath) }.getOrNull() ?: return@withContext null
+        val rawPath = uri.rawPath ?: return@withContext null
+        val rawQuery = uri.rawQuery ?: return@withContext null
+        if (uri.isAbsolute || uri.rawAuthority != null || uri.rawFragment != null) return@withContext null
+        if (!rawPath.startsWith("/api/chat/media/outgoing/") || !rawQuery.contains("mediaTicket=")) {
+          return@withContext null
+        }
+        val scheme = if (tlsConfig != null) "https" else "http"
+        val url = "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}$ticketedPath"
+        val request = Request.Builder().url(url).header("Accept", "image/*")
+        if (tlsConfig != null) {
+          for ((name, value) in GatewayCustomHeaders.sanitized(customHeadersProvider?.invoke(endpoint.stableId).orEmpty())) {
+            request.header(name, value)
+          }
+        }
+        val call = client.newCall(request.build())
+        call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
+        call.execute().use { response ->
+          if (!response.isSuccessful) return@withContext null
+          val body = response.body
+          val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
+          if (!mimeType.startsWith("image/")) return@withContext null
+          val maximumBytes = 12L * 1024L * 1024L
+          val declaredLength = body.contentLength()
+          if (declaredLength > maximumBytes) return@withContext null
+          val buffer = Buffer()
+          val source = body.source()
+          var total = 0L
+          while (true) {
+            val read = source.read(buffer, minOf(8192L, maximumBytes + 1L - total))
+            if (read == -1L) break
+            total += read
+            if (total > maximumBytes) return@withContext null
+          }
+          GatewayLoadedImage(bytes = buffer.readByteArray(), mimeType = mimeType)
+        }
+      }
 
     @OptIn(DelicateCoroutinesApi::class)
     suspend fun sendRequestFrame(

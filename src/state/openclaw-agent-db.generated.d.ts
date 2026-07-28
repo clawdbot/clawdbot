@@ -135,16 +135,26 @@ export interface MemoryEmbeddingCache {
   updated_at: number;
 }
 
+export interface MemoryIndexChunkProvenance {
+  chunk_id: string;
+  observed_at: number;
+  origin_class: string;
+  session_kind: string;
+  supersedes_key: string | null;
+}
+
 export interface MemoryIndexChunks {
   embedding: string;
   end_line: number;
   hash: string;
   id: string;
+  importance: number | null;
   model: string;
   path: string;
   source: Generated<string>;
   start_line: number;
   text: string;
+  triggers: string | null;
   updated_at: number;
 }
 
@@ -315,6 +325,50 @@ export interface SessionWindows {
   updated_at: number;
 }
 
+export interface StandingIntents {
+  channel_scope: string | null;
+  cooldown_seconds: Generated<number>;
+  created_at: number;
+  creator_sender: string | null;
+  description: string;
+  expires_at: number;
+  fire_count: Generated<number>;
+  id: string;
+  intent_key: Generated<number>;
+  last_fired_at: number | null;
+  max_fires: number;
+  sender_scope: string | null;
+  source_session_id: string | null;
+  status: string;
+  trigger_embedding: string | null;
+  trigger_keywords: string;
+}
+
+export interface StandingIntentsFts {
+  trigger_keywords: string | null;
+}
+
+export interface StandingIntentsFtsConfig {
+  k: string;
+  v: string | null;
+}
+
+export interface StandingIntentsFtsData {
+  block: Uint8Array | null;
+  id: Generated<number>;
+}
+
+export interface StandingIntentsFtsDocsize {
+  id: Generated<number>;
+  sz: Uint8Array | null;
+}
+
+export interface StandingIntentsFtsIdx {
+  pgno: string | null;
+  segid: string;
+  term: string;
+}
+
 export interface StateLeases {
   created_at: number;
   expires_at: number | null;
@@ -368,6 +422,7 @@ export interface DB {
   conversations: Conversations;
   heartbeat_outcomes: HeartbeatOutcomes;
   memory_embedding_cache: MemoryEmbeddingCache;
+  memory_index_chunk_provenance: MemoryIndexChunkProvenance;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
@@ -386,6 +441,12 @@ export interface DB {
   session_transcript_fts_idx: SessionTranscriptFtsIdx;
   session_transcript_index_state: SessionTranscriptIndexState;
   session_windows: SessionWindows;
+  standing_intents: StandingIntents;
+  standing_intents_fts: StandingIntentsFts;
+  standing_intents_fts_config: StandingIntentsFtsConfig;
+  standing_intents_fts_data: StandingIntentsFtsData;
+  standing_intents_fts_docsize: StandingIntentsFtsDocsize;
+  standing_intents_fts_idx: StandingIntentsFtsIdx;
   state_leases: StateLeases;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;

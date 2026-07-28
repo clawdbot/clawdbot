@@ -25,6 +25,7 @@ export class ChatLog extends Container {
   private frozenAssistants = new Map<string, Set<AssistantMessageComponent>>();
   private committedAssistantText = new Map<string, string>();
   private latestAssistantText = new Map<string, string>();
+  private liveUsers = new Map<string, UserMessageComponent>();
   private pendingUsers = new Map<
     string,
     {
@@ -68,6 +69,11 @@ export class ChatLog extends Container {
         this.pendingUsers.delete(runId);
       }
     }
+    for (const [messageId, user] of this.liveUsers.entries()) {
+      if (user === component) {
+        this.liveUsers.delete(messageId);
+      }
+    }
     for (const [runId, entry] of this.pendingSystemNotices.entries()) {
       if (entry === component) {
         this.pendingSystemNotices.delete(runId);
@@ -109,6 +115,7 @@ export class ChatLog extends Container {
     this.frozenAssistants.clear();
     this.committedAssistantText.clear();
     this.latestAssistantText.clear();
+    this.liveUsers.clear();
     this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
@@ -194,8 +201,46 @@ export class ChatLog extends Container {
     return true;
   }
 
-  addUser(text: string) {
-    this.appendNonSystem(new UserMessageComponent(text));
+  addUser(text: string, options?: { messageId?: string }) {
+    const component = new UserMessageComponent(text);
+    if (options?.messageId) {
+      this.liveUsers.set(options.messageId, component);
+    }
+    this.appendNonSystem(component);
+  }
+
+  addLiveUser(text: string, options: { messageId: string; runId?: string }) {
+    const existing = this.liveUsers.get(options.messageId);
+    if (existing) {
+      existing.setText(text);
+      return existing;
+    }
+
+    const pending = options.runId ? this.pendingUsers.get(options.runId) : undefined;
+    if (pending && options.runId && pending.text === text) {
+      pending.component.setText(text);
+      this.pendingUsers.delete(options.runId);
+      this.liveUsers.set(options.messageId, pending.component);
+      return pending.component;
+    }
+
+    const component = new UserMessageComponent(text);
+    this.liveUsers.set(options.messageId, component);
+    const frozen = options.runId ? this.frozenAssistants.get(options.runId) : undefined;
+    const assistant =
+      frozen?.values().next().value ??
+      (options.runId ? this.streamingRuns.get(options.runId) : undefined);
+    const assistantIndex = assistant ? this.children.indexOf(assistant) : -1;
+    if (assistantIndex >= 0) {
+      // Transcript broadcasts can trail the first delta; insert their prompt
+      // before the existing reply without resetting live stream or tool state.
+      this.repeatableSystemMessage = null;
+      this.children.splice(assistantIndex, 0, component);
+      this.pruneOverflow();
+      return component;
+    }
+    this.appendNonSystem(component);
+    return component;
   }
 
   addPendingUser(runId: string, text: string, createdAt = Date.now()) {

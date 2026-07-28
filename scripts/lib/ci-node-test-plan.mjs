@@ -31,9 +31,10 @@ const GATEWAY_STARTUP_HEALTH_RUNTIME_ENV = {
   OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "60000",
 };
 // The first embedded-agent file owns 157 serial tests and can stay quiet for
-// more than five minutes on a cold GitHub-hosted 4-vCPU fork runner.
+// more than five minutes on a cold GitHub-hosted fork runner. Keep the outer
+// watchdog above the scoped 600-second hook budget so it cannot preempt Vitest.
 const AGENTS_EMBEDDED_AGENT_ENV = {
-  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "420000",
+  OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "660000",
 };
 const MAX_BUNDLED_NODE_TEST_PATTERNS = 64;
 // PR-only bundles trade a little serial work for fewer ephemeral runner registrations.
@@ -1189,7 +1190,12 @@ const SPLIT_NODE_SHARDS = new Map([
       ...createAgentCoreSplitShards(),
       {
         shardName: "agentic-agents-embedded",
-        configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        configs: [
+          "test/vitest/vitest.agents-embedded-agent.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+        ],
         env: AGENTS_EMBEDDED_AGENT_ENV,
         requiresDist: false,
       },

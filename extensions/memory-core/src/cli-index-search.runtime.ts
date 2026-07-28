@@ -301,13 +301,14 @@ export async function runMemorySearch(
           ? manager.status().workspaceDir
           : undefined;
       if (dreamingEnabled) {
-        void recordShortTermRecalls({
+        await recordShortTermRecalls({
           workspaceDir,
           query,
           results,
           timezone: dreaming.timezone,
         }).catch(() => {
-          // Recall tracking is best-effort and must not block normal search results.
+          // Persistence is best-effort, but the short-lived CLI must await it
+          // so process exit cannot discard an in-flight recall write.
         });
       }
       if (opts.json) {

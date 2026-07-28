@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_LIMIT,
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
@@ -35,6 +36,8 @@ const constants = {
   DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
   DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS:
     DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+  DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION:
+    DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
   DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS,
   RUNTIME_CRON_RECONCILE_INTERVAL_MS: 60_000,
   STARTUP_CRON_RETRY_DELAY_MS: 5_000,
@@ -323,7 +326,7 @@ describe("short-term dreaming config", () => {
       cfg,
     });
     expect(resolved).toEqual({
-      enabled: false,
+      enabled: true,
       cron: constants.DEFAULT_DREAMING_CRON_EXPR,
       timezone: "America/Los_Angeles",
       limit: constants.DEFAULT_DREAMING_LIMIT,
@@ -333,6 +336,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -375,6 +379,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: 21,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: 333,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: true,
       storage: {
         mode: "separate",
@@ -416,6 +421,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: 9,
       maxAgeDays: 45,
       maxPromotedSnippetTokens: 222,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -453,6 +459,7 @@ describe("short-term dreaming config", () => {
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
       maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+      maxPriorEntryLossFraction: constants.DEFAULT_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -1587,7 +1594,7 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("does not recreate startup cron from stale enabled config after live memory-core config is removed", async () => {
+  it("uses default-on cadence instead of stale startup config when live memory-core config is removed", async () => {
     vi.useFakeTimers();
     clearInternalHooks();
     const logger = createLogger();
@@ -1639,7 +1646,8 @@ describe("gateway startup reconciliation", () => {
       await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
 
       expect(runtimeCurrentConfig).toHaveBeenCalled();
-      expect(harness.addCalls).toHaveLength(0);
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.addCalls[0]?.schedule.expr).toBe(constants.DEFAULT_DREAMING_CRON_EXPR);
       expectLogNotContains(logger.warn, "cron service unavailable");
     } finally {
       vi.useRealTimers();
@@ -1784,8 +1792,9 @@ describe("gateway startup reconciliation", () => {
     ]);
   });
 
-  it("does not fall back to startup plugin config when live memory-core config is removed", async () => {
+  it("uses the product default instead of startup plugin config when live config is removed", async () => {
     clearInternalHooks();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-default-on-live-config-");
     const logger = createLogger();
     const harness = createCronHarness();
     const onMock = vi.fn();
@@ -1793,7 +1802,8 @@ describe("gateway startup reconciliation", () => {
       () =>
         ({
           agents: {
-            list: [{ id: "main", default: true }],
+            defaults: { workspace: workspaceDir },
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
           },
         }) as OpenClawConfig,
     );
@@ -1839,13 +1849,13 @@ describe("gateway startup reconciliation", () => {
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       const result = await beforeAgentReply(
         { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey },
+        { trigger: "heartbeat", workspaceDir, sessionKey },
       );
 
       expect(runtimeCurrentConfig).toHaveBeenCalled();
       expect(result).toEqual({
         handled: true,
-        reason: "memory-core: short-term dreaming disabled",
+        reason: "memory-core: short-term dreaming processed",
       });
     } finally {
       clearInternalHooks();

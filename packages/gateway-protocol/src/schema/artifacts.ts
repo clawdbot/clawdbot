@@ -68,6 +68,7 @@ export const ArtifactsDownloadResultSchema = closedObject({
   encoding: Type.Optional(Type.Literal("base64")),
   data: Type.Optional(Type.String()),
   url: Type.Optional(NonEmptyString),
+  expiresAt: Type.Optional(NonEmptyString),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

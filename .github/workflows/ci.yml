@@ -2051,10 +2051,11 @@ jobs:
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           # Frozen targets can carry integration hooks whose cold setup exceeds
-          # the current 120-second default on shared release runners.
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=300000"]' || '[]' }}
+          # the current defaults on shared release runners. Keep the no-output
+          # watchdog above Vitest so it cannot preempt hook diagnostics.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=600000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash

@@ -5,6 +5,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "./embedded-agent-helpers/bootstrap.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
@@ -24,6 +25,7 @@ type BootstrapInjectionStat = {
 };
 
 type BootstrapAnalyzedFile = BootstrapInjectionStat & {
+  effectiveFileLimit: number;
   nearLimit: boolean;
   causes: BootstrapTruncationCause[];
 };
@@ -74,6 +76,16 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
 
 function isAgentsBootstrapName(name: string | undefined): boolean {
   return name?.toLowerCase() === "agents.md";
+}
+
+function isUserBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "user.md";
+}
+
+function effectiveBootstrapFileLimit(name: string, bootstrapMaxChars: number): number {
+  return name.toLowerCase() === "user.md"
+    ? Math.min(bootstrapMaxChars, USER_BOOTSTRAP_MAX_CHARS)
+    : bootstrapMaxChars;
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
@@ -192,24 +204,26 @@ export function analyzeBootstrapBudget(params: {
   const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
   const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
   const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
-  const totalOverLimit = injectedChars >= bootstrapTotalMaxChars;
-
+  let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
+    const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
+    const availableTotalChars = remainingTotalChars;
+    remainingTotalChars = Math.max(0, remainingTotalChars - file.injectedChars);
     if (file.missing) {
-      return { ...file, nearLimit: false, causes: [] };
+      return { ...file, effectiveFileLimit, nearLimit: false, causes: [] };
     }
-    const perFileOverLimit = file.rawChars > bootstrapMaxChars;
-    const nearLimit = file.rawChars >= Math.ceil(bootstrapMaxChars * nearLimitRatio);
+    const perFileOverLimit = file.rawChars > effectiveFileLimit;
+    const nearLimit = file.rawChars >= Math.ceil(effectiveFileLimit * nearLimitRatio);
     const causes: BootstrapTruncationCause[] = [];
     if (file.truncated) {
       if (perFileOverLimit) {
         causes.push("per-file-limit");
       }
-      if (totalOverLimit) {
+      if (availableTotalChars < effectiveFileLimit && file.rawChars > availableTotalChars) {
         causes.push("total-limit");
       }
     }
-    return { ...file, nearLimit, causes };
+    return { ...file, effectiveFileLimit, nearLimit, causes };
   });
 
   const truncatedFiles = files.filter((file) => file.truncated);
@@ -307,9 +321,28 @@ function formatBootstrapTruncationWarningLines(params: {
   if (params.analysis.truncatedFiles.some((file) => isAgentsBootstrapName(file.name))) {
     lines.push("AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.");
   }
-  lines.push(
-    "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+  const fixedUserCapApplied = params.analysis.truncatedFiles.some(
+    (file) =>
+      isUserBootstrapName(file.name) &&
+      file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS &&
+      file.causes.includes("per-file-limit"),
   );
+  if (fixedUserCapApplied) {
+    lines.push(
+      `USER.md has a fixed ${USER_BOOTSTRAP_MAX_CHARS}-character bootstrap cap; keep it compact.`,
+    );
+  }
+  const configurableLimitApplied = params.analysis.truncatedFiles.some(
+    (file) =>
+      !isUserBootstrapName(file.name) ||
+      file.effectiveFileLimit < USER_BOOTSTRAP_MAX_CHARS ||
+      file.causes.includes("total-limit"),
+  );
+  if (configurableLimitApplied) {
+    lines.push(
+      "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
+    );
+  }
   return lines;
 }
 
