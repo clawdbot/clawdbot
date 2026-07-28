@@ -377,6 +377,7 @@ describe("plugin registration transaction", () => {
     record.configSchema = true;
     record.memorySlotSelected = true;
     record.enabled = false;
+    (record as Record<string, unknown>).transientMetadata = "leaked";
     registry.tools.push({
       pluginId: "test-plugin",
       factory: () => ({}) as unknown as import("./types.js").AnyAgentTool,
@@ -406,6 +407,7 @@ describe("plugin registration transaction", () => {
     expect(record.configSchema).toBe(false);
     expect(record.memorySlotSelected).toBe(false);
     expect(record.enabled).toBe(true);
+    expect(record).not.toHaveProperty("transientMetadata");
   });
 
   it("preserves runtime object identity on the active PluginRecord through rollback (#106647)", () => {

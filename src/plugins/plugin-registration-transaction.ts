@@ -93,7 +93,7 @@ export function restorePluginProcessGlobalState(state: PluginProcessGlobalState)
  *
  * A generic recursive deep-clone would convert every plugin-owned object
  * into a plain object, losing prototypes, internal slots, symbols, and
- * shared identity.  Shallow-cloning is correct here because the mutable
+ * shared identity. Shallow-cloning is correct here because the mutable
  * fields on registration records are primitives (strings, numbers,
  * booleans, Dates), and the opaque fields are class instances that the
  * registry must not reconstitute.
@@ -164,9 +164,12 @@ function snapshotActiveRecord(record: PluginRecord): ActiveRecordSnapshot {
 }
 
 function restoreActiveRecord(record: PluginRecord, snapshot: ActiveRecordSnapshot): void {
-  for (const key of Object.keys(snapshot)) {
-    (record as Record<string, unknown>)[key] = snapshot[key];
+  // Registration may create optional metadata that did not exist when the
+  // transaction began. Remove the live shape before restoring the snapshot.
+  for (const key of Object.keys(record)) {
+    Reflect.deleteProperty(record, key);
   }
+  Object.assign(record, snapshot);
 }
 
 type PluginRegistrationTransaction = {
