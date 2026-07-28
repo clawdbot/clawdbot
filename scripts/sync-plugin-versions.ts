@@ -25,6 +25,9 @@ type SyncPluginVersionsOptions = {
 };
 
 const OPENCLAW_VERSION_RANGE_RE = /^>=\d{4}\.\d{1,2}\.\d{1,2}(?:[-.][^"\s]+)?$/u;
+// These exact plugin versions are already immutable in both registries. Keep
+// their candidate metadata byte-identical; a later root version stops matching.
+const PUBLISHED_PLUGIN_METADATA_PINS = new Set(["@openclaw/buzz@2026.7.2-beta.5"]);
 const VERSION_ALIGNED_PACKAGE_DIRS = [
   "packages/ai",
   "packages/gateway-client",
@@ -149,6 +152,13 @@ export function syncPluginVersions(
 
     if (!pkg.name) {
       skipped.push(dir.name);
+      continue;
+    }
+    if (
+      pkg.version === targetVersion &&
+      PUBLISHED_PLUGIN_METADATA_PINS.has(`${pkg.name}@${pkg.version}`)
+    ) {
+      skipped.push(pkg.name);
       continue;
     }
 
