@@ -76,7 +76,7 @@ type ChannelIngressDispatchLifecycle = {
   onAbandoned: () => void | Promise<void>;
 };
 
-export type DeferredLaneOccupancy = "hold" | "release";
+type DeferredLaneOccupancy = "hold" | "release";
 
 export type CreateChannelIngressDrainOptions<
   TPayload,
