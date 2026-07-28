@@ -103,7 +103,7 @@ describe("restored recovery-point admission", () => {
     const snapshots = await resolveFixtureSnapshots(fixture.final.recoveryPointPath);
     const manifest = await createRecoveryPointManifest({
       snapshots,
-      expectedAgentIds: ["main"],
+      ownerInventory: sourceOwnerInventory(),
       obligations: {
         external: [
           {
@@ -211,22 +211,48 @@ describe("restored recovery-point admission", () => {
     });
   });
 
-  it("requires normalized absolute paths and canonical owner inventory", () => {
+  it("rejects a recovery point that differs from the accepted owner receipt", async () => {
+    const fixture = await createFixture();
+
+    await expect(
+      restoreAcceptedRecoveryPoint(
+        {
+          ...fixture.request,
+          ownerInventory: { ...fixture.request.ownerInventory, revision: "different-revision" },
+        },
+        fixture.destinationEnv,
+      ),
+    ).rejects.toMatchObject({
+      code: "restored-admission.verification-failed",
+      disposition: "quarantine",
+    });
+    await expect(
+      fs.access(resolveOpenClawStateSqlitePath(fixture.destinationEnv)),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("requires normalized absolute paths and rejects legacy caller inventory", () => {
     const request = baseRestoreRequest({
       recoveryPointPath: path.resolve("recovery-point"),
       journalRoot: path.resolve("restore-journal"),
       recoveryPointId: "a".repeat(64),
       acceptanceSetId: "b".repeat(64),
-      expectedAgentIds: ["research", "main"],
+      ownerInventory: sourceOwnerInventory(),
     });
-    expect(() => parseRestoredRecoveryPointRequest(JSON.stringify(request))).toThrow(
-      "unique, normalized, and sorted",
-    );
+    expect(() =>
+      parseRestoredRecoveryPointRequest(JSON.stringify({ ...request, journalRoot: "relative" })),
+    ).toThrow("normalized absolute path");
+    expect(() =>
+      parseRestoredRecoveryPointRequest(JSON.stringify({ ...request, expectedAgentIds: ["main"] })),
+    ).toThrow("request is invalid");
     expect(() =>
       parseRestoredRecoveryPointRequest(
-        JSON.stringify({ ...request, expectedAgentIds: ["main"], journalRoot: "relative" }),
+        JSON.stringify({
+          ...request,
+          ownerInventory: { ...request.ownerInventory, agentIds: ["../../outside"] },
+        }),
       ),
-    ).toThrow("normalized absolute path");
+    ).toThrow("owner inventory is invalid");
   });
 });
 
@@ -265,7 +291,7 @@ async function createFixture() {
     sourceGeneration: "generation-7",
     capturedAt: "2026-07-22T18:00:00.000Z",
     repositoryPath: path.join(tempDir, "recovery-points"),
-    expectedAgentIds: ["main"],
+    ownerInventory: sourceOwnerInventory(),
     closure: {
       gateway: "cleanly-stopped",
       authoritativeWriters: "stopped",
@@ -278,7 +304,7 @@ async function createFixture() {
     journalRoot: path.join(tempDir, "restore-journal"),
     recoveryPointId: final.recoveryPointId,
     acceptanceSetId: final.acceptanceSetId,
-    expectedAgentIds: ["main"],
+    ownerInventory: sourceOwnerInventory(),
   });
   return { destinationEnv, final, request };
 }
@@ -286,7 +312,7 @@ async function createFixture() {
 function baseRestoreRequest(
   values: Pick<
     RestoredRecoveryPointRequest,
-    "recoveryPointPath" | "journalRoot" | "recoveryPointId" | "acceptanceSetId" | "expectedAgentIds"
+    "recoveryPointPath" | "journalRoot" | "recoveryPointId" | "acceptanceSetId" | "ownerInventory"
   >,
 ): RestoredRecoveryPointRequest {
   return {
@@ -298,6 +324,16 @@ function baseRestoreRequest(
     destinationOwner: "lobster/tenant-7",
     admissionIdentity: "admission-8",
     ...values,
+  };
+}
+
+function sourceOwnerInventory() {
+  return {
+    version: "openclaw-runtime-sqlite-inventory/v1" as const,
+    owner: "openclaw-state" as const,
+    sourceRuntimeGeneration: "generation-7",
+    revision: "selected-agents-7",
+    agentIds: ["main"],
   };
 }
 

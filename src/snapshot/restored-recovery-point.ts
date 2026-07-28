@@ -6,7 +6,6 @@ import { stableStringify } from "../agents/stable-stringify.js";
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
-import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createLocalSqliteSnapshotProvider } from "./local-repository.js";
@@ -16,7 +15,9 @@ import {
   writeRecoveryJournalRecord,
 } from "./recovery-journal.js";
 import {
+  recoveryPointOwnerInventorySchema,
   verifyRecoveryPoint,
+  verifyRecoveryPointOwnerInventory,
   type RecoveryPointManifest,
   type RecoveryPointSqliteSnapshot,
 } from "./recovery-point.js";
@@ -43,7 +44,7 @@ const requestSchema = z
     recoveryPointPath: z.string().min(1),
     recoveryPointId: z.string().regex(SHA256_PATTERN),
     acceptanceSetId: z.string().regex(SHA256_PATTERN),
-    expectedAgentIds: z.array(z.string().min(1).max(64)).min(1),
+    ownerInventory: recoveryPointOwnerInventorySchema,
     journalRoot: z.string().min(1),
   })
   .strict();
@@ -128,7 +129,11 @@ export function parseRestoredRecoveryPointRequest(raw: string): RestoredRecovery
       throw invalidRequest(`${label} must be a normalized absolute path.`);
     }
   }
-  assertAgentInventory(request.expectedAgentIds);
+  try {
+    verifyRecoveryPointOwnerInventory(request.ownerInventory);
+  } catch (error) {
+    throw invalidRequest("Restored recovery-point owner inventory is invalid.", error);
+  }
   return request;
 }
 
@@ -258,12 +263,15 @@ async function verifyAcceptedRecoveryPoint(request: RestoredRecoveryPointRequest
   snapshots: RecoveryPointSqliteSnapshot[];
 }> {
   try {
-    const manifest = (await readJson(request.recoveryPointPath, "manifest.json")) as unknown;
-    const snapshots = await resolveSnapshots(request.recoveryPointPath, request.expectedAgentIds);
+    const manifest = await readJson(request.recoveryPointPath, "manifest.json");
+    const snapshots = await resolveSnapshots(
+      request.recoveryPointPath,
+      request.ownerInventory.agentIds,
+    );
     const verified = await verifyRecoveryPoint({
       manifest,
       snapshots,
-      expectedAgentIds: request.expectedAgentIds,
+      ownerInventory: request.ownerInventory,
     });
     if (
       verified.manifest.recoveryPointId !== request.recoveryPointId ||
@@ -291,11 +299,11 @@ async function verifyAcceptedRecoveryPoint(request: RestoredRecoveryPointRequest
 
 async function resolveSnapshots(
   recoveryPointPath: string,
-  expectedAgentIds: readonly string[],
+  agentIds: readonly string[],
 ): Promise<RecoveryPointSqliteSnapshot[]> {
   const repositories = [
     { path: path.join(recoveryPointPath, "components", "global"), role: "global" as const },
-    ...expectedAgentIds.map((agentId) => ({
+    ...agentIds.map((agentId) => ({
       path: path.join(recoveryPointPath, "components", "agents", agentId),
       role: "agent" as const,
     })),
@@ -461,19 +469,6 @@ async function readJson(rootPath: string, relativePath: string): Promise<unknown
     symlinks: "reject",
   });
   return JSON.parse(read.buffer.toString("utf8")) as unknown;
-}
-
-function assertAgentInventory(agentIds: readonly string[]): void {
-  const normalized = agentIds.map((agentId) => normalizeAgentId(agentId));
-  if (
-    normalized.some(
-      (agentId, index) => !isValidAgentId(agentIds[index]!) || agentId !== agentIds[index],
-    ) ||
-    new Set(normalized).size !== normalized.length ||
-    !isDeepStrictEqual(normalized, normalized.toSorted())
-  ) {
-    throw invalidRequest("expectedAgentIds must be unique, normalized, and sorted.");
-  }
 }
 
 function invalidRequest(message: string, cause?: unknown): RestoredRecoveryPointError {
