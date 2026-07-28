@@ -19,6 +19,7 @@ type ChannelHealthSnapshot = {
   lastStartAt?: number | null;
   reconnectAttempts?: number;
   mode?: string;
+  ingressUnavailable?: true;
   terminalDisconnect?: boolean;
 };
 
@@ -31,7 +32,8 @@ type ChannelHealthEvaluationReason =
   | "stuck"
   | "startup-connect-grace"
   | "disconnected"
-  | "stale-socket";
+  | "stale-socket"
+  | "ingress-unavailable";
 
 export type ChannelHealthEvaluation = {
   healthy: boolean;
@@ -63,6 +65,14 @@ export function evaluateChannelHealth(
 ): ChannelHealthEvaluation {
   if (!isManagedAccount(snapshot)) {
     return { healthy: true, reason: "unmanaged" };
+  }
+  // Transport liveness and inbound admission are independent failure domains: a
+  // channel can hold a healthy socket and still admit nothing. This outranks every
+  // lifecycle window below because a channel that cannot receive is broken whether
+  // it is running, restarting, or inside its connect grace. Absence is "unknown",
+  // never "fine" -- see `ingressUnavailable` on ChannelAccountSnapshot.
+  if (snapshot.ingressUnavailable === true) {
+    return { healthy: false, reason: "ingress-unavailable" };
   }
   if (!snapshot.running && snapshot.terminalDisconnect) {
     return { healthy: false, reason: "terminal-disconnect" };

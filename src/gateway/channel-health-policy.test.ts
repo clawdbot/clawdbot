@@ -263,6 +263,70 @@ describe("evaluateChannelHealth", () => {
       evaluateHealth({ enabled: true, configured: true, ...snapshot }, { channelId: "whatsapp" }),
     ).toEqual(expected);
   });
+
+  describe("inbound ingress dimension", () => {
+    it("flags a channel whose ingress monitor failed to start, despite a live transport", () => {
+      // The 26h production case: outbound fine, socket connected, zero inbound admitted.
+      const evaluation = evaluateHealth(
+        connectedAccount({
+          ingressUnavailable: true,
+          lastStartAt: 0,
+          lastTransportActivityAt: 99_000,
+        }),
+        { channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("outranks the startup connect grace so dead ingress is never masked", () => {
+      const evaluation = evaluateHealth(
+        connectedAccount({ ingressUnavailable: true, lastStartAt: 99_000 }),
+        { channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("outranks a busy short-circuit so an in-flight run cannot hide dead ingress", () => {
+      const evaluation = evaluateHealth(
+        connectedAccount({ ingressUnavailable: true, activeRuns: 1, lastRunActivityAt: 99_000 }),
+        { channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: false, reason: "ingress-unavailable" });
+    });
+
+    it("keeps a quiet channel with no traffic and no ingress signal healthy", () => {
+      // Guards against a staleness heuristic sneaking in: a genuinely idle channel
+      // must never be restarted merely for having admitted nothing.
+      const evaluation = evaluateHealth(
+        connectedAccount({
+          lastStartAt: 0,
+          lastEventAt: 0,
+          lastInboundAt: null,
+          lastMessageAt: null,
+        }),
+        { now: 10_000_000, channelId: "slack" },
+      );
+      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+    });
+
+    it("leaves the 17 socketless channels that publish no connectivity untouched", () => {
+      const evaluation = evaluateHealth(runningAccount({ lastStartAt: 0 }), {
+        now: 10_000_000,
+        channelId: "imessage",
+      });
+      expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
+    });
+
+    it("stays healthy for a disabled account so unmanaged still wins", () => {
+      const evaluation = evaluateHealth({
+        running: false,
+        enabled: false,
+        configured: true,
+        ingressUnavailable: true,
+      });
+      expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+    });
+  });
 });
 
 describe("resolveChannelRestartReason", () => {

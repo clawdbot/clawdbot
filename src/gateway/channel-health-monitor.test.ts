@@ -365,6 +365,37 @@ describe("channel-health-monitor", () => {
     await expectNoRestart(manager);
   });
 
+  it("does not restart a channel whose ingress monitor could not start", async () => {
+    // Restarting cannot reopen a denied durable queue; looping here would burn the
+    // per-hour restart budget forever instead of leaving the failure visible.
+    const manager = createSnapshotManager({
+      slack: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          ingressUnavailable: true,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("does not restart a running channel with a live socket but dead ingress", async () => {
+    const manager = createSnapshotManager({
+      slack: {
+        default: {
+          running: true,
+          connected: true,
+          enabled: true,
+          configured: true,
+          ingressUnavailable: true,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
   it("restarts a stopped channel without terminalDisconnect", async () => {
     const manager = createSnapshotManager({
       whatsapp: {

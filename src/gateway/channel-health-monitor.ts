@@ -149,6 +149,16 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             );
             continue;
           }
+          // Dead ingress is a capability/config failure, not a stuck runtime. The
+          // channel supervisor already ran its bounded restart ladder against it;
+          // repeating that here would restart forever at the per-hour cap and never
+          // recover. Stay unhealthy and visible so an operator fixes the cause.
+          if (health.reason === "ingress-unavailable") {
+            log.warn?.(
+              `[${channelId}:${accountId}] health-monitor: skipping restart, channel cannot admit inbound events`,
+            );
+            continue;
+          }
           // The channel supervisor owns the account while its own backoff restart
           // is in flight. Restarting here cannot start anything (the supervisor
           // still holds the account task) and only resets the attempt ladder, so
