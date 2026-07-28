@@ -8,7 +8,6 @@ import {
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexAppServerPromptTimeoutOutcome,
@@ -36,6 +35,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { refreshCodexMirroredSessionHistorySnapshot } from "./session-history.js";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
@@ -340,14 +340,28 @@ export async function finalizeCodexAttempt(
     turnSucceeded &&
     result.assistantTexts.every((text) => !text.trim()) &&
     result.messagesSnapshot.some((message) => message.role === "toolResult");
-  const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
-    ? await captureCodexSettledTurnFinalizationContext({
-        ...activeTranscriptTarget,
-        mirroredMessages: mirrorOutcome.mirroredMessages,
-        settledMessages: result.messagesSnapshot,
-        turnId: activeTurnId,
-      })
-    : undefined;
+  const refreshedHistorySnapshot =
+    shouldCaptureSettledTurnFinalizationContext || activeContextEngine
+      ? await refreshCodexMirroredSessionHistorySnapshot(
+          activeTranscriptTarget,
+          historyState.snapshot ?? { messages: historyState.messages },
+        )
+      : undefined;
+  if (refreshedHistorySnapshot) {
+    historyState.snapshot = refreshedHistorySnapshot;
+    historyState.messages = refreshedHistorySnapshot.messages;
+  }
+  const finalMessages =
+    refreshedHistorySnapshot?.messages ?? historyState.messages.concat(result.messagesSnapshot);
+  const settledTurnFinalizationContext =
+    shouldCaptureSettledTurnFinalizationContext && refreshedHistorySnapshot
+      ? await captureCodexSettledTurnFinalizationContext({
+          historyMessages: finalMessages,
+          mirroredMessages: mirrorOutcome.mirroredMessages,
+          settledMessages: result.messagesSnapshot,
+          turnId: activeTurnId,
+        })
+      : undefined;
   if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
     // The isolated child must not infer around a partial or drifting transcript.
     // Omitting this field preserves the existing incomplete-turn failure.
@@ -361,9 +375,6 @@ export async function finalizeCodexAttempt(
     const isHeartbeat =
       params.bootstrapContextRunKind === "heartbeat" ||
       params.bootstrapContextRunKind === "commitment-only";
-    const finalMessages =
-      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
-      historyState.messages.concat(result.messagesSnapshot);
     await finalizeHarnessContextEngineTurn({
       contextEngine: activeContextEngine,
       promptError: Boolean(finalPromptError),

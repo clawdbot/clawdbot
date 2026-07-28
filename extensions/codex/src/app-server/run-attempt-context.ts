@@ -11,7 +11,8 @@ import {
   buildCodexOpenClawPromptContext,
   buildCodexWorkspaceBootstrapContext,
   getCodexWorkspaceMemoryToolNames,
-  readMirroredSessionHistoryMessages,
+  hasMirroredSessionHistory,
+  readMirroredSessionHistorySnapshot,
   renderCodexSkillsCollaborationInstructions,
 } from "./attempt-context.js";
 import {
@@ -21,6 +22,7 @@ import {
 } from "./context-engine-projection.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
+import type { CodexMirroredSessionHistorySnapshot } from "./session-history.js";
 import {
   buildDeveloperInstructions,
   type CodexContextEngineThreadBootstrapProjection,
@@ -64,13 +66,31 @@ export async function prepareCodexAttemptContext(
     sessionId: activeSessionId,
     sessionKey: contextSessionKey,
   };
+  const skipInitialHistory =
+    !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap;
+  let initialHistorySnapshot: CodexMirroredSessionHistorySnapshot | undefined = skipInitialHistory
+    ? { messages: [] }
+    : activeContextEngine
+      ? undefined
+      : await readMirroredSessionHistorySnapshot(activeTranscriptTarget);
+  let hadSessionTranscriptState = initialHistorySnapshot
+    ? initialHistorySnapshot.messages.length > 0
+    : false;
+  if (activeContextEngine) {
+    const hasHistory = await hasMirroredSessionHistory(activeTranscriptTarget);
+    if (hasHistory === undefined) {
+      initialHistorySnapshot = await readMirroredSessionHistorySnapshot(activeTranscriptTarget);
+      hadSessionTranscriptState = initialHistorySnapshot
+        ? initialHistorySnapshot.messages.length > 0
+        : false;
+    } else {
+      hadSessionTranscriptState = hasHistory;
+    }
+  }
   const historyState = {
-    messages:
-      !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
-        ? []
-        : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []),
+    messages: initialHistorySnapshot?.messages ?? [],
+    snapshot: initialHistorySnapshot,
   };
-  const hadSessionTranscriptState = historyState.messages.length > 0;
   const hookContextWindowFields = {
     ...(effectiveContextWindowInfo?.tokens
       ? { contextTokenBudget: effectiveContextWindowInfo.tokens }
@@ -128,8 +148,11 @@ export async function prepareCodexAttemptContext(
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyState.messages =
-      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? historyState.messages;
+    const postBootstrapSnapshot = await readMirroredSessionHistorySnapshot(activeTranscriptTarget);
+    if (postBootstrapSnapshot) {
+      historyState.snapshot = postBootstrapSnapshot;
+      historyState.messages = postBootstrapSnapshot.messages;
+    }
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({

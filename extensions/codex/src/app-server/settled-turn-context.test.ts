@@ -1,15 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
-
-const mocks = vi.hoisted(() => ({
-  readHistory: vi.fn(),
-}));
-
-vi.mock("./session-history.js", () => ({
-  readCodexMirroredSessionHistoryMessages: mocks.readHistory,
-}));
 
 function message(value: unknown, identity: string): AgentMessage {
   return attachCodexMirrorIdentity(value as AgentMessage, identity);
@@ -43,10 +35,8 @@ async function captureContext(params: {
   settledMessages: AgentMessage[];
   turnId?: string;
 }) {
-  mocks.readHistory.mockResolvedValue(params.historyMessages);
   return captureCodexSettledTurnFinalizationContext({
-    sessionFile: "/tmp/session.jsonl",
-    sessionId: "session-1",
+    historyMessages: params.historyMessages,
     mirroredMessages: params.mirroredMessages,
     settledMessages: params.settledMessages,
     turnId: params.turnId ?? "turn-2",
@@ -54,10 +44,6 @@ async function captureContext(params: {
 }
 
 describe("captureCodexSettledTurnFinalizationContext", () => {
-  beforeEach(() => {
-    mocks.readHistory.mockReset();
-  });
-
   it("freezes the complete active branch exactly through the current tool-result boundary", async () => {
     const prior = message({ role: "user", content: "Alice is the recipient." }, "turn-1:prompt");
     const settledMessages = settledTurn();
@@ -147,29 +133,13 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("contains transcript read failures after tools have settled", async () => {
-    mocks.readHistory.mockRejectedValue(new Error("read failed"));
-
-    await expect(
-      captureCodexSettledTurnFinalizationContext({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
-        mirroredMessages: settledTurn(),
-        settledMessages: settledTurn(),
-        turnId: "turn-2",
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("contains transcript clone failures after tools have settled", async () => {
     const historyMessages = settledTurn();
     Object.assign(historyMessages[2]!, { uncloneable: () => undefined });
-    mocks.readHistory.mockResolvedValue(historyMessages);
 
     await expect(
       captureCodexSettledTurnFinalizationContext({
-        sessionFile: "/tmp/session.jsonl",
-        sessionId: "session-1",
+        historyMessages,
         mirroredMessages: historyMessages,
         settledMessages: historyMessages,
         turnId: "turn-2",

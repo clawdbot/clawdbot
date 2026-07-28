@@ -15,7 +15,7 @@ import {
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
-  readMirroredSessionHistoryMessages,
+  readMirroredSessionHistorySnapshot,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
@@ -33,12 +33,12 @@ describe("Codex app-server attempt context", () => {
     const sessionFile = path.join(dir, "session.jsonl");
     try {
       await expect(
-        readMirroredSessionHistoryMessages({
+        readMirroredSessionHistorySnapshot({
           sessionFile,
           sessionId: "codex-session",
           sessionKey: "codex-session",
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toEqual({ messages: [] });
       expect(warn).not.toHaveBeenCalled();
     } finally {
       await fs.rm(dir, { recursive: true, force: true });

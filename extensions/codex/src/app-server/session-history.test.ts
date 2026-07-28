@@ -6,7 +6,12 @@ import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  hasCodexMirroredSessionHistory,
+  readCodexMirroredSessionHistoryMessages,
+  readCodexMirroredSessionHistorySnapshot,
+  refreshCodexMirroredSessionHistorySnapshot,
+} from "./session-history.js";
 
 const tempDirs: string[] = [];
 
@@ -64,8 +69,16 @@ function mirroredTarget(sessionFile: string) {
   };
 }
 
-async function writeSqliteSession(params: { storedSessionFile?: string } = {}): Promise<{
+async function writeSqliteSession(
+  params: { registerSession?: boolean; storedSessionFile?: string } = {},
+): Promise<{
   marker: string;
+  scope: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
   sessionKey: string;
 }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
@@ -80,14 +93,16 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
     sessionKey,
     storePath,
   };
-  await upsertSessionEntry({
-    ...scope,
-    entry: {
-      sessionFile: params.storedSessionFile ?? marker,
-      sessionId,
-      updatedAt: 1,
-    },
-  });
+  if (params.registerSession !== false) {
+    await upsertSessionEntry({
+      ...scope,
+      entry: {
+        sessionFile: params.storedSessionFile ?? marker,
+        sessionId,
+        updatedAt: 1,
+      },
+    });
+  }
   await appendSessionTranscriptMessageByIdentity({
     ...scope,
     message: { role: "user", content: "sqlite prompt", timestamp: 1 },
@@ -96,7 +111,7 @@ async function writeSqliteSession(params: { storedSessionFile?: string } = {}): 
     ...scope,
     message: { role: "assistant", content: "sqlite answer", timestamp: 2 },
   });
-  return { marker, sessionKey };
+  return { marker, scope, sessionKey };
 }
 
 describe("readCodexMirroredSessionHistoryMessages", () => {
@@ -150,6 +165,83 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
       { role: "user", content: "sqlite prompt" },
       { role: "assistant", content: "sqlite answer" },
     ]);
+  });
+
+  it("reads active SQLite rows before the session-list projection is published", async () => {
+    const { marker, sessionKey } = await writeSqliteSession({ registerSession: false });
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
+  it("reuses one SQLite snapshot and applies a validated append delta", async () => {
+    const { marker, scope, sessionKey } = await writeSqliteSession();
+    const target = {
+      agentId: "main",
+      sessionFile: marker,
+      sessionId: "codex-sqlite-session",
+      sessionKey,
+    };
+    const snapshot = await readCodexMirroredSessionHistorySnapshot(target);
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: { role: "user", content: "fresh cross-process prompt", timestamp: 3 },
+    });
+
+    const refreshed = await refreshCodexMirroredSessionHistorySnapshot(target, snapshot!);
+
+    expect(snapshot?.messages).toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+    expect(refreshed?.messages).toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+      { role: "user", content: "fresh cross-process prompt" },
+    ]);
+  });
+
+  it("falls back to an authoritative load when an append does not extend the active tail", async () => {
+    const { marker, scope, sessionKey } = await writeSqliteSession();
+    const target = {
+      agentId: "main",
+      sessionFile: marker,
+      sessionId: "codex-sqlite-session",
+      sessionKey,
+    };
+    const snapshot = await readCodexMirroredSessionHistorySnapshot(target);
+    await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      eventId: "replacement-root",
+      parentId: null,
+      message: { role: "user", content: "replacement branch", timestamp: 3 },
+    });
+
+    const refreshed = await refreshCodexMirroredSessionHistorySnapshot(target, snapshot!);
+
+    expect(refreshed?.messages).toMatchObject([{ role: "user", content: "replacement branch" }]);
+  });
+
+  it("probes SQLite history without materializing the complete message context", async () => {
+    const { marker, sessionKey } = await writeSqliteSession();
+
+    await expect(
+      hasCodexMirroredSessionHistory({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+      }),
+    ).resolves.toBe(true);
   });
 
   it("resolves SQLite marker history when the caller has no session key", async () => {

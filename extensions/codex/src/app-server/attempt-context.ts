@@ -8,7 +8,6 @@ import {
   buildBootstrapContextForFiles,
   embeddedAgentLog,
   resolveBootstrapFilesForRun,
-  type AgentMessage,
   type ContextEngineProjection,
   type EmbeddedContextFile,
   type EmbeddedRunAttemptParams,
@@ -24,7 +23,11 @@ import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } fr
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  hasCodexMirroredSessionHistory,
+  readCodexMirroredSessionHistorySnapshot,
+  type CodexMirroredSessionHistorySnapshot,
+} from "./session-history.js";
 import {
   areCodexDynamicToolFingerprintsCompatible,
   buildContextEngineBinding,
@@ -71,20 +74,30 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   memoryCollaborationInstructions?: string;
 };
 
-/** Reads mirrored Codex session history for harness hooks. */
-export async function readMirroredSessionHistoryMessages(params: {
+/** Reads one prepared mirrored-history snapshot for a complete Codex attempt. */
+export async function readMirroredSessionHistorySnapshot(params: {
   agentId?: string;
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
-}): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(params);
-  if (!messages) {
-    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
+}): Promise<CodexMirroredSessionHistorySnapshot | undefined> {
+  const snapshot = await readCodexMirroredSessionHistorySnapshot(params);
+  if (!snapshot) {
+    embeddedAgentLog.warn("failed to read mirrored session history for codex attempt", {
       sessionFile: params.sessionFile,
     });
   }
-  return messages;
+  return snapshot;
+}
+
+/** Probes whether Codex bootstrap has existing visible history without a full materialization. */
+export async function hasMirroredSessionHistory(params: {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<boolean | undefined> {
+  return await hasCodexMirroredSessionHistory(params);
 }
 
 /** Reads a valid thread-bootstrap projection request from context-engine output. */
