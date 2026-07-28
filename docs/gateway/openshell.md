@@ -21,6 +21,7 @@ workspace sync mode.
 - OpenShell plugin installed (`openclaw plugins install @openclaw/openshell-sandbox`)
 - `openshell` CLI on `PATH` (or a custom path via
   `plugins.entries.openshell.config.command`)
+- OpenSSH client available on the Gateway host
 - An OpenShell account with sandbox access
 - OpenClaw Gateway running on the host
 
@@ -267,6 +268,26 @@ canonical paths (via realpath) before every read, write, mkdir, remove, and
 rename, rejecting mid-path symlinks. A symlink swap or remounted workspace
 cannot redirect file access outside the mirrored tree.
 
+## Custom image contract
+
+The OpenShell source image owns the remote operating system and package set.
+OpenClaw does not apply Docker image, root-filesystem, network, user, or package
+settings to this backend.
+
+Custom images used with the OpenClaw filesystem bridge must provide:
+
+- `/bin/sh`
+- `python3` or `python` for pinned write, edit, rename, and remove operations
+- GNU-compatible `stat` and `find`
+- standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
+
+Package installation and private certificate roots must be included in the
+source image or installed from inside the sandbox. The selected OpenShell
+policy must permit the required network destinations, and the sandbox user and
+filesystem must permit the writes. `sandbox.docker.network`,
+`sandbox.docker.readOnlyRoot`, `sandbox.docker.user`, and
+`sandbox.docker.setupCommand` do not configure OpenShell.
+
 ## Current limitations
 
 - Sandbox browser is not supported on the OpenShell backend.
@@ -274,6 +295,9 @@ cannot redirect file access outside the mirrored tree.
   if binds are configured.
 - Docker-specific runtime knobs under `sandbox.docker.*` (other than `env`)
   apply only to the Docker backend.
+- Native plugin code and Gateway RPC stay on the Gateway host. Plugin-owned and
+  MCP tools are available to sandboxed sessions only when sandbox tool policy
+  allows them.
 
 ## How it works
 
