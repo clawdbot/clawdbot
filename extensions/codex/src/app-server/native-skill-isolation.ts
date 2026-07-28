@@ -1,11 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  isDefaultStateDir,
-  resolveRequiredOsHomeDir,
-  resolveStateDir,
-} from "openclaw/plugin-sdk/state-paths";
+import { resolveRequiredHomeDir, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { CodexAppServerClient } from "./client.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
@@ -35,6 +31,18 @@ async function canonicalizeExistingPath(candidate: string): Promise<string> {
   } catch {
     return path.resolve(candidate);
   }
+}
+
+async function usesDefaultStateDir(): Promise<boolean> {
+  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
+    return true;
+  }
+  const home = resolveRequiredHomeDir();
+  const [stateDir, defaultStateDir] = await Promise.all([
+    canonicalizeExistingPath(resolveStateDir()),
+    canonicalizeExistingPath(path.join(home, ".openclaw")),
+  ]);
+  return stateDir === defaultStateDir;
 }
 
 async function collectPersonalSkillRealPaths(
@@ -189,7 +197,7 @@ export async function resolveCodexNativeSkillIsolation(params: {
   userProfile?: string;
   signal?: AbortSignal;
 }): Promise<CodexNativeSkillIsolation | undefined> {
-  if (isDefaultStateDir()) {
+  if (await usesDefaultStateDir()) {
     return undefined;
   }
   const response = await params.client.request(
@@ -197,7 +205,11 @@ export async function resolveCodexNativeSkillIsolation(params: {
     { cwds: [params.cwd], forceReload: true },
     { signal: params.signal },
   );
-  const effectiveHome = params.home?.trim() || resolveRequiredOsHomeDir();
+  const effectiveHome =
+    params.home?.trim() ||
+    process.env.HOME?.trim() ||
+    process.env.USERPROFILE?.trim() ||
+    os.homedir();
   const homes = [effectiveHome];
   if (process.platform === "win32") {
     homes.push(params.userProfile?.trim() || os.homedir());
