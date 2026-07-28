@@ -3288,11 +3288,13 @@ describe("OpenClaw chat wizard step payload", () => {
           sensitive: true,
         });
       },
+      // initialValue is absent on purpose: the prompt below seeds one, but a
+      // sensitive step's prefilled value is the secret and must not cross to
+      // chat-result consumers. Everything else survives verbatim.
       step: {
         id: expect.any(String),
         type: "text",
         message: "Bot token",
-        initialValue: "seed-token",
         placeholder: "123:abc",
         sensitive: true,
         executor: "client",
@@ -3398,6 +3400,34 @@ describe("OpenClaw chat wizard step payload", () => {
     } else {
       expect(reply.step).toBeUndefined();
     }
+  });
+
+  it("strips a sensitive step's prefilled value but keeps a plain one", async () => {
+    useTempStateDir();
+    const makeEngine = (sensitive: boolean) =>
+      new SystemAgentChatEngine({
+        surface: "gateway",
+        runAgentTurn: async () => null,
+        planWithAssistant: async () => null,
+        deps: { loadOverview: fakeOverviewLoader() },
+        runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+          await prompter.text({
+            message: "Bot token",
+            initialValue: "123456:REAL-SECRET",
+            ...(sensitive ? { sensitive: true } : {}),
+          });
+        },
+      });
+
+    const secret = await makeEngine(true).handle("connect telegram");
+    expect(secret.step?.sensitive).toBe(true);
+    expect(secret.step).not.toHaveProperty("initialValue");
+    expect(JSON.stringify(secret)).not.toContain("REAL-SECRET");
+
+    // Redaction is scoped to sensitive steps; ordinary prefill still reaches
+    // clients, otherwise every edit-in-place prompt would lose its default.
+    const plain = await makeEngine(false).handle("connect telegram");
+    expect(plain.step?.initialValue).toBe("123456:REAL-SECRET");
   });
 
   it("omits the wizard step outside an awaiting hosted wizard", async () => {

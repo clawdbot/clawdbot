@@ -15,14 +15,26 @@ describe("SystemAgentChatResultSchema", () => {
 
   const steps: Array<{ name: string; step: WizardStep }> = [
     {
-      name: "text carrying placeholder, initial value, and secrecy",
+      // No initialValue: the schema still permits one (wizard.start/next carry
+      // prefill for editable prompts), but the chat engine strips it from a
+      // sensitive step before serializing, so this is the shape that ships here.
+      name: "sensitive text carrying placeholder but no prefilled secret",
       step: {
         id: "step-text",
         type: "text",
         message: "Bot token",
         placeholder: "123:abc",
-        initialValue: "seed-token",
         sensitive: true,
+        executor: "client",
+      },
+    },
+    {
+      name: "non-sensitive text carrying a prefilled value",
+      step: {
+        id: "step-text-prefill",
+        type: "text",
+        message: "Display name",
+        initialValue: "openclaw-bot",
         executor: "client",
       },
     },
