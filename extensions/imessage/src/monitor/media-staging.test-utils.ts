@@ -167,6 +167,39 @@ describe("stageIMessageAttachments", () => {
     );
   });
 
+  it("bounds pinned HEIC reads when the opened inode grows", async () => {
+    const sourcePath = await writeTempFile("IMG_0002.HEIC", Buffer.from("heic"));
+    const saveMediaBuffer = vi.fn();
+    const convertHeicToJpeg = vi.fn();
+    const logVerbose = vi.fn();
+
+    await expect(
+      stageIMessageAttachments(
+        [{ original_path: sourcePath, mime_type: "image/heic", missing: false }],
+        {
+          maxBytes: 4,
+          deps: {
+            saveMediaBuffer,
+            convertHeicToJpeg,
+            logVerbose,
+            openLocalFileSafely: async (options) => {
+              const opened = await openLocalFileSafely(options);
+              await fs.appendFile(sourcePath, Buffer.alloc(64));
+              return opened;
+            },
+          },
+        },
+      ),
+    ).resolves.toEqual({
+      attachments: [{ contentType: "image/heic", kind: "image" }],
+      unavailableCount: 1,
+    });
+
+    expect(convertHeicToJpeg).not.toHaveBeenCalled();
+    expect(saveMediaBuffer).not.toHaveBeenCalled();
+    expect(logVerbose).toHaveBeenCalledWith(expect.stringContaining("attachment exceeds"));
+  });
+
   it("drops attachments over the inbound media limit", async () => {
     const sourcePath = await writeTempFile("huge.png", Buffer.from("too large"));
     const saveMediaBuffer = vi.fn();

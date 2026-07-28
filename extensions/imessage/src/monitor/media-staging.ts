@@ -1,5 +1,5 @@
 // Imessage plugin module implements media staging behavior.
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelInboundMediaInput } from "openclaw/plugin-sdk/channel-inbound";
@@ -79,6 +79,22 @@ async function assertAllowedCanonicalAttachmentPath(params: {
   }
 }
 
+async function readPinnedAttachmentBytes(handle: FileHandle, maxBytes: number): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  while (totalBytes <= maxBytes) {
+    const remaining = maxBytes + 1 - totalBytes;
+    const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining));
+    const { bytesRead } = await handle.read(chunk, 0, chunk.length, null);
+    if (bytesRead === 0) {
+      return Buffer.concat(chunks, totalBytes);
+    }
+    chunks.push(chunk.subarray(0, bytesRead));
+    totalBytes += bytesRead;
+  }
+  throw new Error(`attachment exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
+}
+
 async function readAttachmentBuffer(params: {
   attachmentPath: string;
   mimeType?: string | null;
@@ -97,10 +113,8 @@ async function readAttachmentBuffer(params: {
       canonicalPath: opened.realPath,
       allowedRoots: params.allowedRoots,
     });
-    const buffer = await opened.handle.readFile();
-    if (buffer.length > params.maxBytes) {
-      throw new Error(`attachment exceeds ${Math.round(params.maxBytes / (1024 * 1024))}MB limit`);
-    }
+    // The inode can grow after the pinned open; keep the allocation bounded as well as the stat.
+    const buffer = await readPinnedAttachmentBytes(opened.handle, params.maxBytes);
 
     if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
       try {
