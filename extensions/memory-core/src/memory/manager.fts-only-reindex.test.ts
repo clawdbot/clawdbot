@@ -503,6 +503,14 @@ describe("memory manager FTS-only reindex", () => {
       expect(JSON.stringify(debug)).not.toContain("No API key resolved");
       expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
 
+      await fs.writeFile(
+        path.join(workspaceDir, "MEMORY.md"),
+        "Gamma fallback refresh\n\nIndexed while embeddings remain degraded.",
+      );
+      await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
+      await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
+      expect(providerQueryCalls).toBe(0);
+
       providerEmbeddingError = null;
       nowSpy.mockReturnValue(now + 62_000);
       await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);

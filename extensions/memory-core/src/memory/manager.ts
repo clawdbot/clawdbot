@@ -723,6 +723,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       errorName && errorName !== "Error" ? `${errorName}: ${message}` : message,
       { mode: "tools" },
     );
+    // settings.provider is already resolved from "auto"; never trust an unknown
+    // error object's provider-shaped field for public diagnostics.
     const provider = options?.provider ?? this.provider?.id ?? this.settings.provider;
     const debug: MemoryEmbeddingBootstrapDebug = {
       ok: false,
@@ -1847,7 +1849,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     this.syncing = (async () => {
       const useCachedBootstrapFallback =
-        params?.reason === "search" &&
         this.embeddingBootstrapFailure !== undefined &&
         this.getCachedEmbeddingAvailability()?.ok === false;
       if (!useCachedBootstrapFallback) {
@@ -1863,7 +1864,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           this.markEmbeddingBootstrapFailure(err);
         }
       }
-      this.beginSyncProviderGeneration();
+      this.beginSyncProviderGeneration({ forceFtsOnly: useCachedBootstrapFallback });
       try {
         await this.runSyncWithReadonlyRecovery(params);
       } finally {

@@ -74,7 +74,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   private fallbackProviderInitPromise: Promise<boolean> | null = null;
   protected syncProviderGeneration: MemorySyncProviderGeneration | null = null;
 
-  protected beginSyncProviderGeneration(): void {}
+  protected beginSyncProviderGeneration(_options?: { forceFtsOnly?: boolean }): void {}
   protected endSyncProviderGeneration(): void {}
 
   protected override shouldDeferSourceWideBatch(): boolean {
