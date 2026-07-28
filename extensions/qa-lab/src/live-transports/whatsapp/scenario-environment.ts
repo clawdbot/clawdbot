@@ -30,6 +30,19 @@ export type WhatsAppQaScenarioEnvironment = {
   sutAuthDir: string;
 };
 
+function resolveWhatsAppQaReplacePaths(accountId: string): string[] {
+  return [
+    "agents",
+    "approvals",
+    "broadcast",
+    "channels.whatsapp",
+    `channels.whatsapp.accounts.${accountId}.allowFrom`,
+    "messages",
+    "plugins",
+    "tools",
+  ];
+}
+
 export function createWhatsAppQaScenarioEnvironment(params: {
   accountId: string;
   driverAuthDir: string;
@@ -44,7 +57,7 @@ export function createWhatsAppQaScenarioEnvironment(params: {
   const prepareFlow = async (input: FlowPreparationInput) => {
     const scenarioId = input.config.whatsappScenarioId;
     if (typeof scenarioId !== "string") {
-      throw new Error("WhatsApp QA module flow requires config.whatsappScenarioId");
+      return undefined;
     }
     const scenario = getWhatsAppQaScenarioDefinition(scenarioId);
     if (scenario.requiresGroupJid && !params.runtimeEnv.groupJid) {
@@ -86,21 +99,14 @@ export function createWhatsAppQaScenarioEnvironment(params: {
       authDir: params.sutAuthDir,
       dmPolicy,
       groupJid,
+      ownerAllowFrom: [params.runtimeEnv.driverPhoneE164],
       overrides: scenario.configOverrides,
       sutAccountId: params.accountId,
     });
     await patchLiveQaGatewayConfig({
       gateway: input.gateway,
       patch: cfg as Record<string, unknown>,
-      replacePaths: [
-        "agents",
-        "approvals",
-        "broadcast",
-        "channels.whatsapp",
-        "messages",
-        "plugins",
-        "tools",
-      ],
+      replacePaths: resolveWhatsAppQaReplacePaths(params.accountId),
       timeoutMs: input.timeoutMs,
       waitForConfigRestartSettle: input.waitForConfigRestartSettle,
     });

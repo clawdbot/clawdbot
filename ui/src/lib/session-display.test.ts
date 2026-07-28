@@ -7,6 +7,18 @@ import {
 } from "./session-display.ts";
 
 describe("resolveSessionDisplayName", () => {
+  it("uses the same friendly main-thread name for every agent", () => {
+    for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
+      expect(resolveSessionDisplayName(key)).toBe("Main Thread");
+    }
+
+    expect(resolveSessionDisplayName("agent:research:main", { displayName: "Research desk" })).toBe(
+      "Research desk",
+    );
+    expect(resolveSessionDisplayName("agent:research:dashboard:main")).toBe("New thread");
+    expect(resolveSessionDisplayName("agent:research:main:thread")).toBe("main:thread");
+  });
+
   it("prefers label, then displayName", () => {
     expect(
       resolveSessionDisplayName("agent:main:telegram:direct:42", {
@@ -24,6 +36,12 @@ describe("resolveSessionDisplayName", () => {
       "Telegram · …567890",
     );
     expect(resolveSessionDisplayName("agent:main:imessage:direct:+4912")).toBe("iMessage · +4912");
+  });
+
+  it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {
+    expect(resolveSessionDisplayName("agent:main:telegram:direct:12345😀67890")).toBe(
+      "Telegram · …67890",
+    );
   });
 
   it("falls back to a friendly name for dashboard sessions instead of the uuid key", () => {

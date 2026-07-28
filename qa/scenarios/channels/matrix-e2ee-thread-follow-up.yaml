@@ -4,7 +4,7 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
+      - matrix.matrix-thread-reply-routing
   execution:
     profiles: { "matrix:all": 59, "matrix:e2ee-smoke": 1 }
     kind: flow

@@ -6,6 +6,9 @@ export function createAgentsEmbeddedVitestConfig(env?: Record<string, string | u
   return createScopedVitestConfig(agentsEmbeddedTestPatterns, {
     dir: "src/agents",
     env,
+    fileParallelism: false,
+    // Cold shared harness imports exceed the generic limit on 2-vCPU hosted release runners.
+    hookTimeout: 600_000,
     name: "agents-embedded-agent",
   });
 }

@@ -5,12 +5,14 @@ import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/mod
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   normalizePluginDiscoveryResult,
   resolveRuntimePluginDiscoveryProviders,
@@ -26,15 +28,8 @@ import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 import { staticModelIdMatches } from "./model.static-id.js";
 
-export {
-  canonicalizeManifestModelCatalogProviderAlias,
-  resolveManifestModelCatalogProviderAliasMetadata,
-  resolveManifestModelCatalogProviderTransport,
-} from "./model.manifest-alias.js";
-export type {
-  ManifestModelCatalogProviderAliasMetadata,
-  ManifestModelCatalogProviderTransport,
-} from "./model.manifest-alias.js";
+export { resolveManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
+export type { ManifestModelCatalogProviderAliasMetadata } from "./model.manifest-alias.js";
 
 /**
  * Resolves bundled plugin static model-catalog rows into runtime model records.
@@ -130,38 +125,93 @@ function modelFromProviderStaticCatalog(params: {
 }
 
 type StaticCatalogPlugin = Parameters<
-  typeof planManifestModelCatalogRows
+  typeof planEffectiveModelCatalogRows
 >[0]["registry"]["plugins"][number];
 
-function listBundledStaticCatalogPlugins(params: {
+type BundledStaticCatalogParams = {
   cfg?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): StaticCatalogPlugin[] {
-  const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
-  return listOpenClawPluginManifestMetadata(params.env).flatMap((record): StaticCatalogPlugin[] => {
-    if (record.origin !== "bundled") {
-      return [];
-    }
-    const loaded = loadPluginManifest(record.pluginDir);
-    if (!loaded.ok || !loaded.manifest.modelCatalog) {
-      return [];
-    }
-    if (
-      !passesManifestOwnerBasePolicy({
-        plugin: { id: loaded.manifest.id },
-        normalizedConfig,
-      })
-    ) {
-      return [];
-    }
-    return [
-      {
-        id: loaded.manifest.id,
-        providers: loaded.manifest.providers,
-        modelCatalog: loaded.manifest.modelCatalog,
-      },
-    ];
+  workspaceDir?: string;
+};
+
+type BundledStaticCatalogState = {
+  plugins: StaticCatalogPlugin[];
+  plans: Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>;
+};
+
+// Snapshot identity changes at the Gateway reload commit, so old provider plans
+// cannot survive into a replacement plugin generation.
+const bundledStaticCatalogStatesBySnapshot = new WeakMap<
+  PluginMetadataSnapshot,
+  WeakMap<OpenClawConfig, BundledStaticCatalogState>
+>();
+const defaultBundledStaticCatalogConfig: OpenClawConfig = {};
+
+function resolveBundledStaticCatalogMetadataSnapshot(
+  params: BundledStaticCatalogParams,
+): PluginMetadataSnapshot | undefined {
+  if (params.env !== process.env) {
+    return undefined;
+  }
+  return getCurrentPluginMetadataSnapshot({
+    config: params.cfg,
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
+    ...(params.cfg === undefined ? { requireDefaultDiscoveryContext: true } : {}),
   });
+}
+
+function listBundledStaticCatalogPlugins(
+  params: BundledStaticCatalogParams,
+  metadataSnapshot?: PluginMetadataSnapshot,
+): StaticCatalogPlugin[] {
+  const normalizedConfig = normalizePluginsConfig(params.cfg?.plugins);
+  const plugins: StaticCatalogPlugin[] = metadataSnapshot
+    ? metadataSnapshot.plugins
+        .filter((plugin) => plugin.origin === "bundled")
+        .map(({ id, providers, modelCatalog }) => ({ id, providers, modelCatalog }))
+    : listOpenClawPluginManifestMetadata(params.env).flatMap((record): StaticCatalogPlugin[] => {
+        if (record.origin !== "bundled") {
+          return [];
+        }
+        const loaded = loadPluginManifest(record.pluginDir);
+        return loaded.ok
+          ? [
+              {
+                id: loaded.manifest.id,
+                providers: loaded.manifest.providers,
+                modelCatalog: loaded.manifest.modelCatalog,
+              },
+            ]
+          : [];
+      });
+  return plugins.filter(
+    (plugin) =>
+      Boolean(plugin.modelCatalog) && passesManifestOwnerBasePolicy({ plugin, normalizedConfig }),
+  );
+}
+
+function resolveSnapshotBundledStaticCatalogState(
+  params: BundledStaticCatalogParams,
+  metadataSnapshot: PluginMetadataSnapshot,
+): BundledStaticCatalogState {
+  let states = bundledStaticCatalogStatesBySnapshot.get(metadataSnapshot);
+  if (!states) {
+    states = new WeakMap();
+    bundledStaticCatalogStatesBySnapshot.set(metadataSnapshot, states);
+  }
+  const config = params.cfg ?? defaultBundledStaticCatalogConfig;
+  const cached = states.get(config);
+  if (cached) {
+    return cached;
+  }
+  const state = {
+    plugins: listBundledStaticCatalogPlugins(params, metadataSnapshot),
+    plans: new Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>(),
+  };
+  states.set(config, state);
+  return state;
 }
 
 /** Returns whether a bundled static catalog asks runtime discovery to augment its rows. */
@@ -169,15 +219,22 @@ export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
   provider: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
 }): boolean {
   const provider = normalizeProviderId(params.provider);
   if (!provider) {
     return false;
   }
-  return listBundledStaticCatalogPlugins({
+  const catalogParams = {
     cfg: params.cfg,
     env: params.env ?? process.env,
-  }).some((plugin) => {
+    workspaceDir: params.workspaceDir,
+  };
+  const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
+  const plugins = metadataSnapshot
+    ? resolveSnapshotBundledStaticCatalogState(catalogParams, metadataSnapshot).plugins
+    : listBundledStaticCatalogPlugins(catalogParams);
+  return plugins.some((plugin) => {
     const catalog = plugin.modelCatalog;
     if (catalog?.runtimeAugment !== true) {
       return false;
@@ -212,6 +269,7 @@ type BundledProviderStaticCatalogResolverParams = {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  providerIds?: readonly string[];
 };
 
 /**
@@ -222,33 +280,49 @@ export function createBundledStaticCatalogModelResolver(params?: {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   includeRuntimeDiscovery?: boolean;
+  workspaceDir?: string;
 }): (lookup: BundledStaticCatalogLookup) => ProviderRuntimeModel | undefined {
-  const bundledStaticPlugins = listBundledStaticCatalogPlugins({
+  const catalogParams = {
     cfg: params?.cfg,
     env: params?.env ?? process.env,
-  });
-  const plans = new Map<string, ReturnType<typeof planManifestModelCatalogRows>>();
+    workspaceDir: params?.workspaceDir,
+  };
+  let standaloneState: BundledStaticCatalogState | undefined;
   return (lookup) => {
     const provider = normalizeProviderId(lookup.provider);
-    if (!provider || !lookup.modelId.trim() || bundledStaticPlugins.length === 0) {
+    if (!provider || !lookup.modelId.trim()) {
       return undefined;
     }
-    let plan = plans.get(provider);
+    const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot(catalogParams);
+    const state = metadataSnapshot
+      ? resolveSnapshotBundledStaticCatalogState(catalogParams, metadataSnapshot)
+      : (standaloneState ??= {
+          plugins: listBundledStaticCatalogPlugins(catalogParams),
+          plans: new Map(),
+        });
+    if (state.plugins.length === 0) {
+      return undefined;
+    }
+    let plan = state.plans.get(provider);
     if (!plan) {
-      plan = planManifestModelCatalogRows({
-        registry: { plugins: bundledStaticPlugins },
+      plan = planEffectiveModelCatalogRows({
+        registry: { plugins: state.plugins },
+        config: params?.cfg ?? {},
         providerFilter: provider,
       });
-      plans.set(provider, plan);
+      state.plans.set(provider, plan);
     }
     for (const entry of plan.entries) {
       if (
         entry.discovery !== "static" &&
-        !(params?.includeRuntimeDiscovery && entry.discovery === "runtime")
+        !(
+          params?.includeRuntimeDiscovery &&
+          (entry.discovery === "runtime" || entry.discovery === "refreshable")
+        )
       ) {
         continue;
       }
-      const row = entry.rows.find((candidate) =>
+      const row = entry.rows.find((candidate: NormalizedModelCatalogRow) =>
         rowMatchesModel({
           row: candidate,
           provider,
@@ -278,6 +352,7 @@ export function resolveBundledStaticCatalogModel(
     ...(params.includeRuntimeDiscovery !== undefined
       ? { includeRuntimeDiscovery: params.includeRuntimeDiscovery }
       : {}),
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
   })(params);
 }
 
@@ -369,20 +444,42 @@ export async function loadBundledProviderStaticCatalogContextModels(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): Promise<ProviderRuntimeModel[]> {
   const env = params.env ?? process.env;
+  const metadataSnapshot = resolveBundledStaticCatalogMetadataSnapshot({
+    cfg: params.cfg,
+    env,
+    workspaceDir: params.workspaceDir,
+  });
   const discoveryEntryPluginIds = new Set(
-    loadPluginManifestRegistry({
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env,
-    }).plugins.flatMap((plugin) =>
+    (
+      metadataSnapshot?.manifestRegistry?.plugins ??
+      loadPluginManifestRegistry({
+        config: params.cfg,
+        workspaceDir: params.workspaceDir,
+        env,
+      }).plugins
+    ).flatMap((plugin) =>
       plugin.origin === "bundled" && plugin.providerDiscoverySource ? [plugin.id] : [],
     ),
   );
-  const pluginIds = resolveBundledProviderCompatPluginIds({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-    env,
-  }).filter((pluginId) => discoveryEntryPluginIds.has(pluginId));
+  const providerScopedPluginIds = params.providerIds?.flatMap((provider) =>
+    resolveBundledProviderStaticCatalogPluginIds({
+      provider,
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env,
+    }),
+  );
+  const candidatePluginIds =
+    providerScopedPluginIds === undefined
+      ? resolveBundledProviderCompatPluginIds({
+          config: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env,
+        })
+      : providerScopedPluginIds;
+  const pluginIds = [...new Set(candidatePluginIds)]
+    .filter((pluginId) => discoveryEntryPluginIds.has(pluginId))
+    .toSorted((left, right) => left.localeCompare(right));
   if (pluginIds.length === 0) {
     return [];
   }
@@ -457,7 +554,7 @@ function createScopedBundledProviderStaticCatalogModelResolver(
  * Prepares bundled provider static-catalog lookup.
  * Each provider hook runs at most once for the resolver lifetime.
  */
-export function createBundledProviderStaticCatalogModelResolver(
+function createBundledProviderStaticCatalogModelResolver(
   params: BundledProviderStaticCatalogResolverParams = {},
 ): (lookup: BundledStaticCatalogLookup) => Promise<ProviderRuntimeModel | undefined> {
   const resolveModel = createScopedBundledProviderStaticCatalogModelResolver(params);

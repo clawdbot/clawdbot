@@ -14,6 +14,7 @@ struct MenuContent: View {
     private let healthStore = HealthStore.shared
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
+    private let dashboardManager = DashboardManager.shared
     private let activityStore = WorkActivityStore.shared
     private let nodesStore = NodesStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
@@ -201,14 +202,9 @@ struct MenuContent: View {
     }
 
     private var connectionLabel: String {
-        switch self.state.connectionMode {
-        case .unconfigured:
-            "OpenClaw Not Configured"
-        case .remote:
-            "Remote OpenClaw Active"
-        case .local:
-            "OpenClaw Active"
-        }
+        DashboardGatewayMenuModel.connectionLabel(
+            mode: self.state.connectionMode,
+            entries: self.dashboardManager.gatewayEntries)
     }
 
     private func loadBrowserControlEnabled() async {

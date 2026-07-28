@@ -22,6 +22,7 @@ import { createTelegramDraftStream, type TelegramDraftPreview } from "./draft-st
 import { renderTelegramHtmlText } from "./format.js";
 import type { DraftLaneState, LaneName } from "./lane-delivery.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 import { buildTelegramRichMarkdown, TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
 
@@ -59,6 +60,7 @@ function resolveDraftPartialText(
 
 export function createTelegramDraftController(params: {
   accountId: string;
+  allowProviderPreview: boolean;
   bot: Bot;
   cfg: OpenClawConfig;
   chatId: number;
@@ -81,6 +83,7 @@ export function createTelegramDraftController(params: {
     resolveChannelStreamingBlockEnabled(params.telegramCfg) ??
     params.cfg.agents?.defaults?.blockStreamingDefault === "on";
   const canStreamAnswerDraft =
+    params.allowProviderPreview &&
     streamDeliveryEnabled &&
     !params.hasTelegramQuoteReply &&
     !accountBlockStreamingEnabled &&
@@ -89,7 +92,10 @@ export function createTelegramDraftController(params: {
   const streamReasoningInProgressDraft =
     streamReasoningDraft && params.streamMode === "progress" && canStreamAnswerDraft;
   const canStreamReasoningDraft =
-    !params.isRoomEvent && streamReasoningDraft && !streamReasoningInProgressDraft;
+    params.allowProviderPreview &&
+    !params.isRoomEvent &&
+    streamReasoningDraft &&
+    !streamReasoningInProgressDraft;
   const draftMaxChars =
     params.streamMode === "block"
       ? Math.min(
@@ -133,6 +139,25 @@ export function createTelegramDraftController(params: {
             lanes[laneName].retainedPromptContextPages.push({
               messageId: page.messageId,
               text: page.textSnapshot,
+            });
+          },
+          onProviderMessage: async (message) => {
+            await (
+              params.telegramDeps.recordOutboundMessageForPromptContext ??
+              recordOutboundMessageForPromptContext
+            )({
+              cfg: params.cfg,
+              account: {
+                accountId: params.accountId,
+                ...(params.telegramCfg.name !== undefined ? { name: params.telegramCfg.name } : {}),
+              },
+              chatId: params.chatId,
+              message,
+              messageId: message.message_id,
+              ...(params.threadSpec.id !== undefined
+                ? { messageThreadId: params.threadSpec.id }
+                : {}),
+              successfulSendThread: params.threadSpec,
             });
           },
           log: logVerbose,
@@ -438,6 +463,15 @@ export function createTelegramDraftController(params: {
     answerLane,
     reasoningLane,
     lanes,
+    beginQueuedFollowup: () => {
+      for (const lane of [answerLane, reasoningLane]) {
+        if (!lane.stream) {
+          continue;
+        }
+        lane.stream.forceNewMessage();
+        resetLaneState(lane);
+      }
+    },
     canPushAnswerDraft: () => Boolean(answerLane.stream),
     cleanup: async (superseded: boolean) => {
       for (const lane of [answerLane, reasoningLane]) {

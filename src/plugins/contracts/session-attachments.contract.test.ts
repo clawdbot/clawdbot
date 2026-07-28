@@ -12,6 +12,7 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
@@ -45,7 +46,7 @@ type SessionAttachmentRequest = Parameters<typeof sendPluginSessionAttachment>[0
 type TestSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
-  deliveryContext?: Record<string, unknown>;
+  delivery?: SessionEntry["delivery"];
 };
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -93,7 +94,9 @@ async function withSessionStore(
 
 async function writeSessionEntry(
   storePath: string,
-  entry: TestSessionEntry = { deliveryContext: DEFAULT_TELEGRAM_ROUTE },
+  entry: TestSessionEntry = {
+    delivery: normalizeSessionDeliveryState({ context: DEFAULT_TELEGRAM_ROUTE }),
+  },
   key = MAIN_SESSION_KEY,
 ) {
   await replaceSessionEntry({ storePath, sessionKey: key }, {
@@ -154,20 +157,18 @@ describe("plugin session attachments", () => {
     delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
   });
 
-  it("sends validated files through the session delivery route with channel hints", async () => {
+  it("sends validated files through the session delivery route with portable hints", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: {
-          ...DEFAULT_TELEGRAM_ROUTE,
-          accountId: "default",
-          threadId: 42,
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { ...DEFAULT_TELEGRAM_ROUTE, accountId: "default", threadId: 42 },
+        }),
       });
       mockSuccessfulAttachmentDelivery();
 
       const result = await sendBundledSessionAttachment({
         files: [{ path: filePath }],
-        channelHints: { telegram: { disableNotification: true, parseMode: "HTML" } },
+        channelHints: { silent: true, parseMode: "HTML", threadId: "attachment-thread" },
       });
 
       expect(result).toEqual({
@@ -181,7 +182,7 @@ describe("plugin session attachments", () => {
       expect(sendParams.to).toBe("12345");
       expect(sendParams.channel).toBe("telegram");
       expect(sendParams.accountId).toBe("default");
-      expect(sendParams.threadId).toBe(42);
+      expect(sendParams.threadId).toBe("attachment-thread");
       expect(sendParams.mediaUrls).toEqual([filePath]);
       expect(sendParams.bestEffort).toBe(false);
       expect(sendParams.silent).toBe(true);
@@ -208,7 +209,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("escapes plain Telegram attachment captions before HTML delivery", async () => {
+  it("keeps shipped Telegram hints compatible when escaping plain captions", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
@@ -223,6 +224,23 @@ describe("plugin session attachments", () => {
       const sendParams = requireFirstSendMessageParams();
       expect(sendParams.content).toBe("1 &lt; 2 &amp; 3 &gt; 2");
       expect(sendParams.parseMode).toBe("HTML");
+    });
+  });
+
+  it("keeps shipped Slack thread hints compatible", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await writeSessionEntry(storePath, {
+        delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
+      });
+      mockSuccessfulAttachmentDelivery();
+
+      const result = await sendBundledSessionAttachment({
+        files: [{ path: filePath }],
+        channelHints: { slack: { threadTs: "171234.567" } },
+      });
+
+      expect(result).toMatchObject({ ok: true, channel: "slack", deliveredTo: "C123" });
+      expect(requireFirstSendMessageParams().threadId).toBe("171234.567");
     });
   });
 
@@ -241,7 +259,7 @@ describe("plugin session attachments", () => {
         config: {
           session: { store: storePath },
           agents: {
-            list: [{ id: "main", workspace: workspaceDir }],
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
           },
         },
       });
@@ -345,7 +363,7 @@ describe("plugin session attachments", () => {
       await expect(
         sendBundledSessionAttachment({
           files: [{ path: filePath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+          channelHints: { forceDocumentMime: "application/pdf" },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -356,7 +374,7 @@ describe("plugin session attachments", () => {
       await expect(
         sendBundledSessionAttachment({
           files: [{ path: fakePdfPath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+          channelHints: { forceDocumentMime: "application/pdf" },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -379,7 +397,7 @@ describe("plugin session attachments", () => {
       const result = await sendBundledSessionAttachment({
         files: [{ path: pdfPath }],
         forceDocument: false,
-        channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        channelHints: { forceDocumentMime: "application/pdf" },
       });
       expectTelegramAttachmentResult(result, 1);
       const sendParams = requireFirstSendMessageParams();
@@ -427,10 +445,9 @@ describe("plugin session attachments", () => {
   it("rejects unloaded bundled gateway-mode channels before attachment delivery", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15551234567",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "whatsapp", to: "+15551234567" },
+        }),
       });
       setActivePluginRegistry(createEmptyPluginRegistry());
       workflowMocks.getChannelPlugin.mockReturnValue(

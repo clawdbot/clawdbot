@@ -1,12 +1,9 @@
 // Nostr plugin module owns durable relay-event admission and replay draining.
 import type { Event } from "nostr-tools";
 import {
-  bindIngressLifecycleToReplyOptions,
-  createChannelIngressDrain,
+  createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  type ChannelIngressMonitorLifecycle,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -35,7 +32,7 @@ type PreparedNostrAdmission = {
   payload: NostrIngressPayload;
 };
 
-export type NostrIngressLifecycle = Parameters<typeof bindIngressLifecycleToReplyOptions>[0];
+export type NostrIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
 type NostrIngressMonitor = {
   ready: () => Promise<void>;
@@ -54,20 +51,10 @@ export class NostrIngressAdmissionRejectedError extends Error {
   }
 }
 
-function parseClaimedEvent(
-  payload: NostrIngressPayload,
-  claimedId: string,
-  claimedLaneKey: string | undefined,
-): Event {
-  if (payload.version !== NOSTR_INGRESS_PAYLOAD_VERSION) {
-    throw new NostrIngressPermanentError(
-      "invalid-event",
-      `Nostr ingress row ${claimedId} has an unsupported version.`,
-    );
-  }
+function deserializeNostrIngressEvent(rawEvent: string, claimedId: string): Event {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(payload.rawEvent);
+    parsed = JSON.parse(rawEvent);
   } catch (error) {
     throw new NostrIngressPermanentError(
       "invalid-event",
@@ -75,15 +62,10 @@ function parseClaimedEvent(
       { cause: error },
     );
   }
-  const facts = inspectNostrIngressEvent(parsed);
-  if (
-    facts.eventId !== claimedId ||
-    facts.laneKey !== claimedLaneKey ||
-    !isNostrIngressRecord(parsed)
-  ) {
+  if (!isNostrIngressRecord(parsed)) {
     throw new NostrIngressPermanentError(
       "invalid-event",
-      `Nostr ingress row ${claimedId} changed event identity.`,
+      `Nostr ingress row ${claimedId} has an invalid event shape.`,
     );
   }
   if (
@@ -116,18 +98,14 @@ export function createNostrIngress(options: {
   adoptionStallTimeoutMs?: number;
 }): NostrIngressMonitor {
   let queue = options.queue;
-  let drain!: ChannelIngressDrain;
-  let drainInitialized = false;
-  let running = true;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let lastPrunedAt = 0;
   let admissionFailure: Error | undefined;
   let admissionWindowStartedAt = Date.now();
   let admissionWindowCount = 0;
   let queuedAdmissions = 0;
-  const shutdown = new AbortController();
-  const activeDeliveries = new Set<Promise<void>>();
+  let stopping = false;
+  let stopTask: Promise<void> | undefined;
+
+  const createStoppedError = () => new Error("Nostr ingress stopped");
 
   const getQueue = (): ChannelIngressQueue<NostrIngressPayload> => {
     queue ??= getNostrRuntime().state.openChannelIngressQueue<NostrIngressPayload>({
@@ -141,123 +119,82 @@ export function createNostrIngress(options: {
     eventIds: options.legacyEventIds ?? [],
   });
 
-  const getDrain = (): ChannelIngressDrain => {
-    if (!drainInitialized) {
-      drain = createChannelIngressDrain<NostrIngressPayload>({
-        queue: getQueue(),
-        abortSignal: shutdown.signal,
-        adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-        retryPolicy: {
-          maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-          deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-        },
-        resolveNonRetryableFailure: (error) =>
-          error instanceof NostrIngressPermanentError
-            ? { reason: error.reason, message: error.message }
-            : null,
-        onLog: (message) => options.onError?.(new Error(message), "ingress drain"),
-        dispatchClaimedEvent: async (record, lifecycle) => {
-          if (shutdown.signal.aborted || lifecycle.abortSignal.aborted) {
-            return {
-              kind: "failed-retryable",
-              error: new Error("Nostr ingress stopped before dispatch"),
-            };
-          }
-          const event = parseClaimedEvent(record.payload, record.id, record.laneKey);
-          let handedOff = false;
-          let deferredHandoff = false;
-          const delivery = options.deliver(event, {
-            ...lifecycle,
-            onAdopted: async () => {
-              handedOff = true;
-              await lifecycle.onAdopted();
-            },
-            onDeferred: () => {
-              handedOff = true;
-              deferredHandoff = true;
-              lifecycle.onDeferred();
-            },
-            onAdoptionFinalizing: () => {
-              handedOff = true;
-              deferredHandoff = true;
-              lifecycle.onAdoptionFinalizing();
-            },
-            onAbandoned: async () => {
-              handedOff = true;
-              await lifecycle.onAbandoned();
-            },
-          });
-          activeDeliveries.add(delivery);
-          try {
-            await delivery;
-            // Policy gates and deliberate no-dispatch turns are terminal.
-            if (!handedOff) {
-              await lifecycle.onAdopted();
-            }
-          } finally {
-            activeDeliveries.delete(delivery);
-          }
-          return deferredHandoff ? { kind: "deferred" } : undefined;
-        },
-      });
-      drainInitialized = true;
-    }
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < NOSTR_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
+  const monitor = createChannelIngressMonitor<
+    Event,
+    { receivedAt: number; rawEvent: string },
+    NostrIngressPayload
+  >({
+    queue: getQueue,
+    inspect: (event) => {
+      const facts = inspectNostrIngressEvent(event);
+      return { eventId: facts.eventId, laneKey: facts.laneKey };
+    },
+    payload: {
+      version: NOSTR_INGRESS_PAYLOAD_VERSION,
+      serialize: (event, { receivedAt }) => ({
+        receivedAt,
+        rawEvent: JSON.stringify(event),
+      }),
+      deserialize: (body, { claim }) => deserializeNostrIngressEvent(body.rawEvent, claim.id),
+      encode: ({ body }) => ({ version: NOSTR_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload, { claim }) => {
+        if (
+          typeof payload !== "object" ||
+          payload === null ||
+          typeof payload.rawEvent !== "string"
+        ) {
+          throw new NostrIngressPermanentError(
+            "invalid-event",
+            `Nostr ingress row ${claim.id} has an invalid payload.`,
+          );
+        }
+        return {
+          version: payload.version,
+          body: {
+            receivedAt: typeof payload.receivedAt === "number" ? payload.receivedAt : 0,
+            rawEvent: payload.rawEvent,
+          },
+        };
+      },
+      createClaimError: (kind, claim) =>
+        new NostrIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Nostr ingress row ${claim.id} has an unsupported version.`
+            : `Nostr ingress row ${claim.id} changed event identity.`,
+        ),
+    },
+    deliver: (event, lifecycle) => options.deliver(event, lifecycle),
+    pollIntervalMs: options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: NOSTR_INGRESS_PRUNE_INTERVAL_MS,
       completedTtlMs: NOSTR_INGRESS_COMPLETED_TTL_MS,
       completedMaxEntries: NOSTR_INGRESS_COMPLETED_MAX_ENTRIES,
       failedTtlMs: NOSTR_INGRESS_FAILED_TTL_MS,
       failedMaxEntries: NOSTR_INGRESS_FAILED_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      await legacyMigration;
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.onError?.(error as Error, "ingress drain");
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
+    },
+    drain: {
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
+      resolveNonRetryableFailure: (error) =>
+        error instanceof NostrIngressPermanentError
+          ? { reason: error.reason, message: error.message }
+          : null,
+      onLog: (message) => options.onError?.(new Error(message), "ingress drain"),
+    },
+    createStoppedError,
+    onError: (error) => options.onError?.(error as Error, "ingress drain"),
+  });
+  const monitorStart = legacyMigration.then(() => {
+    // stop() may run while the legacy migration is pending. Do not let that
+    // deferred startup revive polling after shutdown has begun.
+    if (!stopping) {
+      monitor.start();
     }
-  };
+  });
+  void monitorStart.catch((error: unknown) => options.onError?.(error as Error, "ingress drain"));
 
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  const timer = setInterval(requestDrain, options.pollIntervalMs ?? NOSTR_INGRESS_POLL_INTERVAL_MS);
-  timer.unref?.();
-  requestDrain();
-
-  // Relays may deliver concurrently. Preserve per-pubkey arrival order across append backoff.
+  // Admission stays local because relay ack needs accepted/duplicate plus rate,
+  // size, backlog, cursor, and failure-latch semantics the shared monitor hides.
   let admissionTail: Promise<void> = Promise.resolve();
   const prepareAdmission = (event: Event): PreparedNostrAdmission => {
     const facts = inspectNostrIngressEvent(event);
@@ -330,7 +267,7 @@ export function createNostrIngress(options: {
           laneKey: prepared.facts.laneKey,
         });
         options.afterDurableAppend(prepared.event);
-        requestDrain();
+        monitor.requestDrain();
         return result.kind === "accepted" ? "accepted" : "duplicate";
       } catch (error) {
         lastError = error;
@@ -343,9 +280,12 @@ export function createNostrIngress(options: {
 
   return {
     ready: async () => {
-      await legacyMigration;
+      await monitorStart;
     },
     receive: (event) => {
+      if (stopping) {
+        return Promise.reject(createStoppedError());
+      }
       let prepared: PreparedNostrAdmission;
       try {
         prepared = prepareAdmission(event);
@@ -380,35 +320,26 @@ export function createNostrIngress(options: {
       );
       return settledAdmission;
     },
-    stop: async () => {
-      running = false;
-      clearInterval(timer);
-      await admissionTail;
-      shutdown.abort(new Error("Nostr ingress stopped"));
-      if (drainInitialized) {
-        drain.dispose();
+    stop: () => {
+      if (stopTask) {
+        return stopTask;
       }
-      await pumping;
-      if (drainInitialized) {
-        drain.dispose();
-      }
-      await Promise.allSettled(activeDeliveries);
-      if (drainInitialized) {
-        await drain.waitForIdle();
-      }
+      stopping = true;
+      // pause() closes the polling gate synchronously before waiting for local
+      // admissions that still retain Nostr's relay acknowledgement contract.
+      const pauseTask = monitor.pause();
+      stopTask = (async () => {
+        await admissionTail;
+        await monitorStart.catch(() => undefined);
+        await pauseTask;
+        await monitor.stop();
+      })();
+      return stopTask;
     },
     waitForIdle: async () => {
       await admissionTail;
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      if (drainInitialized) {
-        await drain.waitForIdle();
-      }
+      await monitorStart;
+      await monitor.waitForIdle();
     },
   };
 }

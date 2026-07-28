@@ -1,11 +1,15 @@
 export const GENERAL_SETTINGS_TARGET_IDS = {
   model: "settings-general-model",
-  system: "settings-general-system",
+} as const;
+
+export const CONNECTION_SETTINGS_TARGET_IDS = {
+  host: "settings-connection-host",
 } as const;
 
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   theme: "settings-appearance-theme",
   textSize: "settings-appearance-text-size",
+  sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
   connection: "settings-appearance-connection",
 } as const;

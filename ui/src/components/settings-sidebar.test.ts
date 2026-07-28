@@ -3,7 +3,9 @@
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
+import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
+import "./tooltip.ts";
 
 let container: HTMLDivElement;
 
@@ -13,7 +15,9 @@ beforeEach(async () => {
   document.body.append(container);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  i18n.registerTranslation("pt-BR", pt_BR);
+  await i18n.setLocale("en");
   container.remove();
 });
 
@@ -24,13 +28,15 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
         searchQuery: "",
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -51,7 +57,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
@@ -59,12 +66,13 @@ describe("settings sidebar search", () => {
         searchQuery: "cp",
         searchBlockMatches: [
           {
-            routeId: "config",
+            routeId: "connection",
             label: "Gateway Host",
-            hash: "#settings-general-system",
+            hash: "#settings-connection-host",
           },
         ],
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -77,7 +85,7 @@ describe("settings sidebar search", () => {
         ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
       ),
     ].map((item) => item.textContent?.trim());
-    expect(resultLabels).toEqual(["General", "Gateway Host"]);
+    expect(resultLabels).toEqual(["Gateway", "Gateway Host"]);
   });
 
   it("ranks matching pages before matching blocks and navigates to the block", () => {
@@ -86,7 +94,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
@@ -106,6 +115,7 @@ describe("settings sidebar search", () => {
           },
         ],
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -136,7 +146,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
@@ -151,6 +162,7 @@ describe("settings sidebar search", () => {
           },
         ],
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -184,13 +196,15 @@ describe("settings sidebar search", () => {
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "config",
-          connected: true,
+          offline: false,
+          lastError: null,
           version: "",
           updateAvailable: null,
           updateRunning: false,
           onUpdate: vi.fn(),
           searchQuery,
           onExit: vi.fn(),
+          onRetryConnect: vi.fn(),
           onNavigate,
           onSearchQueryChange: (nextQuery) => {
             searchQuery = nextQuery;
@@ -229,7 +243,7 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Connection", "Channels", "Communications", "Devices"]);
+    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Devices"]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);
@@ -248,13 +262,52 @@ describe("settings sidebar search", () => {
     expect(onNavigate).toHaveBeenCalledWith("channels");
   });
 
+  it("renders refreshed settings route titles from the active locale", async () => {
+    i18n.registerTranslation("pt-BR", {
+      routeTitles: {
+        notifications: "Notificacoes",
+        modelProviders: "Provedores de modelos",
+        advanced: "Avancado",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+
+    render(
+      renderSettingsSidebar({
+        basePath: "",
+        activeRouteId: "config",
+        offline: false,
+        lastError: null,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "",
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate: vi.fn(),
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const labels = [...container.querySelectorAll(".settings-sidebar__item-label")].map((item) =>
+      item.textContent?.trim(),
+    );
+    expect(labels).toContain("Notificacoes");
+    expect(labels).toContain("Provedores de modelos");
+    expect(labels).toContain("Avancado");
+  });
+
   it("keeps the update card above the settings footer", async () => {
     const onUpdate = vi.fn();
     render(
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "1.0.0",
         updateAvailable: {
           currentVersion: "1.0.0",
@@ -265,6 +318,7 @@ describe("settings sidebar search", () => {
         onUpdate,
         searchQuery: "",
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -279,5 +333,44 @@ describe("settings sidebar search", () => {
     expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows the offline retry action without an online status", () => {
+    const onRetryConnect = vi.fn();
+    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
+      render(
+        renderSettingsSidebar({
+          basePath: "",
+          activeRouteId: "config",
+          offline,
+          queuedOutboxCount,
+          lastError,
+          version: "1.0.0",
+          updateAvailable: null,
+          updateRunning: false,
+          onUpdate: vi.fn(),
+          searchQuery: "",
+          onExit: vi.fn(),
+          onRetryConnect,
+          onNavigate: vi.fn(),
+          onSearchQueryChange: vi.fn(),
+          preloadTimers: new Map(),
+        }),
+        container,
+      );
+
+    renderSidebar(false, null, 3);
+    expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+
+    renderSidebar(true, "connection refused?token=settings-secret", 3);
+    const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
+    expect(button?.hasAttribute("title")).toBe(false);
+    expect(
+      (button?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
+    ).toBe("connection refused?[redacted-credential]");
+    expect(button?.textContent).toContain("3 queued");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
+    button?.click();
+    expect(onRetryConnect).toHaveBeenCalledOnce();
   });
 });

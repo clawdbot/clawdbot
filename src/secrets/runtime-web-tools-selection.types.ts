@@ -1,5 +1,5 @@
 /** Typed credential ownership and unavailable-provider results for runtime web tools. */
-import type { SecretRef } from "../config/types.secrets.js";
+import type { SecretRef, SecretRefSource } from "../config/types.secrets.js";
 import type { SecretDegradationReason } from "./runtime-degraded-state.js";
 import type { SecretResolverWarningCode } from "./runtime-shared.js";
 import type { RuntimeWebDiagnosticCode } from "./runtime-web-tools.types.js";
@@ -32,6 +32,7 @@ export type RuntimeWebSecretOwner = {
   contractDigest: string;
   resolvedValue?: string;
   reason?: SecretDegradationReason;
+  providerFailure?: { source: SecretRefSource; provider: string };
   restoreResolvedValue?: (value: string) => void;
 };
 

@@ -46,7 +46,7 @@ export function classifyInferenceRouteConfigPath(
     return "blocked";
   }
   if (scope === "defaults") {
-    return ["agentruntime", "clibackends", "model", "models", "params"].includes(ownerOrField ?? "")
+    return ["agentruntime", "model", "models", "params"].includes(ownerOrField ?? "")
       ? "blocked"
       : "allowed";
   }
@@ -63,7 +63,7 @@ export function classifyInferenceRouteConfigPath(
   if (["agentdir", "default", "id"].includes(routeField ?? "")) {
     return "blocked";
   }
-  return ["agentruntime", "clibackends", "model", "models", "params"].includes(routeField ?? "")
+  return ["agentruntime", "model", "models", "params"].includes(routeField ?? "")
     ? "agent-route"
     : "allowed";
 }

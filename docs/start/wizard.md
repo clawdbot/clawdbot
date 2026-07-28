@@ -38,12 +38,13 @@ the browser through the Control UI. Docs: [Dashboard](/web/dashboard).
 
 ## Locale
 
-The wizard localizes fixed onboarding copy. Resolve order: `OPENCLAW_LOCALE`,
-`LC_ALL`, `LC_MESSAGES`, `LANG`, then English. Supported locales: `en`,
-`zh-CN`, `zh-TW`.
+The wizard localizes fixed onboarding copy. It uses the first nonblank value from
+`OPENCLAW_LOCALE`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, in that order, then
+falls back to English. Supported locales: `en`, `zh-CN`, `zh-TW`.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 
 Product names, commands, config keys, URLs, provider IDs, model IDs, and
@@ -196,9 +197,9 @@ not the full `openclaw onboard` wizard.
 
 What it sets:
 
-- `agents.list[].name`
-- `agents.list[].workspace`
-- `agents.list[].agentDir`
+- `agents.entries.*.name`
+- `agents.entries.*.workspace`
+- `agents.entries.*.agentDir`
 
 Notes:
 

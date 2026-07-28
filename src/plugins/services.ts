@@ -7,6 +7,7 @@ import {
   onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { subscribePluginSessionsChanged } from "./gateway-events.js";
 import { isPluginJsonValue, type PluginJsonValue } from "./host-hook-json.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
@@ -71,10 +72,16 @@ function createScopedGatewayEvents(params: {
   gatewayEvents?: OpenClawPluginServiceContext["gatewayEvents"];
   revoke: () => void;
 } {
+  // No broadcaster means no gateway events at all: emits have nowhere to go and
+  // sessions.changed is queued by the broadcaster itself. Omitting the facade
+  // keeps `ctx.gatewayEvents` presence as the capability signal plugins
+  // feature-detect; a silently dropping emit would defeat their fallbacks.
   if (!params.broadcast) {
     return { revoke: () => undefined };
   }
+  const broadcast = params.broadcast;
   let active = true;
+  const subscriptions = new Set<() => void>();
   return {
     gatewayEvents: {
       emit: (event, payload: PluginJsonValue, opts) => {
@@ -94,11 +101,31 @@ function createScopedGatewayEvents(params: {
         ) {
           throw new Error("plugin gateway event scope must be an operator scope");
         }
-        params.broadcast?.(`plugin.${params.pluginId}.${event}`, payload, opts.scope);
+        broadcast(`plugin.${params.pluginId}.${event}`, payload, opts.scope);
+      },
+      onSessionsChanged: (handler) => {
+        if (!active) {
+          throw new Error("plugin service gateway event subscriber is no longer active");
+        }
+        const unsubscribe = subscribePluginSessionsChanged(handler);
+        let subscribed = true;
+        const release = () => {
+          if (!subscribed) {
+            return;
+          }
+          subscribed = false;
+          subscriptions.delete(release);
+          unsubscribe();
+        };
+        subscriptions.add(release);
+        return release;
       },
     },
     revoke: () => {
       active = false;
+      for (const unsubscribe of subscriptions) {
+        unsubscribe();
+      }
     },
   };
 }

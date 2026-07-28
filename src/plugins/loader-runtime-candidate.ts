@@ -6,6 +6,10 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "./config-state.js";
+import {
+  PluginDashboardDeclarationError,
+  registerPluginDashboardCapabilities,
+} from "./dashboard-capabilities.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
@@ -529,6 +533,11 @@ export function loadRuntimePluginCandidate(params: {
       `${registrationPlan.mode}:register`,
       () => runPluginRegisterSync(register, api),
     );
+    // Dashboard entries stay inside the same registry snapshot as their RPC handlers.
+    // Non-activating snapshots are private until cached activation; rollback restores both.
+    if (registrationPlan.runRuntimeCapabilityPolicy) {
+      registerPluginDashboardCapabilities({ record, registry });
+    }
     registry.plugins.push(record);
     state.seenIds.set(pluginId, candidate.origin);
     transaction.commit({ activate: context.shouldActivate });
@@ -550,6 +559,9 @@ export function loadRuntimePluginCandidate(params: {
       error,
       logPrefix: `[plugins] ${record.id} failed during register from ${record.source}: `,
       diagnosticMessagePrefix: "plugin failed during register: ",
+      ...(error instanceof PluginDashboardDeclarationError
+        ? { diagnosticCode: "dashboard-declaration-invalid" }
+        : {}),
     });
     registerFailed = true;
   } finally {

@@ -63,7 +63,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -71,7 +71,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     });
 
     expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
+      config: {},
       workspaceDir: "/tmp/workspace",
     });
   });
@@ -86,7 +86,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -95,7 +95,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     });
 
     expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
+      config: {},
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
@@ -112,7 +112,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -140,7 +140,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -161,7 +161,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "flush",
       timeoutMs: 30000,
@@ -206,7 +206,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     const result = await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -247,7 +247,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     const result = await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       timeoutMs: 30000,
@@ -296,7 +296,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     const result = await runEmbeddedAgent({
       sessionId: "test-session",
       sessionKey: "test-key",
-      sessionFile: "/tmp/session.json",
+      sessionFile: "test-key",
       workspaceDir: "/tmp/workspace",
       prompt: "hello",
       provider: "openrouter",

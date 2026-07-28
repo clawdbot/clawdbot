@@ -222,6 +222,138 @@ describe("openshell backend manager", () => {
   afterAll(uninstallOpenShellBackendMocks);
   beforeEach(resetOpenShellBackendMocks);
 
+  it("builds deterministic OpenShell-compatible sandbox names", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
+    const createBackend = async (scopeKey: string, registeredRuntimeIds?: readonly string[]) =>
+      await factory({
+        sessionKey: `${scopeKey}:turn`,
+        scopeKey,
+        ...(registeredRuntimeIds ? { registeredRuntimeIds } : {}),
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: createOpenShellBackendSandboxConfig(),
+      });
+
+    const first = await createBackend("agent:main");
+    const repeated = await createBackend("agent:main");
+    const other = await createBackend("agent:other");
+    const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
+    const adoptedLegacy = await createBackend("agent:main", [legacyRuntimeId]);
+    const punctuationLegacyRuntimeId = "openclaw-agent-foo-bar-baz-ab401a99";
+    const adoptedPunctuationLegacy = await createBackend("agent:foo_bar.baz", [
+      punctuationLegacyRuntimeId,
+    ]);
+    const ignoresUnknown = await createBackend("agent:main", ["unrelated-runtime"]);
+    const prefersCurrent = await createBackend("agent:main", [legacyRuntimeId, first.runtimeId]);
+
+    expect(first.runtimeId).toMatch(/^oc-[a-f0-9]{16}$/u);
+    expect(first.runtimeId).toHaveLength(19);
+    expect(repeated.runtimeId).toBe(first.runtimeId);
+    expect(other.runtimeId).not.toBe(first.runtimeId);
+    expect(adoptedLegacy.runtimeId).toBe(legacyRuntimeId);
+    expect(adoptedPunctuationLegacy.runtimeId).toBe(punctuationLegacyRuntimeId);
+    expect(ignoresUnknown.runtimeId).toBe(first.runtimeId);
+    expect(prefersCurrent.runtimeId).toBe(first.runtimeId);
+  });
+
+  it("does not recreate an unreachable registered legacy sandbox name", async () => {
+    const scopeKey = "agent:main'$(touch /tmp/pwn)";
+    const legacyRuntimeId = "openclaw-agent-main-touch-tmp-pwn-87608e6a";
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "sandbox not found",
+    });
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+    const backend = await factory({
+      sessionKey: `${scopeKey}:turn`,
+      scopeKey,
+      registeredRuntimeIds: [legacyRuntimeId],
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await expect(
+      backend.runShellCommand({
+        script: "true",
+      }),
+    ).rejects.toThrow(
+      `Run \`openclaw sandbox recreate --session ${shellEscape(scopeKey)}\` to migrate this scope`,
+    );
+    expect(cliMocks.runOpenShellCli).toHaveBeenCalledTimes(1);
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["create"]),
+      }),
+    );
+  });
+
+  it("does not execute a registered legacy sandbox that is no longer ready", async () => {
+    const scopeKey = "agent:main";
+    const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
+    cliMocks.runOpenShellCli
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: "sandbox detail",
+        stderr: "",
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify(
+          Array.from({ length: 100 }, (_, index) => ({
+            name: `other-${index}`,
+            phase: "Ready",
+          })),
+        ),
+        stderr: "",
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify([{ name: legacyRuntimeId, phase: "Error" }]),
+        stderr: "",
+      });
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell", mode: "remote" }),
+    });
+    const backend = await factory({
+      sessionKey: `${scopeKey}:turn`,
+      scopeKey,
+      registeredRuntimeIds: [legacyRuntimeId],
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await expect(backend.runShellCommand({ script: "true" })).rejects.toThrow(
+      'OpenShell reports phase "Error".',
+    );
+    expect(cliMocks.runOpenShellCli).toHaveBeenNthCalledWith(2, {
+      context: expect.objectContaining({
+        sandboxName: legacyRuntimeId,
+      }),
+      args: ["sandbox", "list", "--limit", "100", "--offset", "0", "--output", "json"],
+      cwd: "/tmp/workspace",
+    });
+    expect(cliMocks.runOpenShellCli).toHaveBeenNthCalledWith(3, {
+      context: expect.objectContaining({
+        sandboxName: legacyRuntimeId,
+      }),
+      args: ["sandbox", "list", "--limit", "100", "--offset", "100", "--output", "json"],
+      cwd: "/tmp/workspace",
+    });
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: expect.arrayContaining(["create"]),
+      }),
+    );
+    expect(cliMocks.createOpenShellSshSession).not.toHaveBeenCalled();
+  });
+
   it.runIf(process.platform !== "win32")(
     "clears the materialized skills directory through the remote backend boundary",
     async () => {

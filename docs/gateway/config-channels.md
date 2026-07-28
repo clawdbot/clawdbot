@@ -103,7 +103,7 @@ Use `channels.defaults` for shared group-policy, implicit-mention, and heartbeat
 
 - `channels.defaults.groupPolicy`: fallback group policy when a provider-level `groupPolicy` is unset.
 - `channels.defaults.contextVisibility`: default supplemental context visibility mode for all channels. Values: `all` (default, include all quoted/thread/history context), `allowlist` (only include context from allowlisted senders), `allowlist_quote` (same as allowlist but keep explicit quote/reply context). Per-channel override: `channels.<channel>.contextVisibility`.
-- `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. These settings do not change outbound reply/thread modes or authorized command handling.
+- `channels.defaults.implicitMentions`: controls which supported inbound facts count as mentions. `replyToBot`, `quotedBot`, and `threadParticipation` each default to `true`, preserving current behavior. Override per channel with `channels.<channel>.implicitMentions` or per account with `channels.<channel>.accounts.<id>.implicitMentions`; each flag resolves account -> channel -> defaults independently. The names are positive: set a flag to `false` to stop that fact from bypassing mention gating. Native explicit mentions are always allowed, and a flag has no effect when the channel does not produce that fact. See [Mention gating](/channels/groups#mention-gating-default) for the current producer matrix. These settings do not change outbound reply/thread modes or authorized command handling.
 - `channels.defaults.heartbeat.showOk`: include healthy channel statuses in heartbeat output (default `false`).
 - `channels.defaults.heartbeat.showAlerts`: include degraded/error statuses in heartbeat output (default `true`).
 - `channels.defaults.heartbeat.useIndicator`: render compact indicator-style heartbeat output (default `true`).
@@ -116,19 +116,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 {
   web: {
     enabled: true,
-    heartbeatSeconds: 60,
-    whatsapp: {
-      keepAliveIntervalMs: 25000,
-      connectTimeoutMs: 60000,
-      defaultQueryTimeoutMs: 60000,
-    },
-    reconnect: {
-      initialMs: 2000,
-      maxMs: 30000,
-      factor: 1.8,
-      jitter: 0.25,
-      maxAttempts: 12, // 0 = retry forever
-    },
   },
   channels: {
     whatsapp: {
@@ -148,8 +135,6 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 }
 ```
 
-- `web.whatsapp.keepAliveIntervalMs` (default `25000`), `connectTimeoutMs` (default `60000`), and `defaultQueryTimeoutMs` (default `60000`) tune the Baileys socket.
-- `web.reconnect` defaults: `initialMs: 2000`, `maxMs: 30000`, `factor: 1.8`, `jitter: 0.25`, `maxAttempts: 12`. `maxAttempts: 0` retries forever instead of giving up.
 - Top-level `bindings[]` entries with `type: "acp"` configure persistent ACP bindings for WhatsApp DMs and groups. Use an E.164 direct number or WhatsApp group JID in `match.peer.id`. Field semantics are shared in [ACP Agents](/tools/acp-agents#persistent-channel-bindings).
 
 <Accordion title="Multi-account WhatsApp">
@@ -409,11 +394,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       audience: "https://gateway.example.com/googlechat",
       webhookPath: "/googlechat",
       botUser: "users/1234567890",
-      dm: {
-        enabled: true,
-        policy: "pairing",
-        allowFrom: ["users/1234567890"],
-      },
+      dmPolicy: "pairing",
+      allowFrom: ["users/1234567890"],
       groupPolicy: "allowlist",
       groups: {
         "spaces/AAAA": { allow: true, requireMention: true },
@@ -427,7 +409,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Service account JSON: inline (`serviceAccount`) or file-based (`serviceAccountFile`).
-- Service account SecretRef is also supported (`serviceAccountRef`).
+- `serviceAccount` accepts a SecretRef directly.
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE` (default account only).
 - Use `spaces/<spaceId>` or `users/<userId>` for delivery targets.
 - `channels.googlechat.dangerouslyAllowNameMatching` re-enables mutable email principal matching (break-glass compatibility mode).
@@ -854,7 +836,7 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 **Mention types:**
 
 - **Metadata mentions**: Native platform @-mentions. Ignored in WhatsApp self-chat mode.
-- **Text patterns**: Safe regex patterns in `agents.list[].groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
+- **Text patterns**: Safe regex patterns in `agents.entries.*.groupChat.mentionPatterns`. Invalid patterns and unsafe nested repetition are ignored.
 - Mention gating is enforced only when detection is possible (native mentions or at least one pattern).
 
 ```json5
@@ -951,7 +933,7 @@ Include your own number in `allowFrom` to enable self-chat mode (ignores native 
 <Accordion title="Command details">
 
 - This block configures command surfaces. For the current built-in + bundled command catalog, see [Slash Commands](/tools/slash-commands).
-- This page is a **config-key reference**, not the full command catalog. Channel/plugin-owned commands such as QQ Bot `/bot-ping` `/bot-help` `/bot-logs`, LINE `/card`, device-pair `/pair`, memory `/dreaming`, phone-control `/phone`, and Talk `/voice` are documented in their channel/plugin pages plus [Slash Commands](/tools/slash-commands).
+- This page is a **config-key reference**, not the full command catalog. Channel/plugin-owned commands such as QQ Bot `/bot-ping` `/bot-help` `/bot-logs`, LINE `/card`, device-pair `/pair`, memory `/dreaming`, and Talk `/voice` are documented in their channel/plugin pages plus [Slash Commands](/tools/slash-commands).
 - Text commands must be **standalone** messages with leading `/`.
 - `native: "auto"` turns on native commands for Discord/Telegram, leaves Slack off.
 - `nativeSkills: "auto"` turns on native skill commands for Discord/Telegram, leaves Slack off.

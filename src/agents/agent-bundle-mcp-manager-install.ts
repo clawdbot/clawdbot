@@ -4,6 +4,7 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { SessionMcpRuntimeManagerLifecycle } from "./agent-bundle-mcp-manager-lifecycle.js";
 import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { allowMcpAppModelContext, revokeMcpAppModelContext } from "./mcp-app-model-context.js";
 import {
   hashMcpResolvedConnections,
   resolveMcpConnectionRevalidateMs,
@@ -65,12 +66,16 @@ export function createSessionMcpRuntimeManagerInstall(
   lifecycle: SessionMcpRuntimeManagerLifecycle,
 ): SessionMcpRuntimeManagerInstall {
   const { store } = lifecycle;
-  const cancelReusableRetirement = (sessionId: string) => {
+  const reconcileReusableRetirement = (sessionId: string, runtime: SessionMcpRuntime) => {
     if (store.requiredRetirementSessionIds.has(sessionId)) {
+      // Reset/delete retirement deliberately survives late creation and reuse;
+      // otherwise a racing run could escape the required session teardown.
       store.deferredRetirementSessionIds.add(sessionId);
+      revokeMcpAppModelContext(runtime);
       return;
     }
     store.deferredRetirementSessionIds.delete(sessionId);
+    allowMcpAppModelContext(runtime);
   };
 
   /** Static/session runtime get-or-create (createInFlight dedup for bare keys only). */
@@ -104,7 +109,7 @@ export function createSessionMcpRuntimeManagerInstall(
         store.connectionMetaByRuntimeKey.delete(params.runtimeKey);
         await existing.dispose();
       } else {
-        cancelReusableRetirement(params.sessionId);
+        reconcileReusableRetirement(params.sessionId, existing);
         existing.markUsed();
         store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
         return existing;
@@ -146,7 +151,7 @@ export function createSessionMcpRuntimeManagerInstall(
         configFingerprint: nextFingerprint,
       }),
     ).then((runtime) => {
-      cancelReusableRetirement(params.sessionId);
+      reconcileReusableRetirement(params.sessionId, runtime);
       runtime.markUsed();
       store.runtimesBySessionId.set(params.runtimeKey, runtime);
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
@@ -206,7 +211,7 @@ export function createSessionMcpRuntimeManagerInstall(
         candidate: existing,
       })
     ) {
-      cancelReusableRetirement(params.sessionId);
+      reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
@@ -289,7 +294,7 @@ export function createSessionMcpRuntimeManagerInstall(
         candidate: existing,
       })
     ) {
-      cancelReusableRetirement(params.sessionId);
+      reconcileReusableRetirement(params.sessionId, existing);
       existing.markUsed();
       store.idleTtlMsBySessionId.set(params.runtimeKey, params.idleTtlMs);
       return existing;

@@ -302,7 +302,12 @@ describe("buildComputedAccountStatusSnapshot", () => {
         enabled: true,
         configured: false,
       }),
-    ).toEqual(expectedAccountSnapshot({ enabled: true }));
+    ).toEqual(
+      expectedAccountSnapshot({
+        enabled: true,
+        stateReason: "not configured",
+      }),
+    );
   });
 
   it("merges computed extras after the shared fields", () => {

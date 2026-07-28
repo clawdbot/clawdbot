@@ -25,20 +25,34 @@ type AbortResult = {
   rejectionReason?: "finalizing";
   stoppedSubagents?: number;
 };
+type FastApproveResult = { handled: false } | { handled: true; reply?: ReplyPayload };
 type PluginTargetedInboundClaimOutcome = Awaited<
   ReturnType<ReturnType<typeof createHookRunner>["runInboundClaimForPluginOutcome"]>
 >;
 
 const mocks = vi.hoisted(() => ({
   isRoutableChannel: vi.fn((_channel: string | undefined) => true),
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(
+    async (
+      _params: unknown,
+    ): Promise<{ ok: boolean; messageId?: string; suppressed?: boolean; error?: string }> => ({
+      ok: true,
+      messageId: "mock",
+    }),
+  ),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
   })),
+  tryFastApproveFromMessage: vi.fn<() => Promise<FastApproveResult>>(async () => ({
+    handled: false,
+  })),
 }));
 const globalMocks = vi.hoisted(() => ({
   logVerbose: vi.fn(),
+}));
+const askUserMocks = vi.hoisted(() => ({
+  isAskUserPromptPending: vi.fn(async () => true),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
@@ -131,7 +145,7 @@ const sessionStoreMocks = vi.hoisted(() => ({
   currentEntry: undefined as Record<string, unknown> | undefined,
   entriesBySessionKey: new Map<string, Record<string, unknown>>(),
   loadSessionEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
-  loadSessionStoreEntry: vi.fn(() => sessionStoreMocks.currentEntry),
+  loadSessionStoreEntry: vi.fn((..._args: unknown[]) => sessionStoreMocks.currentEntry),
   loadSessionStore: vi.fn(() => ({})),
   readSessionEntry: vi.fn(() => sessionStoreMocks.currentEntry),
   resolveStorePath: vi.fn(() => "/tmp/mock-sessions.json"),
@@ -238,7 +252,12 @@ const transcriptMocks = vi.hoisted(() => ({
   persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
   appendAssistantMessageToSessionTranscript: vi.fn(async (_params: unknown) => ({
     ok: true,
-    sessionFile: "/tmp/session.jsonl",
+    target: {
+      agentId: "main",
+      sessionId: "test-session",
+      sessionKey: "agent:main",
+      storePath: "/tmp/sessions.json",
+    },
     messageId: "message-1",
   })),
 }));
@@ -310,10 +329,16 @@ const conversationBindingMocks = vi.hoisted(() => {
       if (!conversationId) {
         return null;
       }
+      const rawThreadParentId = resolveTarget(channel, params.ctx.ThreadParentId);
+      const explicitThreadParentId =
+        channel === "discord" && rawThreadParentId && !rawThreadParentId.includes(":")
+          ? `channel:${rawThreadParentId}`
+          : rawThreadParentId;
       const parentConversationId =
-        threadId && baseConversationId && baseConversationId !== threadId
+        explicitThreadParentId ??
+        (threadId && baseConversationId && baseConversationId !== threadId
           ? baseConversationId
-          : resolveTarget(channel, params.ctx.ThreadParentId);
+          : undefined);
       return {
         channel,
         accountId: resolveAccountId(params.ctx, params.cfg, channel),
@@ -369,6 +394,7 @@ export {
   acpManagerRuntimeMocks,
   acpMocks,
   agentEventMocks,
+  askUserMocks,
   diagnosticMocks,
   globalMocks,
   hookMocks,
@@ -430,6 +456,10 @@ vi.mock("./abort.runtime.js", () => ({
   },
 }));
 
+vi.mock("./fast-approve.runtime.js", () => ({
+  tryFastApproveFromMessage: mocks.tryFastApproveFromMessage,
+}));
+
 vi.mock("../../globals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../globals.js")>();
   return {
@@ -437,6 +467,10 @@ vi.mock("../../globals.js", async (importOriginal) => {
     logVerbose: globalMocks.logVerbose,
   };
 });
+
+vi.mock("../../agents/tools/ask-user-tool.js", () => ({
+  isAskUserPromptPending: askUserMocks.isAskUserPromptPending,
+}));
 
 vi.mock("../../logging/diagnostic.js", () => ({
   logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
@@ -448,16 +482,9 @@ vi.mock("../../logging/diagnostic.js", () => ({
   isStuckSessionRecoveryEnabled: (config?: { diagnostics?: { enabled?: boolean } }) =>
     config?.diagnostics?.enabled !== false,
   requestStuckDiagnosticSessionRecovery: diagnosticMocks.requestStuckDiagnosticSessionRecovery,
-  resolveStuckSessionWarnMs: (config?: { diagnostics?: { stuckSessionWarnMs?: number } }) =>
-    config?.diagnostics?.stuckSessionWarnMs ?? 120_000,
-  resolveStuckSessionAbortMs: (
-    config: { diagnostics?: { stuckSessionAbortMs?: number } } | undefined,
-    stuckSessionWarnMs: number,
-  ) =>
-    Math.max(
-      stuckSessionWarnMs,
-      config?.diagnostics?.stuckSessionAbortMs ?? Math.max(300_000, stuckSessionWarnMs * 3),
-    ),
+  resolveStuckSessionWarnMs: () => 120_000,
+  resolveStuckSessionAbortMs: (stuckSessionWarnMs: number) =>
+    Math.max(300_000, stuckSessionWarnMs * 3),
 }));
 vi.mock("../../audit/message-audit-events.js", () => ({
   emitTrustedMessageAuditEvent: messageAuditMocks.emitTrustedMessageAuditEvent,
@@ -484,6 +511,7 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
   return {
     ...actual,
     loadSessionEntry: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
+    loadSessionEntryReadOnly: (...args: unknown[]) => sessionStoreMocks.loadSessionEntry(...args),
     updateSessionEntry: (...args: Parameters<typeof sessionStoreMocks.updateSessionEntry>) =>
       sessionStoreMocks.updateSessionEntry(...args),
   };
@@ -536,7 +564,10 @@ vi.mock("../../bindings/records.js", () => ({
 vi.mock("../../infra/agent-events.js", () => ({
   emitAgentAuditEvent: (params: unknown) => agentEventMocks.emitAgentAuditEvent(params),
   emitAgentEvent: (params: unknown) => agentEventMocks.emitAgentEvent(params),
+  getAgentEventLifecycleGeneration: () => "test-generation",
+  isAgentEventLifecycleGenerationCurrent: (generation: string) => generation === "test-generation",
   onAgentEvent: (listener: unknown) => agentEventMocks.onAgentEvent(listener),
+  registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 vi.mock("../../plugins/conversation-binding.js", () => ({
   buildPluginBindingDeclinedText: () => "Plugin binding request was declined.",
@@ -688,6 +719,7 @@ export function createDispatcher(): ReplyDispatcher {
 }
 
 export function resetPluginTtsAndThreadMocks() {
+  askUserMocks.isAskUserPromptPending.mockReset().mockResolvedValue(true);
   pluginConversationBindingMocks.shownFallbackNoticeBindingIds.clear();
   ttsMocks.state.synthesizeFinalAudio = false;
   ttsMocks.state.synthesizeToolAudio = false;

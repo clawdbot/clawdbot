@@ -21,6 +21,7 @@ export type RealtimeTalkCallbacks = {
   onTranscript?: (entry: { role: "user" | "assistant"; text: string; final: boolean }) => void;
   onTalkEvent?: (event: RealtimeTalkEvent) => void;
   onVideoStream?: (stream: MediaStream | null) => void;
+  onVideoError?: (error: unknown) => void;
 };
 
 type RealtimeTalkEventInput<TPayload = unknown> = {
@@ -44,6 +45,7 @@ type RealtimeTalkAudioContract = {
 export type RealtimeTalkWebRtcSdpSessionResult = {
   provider: string;
   transport: "webrtc";
+  voiceSessionId?: string;
   clientSecret: string;
   offerUrl?: string;
   offerHeaders?: Record<string, string>;
@@ -57,6 +59,7 @@ export type RealtimeTalkWebRtcSdpSessionResult = {
 export type RealtimeTalkJsonPcmWebSocketSessionResult = {
   provider: string;
   transport: "provider-websocket";
+  voiceSessionId?: string;
   protocol: string;
   clientSecret: string;
   websocketUrl: string;
@@ -72,6 +75,7 @@ export type RealtimeTalkJsonPcmWebSocketSessionResult = {
 export type RealtimeTalkGatewayRelaySessionResult = {
   provider: string;
   transport: "gateway-relay";
+  voiceSessionId?: string;
   relaySessionId: string;
   audio: RealtimeTalkAudioContract;
   model?: string;
@@ -84,6 +88,7 @@ export type RealtimeTalkGatewayRelaySessionResult = {
 type RealtimeTalkManagedRoomSessionResult = {
   provider: string;
   transport: "managed-room";
+  voiceSessionId?: string;
   roomUrl: string;
   token?: string;
   model?: string;
@@ -103,13 +108,17 @@ export type RealtimeTalkTransport = {
   start(): Promise<void>;
   stop(): void;
   setVideoEnabled?: (enabled: boolean) => Promise<void>;
+  switchCamera?: (videoDeviceId: string | undefined) => Promise<void>;
 };
 
 export type RealtimeTalkTransportContext = {
   client: GatewayBrowserClient;
   sessionKey: string;
+  voiceSessionId?: string;
+  flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
   inputDeviceId?: string;
+  videoDeviceId?: string;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
 };
@@ -569,10 +578,12 @@ export async function submitRealtimeTalkConsult(params: {
   try {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
+    await ctx.flushTranscriptWrites?.();
     const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
       "talk.client.toolCall",
       {
         sessionKey: ctx.sessionKey,
+        ...(ctx.voiceSessionId ? { voiceSessionId: ctx.voiceSessionId } : {}),
         callId,
         name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
         args,

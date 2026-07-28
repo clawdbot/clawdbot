@@ -1,12 +1,9 @@
 // Synology Chat plugin owns raw webhook durable admission and draining.
 import {
-  bindIngressLifecycleToReplyOptions,
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getSynologyRuntime } from "./runtime.js";
@@ -32,14 +29,9 @@ type SynologyIngressPayload = {
   rawEvent: string;
 };
 
-export type SynologyIngressLifecycle = ReturnType<
-  typeof bindIngressLifecycleToReplyOptions
->["turnAdoptionLifecycle"];
+export type SynologyIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "onAdoptionFinalizing">;
 
-type SynologyIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+type SynologyIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type SynologyIngressDispatch = (
   event: SynologyWebhookRawEvent,
@@ -110,22 +102,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseClaimedSynologyEvent(
-  payload: SynologyIngressPayload,
+function deserializeSynologyIngressEvent(
+  rawEvent: string,
   claimedId: string,
 ): SynologyWebhookRawEvent {
-  if (
-    payload.version !== SYNOLOGY_INGRESS_PAYLOAD_VERSION ||
-    typeof payload.rawEvent !== "string"
-  ) {
-    throw new SynologyIngressPermanentError(
-      "invalid-event",
-      `Synology Chat ingress row ${claimedId} has an invalid payload.`,
-    );
-  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(payload.rawEvent);
+    parsed = JSON.parse(rawEvent);
   } catch (error) {
     throw new SynologyIngressPermanentError(
       "invalid-event",
@@ -139,17 +122,10 @@ function parseClaimedSynologyEvent(
       `Synology Chat ingress row ${claimedId} has an invalid webhook envelope.`,
     );
   }
-  const event = {
+  return {
     bodyFields: parsed.bodyFields,
     queryFields: parsed.queryFields,
   };
-  if (inspectSynologyIngressEvent(event).eventId !== claimedId) {
-    throw new SynologyIngressPermanentError(
-      "invalid-event",
-      `Synology Chat ingress row ${claimedId} has invalid message identity.`,
-    );
-  }
-  return event;
 }
 
 function resolveSynologyIngressNonRetryableFailure(error: unknown) {
@@ -181,116 +157,6 @@ export function createSynologyIngressMonitor(options: {
   adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }): SynologyIngressMonitor {
-  let queue = options.queue;
-  let drain: ChannelIngressDrain | undefined;
-  let running = false;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let lastPrunedAt = 0;
-  const activeDeliveries = new Set<Promise<SynologyIngressDispatchResult | void>>();
-
-  const getQueue = (): ChannelIngressQueue<SynologyIngressPayload> => {
-    queue ??= getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
-      accountId: options.accountId,
-    });
-    return queue;
-  };
-
-  const getDrain = (): ChannelIngressDrain => {
-    drain ??= createChannelIngressDrain<SynologyIngressPayload>({
-      queue: getQueue(),
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      startLimit: SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      resolveNonRetryableFailure: resolveSynologyIngressNonRetryableFailure,
-      ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
-      onLog: (message) => options.runtime.error?.(`synology-chat: ${message}`),
-      dispatchClaimedEvent: async (record, lifecycle) => {
-        if (lifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: lifecycle.abortSignal.reason };
-        }
-        const event = parseClaimedSynologyEvent(record.payload, record.id);
-        const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-        if (boundLifecycle.abortSignal.aborted) {
-          return { kind: "failed-retryable", error: boundLifecycle.abortSignal.reason };
-        }
-        const delivery = Promise.resolve().then(() => options.dispatch(event, boundLifecycle));
-        activeDeliveries.add(delivery);
-        try {
-          return await delivery;
-        } finally {
-          activeDeliveries.delete(delivery);
-        }
-      },
-    });
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < SYNOLOGY_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
-      completedTtlMs: SYNOLOGY_INGRESS_COMPLETED_TTL_MS,
-      completedMaxEntries: SYNOLOGY_INGRESS_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: SYNOLOGY_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: SYNOLOGY_INGRESS_FAILED_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const waitForActiveDeliveries = async (): Promise<void> => {
-    while (activeDeliveries.size > 0) {
-      await Promise.allSettled(activeDeliveries);
-    }
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        // stop() may race the async prune; never create a fresh drain afterward.
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce({
-          shouldStop: () =>
-            !running || activeDeliveries.size >= SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES,
-        });
-        await waitForActiveDeliveries();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`synology-chat ingress drain failed: ${formatErrorMessage(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
-
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  // Serialize concurrent HTTP admissions so append retry cannot invert a conversation lane.
-  let admissionTail: Promise<void> = Promise.resolve();
-
   const serializeForIngress = (rawEvent: SynologyWebhookRawEvent): string => {
     const bodyFields = { ...rawEvent.bodyFields };
     const queryFields = { ...rawEvent.queryFields };
@@ -300,36 +166,58 @@ export function createSynologyIngressMonitor(options: {
     return JSON.stringify({ bodyFields, queryFields });
   };
 
-  const admitOnce = async (params: {
-    rawEvent: string;
-    facts: { eventId: string; laneKey: string };
-    receivedAt: number;
-  }): Promise<void> => {
-    let lastError: unknown;
-    for (const delayMs of [0, 100, 300]) {
-      if (delayMs > 0) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        await getQueue().enqueue(
-          params.facts.eventId,
-          { version: SYNOLOGY_INGRESS_PAYLOAD_VERSION, rawEvent: params.rawEvent },
-          { receivedAt: params.receivedAt, laneKey: params.facts.laneKey },
-        );
-        requestDrain();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
-  };
+  const monitor = createChannelIngressMonitor<
+    SynologyWebhookRawEvent,
+    string,
+    SynologyIngressPayload
+  >({
+    queue:
+      options.queue ??
+      (() =>
+        getSynologyRuntime().state.openChannelIngressQueue<SynologyIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (rawEvent) => inspectSynologyIngressEvent(rawEvent),
+    payload: {
+      storage: "raw-event",
+      version: SYNOLOGY_INGRESS_PAYLOAD_VERSION,
+      serialize: serializeForIngress,
+      deserialize: (rawEvent, { claim }) => deserializeSynologyIngressEvent(rawEvent, claim.id),
+      createClaimError: (kind, claim) =>
+        new SynologyIngressPermanentError(
+          "invalid-event",
+          kind === "invalid-version"
+            ? `Synology Chat ingress row ${claim.id} has an invalid payload.`
+            : `Synology Chat ingress row ${claim.id} has invalid message identity.`,
+        ),
+    },
+    deliver: (rawEvent, lifecycle) => options.dispatch(rawEvent, lifecycle),
+    pollIntervalMs: options.pollIntervalMs ?? SYNOLOGY_INGRESS_POLL_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: SYNOLOGY_INGRESS_PRUNE_INTERVAL_MS,
+      completedTtlMs: SYNOLOGY_INGRESS_COMPLETED_TTL_MS,
+      completedMaxEntries: SYNOLOGY_INGRESS_COMPLETED_MAX_ENTRIES,
+      failedTtlMs: SYNOLOGY_INGRESS_FAILED_TTL_MS,
+      failedMaxEntries: SYNOLOGY_INGRESS_FAILED_MAX_ENTRIES,
+    },
+    drain: {
+      resolveNonRetryableFailure: resolveSynologyIngressNonRetryableFailure,
+      startLimit: SYNOLOGY_INGRESS_MAX_CONCURRENT_DELIVERIES,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      onLog: (message) => options.runtime.error?.(`synology-chat: ${message}`),
+    },
+    ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
+    admissionMode: "while-running",
+    createStoppedError: () => new Error("Synology Chat ingress is stopped."),
+    onError: (error) =>
+      options.runtime.error?.(`synology-chat ingress drain failed: ${formatErrorMessage(error)}`),
+  });
 
   return {
     receive: async (rawEvent) => {
-      if (!running) {
+      if (!monitor.isRunning()) {
         throw new Error("Synology Chat ingress is stopped.");
       }
       let facts: ReturnType<typeof inspectSynologyIngressEvent>;
@@ -341,51 +229,11 @@ export function createSynologyIngressMonitor(options: {
         }
         throw error;
       }
-      const serialized = serializeForIngress(rawEvent);
-      const receivedAt = Date.now();
-      const admission = admissionTail.then(async () => {
-        await admitOnce({ rawEvent: serialized, facts, receivedAt });
-      });
-      admissionTail = admission.catch(() => undefined);
-      await admission;
+      await monitor.admit(rawEvent, { facts });
       return { kind: "durable" };
     },
-    start: () => {
-      if (running) {
-        return;
-      }
-      running = true;
-      pollTimer = setInterval(
-        requestDrain,
-        options.pollIntervalMs ?? SYNOLOGY_INGRESS_POLL_INTERVAL_MS,
-      );
-      pollTimer.unref?.();
-      requestDrain();
-    },
-    stop: async () => {
-      running = false;
-      if (pollTimer) {
-        clearInterval(pollTimer);
-        pollTimer = undefined;
-      }
-      await admissionTail;
-      drain?.dispose();
-      await pumping;
-      await waitForActiveDeliveries();
-      // The pump can lazily create the drain before observing running=false.
-      drain?.dispose();
-      await drain?.waitForIdle();
-    },
-    waitForIdle: async () => {
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      await waitForActiveDeliveries();
-      await drain?.waitForIdle();
-    },
+    start: monitor.start,
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
   };
 }

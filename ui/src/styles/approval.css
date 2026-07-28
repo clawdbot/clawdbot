@@ -281,6 +281,10 @@
   background: var(--primary-hover);
 }
 
+:root[data-theme="openknot"] .approval-page__action--allow-once:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
 .approval-page__action--deny {
   border-color: color-mix(in srgb, var(--danger) 52%, var(--border));
   color: var(--danger);

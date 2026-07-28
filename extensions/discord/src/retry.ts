@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
+  classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
   resolveRetryConfig,
   type RetryConfig,
@@ -22,28 +23,8 @@ const DISCORD_RETRY_DEFAULTS = {
 const DISCORD_GATEWAY_RECONNECT_EXTRA_ATTEMPTS = 2;
 
 const DISCORD_RETRYABLE_STATUS_CODES = new Set([408, 429]);
-const DISCORD_RETRYABLE_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "EPIPE",
-  "ETIMEDOUT",
-  "UND_ERR_BODY_TIMEOUT",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_SOCKET",
-]);
 const DISCORD_TRANSIENT_MESSAGE_RE =
   /\b(?:bad gateway|fetch failed|network error|networkerror|service unavailable|socket hang up|temporarily unavailable|timed out|timeout)\b|connection (?:closed|reset|refused)/i;
-const DISCORD_PRECONNECT_ERROR_CODES = new Set([
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "ENOTFOUND",
-  "UND_ERR_CONNECT_TIMEOUT",
-]);
 type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
 
 export type DiscordRetryRunner = <T>(
@@ -77,8 +58,7 @@ function isRetryableDiscordTransientError(err: unknown): boolean {
     if (status !== undefined && (DISCORD_RETRYABLE_STATUS_CODES.has(status) || status >= 500)) {
       return true;
     }
-    const code = extractErrorCode(candidate);
-    if (code && DISCORD_RETRYABLE_ERROR_CODES.has(code.toUpperCase())) {
+    if (classifyTransientNetworkErrorCode(extractErrorCode(candidate))) {
       return true;
     }
     if (readErrorName(candidate) === "AbortError") {
@@ -105,8 +85,7 @@ function isRetryableDiscordPreConnectError(err: unknown): boolean {
     if (readDiscordErrorStatus(candidate) === 429) {
       return true;
     }
-    const code = extractErrorCode(candidate);
-    if (code && DISCORD_PRECONNECT_ERROR_CODES.has(code.toUpperCase())) {
+    if (classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect") {
       return true;
     }
   }
@@ -130,14 +109,10 @@ function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
 
 export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
-  configRetry?: RetryConfig;
   verbose?: boolean;
   isGatewayDisconnected?: () => boolean;
 }): DiscordRetryRunner {
-  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
-    ...params.configRetry,
-    ...params.retry,
-  });
+  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, params.retry);
   // Extend only the per-request runner. A delivery may contain several REST
   // writes, so replaying its outer adapter can duplicate already-sent chunks.
   const attempts =

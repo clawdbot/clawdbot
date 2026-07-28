@@ -44,6 +44,7 @@ async function runLoadedScenarioFlow(
   const state = params.state ?? createQaBusState();
   let waitCount = 0;
   const transport = {
+    accountId: "qa-channel",
     state,
     reset: async () => {
       state.reset();
@@ -80,6 +81,10 @@ async function runLoadedScenarioFlow(
             (!input.textIncludes || candidate.text.includes(input.textIncludes)),
         );
       if (match) {
+        state.resolvePollCursor({
+          accountId: "qa-channel",
+          cursor: state.getSnapshot().cursor,
+        });
         return match;
       }
       throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
@@ -93,7 +98,14 @@ async function runLoadedScenarioFlow(
         }),
   };
   const api = {
-    env: { providerMode: "mock-openai" },
+    env: {
+      providerMode: "mock-openai",
+      gateway: {
+        restartAfterStateMutation: async (mutate: (context: unknown) => Promise<void>) => {
+          await mutate({});
+        },
+      },
+    },
     transport,
     state,
     scenario,
@@ -104,6 +116,15 @@ async function runLoadedScenarioFlow(
     waitForTransportReady: async () => undefined,
     waitForQaChannelReady: async () => undefined,
     waitForNoOutbound: async () => undefined,
+    waitForCondition: async <T>(check: () => T | Promise<T | undefined>) => {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const value = await check();
+        if (value !== undefined) {
+          return value;
+        }
+      }
+      throw new Error("test condition was not met");
+    },
     sleep: async () => undefined,
     reset: async () => {
       state.reset();
@@ -381,6 +402,84 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it.each([
+    "control-ui-qa-channel-image-roundtrip",
+    "control-ui-assistant-transcript-role-boundary",
+  ])("opens the selected Control UI session on the chat route for %s", async (scenarioId) => {
+    const scenario = readQaScenarioById(scenarioId);
+    const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions);
+    if (!actions) {
+      throw new Error(`scenario has no flow: ${scenarioId}`);
+    }
+
+    const sessionAction = actions.find(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "set" in action &&
+        action.set === "uiSessionKey",
+    );
+    const urlAction = actions.find(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "set" in action &&
+        action.set === "controlUiChatUrl",
+    );
+    const openAction = actions.find(
+      (action) =>
+        typeof action === "object" &&
+        action !== null &&
+        "call" in action &&
+        action.call === "webOpenPage",
+    );
+    if (!sessionAction || !urlAction || !openAction) {
+      throw new Error(`scenario has no Control UI session navigation: ${scenarioId}`);
+    }
+
+    const sessionKey = "agent:main:qa-channel:direct:control-ui-session";
+    const gatewayToken = "qa token/+";
+    const openedUrls: string[] = [];
+    const result = await runLoadedScenarioFlow(scenarioId, {
+      flow: {
+        steps: [
+          {
+            name: "opens the selected chat session",
+            actions: [sessionAction, urlAction, openAction],
+          },
+        ],
+      },
+      api: {
+        env: {
+          providerMode: "mock-openai",
+          cfg: {
+            agents: { list: [{ id: "main", default: true }] },
+          },
+          gateway: {
+            baseUrl: "http://127.0.0.1:43124",
+            token: gatewayToken,
+          },
+        },
+        buildAgentSessionKey: () => sessionKey,
+        webOpenPage: async ({ url }: { url: string }) => {
+          openedUrls.push(url);
+          return { pageId: "control-ui-session-page" };
+        },
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(openedUrls).toHaveLength(1);
+    const openedUrl = openedUrls[0];
+    if (!openedUrl) {
+      throw new Error(`scenario did not open its Control UI session: ${scenarioId}`);
+    }
+    const chatUrl = new URL(openedUrl);
+    expect(chatUrl.pathname).toBe("/chat");
+    expect(chatUrl.searchParams.get("session")).toBe(sessionKey);
+    expect(chatUrl.hash).toBe(`#token=${encodeURIComponent(gatewayToken)}`);
+  });
+
   it.each(planningEvidenceFixtures)(
     "accepts current-attempt planning evidence for $scenario.id",
     async (fixture) => {

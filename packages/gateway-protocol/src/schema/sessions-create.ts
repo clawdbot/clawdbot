@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { ChatAttachmentsSchema } from "./logs-chat.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 
 /** Creates or adopts a session with optional model, thinking, label, and parent linkage. */
 export const SessionsCreateParamsSchema = closedObject({
@@ -10,8 +11,17 @@ export const SessionsCreateParamsSchema = closedObject({
   label: Type.Optional(SessionLabelString),
   model: Type.Optional(NonEmptyString),
   thinkingLevel: Type.Optional(NonEmptyString),
+  incognito: Type.Optional(Type.Boolean()),
+  visibility: Type.Optional(SessionVisibilitySchema),
   catalogId: Type.Optional(NonEmptyString),
   parentSessionKey: Type.Optional(NonEmptyString),
+  spawnDepth: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      description:
+        "Spawn-lineage depth for spawn-owned creations (visible subagent sessions); requires parentSessionKey. Omitted creations persist as root sessions (depth 0).",
+    }),
+  ),
   fork: Type.Optional(
     Type.Boolean({ description: "Fork the parent transcript; requires parentSessionKey." }),
   ),
@@ -49,7 +59,7 @@ export const SessionsCreateParamsSchema = closedObject({
     Type.String({
       minLength: 1,
       description:
-        "Absolute source directory for a managed worktree, or the working directory on execNode. Requires operator.admin.",
+        "Absolute Gateway working directory, managed-worktree source directory, or working directory on execNode. Requires operator.admin.",
     }),
   ),
 });

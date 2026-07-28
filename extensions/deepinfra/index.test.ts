@@ -229,7 +229,8 @@ describe("deepinfra capability registration", () => {
     expect(captured.mediaUnderstandingProviders.map((provider) => provider.id)).toEqual([
       "deepinfra",
     ]);
-    expect(captured.memoryEmbeddingProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    expect(captured.embeddingProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
+    expect(captured.memoryEmbeddingProviders).toEqual([]);
     expect(captured.speechProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual(["deepinfra"]);
   });

@@ -49,6 +49,9 @@ not install or modify anything on the remote host.
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds workspace files needed for first-run bootstrap.
+    - On rerun, an existing agent roster keeps its fleet-wide workspace unless
+      you explicitly confirm the move. Non-interactive reruns warn and preserve
+      the current value.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
 
   </Step>
@@ -338,7 +341,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Active sessions and transcripts are stored in
@@ -384,7 +387,7 @@ Clients (macOS app and Control UI) can render steps without re-implementing onbo
 - Downloads the appropriate release asset from the official `signal-cli` GitHub releases (native build, Linux x86-64 only)
 - On other platforms (macOS, non-x64 Linux), installs via Homebrew instead
 - Stores the release-asset install under `~/.openclaw/tools/signal-cli/<version>/`
-- Writes `channels.signal.cliPath` in config
+- Writes `channels.signal.transport.cliPath` with `kind: "managed-native"` in config
 - Native Windows is not supported yet; run onboarding inside WSL2 to get the Linux install path
 
 ## Related docs

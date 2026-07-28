@@ -315,6 +315,42 @@ describe("thread-ownership plugin", () => {
       expect(infoMessage).toContain("cancelled send");
     });
 
+    it("cancels when the forwarder conflict JSON is malformed", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(new Response("{", { status: 409 }));
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const warningMessage = requireFirstLogMessage(
+        api.logger.warn,
+        "ownership conflict warning log",
+      );
+      expect(warningMessage).toContain("conflict body unreadable");
+      expect(warningMessage).toContain("malformed JSON response");
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+      expect(infoMessage).toContain("owned by unknown");
+    });
+
+    it("cancels when the forwarder conflict JSON exceeds the bounded read limit", async () => {
+      vi.mocked(globalThis.fetch).mockResolvedValue(
+        new Response(JSON.stringify({ owner: "x".repeat(70 * 1024) }), { status: 409 }),
+      );
+
+      const result = await sendSlackThreadMessage();
+
+      expect(result).toEqual({ cancel: true });
+      const warningMessage = requireFirstLogMessage(
+        api.logger.warn,
+        "ownership conflict warning log",
+      );
+      expect(warningMessage).toContain("conflict body unreadable");
+      expect(warningMessage).toContain("JSON response exceeds 65536 bytes");
+      const infoMessage = requireFirstLogMessage(api.logger.info, "ownership cancel info log");
+      expect(infoMessage).toContain("cancelled send");
+      expect(infoMessage).toContain("owned by unknown");
+    });
+
     it("fails open on network error", async () => {
       vi.mocked(globalThis.fetch).mockRejectedValue(new Error("ECONNREFUSED"));
 

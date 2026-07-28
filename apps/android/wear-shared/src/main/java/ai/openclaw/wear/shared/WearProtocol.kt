@@ -38,11 +38,24 @@ enum class WearProxyCapability(
 ) {
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
+  ModelControls(wireValue = "model-controls"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
   ;
 
   companion object {
     fun fromWireValue(value: String): WearProxyCapability? = entries.firstOrNull { capability -> capability.wireValue == value }
+  }
+}
+
+enum class WearConnectionFailure(
+  val wireValue: String,
+) {
+  GatewayOffline(wireValue = "gateway_offline"),
+  Incompatible(wireValue = "incompatible"),
+  ;
+
+  companion object {
+    fun fromWireValue(value: String?): WearConnectionFailure? = entries.firstOrNull { failure -> failure.wireValue == value }
   }
 }
 
@@ -59,6 +72,12 @@ enum class WearRpcMethod {
 
   @SerialName("agents.select")
   AgentsSelect,
+
+  @SerialName("models.list")
+  ModelsList,
+
+  @SerialName("models.select")
+  ModelsSelect,
 
   @SerialName("gateway.connect")
   GatewayConnect,

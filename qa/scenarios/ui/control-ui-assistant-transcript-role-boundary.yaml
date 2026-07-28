@@ -5,9 +5,9 @@ scenario:
   surface: control-ui
   coverage:
     secondary:
-      - channels.qa-channel
-      - runtime.delivery
-      - ui.control
+      - channels.qa-channel-final-reply
+      - channels.automatic-final-reply
+      - control-ui.chat-send-lifecycle-control
   objective: Verify transcript-role-looking Markdown emitted by an assistant stays visibly inside the assistant reply while ordinary code examples remain ordinary code.
   successCriteria:
     - A mock-model reply travels through the real Gateway and qa-channel delivery path unchanged.
@@ -141,7 +141,7 @@ flow:
       actions:
         - set: controlUiChatUrl
           value:
-            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
+            expr: "(() => { const url = new URL(`${env.gateway.baseUrl}/chat`); url.searchParams.set('session', uiSessionKey); url.hash = `token=${encodeURIComponent(env.gateway.token ?? '')}`; return url.toString(); })()"
         - call: webOpenPage
           saveAs: uiTab
           args:

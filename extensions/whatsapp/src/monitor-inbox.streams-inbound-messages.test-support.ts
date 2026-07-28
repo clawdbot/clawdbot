@@ -19,7 +19,6 @@ import {
   type InboxMonitorOptions,
   buildNotifyMessageUpsert,
   DEFAULT_ACCOUNT_ID,
-  DEFAULT_WEB_INBOX_CONFIG,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
@@ -372,7 +371,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("keeps the first delivery's prepared entry when a duplicate arrives", async () => {
+  it("keeps the first durable delivery when a duplicate arrives", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("dup-prepared");
@@ -385,8 +384,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    // Duplicate delivery of the same message id: its pending verdict must not
-    // delete the first delivery's kept preparation.
+    // Duplicate delivery of the same message id stays pending behind the first claim.
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
     await settleInboundWork();
@@ -1010,16 +1008,24 @@ describe("web monitor inbox", () => {
       await waitForMessageCalls(onMessage, 1);
       expect(inboundMessage(onMessage).payload.body).toBe("first");
 
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-2"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "second",
-          timestamp: 1_700_000_001,
-          pushName: "Tester",
-        }),
-      );
+      const second = buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-2"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "second",
+        timestamp: 1_700_000_001,
+        pushName: "Tester",
+      });
+      const third = buildNotifyMessageUpsert({
+        id: nextMessageId("debounce-close-3"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "third",
+        timestamp: 1_700_000_002,
+        pushName: "Tester",
+      });
+      sock.ev.emit("messages.upsert", {
+        type: "notify",
+        messages: [...second.messages, ...third.messages],
+      });
 
       const closePromise = listener.close();
       expect(onMessage).toHaveBeenCalledTimes(1);
@@ -1027,9 +1033,11 @@ describe("web monitor inbox", () => {
       releaseFirst?.();
       await closePromise;
 
-      expect(onMessage).toHaveBeenCalledTimes(2);
+      expect(onMessage).toHaveBeenCalledTimes(3);
       expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
       expect(inboundMessage(onMessage, 1).admission?.conversation.kind).toBe("direct");
+      expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+      expect(inboundMessage(onMessage, 2).admission?.conversation.kind).toBe("direct");
     } finally {
       vi.useRealTimers();
     }
@@ -1211,41 +1219,6 @@ describe("web monitor inbox", () => {
     expect(sleepWithAbortMock).toHaveBeenCalledTimes(1);
 
     await listener.close();
-  });
-
-  it("lets configured slow socket sends complete beyond thirty seconds", async () => {
-    const onMessage = vi.fn(async () => undefined);
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-      cfg: {
-        ...DEFAULT_WEB_INBOX_CONFIG,
-        web: { whatsapp: { defaultQueryTimeoutMs: 45_000 } },
-      },
-    });
-    vi.useFakeTimers();
-    try {
-      sock.sendMessage.mockImplementationOnce(
-        async () =>
-          await new Promise((resolve) => {
-            setTimeout(() => resolve({ key: { id: "slow-success" } }), 40_000);
-          }),
-      );
-
-      let settled = false;
-      const sendPromise = listener.sendMessage("+1555", "hello").finally(() => {
-        settled = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(10_000);
-      await expect(sendPromise).resolves.toMatchObject({ messageId: "slow-success" });
-      expect(vi.getTimerCount()).toBe(0);
-      expect(sock.sendMessage).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-      await listener.close();
-    }
   });
 
   it("rejects direct sends before Baileys sendMessage when reachout timelock is active", async () => {

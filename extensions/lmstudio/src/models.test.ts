@@ -13,6 +13,7 @@ import {
 } from "./models.fetch.js";
 import {
   mapLmstudioWireEntry,
+  mapLmstudioWireModelsToConfig,
   normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
@@ -211,6 +212,128 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label tool support in configured model metadata", ({ supportsTools }) => {
+    const model = normalizeLmstudioConfiguredCatalogEntry({
+      id: "qwen3-8b-instruct",
+      compat: {
+        ...(supportsTools === undefined ? {} : { supportsTools }),
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["off", "on"],
+        reasoningEffortMap: { off: "off", high: "on" },
+      },
+    });
+
+    expect(model?.compat).toEqual({
+      ...(supportsTools === undefined ? {} : { supportsTools }),
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    });
+  });
+
+  it("preserves every schema-approved configured compatibility field", () => {
+    const compat = {
+      supportsStore: false,
+      supportsPromptCacheKey: false,
+      supportsDeveloperRole: false,
+      supportsReasoningEffort: true,
+      supportsTemperature: false,
+      supportsUsageInStreaming: false,
+      supportsTools: false,
+      supportsStrictMode: false,
+      supportsJsonSchemaResponseFormat: false,
+      requiresStringContent: true,
+      strictMessageKeys: true,
+      visibleReasoningDetailTypes: ["reasoning.summary"],
+      supportedReasoningEfforts: ["low", "high"],
+      reasoningEffortMap: { off: "none", high: "high" },
+      maxTokensField: "max_tokens",
+      thinkingFormat: "qwen",
+      requiresToolResultName: true,
+      requiresAssistantAfterToolResult: true,
+      requiresThinkingAsText: true,
+      requiresReasoningContentOnAssistantMessages: true,
+      toolSchemaProfile: "lmstudio",
+      unsupportedToolSchemaKeywords: ["additionalProperties"],
+      toolCallArgumentsEncoding: "string",
+      requiresOpenAiAnthropicToolPayload: true,
+    };
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({ id: "qwen/qwen3-1.7b", compat })?.compat,
+    ).toEqual(compat);
+  });
+
+  it.each(["openai", "openrouter", "deepseek", "together", "qwen", "qwen-chat-template", "zai"])(
+    "preserves the schema-approved %s thinking format",
+    (thinkingFormat) => {
+      expect(
+        normalizeLmstudioConfiguredCatalogEntry({
+          id: "qwen/qwen3-1.7b",
+          compat: { thinkingFormat },
+        })?.compat,
+      ).toEqual({ thinkingFormat });
+    },
+  );
+
+  it("rejects malformed and unapproved configured compatibility fields", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "qwen/qwen3-1.7b",
+        compat: {
+          supportsStore: "false",
+          supportsPromptCacheKey: 1,
+          visibleReasoningDetailTypes: ["reasoning.summary", 1],
+          maxTokensField: "max_output_tokens",
+          thinkingFormat: "unsupported",
+          toolSchemaProfile: 1,
+          unsupportedToolSchemaKeywords: ["additionalProperties", ""],
+          toolCallArgumentsEncoding: false,
+          requiresOpenAiAnthropicToolPayload: "true",
+          unapprovedCompatField: true,
+        },
+      })?.compat,
+    ).toBeUndefined();
+  });
+
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label native tool support in runtime and setup models", ({ supportsTools }) => {
+    const entry = {
+      type: "llm" as const,
+      key: "qwen3-8b-instruct",
+      capabilities: {
+        ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
+        reasoning: { allowed_options: ["off", "on"], default: "on" },
+      },
+    };
+    const expectedCompat = {
+      ...(supportsTools === true ? { supportsTools } : {}),
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+    };
+
+    expect(mapLmstudioWireEntry(entry)?.compat).toEqual(expectedCompat);
+    expect(mapLmstudioWireModelsToConfig([entry])[0]?.compat).toEqual(expectedCompat);
+  });
+
   it("drops malformed discovered context metadata", () => {
     const model = mapLmstudioWireEntry({
       type: "llm",
@@ -225,6 +348,23 @@ describe("lmstudio-models", () => {
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
       loaded: false,
+    });
+  });
+
+  it("uses the loaded context as the effective runtime budget", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "small-loaded-context",
+      max_context_length: 262_144,
+      loaded_instances: [{ id: "loaded", config: { context_length: 8_192 } }],
+    });
+
+    expect(model).toMatchObject({
+      id: "small-loaded-context",
+      contextWindow: 262_144,
+      contextTokens: 8_192,
+      maxTokens: 8_192,
+      loaded: true,
     });
   });
 
@@ -374,6 +514,7 @@ describe("lmstudio-models", () => {
           adaptive: "xhigh",
           max: "xhigh",
         },
+        supportsTools: true,
       },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
@@ -389,6 +530,47 @@ describe("lmstudio-models", () => {
       contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+    });
+  });
+
+  it.each([
+    { label: "enabled", supportsTools: true },
+    { label: "disabled", supportsTools: false },
+    { label: "unknown", supportsTools: undefined },
+  ])("preserves $label native tool support in discovered models", async ({ supportsTools }) => {
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
+      jsonResponse({
+        models: [
+          {
+            type: "llm",
+            key: "qwen3-8b-instruct",
+            capabilities: {
+              ...(supportsTools === undefined ? {} : { trained_for_tool_use: supportsTools }),
+              reasoning: { allowed_options: ["off", "on"], default: "on" },
+            },
+          },
+        ],
+      }),
+    );
+
+    const [model] = await discoverLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "lm-token",
+      quiet: true,
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(model?.compat).toEqual({
+      supportsUsageInStreaming: true,
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: {
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      },
+      ...(supportsTools === true ? { supportsTools } : {}),
     });
   });
 

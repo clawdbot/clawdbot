@@ -1,12 +1,10 @@
 // IRC plugin module owns raw PRIVMSG durable admission and replay draining.
 import { randomUUID } from "node:crypto";
 import {
-  createChannelIngressDrain,
-  DEFAULT_INGRESS_ADOPTION_STALL_MS,
-  DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-  type ChannelIngressDrain,
+  createChannelIngressMonitor,
   type ChannelIngressQueue,
+  type ChannelIngressMonitorDeliveryResult,
+  type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -30,18 +28,11 @@ type IrcIngressPayload = {
   rawLine: string;
 };
 
-export type IrcIngressLifecycle = {
-  abortSignal: AbortSignal;
-  onAdopted: () => void | Promise<void>;
-  onDeferred: () => void;
-  onAdoptionFinalizing: () => void;
-  onAbandoned: () => void | Promise<void>;
-};
+type IrcIngressBody = Omit<IrcIngressPayload, "version">;
 
-export type IrcIngressDispatchResult =
-  | { kind: "completed" }
-  | { kind: "deferred" }
-  | { kind: "failed-retryable"; error: unknown };
+export type IrcIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
+
+export type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type IrcIngressDispatch = (
   message: IrcInboundMessage,
@@ -88,20 +79,18 @@ function inspectRawPrivmsg(rawLine: string): {
   };
 }
 
-function parseClaimedEvent(
+function decodeIrcIngressPayload(
   payload: unknown,
   claimedId: string,
 ): {
-  message: IrcInboundMessage;
-  connectedNick: string;
-  connectionEpoch: string;
+  version: unknown;
+  body: IrcIngressBody;
 } {
   if (
     !payload ||
     typeof payload !== "object" ||
     Array.isArray(payload) ||
-    (payload as Partial<IrcIngressPayload>).version !== IRC_INGRESS_PAYLOAD_VERSION ||
-    (payload as Partial<IrcIngressPayload>).eventId !== claimedId ||
+    typeof (payload as Partial<IrcIngressPayload>).eventId !== "string" ||
     !Number.isSafeInteger((payload as Partial<IrcIngressPayload>).receivedAt) ||
     ((payload as Partial<IrcIngressPayload>).receivedAt ?? 0) <= 0 ||
     typeof (payload as Partial<IrcIngressPayload>).connectionEpoch !== "string" ||
@@ -113,16 +102,31 @@ function parseClaimedEvent(
     throw new IrcIngressPayloadError(`IRC ingress row ${claimedId} has invalid metadata.`);
   }
   const validPayload = payload as IrcIngressPayload;
-  const inspected = inspectRawPrivmsg(validPayload.rawLine);
   return {
-    message: {
-      ...inspected.message,
-      messageId: claimedId,
-      timestamp: validPayload.receivedAt,
+    version: validPayload.version,
+    body: {
+      eventId: validPayload.eventId,
+      receivedAt: validPayload.receivedAt,
+      connectionEpoch: validPayload.connectionEpoch,
+      connectedNick: validPayload.connectedNick,
+      rawLine: validPayload.rawLine,
     },
-    connectedNick: validPayload.connectedNick.trim(),
-    connectionEpoch: validPayload.connectionEpoch.trim(),
   };
+}
+
+function inspectIrcIngress(
+  raw: IrcIngressBody,
+  phase: "admission" | "claim",
+): { eventId: string; laneKey: string } {
+  try {
+    return { eventId: raw.eventId, laneKey: inspectRawPrivmsg(raw.rawLine).laneKey };
+  } catch (error) {
+    if (phase === "admission" && error instanceof IrcIngressPayloadError) {
+      // IRC cannot replay a rejected socket line; persist it for claim-side dead-lettering.
+      return { eventId: raw.eventId, laneKey: `invalid:${raw.eventId}` };
+    }
+    throw error;
+  }
 }
 
 function resolveIrcIngressNonRetryableFailure(error: unknown) {
@@ -152,184 +156,53 @@ export function createIrcIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
 }): IrcIngressMonitor {
-  let queue = options.queue;
-  let drain: ChannelIngressDrain | undefined;
-  let running = false;
-  let stopped = false;
-  let requested = false;
-  let pumping: Promise<void> | undefined;
-  let pollTimer: ReturnType<typeof setInterval> | undefined;
-  let pauseTask: Promise<void> | undefined;
-  let lastPrunedAt = 0;
-  let admissionTail: Promise<void> = Promise.resolve();
-  const shutdown = new AbortController();
-
-  const getQueue = (): ChannelIngressQueue<IrcIngressPayload> => {
-    queue ??= getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
-      accountId: options.accountId,
-    });
-    return queue;
-  };
-
-  const getDrain = (): ChannelIngressDrain => {
-    drain ??= createChannelIngressDrain<IrcIngressPayload>({
-      queue: getQueue(),
-      abortSignal: shutdown.signal,
-      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
-      retryPolicy: {
-        maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
-        deadLetterMinAgeMs: DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
-      },
-      resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
-      onLog: (message) => options.runtime.log?.(`irc ${message}`),
-      dispatchClaimedEvent: async (record, lifecycle) => {
-        if (!running || shutdown.signal.aborted || lifecycle.abortSignal.aborted) {
-          return {
-            kind: "failed-retryable",
-            error: new Error("IRC ingress stopped before dispatch."),
-          };
-        }
-        const claimed = parseClaimedEvent(record.payload, record.id);
-        const result = await options.dispatch(claimed.message, lifecycle, {
-          connectedNick: claimed.connectedNick,
-          connectionEpoch: claimed.connectionEpoch,
-        });
-        if (shutdown.signal.aborted && result?.kind !== "deferred") {
-          return {
-            kind: "failed-retryable",
-            error: new Error("IRC ingress stopped during dispatch."),
-          };
-        }
-        return result;
-      },
-    });
-    return drain;
-  };
-
-  const pruneIfDue = async (): Promise<void> => {
-    const now = Date.now();
-    if (now - lastPrunedAt < IRC_INGRESS_PRUNE_INTERVAL_MS) {
-      return;
-    }
-    await getQueue().prune({
+  const monitor = createChannelIngressMonitor<IrcIngressBody, IrcIngressBody, IrcIngressPayload>({
+    queue:
+      options.queue ??
+      (() =>
+        getIrcRuntime().state.openChannelIngressQueue<IrcIngressPayload>({
+          accountId: options.accountId,
+        })),
+    inspect: (raw, context) => inspectIrcIngress(raw, context.phase),
+    payload: {
+      version: IRC_INGRESS_PAYLOAD_VERSION,
+      serialize: (raw) => raw,
+      deserialize: (body) => body,
+      encode: ({ body }) => ({ version: IRC_INGRESS_PAYLOAD_VERSION, ...body }),
+      decode: (payload, { claim }) => decodeIrcIngressPayload(payload, claim.id),
+      createClaimError: (_kind, claim) =>
+        new IrcIngressPayloadError(`IRC ingress row ${claim.id} has invalid metadata.`),
+    },
+    deliver: (raw, lifecycle, claim) => {
+      const inspected = inspectRawPrivmsg(raw.rawLine);
+      const message: IrcInboundMessage = {
+        ...inspected.message,
+        messageId: claim.id,
+        timestamp: raw.receivedAt,
+      };
+      return options.dispatch(message, lifecycle, {
+        connectedNick: raw.connectedNick.trim(),
+        connectionEpoch: raw.connectionEpoch.trim(),
+      });
+    },
+    pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
+    retention: {
+      pruneIntervalMs: IRC_INGRESS_PRUNE_INTERVAL_MS,
       completedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
       completedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
       failedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
       failedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      now,
-    });
-    lastPrunedAt = now;
-  };
-
-  const runPump = async (): Promise<void> => {
-    try {
-      for (;;) {
-        requested = false;
-        await pruneIfDue();
-        // stop() can race the async prune; do not lazily create a live drain afterward.
-        if (!running) {
-          break;
-        }
-        const activeDrain = getDrain();
-        const { started } = await activeDrain.drainOnce();
-        await activeDrain.waitForIdle();
-        if (!running || (!requested && started === 0)) {
-          break;
-        }
-      }
-    } catch (error) {
-      options.runtime.error?.(`irc ingress drain failed: ${String(error)}`);
-    } finally {
-      pumping = undefined;
-      if (running && requested) {
-        requestDrain();
-      }
-    }
-  };
-
-  const requestDrain = (): void => {
-    requested = true;
-    if (!running || pumping) {
-      return;
-    }
-    pumping = runPump();
-  };
-
-  const pause = (): Promise<void> => {
-    running = false;
-    requested = false;
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = undefined;
-    }
-    const activePump = pumping;
-    if (!activePump) {
-      return Promise.resolve();
-    }
-    pauseTask ??= activePump.finally(() => {
-      pauseTask = undefined;
-    });
-    return pauseTask;
-  };
-
-  const admitOnce = async (params: {
-    eventId: string;
-    rawLine: string;
-    receivedAt: number;
-    connectionEpoch: string;
-    connectedNick: string;
-  }): Promise<void> => {
-    const connectionEpoch = params.connectionEpoch.trim();
-    if (!connectionEpoch) {
-      throw new Error("IRC ingress connection epoch is required.");
-    }
-    const connectedNick = params.connectedNick.trim();
-    if (!connectedNick) {
-      throw new Error("IRC ingress connected nickname is required.");
-    }
-    let laneKey: string;
-    try {
-      // Receive-time inspection extracts queue metadata only. The persisted
-      // envelope remains the untouched line and normalization waits for claim.
-      laneKey = inspectRawPrivmsg(params.rawLine).laneKey;
-    } catch (error) {
-      if (!(error instanceof IrcIngressPayloadError)) {
-        throw error;
-      }
-      // Persist malformed accepted input too, so claim-side parsing can apply
-      // the permanent failure classifier instead of losing it before append.
-      laneKey = `invalid:${params.eventId}`;
-    }
-    let lastError: unknown;
-    // IRC cannot nack or replay an accepted line. Retry the durable append before
-    // surfacing the storage failure; later reconnects cannot recover this event.
-    for (const delayMs of [0, 100, 300]) {
-      if (delayMs > 0) {
-        await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
-        });
-      }
-      try {
-        await getQueue().enqueue(
-          params.eventId,
-          {
-            version: IRC_INGRESS_PAYLOAD_VERSION,
-            eventId: params.eventId,
-            receivedAt: params.receivedAt,
-            connectionEpoch,
-            connectedNick,
-            rawLine: params.rawLine,
-          },
-          { receivedAt: params.receivedAt, laneKey },
-        );
-        requestDrain();
-        return;
-      } catch (error) {
-        lastError = error;
-      }
-    }
-    throw lastError;
-  };
+    },
+    drain: {
+      resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,
+      ...(options.adoptionStallTimeoutMs === undefined
+        ? {}
+        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      onLog: (message) => options.runtime.log?.(`irc ${message}`),
+    },
+    createStoppedError: () => new Error("IRC ingress is stopped."),
+    onError: (error) => options.runtime.error?.(`irc ingress drain failed: ${String(error)}`),
+  });
 
   return {
     openConnection: (connectionEpoch = randomUUID()) => {
@@ -341,7 +214,7 @@ export function createIrcIngressMonitor(options: {
       return {
         connectionEpoch: epoch,
         accept: (rawLine, connectedNick) => {
-          if (stopped) {
+          if (monitor.isStopped()) {
             return Promise.reject(new Error("IRC ingress is stopped."));
           }
           sequence += 1;
@@ -349,61 +222,28 @@ export function createIrcIngressMonitor(options: {
           // monotonic within one TCP connection, and never derived from content.
           const eventId = `local:${epoch}:${String(sequence).padStart(12, "0")}`;
           const receivedAt = Date.now();
-          const admission = admissionTail.then(async () => {
-            await admitOnce({
-              eventId,
-              rawLine,
-              receivedAt,
-              connectionEpoch: epoch,
-              connectedNick,
-            });
-          });
-          admissionTail = admission.catch(() => undefined);
-          return admission;
+          const normalizedNick = connectedNick.trim();
+          if (!normalizedNick) {
+            return Promise.reject(new Error("IRC ingress connected nickname is required."));
+          }
+          return monitor
+            .admit(
+              {
+                eventId,
+                rawLine,
+                receivedAt,
+                connectionEpoch: epoch,
+                connectedNick: normalizedNick,
+              },
+              { receivedAt },
+            )
+            .then(() => undefined);
         },
       };
     },
-    start: () => {
-      if (stopped) {
-        return;
-      }
-      if (!running) {
-        running = true;
-        pollTimer = setInterval(
-          requestDrain,
-          options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
-        );
-        pollTimer.unref?.();
-      }
-      requestDrain();
-    },
-    pause,
-    stop: async () => {
-      if (stopped) {
-        await admissionTail;
-        return;
-      }
-      stopped = true;
-      const paused = pause();
-      // Every callback accepted before stop must finish its durable append.
-      await admissionTail;
-      shutdown.abort();
-      drain?.dispose();
-      await paused;
-      // A pump may have created the lazy drain before observing running=false.
-      drain?.dispose();
-      await drain?.waitForIdle();
-    },
-    waitForIdle: async () => {
-      await admissionTail;
-      for (;;) {
-        const activePump = pumping;
-        if (!activePump) {
-          break;
-        }
-        await activePump;
-      }
-      await drain?.waitForIdle();
-    },
+    start: monitor.start,
+    pause: monitor.pause,
+    stop: monitor.stop,
+    waitForIdle: monitor.waitForIdle,
   };
 }

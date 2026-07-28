@@ -121,7 +121,7 @@ extension RootTabsSourceGuardTests {
         #expect(settingsSource.contains("let acceptsGatewaySetupRequests: Bool"))
         #expect(settingsSource.contains("guard self.acceptsGatewaySetupRequests else { return }"))
         #expect(settingsSource.contains(".onChange(of: self.acceptsGatewaySetupRequests)"))
-        #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 2)
+        #expect(rootSource.matches(of: /acceptsGatewaySetupRequests: !self\.showOnboarding/).count == 1)
         #expect(actionsSource.contains("func syncAfterOnboardingReset()"))
         #expect(actionsSource.contains("self.pendingManualAuthOverride = nil"))
         // The root toast is the only gateway problem surface outside covers, so it

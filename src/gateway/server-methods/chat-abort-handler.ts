@@ -2,7 +2,6 @@
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
@@ -37,22 +36,17 @@ import {
   normalizeUnknownChatText as normalizeUnknownText,
 } from "./chat-text-normalization.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
-export async function handleChatAbortRequest({
-  params,
-  respond,
-  context,
-  client,
-}: GatewayRequestHandlerOptions): Promise<void> {
-  if (!validateChatAbortParams(params)) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid chat.abort params: ${formatValidationErrors(validateChatAbortParams.errors)}`,
-      ),
-    );
+type ChatAbortLifecycle = {
+  onAuthorizedAfterQueuedAbort?: () => boolean;
+};
+
+export async function handleChatAbortRequestWithLifecycle(
+  { params, respond, context, client }: GatewayRequestHandlerOptions,
+  lifecycle: ChatAbortLifecycle = {},
+): Promise<void> {
+  if (!assertValidParams(params, validateChatAbortParams, "chat.abort", respond)) {
     return;
   }
   const {
@@ -124,6 +118,7 @@ export async function handleChatAbortRequest({
       stopReason: "rpc",
       requester,
       preserveSideRuns,
+      onAuthorizedAfterQueuedAbort: lifecycle.onAuthorizedAfterQueuedAbort,
     });
     if (res.unauthorized) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
@@ -297,7 +292,7 @@ export async function handleChatAbortRequest({
     return;
   }
 
-  const partialText = context.chatRunBuffers.get(runId);
+  const partialText = context.chatRunState.runs.get(runId)?.buffer;
   const res = abortChatRunById(ops, {
     runId,
     sessionKey: active.sessionKey,
@@ -319,4 +314,8 @@ export async function handleChatAbortRequest({
     });
   }
   respondWithWorkerRuns(res.aborted ? [runId] : [], active.sessionId);
+}
+
+export async function handleChatAbortRequest(options: GatewayRequestHandlerOptions): Promise<void> {
+  await handleChatAbortRequestWithLifecycle(options);
 }

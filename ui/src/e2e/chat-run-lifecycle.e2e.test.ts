@@ -1,4 +1,6 @@
 // Control UI E2E tests cover chat run lifecycle behavior through the Gateway WebSocket.
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { CHAT_RUN_STATUS_TOAST_DURATION_MS } from "../pages/chat/run-lifecycle.ts";
@@ -14,6 +16,9 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
+// Home mirrors the sidebar leading-slot contract: an active run rings the Home
+// glyph instead of adding a trailing spinner (see app-sidebar-render.ts).
+const HOME_RUN_RING_SELECTOR = ".session-glyph--running .session-glyph__ring";
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let browser: Browser;
@@ -42,6 +47,43 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
   afterAll(async () => {
     await browser?.close().catch(() => {});
     await server?.close();
+  });
+
+  it("keeps a continuing run inside its latest assistant reply", async () => {
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    await installMockGateway(currentPage, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: "First result is ready.",
+          timestamp: Date.now() - 1_000,
+        },
+      ],
+      inFlightRun: { runId: "run-continuing", text: "" },
+      sessionInfo: {
+        activeRunIds: ["run-continuing"],
+        hasActiveRun: true,
+        key: "main",
+      },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    const assistantGroup = currentPage.locator(".chat-group.assistant");
+    await assistantGroup.getByText("First result is ready.", { exact: true }).waitFor();
+    await assistantGroup.locator(".chat-working-indicator--continuation").waitFor();
+
+    expect(await assistantGroup.count()).toBe(1);
+    expect(await currentPage.locator(".chat-reading-indicator").count()).toBe(0);
+    expect(await assistantGroup.getByText("Working…", { exact: true }).count()).toBe(1);
+
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/chat-single-turn-status");
+    await mkdir(artifactDir, { recursive: true });
+    await currentPage.screenshot({
+      path: path.join(artifactDir, "continuing-reply.png"),
+      fullPage: true,
+    });
   });
 
   it("shows compaction savings and live working time", async () => {
@@ -115,7 +157,8 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    const mainSession = currentPage.locator(".nav-item--home");
+    const mainSessionRunRing = mainSession.locator(HOME_RUN_RING_SELECTOR);
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -134,11 +177,11 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeActive);
-    await mainSession.locator(".session-run-spinner").waitFor();
+    await mainSessionRunRing.waitFor();
 
     await gateway.emitChatFinal({ runId, text: "Run complete." });
     await currentPage.locator(".chat-bubble").getByText("Run complete.", { exact: true }).waitFor();
-    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
     const staleActiveLabel = "Main stale active snapshot";
     await gateway.resolveDeferred("sessions.list", {
       count: 1,
@@ -161,9 +204,9 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       ],
       ts: activeUpdatedAt,
     });
-    await currentPage.getByText(staleActiveLabel, { exact: true }).waitFor();
+    await currentPage.locator(".chat-pane__session-title", { hasText: staleActiveLabel }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
 
     const sessionListsBeforeStaleActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -181,12 +224,12 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
     await currentPage.clock.fastForward(CHAT_RUN_STATUS_TOAST_DURATION_MS + 250);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    expect(await mainSession.locator(".session-run-spinner").count()).toBe(0);
+    expect(await mainSessionRunRing.count()).toBe(0);
 
     // Event timestamps must follow the page's virtual clock so freshness checks
     // see the same elapsed suppression window that the UI just observed.
@@ -204,7 +247,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeOtherSession);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
 
     // Re-publish after the former 10-second suppression window. The completed
@@ -227,7 +270,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeLateStaleActive);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
     await gateway.resolveDeferred("sessions.list");
   });
 
@@ -258,7 +301,8 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     const runId = params.idempotencyKey as string;
 
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
-    const mainSession = currentPage.locator(".sidebar-recent-session").filter({ hasText: "Main" });
+    const mainSession = currentPage.locator(".nav-item--home");
+    const mainSessionRunRing = mainSession.locator(HOME_RUN_RING_SELECTOR);
     await mainSession.waitFor({ state: "visible" });
     const sessionListsBeforeActive = (await gateway.getRequests("sessions.list")).length;
     await gateway.deferNext("sessions.list");
@@ -275,7 +319,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
     await expect
       .poll(async () => (await gateway.getRequests("sessions.list")).length)
       .toBeGreaterThan(sessionListsBeforeActive);
-    await mainSession.locator(".session-run-spinner").waitFor();
+    await mainSessionRunRing.waitFor();
 
     const finalText = "The gateway will restart; I will resume verification afterward.";
     await gateway.emitGatewayEvent("chat", {
@@ -293,7 +337,7 @@ describeControlUiE2e("Control UI chat run lifecycle", () => {
 
     await currentPage.locator(".chat-thread-inner").getByText(finalText, { exact: true }).waitFor();
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
-    await expect.poll(() => mainSession.locator(".session-run-spinner").count()).toBe(0);
+    await expect.poll(() => mainSessionRunRing.count()).toBe(0);
     await expect
       .poll(() => currentPage.locator(".agent-chat__run-status-announcement").textContent())
       .toBe("");

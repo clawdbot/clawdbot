@@ -224,10 +224,27 @@ function normalizeUiSessionEventKey(
       buildAgentMainSessionKey({ agentId: defaultAgentId, mainKey }),
     ]
       .filter((value): value is string => Boolean(value))
-      .map(normalizeLowercaseStringOrEmpty),
+      .map(normalizeSessionKeyForUiComparison),
   );
-  const normalized = normalizeLowercaseStringOrEmpty(raw);
-  return aliases.has(normalized) ? normalizeLowercaseStringOrEmpty(canonicalMain) : normalized;
+  const normalized = normalizeSessionKeyForUiComparison(raw);
+  return aliases.has(normalized) ? normalizeSessionKeyForUiComparison(canonicalMain) : normalized;
+}
+
+export function canonicalUiSessionKeyForPersistence(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  sessionKey: string | undefined | null,
+): string {
+  return normalizeUiSessionEventKey(host, sessionKey) ?? "";
+}
+
+function areUiSessionKeysEquivalentForHost(
+  host: Pick<UiSessionDefaultsHost, "agentsList" | "hello">,
+  left: string | undefined | null,
+  right: string | undefined | null,
+): boolean {
+  const normalizedLeft = normalizeUiSessionEventKey(host, left);
+  const normalizedRight = normalizeUiSessionEventKey(host, right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
 }
 
 export function uiSessionEventMatches(
@@ -239,9 +256,7 @@ export function uiSessionEventMatches(
   if (!eventKey) {
     return true;
   }
-  const keysMatch =
-    normalizeUiSessionEventKey(host, eventKey) ===
-    normalizeUiSessionEventKey(host, host.sessionKey);
+  const keysMatch = areUiSessionKeysEquivalentForHost(host, eventKey, host.sessionKey);
   const selectedAliasAgentId = resolveUiMainAliasAgentId(host, host.sessionKey);
   const globalAliasMatches =
     selectedAliasAgentId !== null &&

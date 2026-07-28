@@ -1,0 +1,128 @@
+title: Issue 109025 sender-scoped subagent tool inheritance live probe
+
+scenario:
+  id: issue-109025-sender-policy-live
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.delegated-tool-access
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+      - agent-runtime.tool-fs-read
+  gatewayConfigPatch:
+    tools:
+      toolsBySender:
+        "*":
+          deny:
+            - group:runtime
+            - group:fs
+        "id:alice": {}
+  objective: Prove a sender-less child retains its external requester's exact sender tool policy instead of reapplying the wildcard deny.
+  successCriteria:
+    - The inbound parent writes a proof file and calls sessions_spawn.
+    - The child reads a secret marker file that was not included in the prompt.
+    - The parent returns the exact marker learned from the child.
+  docsRefs:
+    - docs/gateway/config-tools.md
+    - docs/tools/subagents.md
+  codeRefs:
+    - src/agents/conversation-capability-profile.ts
+    - src/agents/requester-tool-policy.ts
+    - src/agents/sender-tool-policy.ts
+    - src/agents/subagent-capabilities.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Mutates tool policy and requires a fresh parent/child session lineage.
+    channel: qa-channel
+    retryCount: 0
+    summary: Exercise exact sender policy through a real inbound channel turn and native subagent spawn.
+    config:
+      requiredProviderMode: live-frontier
+      childLabel: issue-109025-child
+      parentProofFile: issue-109025-parent-proof.txt
+      secretFile: issue-109025-secret.txt
+      parentDoneMarker: ISSUE109025_PARENT_DONE
+
+flow:
+  steps:
+    - name: exact-sender parent delegates a filesystem read to its sender-less child
+      actions:
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 120000
+        - call: reset
+        - set: expectedMarker
+          value:
+            expr: "`ISSUE-109025-SECRET-${randomUUID()}`"
+        - set: secretPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.secretFile)"
+        - set: parentProofPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.parentProofFile)"
+        - call: fs.writeFile
+          args:
+            - ref: secretPath
+            - expr: "`${expectedMarker}\n`"
+            - utf8
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.length"
+        - sendInbound:
+            conversation:
+              id: issue-109025
+              kind: direct
+            senderId: alice
+            senderName: Alice
+            text:
+              expr: |-
+                `Issue 109025 live probe. Follow these steps exactly.
+                1. Use your filesystem write capability to create ${config.parentProofFile} in the workspace with exactly PARENT_OK.
+                2. Do not read ${config.secretFile} yourself and do not guess its contents.
+                3. Call the OpenClaw sessions_spawn tool exactly once with runtime subagent, label ${config.childLabel}, and task: "Use the filesystem read tool to read ${config.secretFile} in the workspace. Reply with its exact single-line contents and nothing else. You must actually read the file; do not guess."
+                4. Wait for the child to finish.
+                5. Reply with ${config.parentDoneMarker}: followed by the child's exact result.`
+        - call: waitForOutboundMessage
+          saveAs: outbound
+          args:
+            - ref: state
+            - lambda:
+                params: [candidate]
+                expr: "candidate.direction === 'outbound' && candidate.conversation.id === 'issue-109025' && String(candidate.text ?? '').includes(config.parentDoneMarker)"
+            - expr: "liveTurnTimeoutMs(env, 240000)"
+            - sinceIndex:
+                ref: outboundStartIndex
+        - call: fs.readFile
+          saveAs: parentProof
+          args:
+            - ref: parentProofPath
+            - utf8
+        - assert:
+            expr: "String(parentProof).trim() === 'PARENT_OK'"
+            message:
+              expr: "`exact-sender parent did not retain filesystem write capability; outbound=${String(outbound.text ?? '')}`"
+        - call: waitForCondition
+          saveAs: childRow
+          args:
+            - lambda:
+                async: true
+                expr: "readRawQaSessionStore(env).then((store) => { const match = Object.entries(store).find(([, entry]) => entry?.label === config.childLabel && typeof entry?.spawnedBy === 'string'); return match ? { key: match[0], entry: match[1] } : undefined; })"
+            - 60000
+            - 250
+        - call: readSessionTranscriptSummary
+          saveAs: childTranscript
+          args:
+            - ref: env
+            - expr: childRow.key
+        - assert:
+            expr: "normalizeLowercaseStringOrEmpty(childTranscript.finalText).includes(normalizeLowercaseStringOrEmpty(expectedMarker))"
+            message:
+              expr: "`reproduced issue 109025: parentProof=${String(parentProof).trim()} spawnedBy=${String(childRow.entry.spawnedBy ?? '')} childTools=${JSON.stringify(childTranscript.assistantToolCallCounts ?? {})} childFinal=${String(childTranscript.finalText ?? '')} outbound=${String(outbound.text ?? '')}`"
+      detailsExpr: "`parentProof=${String(parentProof).trim()} spawnedBy=${String(childRow.entry.spawnedBy ?? '')} childTools=${JSON.stringify(childTranscript.assistantToolCallCounts ?? {})} childFinal=${String(childTranscript.finalText ?? '')} outbound=${String(outbound.text ?? '')}`"

@@ -124,8 +124,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
 /* A session dashboard keeps the board primary on narrow shells. Every desktop
    edge becomes one bounded bottom sheet; the stored tab preference is left
    untouched and returns when the viewport widens. */
-.shell--mobile-nav .board-session-surface--dock-left,
-.shell--mobile-nav .board-session-surface--dock-right,
 .shell--mobile-nav .board-session-surface--dock-bottom {
   flex-direction: column;
 }
@@ -233,13 +231,6 @@ html:not(.openclaw-native-macos):not(.openclaw-native-nav):not(.openclaw-native-
   height: 38px;
   min-height: 38px;
   padding: 0;
-}
-
-/* Drawer brand row keeps only the new-thread action: search lives in the
-   topbar and the drawer dismisses via backdrop, so their buttons stay hidden. */
-.shell--mobile-nav .sidebar-brand .sidebar-search,
-.shell--mobile-nav .sidebar-brand .sidebar-brand__collapse {
-  display: none;
 }
 
 .shell--mobile-nav .sidebar {

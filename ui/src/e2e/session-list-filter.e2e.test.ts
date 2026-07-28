@@ -113,6 +113,103 @@ describeControlUiE2e("Control UI session-list event scope", () => {
     expect(await currentPage.getByText(hiddenLabel, { exact: true }).count()).toBe(0);
   });
 
+  it("keeps older Gateway sessions consistent between the sidebar and Sessions page", async () => {
+    const sessionKey = "agent:main:older-stored";
+    const sessionLabel = "Older stored session";
+    const populatedResponse = {
+      count: 1,
+      defaults: { contextTokens: null, model: null, modelProvider: null },
+      path: "",
+      sessions: [
+        {
+          key: sessionKey,
+          kind: "direct",
+          label: sessionLabel,
+          updatedAt: 1,
+        },
+      ],
+      ts: 1,
+    };
+    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:main",
+      methodResponses: {
+        "sessions.list": {
+          cases: [
+            {
+              match: { activeMinutes: 60 },
+              response: {
+                count: 0,
+                defaults: populatedResponse.defaults,
+                path: "",
+                sessions: [],
+                ts: 2,
+              },
+            },
+            { response: populatedResponse },
+          ],
+        },
+      },
+    });
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}chat`);
+    const sidebarRow = currentPage.locator(
+      `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
+    );
+    await sidebarRow.getByText(sessionLabel, { exact: true }).waitFor({ timeout: 10_000 });
+    const sidebarRequests = await gateway.getRequests("sessions.list");
+    const sidebarParams = sidebarRequests.find(
+      (request) =>
+        (request.params as { includeUnknown?: unknown } | undefined)?.includeUnknown === true,
+    )?.params as Record<string, unknown> | undefined;
+    expect(sidebarParams).toMatchObject({ limit: 50 });
+    expect(sidebarParams).not.toHaveProperty("activeMinutes");
+
+    await currentPage.goto(`${server?.baseUrl ?? ""}sessions`);
+    const sessionsPage = currentPage.locator("openclaw-sessions-page");
+    await sessionsPage.getByText(sessionLabel, { exact: true }).waitFor({ timeout: 10_000 });
+    const initialPageRequests = await gateway.getRequests("sessions.list");
+    const initialPageParams = initialPageRequests.find(
+      (request) =>
+        (request.params as { includeUnknown?: unknown } | undefined)?.includeUnknown === false,
+    )?.params as Record<string, unknown> | undefined;
+    expect(initialPageParams).toMatchObject({ limit: 50 });
+    expect(initialPageParams).not.toHaveProperty("activeMinutes");
+
+    const activeMinutes = sessionsPage.getByLabel("Updated within");
+    const limit = sessionsPage.getByLabel("Limit");
+    await expect.poll(() => activeMinutes.inputValue()).toBe("");
+    await expect.poll(() => limit.inputValue()).toBe("50");
+
+    let requestCount = initialPageRequests.length;
+    await activeMinutes.fill("60");
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(requestCount);
+    const filteredParams = (await gateway.getRequests("sessions.list")).at(-1)?.params as
+      | Record<string, unknown>
+      | undefined;
+    expect(filteredParams).toMatchObject({ activeMinutes: 60, limit: 50 });
+    await expect.poll(() => sessionsPage.getByText(sessionLabel, { exact: true }).count()).toBe(0);
+
+    requestCount = (await gateway.getRequests("sessions.list")).length;
+    await sessionsPage.getByRole("button", { name: "Show all" }).click();
+    await expect
+      .poll(async () => (await gateway.getRequests("sessions.list")).length)
+      .toBeGreaterThan(requestCount);
+    await sessionsPage.getByText(sessionLabel, { exact: true }).waitFor();
+    const resetParams = (await gateway.getRequests("sessions.list")).at(-1)?.params as
+      | Record<string, unknown>
+      | undefined;
+    expect(resetParams).toMatchObject({ includeUnknown: false, limit: 50 });
+    expect(resetParams).not.toHaveProperty("activeMinutes");
+    await expect.poll(() => activeMinutes.inputValue()).toBe("");
+    await expect.poll(() => limit.inputValue()).toBe("50");
+  });
+
   it("omits noncanonical numeric filters from sessions.list requests", async () => {
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();

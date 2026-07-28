@@ -18,6 +18,7 @@ import type {
   InternalHookEventType,
   InternalHookHandler,
 } from "./internal-hook-types.js";
+import type { MessageHookMediaFact } from "./message-hook-media.js";
 export type { InternalHookEvent, InternalHookEventType, InternalHookHandler };
 
 export type AgentBootstrapHookContext = {
@@ -66,6 +67,12 @@ export type MessageReceivedHookContext = {
   conversationId?: string;
   /** Message ID from the provider */
   messageId?: string;
+  /** Staged, locally usable attachments in stable source order. */
+  media?: MessageHookMediaFact[];
+  /** Original attachment facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
   /** Additional provider-specific metadata */
   metadata?: Record<string, unknown>;
 };
@@ -132,9 +139,15 @@ type MessageEnrichedBodyHookContext = {
   provider?: string;
   /** Surface name */
   surface?: string;
-  /** Path to the media file that was transcribed */
+  /** Ordered media facts available to preprocessing/transcription hooks. */
+  media?: MessageHookMediaFact[];
+  /** Original facts when local staging has not completed yet. */
+  originalMedia?: MessageHookMediaFact[];
+  /** True when originalMedia is present but media is withheld pending staging. */
+  mediaStagingPending?: boolean;
+  /** @deprecated Use `media?.[0]?.path`. */
   mediaPath?: string;
-  /** MIME type of the media */
+  /** @deprecated Use `media?.[0]?.contentType` or `.kind`. */
   mediaType?: string;
 };
 

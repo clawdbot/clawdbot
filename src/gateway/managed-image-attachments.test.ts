@@ -41,6 +41,7 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
+  loadSessionEntryReadOnly: loadSessionEntryMock,
   resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 
@@ -54,10 +55,12 @@ vi.mock("./session-transcript-readers.js", () => ({
 
 const {
   DEFAULT_MANAGED_IMAGE_ATTACHMENT_LIMITS,
+  MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
   attachManagedOutgoingImagesToMessage,
   cleanupManagedOutgoingImageRecords,
   createManagedOutgoingImageBlocks,
   handleManagedOutgoingImageHttpRequest,
+  resolveManagedOutgoingImageArtifactDownload,
   resolveManagedImageAttachmentLimits,
 } = await import("./managed-image-attachments.js");
 
@@ -100,8 +103,10 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 type ManagedImageBlock = {
   type?: string;
+  artifactId?: string;
   alt?: string;
   mimeType?: string;
+  sizeBytes?: number;
   url?: string;
   openUrl?: string;
 };
@@ -316,6 +321,50 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
       },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
+  });
+
+  it("serves an exact transcript image through a short-lived artifact ticket", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    const canonicalPath = `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`;
+    loadSessionEntryMock.mockReturnValue({
+      storePath: path.join(stateDir, "gateway-sessions.json"),
+      entry: { sessionId: "sess-1", sessionFile: "session.jsonl" },
+    });
+    resolveSessionHistoryTranscriptPathMock.mockResolvedValue("session.jsonl");
+    readSessionMessagesMock.mockResolvedValue([
+      {
+        role: "assistant",
+        content: [{ type: "image", url: canonicalPath, openUrl: canonicalPath }],
+        __openclaw: { id: "msg-1" },
+      },
+    ]);
+
+    const download = await resolveManagedOutgoingImageArtifactDownload({
+      sessionKey,
+      artifactId: `${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`,
+      stateDir,
+    });
+    expect(download?.url).toContain("mediaTicket=");
+
+    vi.clearAllMocks();
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: download?.url ?? "",
+      denyAuth: true,
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.body.toString("utf-8")).toBe("original-image");
+    expect(authorizeGatewayHttpRequestOrReplyMock).not.toHaveBeenCalled();
+
+    const wrongAttachmentId = "22222222-2222-4222-8222-222222222222";
+    const wrong = await requestManagedImage({
+      stateDir,
+      pathName: (download?.url ?? "").replace(attachmentId, wrongAttachmentId),
+      denyAuth: true,
+    });
+    expect(wrong.result.statusCode).toBe(401);
+    expect(authorizeGatewayHttpRequestOrReplyMock).toHaveBeenCalledTimes(1);
   });
 
   it("keeps serving and deleting an original after the configured media root changes", async () => {
@@ -652,6 +701,8 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(String(block.url)).toMatch(/\/full$/);
 
     const attachmentId = requireAttachmentIdFromUrl(block.url);
+    expect(block.artifactId).toBe(`${MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX}${attachmentId}`);
+    expect(block.sizeBytes).toBe(Buffer.from(TINY_PNG_BASE64, "base64").byteLength);
     const record = readManagedImageRecord(attachmentId, stateDir);
     expect(record?.original.mediaSubdir).toBe(MANAGED_OUTGOING_ORIGINALS_SUBDIR);
     expect(record?.original.mediaId).toMatch(/\.png$/);

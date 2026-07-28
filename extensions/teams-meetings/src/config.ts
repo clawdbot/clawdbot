@@ -17,7 +17,7 @@ import {
 
 export type TeamsMeetingsMode = "agent" | "bidi" | "transcribe";
 export type TeamsMeetingsTransport = "chrome" | "chrome-node";
-export type TeamsMeetingsToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
+type TeamsMeetingsToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 type TeamsMeetingsRealtimeStrategy = "agent" | "bidi";
 type TeamsMeetingsAudioFormat = "pcm16-24khz" | "g711-ulaw-8khz";
 

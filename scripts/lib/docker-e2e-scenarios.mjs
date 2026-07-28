@@ -121,6 +121,19 @@ function serviceLane(name, command, options = {}) {
   });
 }
 
+function releaseTypedOnboardingLane() {
+  return npmLane(
+    "release-typed-onboarding",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
+    {
+      resources: ["npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
 function createPackageUpdateMaintenanceLanes() {
   return [
     npmLane("doctor-switch", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:doctor-switch", {
@@ -382,6 +395,24 @@ export const mainLanes = [
     "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:npm-onboard-channel-agent",
     { resources: ["service"], stateScenario: "empty", weight: 3 },
   ),
+  // Prerelease validation must pair frozen core bytes with matching target plugin bytes.
+  // Keep the registry-backed lanes above unchanged for published-package proof.
+  npmLane(
+    "npm-onboard-discord-candidate-channel-agent",
+    liveDockerScriptCommand(
+      "e2e/npm-onboard-channel-agent-docker.sh",
+      "OPENCLAW_NPM_ONBOARD_CHANNEL=discord OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
+    ),
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
+  npmLane(
+    "npm-onboard-slack-candidate-channel-agent",
+    liveDockerScriptCommand(
+      "e2e/npm-onboard-channel-agent-docker.sh",
+      "OPENCLAW_NPM_ONBOARD_CHANNEL=slack OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE=1",
+    ),
+    { resources: ["service"], stateScenario: "empty", weight: 3 },
+  ),
   npmLane(
     "release-user-journey",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-user-journey",
@@ -392,16 +423,7 @@ export const mainLanes = [
       weight: 4,
     },
   ),
-  npmLane(
-    "release-typed-onboarding",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-typed-onboarding",
-    {
-      resources: ["npm", "service"],
-      stateScenario: "empty",
-      timeoutMs: 20 * 60 * 1000,
-      weight: 3,
-    },
-  ),
+  releaseTypedOnboardingLane(),
   npmLane(
     "release-media-memory",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:release-media-memory",
@@ -771,6 +793,7 @@ const releasePathPackageInstallOpenAiLanes = [
     timeoutMs: 30 * 60 * 1000,
     weight: 3,
   }),
+  releaseTypedOnboardingLane(),
 ];
 
 const releasePathPackageInstallAnthropicLanes = [

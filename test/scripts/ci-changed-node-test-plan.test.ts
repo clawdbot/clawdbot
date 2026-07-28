@@ -160,7 +160,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("fails safe when public SDK changes affect extension imports", () => {
-    expect(createChangedNodeTestShards(["src/plugin-sdk/index.ts"])).toBeNull();
+    expect(createChangedNodeTestShards(["src/plugin-sdk/core.ts"])).toBeNull();
   });
 
   it("fails safe when a core change reaches package consumers through the public SDK", () => {

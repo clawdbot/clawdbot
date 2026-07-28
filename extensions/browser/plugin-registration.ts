@@ -14,13 +14,15 @@ import type {
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { isBrowserMachineOutput } from "./cli-output-mode.js";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPE,
 } from "./src/browser-gateway-contract.js";
 import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
-import { BrowserToolSchema } from "./src/browser-tool.schema.js";
+import { BrowserToolOutputSchema, BrowserToolSchema } from "./src/browser-tool.schema.js";
+import { initializeBrowserSessionTabStore } from "./src/browser/session-tab-store.js";
 import {
   configureSystemProfileImportStateStore,
   type SystemProfileImportState,
@@ -56,12 +58,14 @@ const BROWSER_CLI_DESCRIPTOR = {
   name: "browser",
   description: "Manage OpenClaw's dedicated browser (Chrome/Chromium)",
   hasSubcommands: true,
+  machineOutput: isBrowserMachineOutput,
 };
 
 function createLazyBrowserTool(opts?: {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -90,6 +94,7 @@ function createLazyBrowserTool(opts?: {
     name: "browser",
     description: describeBrowserTool({ targetDefault, hostHint }),
     parameters: BrowserToolSchema,
+    outputSchema: BrowserToolOutputSchema,
     execute: async (toolCallId, args, signal, onUpdate) => {
       const { createBrowserTool } = await loadBrowserRegistrationRuntimeModule();
       const tool = createBrowserTool(
@@ -104,6 +109,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
   sandboxBridgeUrl?: string;
   allowHostControl?: boolean;
   agentSessionKey?: string;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   activeModel?: {
@@ -125,6 +131,7 @@ function createBrowserToolOptions(ctx: OpenClawPluginToolContext): {
       ? { allowHostControl: ctx.browser.allowHostControl }
       : {}),
     ...(ctx.sessionKey ? { agentSessionKey: ctx.sessionKey } : {}),
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
     ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
     ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
     ...(ctx.activeModel?.provider || ctx.activeModel?.modelId
@@ -209,6 +216,7 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 /** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
+  initializeBrowserSessionTabStore(api.runtime);
   configureSystemProfileImportStateStore(
     api.runtime.state.openKeyedStore<SystemProfileImportState>({
       namespace: "browser.system-profile-import",

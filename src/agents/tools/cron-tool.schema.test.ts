@@ -55,6 +55,7 @@ describe("createCronToolSchema", () => {
         "failureAlert",
         "name",
         "owner",
+        "pacing",
         "payload",
         "schedule",
         "sessionKey",
@@ -85,6 +86,7 @@ describe("createCronToolSchema", () => {
         "enabled",
         "failureAlert",
         "name",
+        "pacing",
         "payload",
         "schedule",
         "sessionKey",
@@ -95,10 +97,83 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs", () => {
-    expect(keysAt(schemaRecord, "job.schedule")).toEqual(
-      ["anchorMs", "at", "everyMs", "expr", "kind", "staggerMs", "tz"].toSorted(),
+  it("exposes next_check with its relative duration parameter", () => {
+    expect(Value.Check(schema, { action: "next_check", in: "15m" })).toBe(true);
+    expect(propertyAt(schemaRecord, "in")?.description).toContain("next_check");
+    expect(keysAt(schemaRecord, "job.pacing")).toEqual(["max", "min"]);
+    const patchPacing = propertyAt(schemaRecord, "patch.pacing");
+    const pacingObject = (patchPacing?.anyOf as Array<Record<string, unknown>> | undefined)?.find(
+      (entry) => entry.type === "object",
     );
+    expect(
+      Object.keys((pacingObject?.properties as Record<string, unknown>) ?? {}).toSorted(),
+    ).toEqual(["max", "min"]);
+  });
+
+  it("exposes bounded cron list pagination", () => {
+    expect(propertyAt(schemaRecord, "limit")).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 200,
+    });
+    expect(propertyAt(schemaRecord, "offset")).toMatchObject({
+      type: "integer",
+      minimum: 0,
+    });
+    expect(Value.Check(schema, { action: "list", limit: 200, offset: 200 })).toBe(true);
+
+    for (const invalid of [
+      { action: "list", limit: 0 },
+      { action: "list", limit: 201 },
+      { action: "list", limit: 1.5 },
+      { action: "list", offset: -1 },
+      { action: "list", offset: 1.5 },
+    ]) {
+      expect(Value.Check(schema, invalid)).toBe(false);
+    }
+  });
+
+  it("job.schedule exposes interval, cron, and stream source fields", () => {
+    expect(keysAt(schemaRecord, "job.schedule")).toEqual(
+      [
+        "anchorMs",
+        "at",
+        "batchMs",
+        "command",
+        "cwd",
+        "everyMs",
+        "expr",
+        "kind",
+        "match",
+        "maxBatchBytes",
+        "mode",
+        "staggerMs",
+        "tz",
+      ].toSorted(),
+    );
+    expect(propertyAt(schemaRecord, "job.schedule.kind")?.enum).toContain("stream");
+  });
+
+  it("documents wake, context, and session-target fields", () => {
+    expect(propertyAt(schemaRecord, "text")?.description).toBe(
+      'systemEvent text for action="wake"',
+    );
+    expect(propertyAt(schemaRecord, "mode")?.description).toBe(
+      'Wake mode for action="wake" (default next-heartbeat)',
+    );
+    for (const path of ["job.sessionTarget", "patch.sessionTarget"]) {
+      expect(propertyAt(schemaRecord, path)?.description).toBe(
+        "main | isolated | current (agentTurn default) | session:<id>",
+      );
+    }
+    for (const path of ["job.payload", "patch.payload"]) {
+      expect(propertyAt(schemaRecord, `${path}.lightContext`)?.description).toBe(
+        "Lightweight bootstrap context (skip full workspace context)",
+      );
+      expect(propertyAt(schemaRecord, `${path}.allowUnsafeExternalContent`)?.description).toBe(
+        "Allow untrusted external content in prompt",
+      );
+    }
   });
 
   it("marks staggerMs as cron-only in both job and patch schedule schemas", () => {
@@ -167,7 +242,7 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.payload exposes kind, text, message, model, thinking and extras", () => {
+  it("job.payload exposes conversational and script payload fields", () => {
     expect(keysAt(schemaRecord, "job.payload")).toEqual(
       [
         "allowUnsafeExternalContent",
@@ -176,8 +251,10 @@ describe("createCronToolSchema", () => {
         "lightContext",
         "message",
         "model",
+        "script",
         "text",
         "thinking",
+        "toolBudget",
         "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
@@ -197,12 +274,41 @@ describe("createCronToolSchema", () => {
         "lightContext",
         "message",
         "model",
+        "script",
         "text",
         "thinking",
+        "toolBudget",
         "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
     );
+  });
+
+  it("accepts script payloads in create and patch schemas", () => {
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: {
+          name: "script job",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "script",
+            script: "return { notify: 'done' }",
+            timeoutSeconds: 300,
+            toolBudget: 50,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        id: "job-1",
+        patch: { payload: { kind: "script", toolBudget: 75 } },
+      }),
+    ).toBe(true);
   });
 
   it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {

@@ -805,7 +805,7 @@
 
 .sw-btn--primary {
   background: var(--primary);
-  color: white;
+  color: var(--primary-foreground);
   border-color: var(--accent);
 }
 
@@ -818,6 +818,10 @@
 }
 
 :root[data-theme="dark"] .sw-btn--primary:hover:not(:disabled) {
+  background: var(--primary-hover);
+}
+
+:root[data-theme="openknot"] .sw-btn--primary:hover:not(:disabled) {
   background: var(--primary-hover);
 }
 
@@ -1503,7 +1507,7 @@
 .sw-today__big--primary {
   background: var(--primary);
   border-color: var(--accent);
-  color: white;
+  color: var(--primary-foreground);
 }
 
 .sw-today__big--primary:hover:not([disabled]) {
@@ -1511,6 +1515,11 @@
 }
 
 :root[data-theme="dark"] .sw-today__big--primary:hover:not([disabled]) {
+  background: var(--primary-hover);
+  filter: none;
+}
+
+:root[data-theme="openknot"] .sw-today__big--primary:hover:not([disabled]) {
   background: var(--primary-hover);
   filter: none;
 }

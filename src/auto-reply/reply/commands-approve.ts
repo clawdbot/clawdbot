@@ -75,7 +75,9 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   return { ok: false, error: APPROVE_USAGE_TEXT };
 }
 
-function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
+type ApproveCommandParams = Pick<Parameters<CommandHandler>[0], "cfg" | "command" | "ctx">;
+
+function buildResolvedByLabel(params: ApproveCommandParams): string {
   const channel = params.command.channel;
   const sender = params.command.senderId ?? "unknown";
   return `${channel}:${sender}`;
@@ -112,7 +114,10 @@ function resolveApprovalAuthorizationError(params: {
   );
 }
 
-export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
+export async function handleApproveCommandFromContext(
+  params: ApproveCommandParams,
+  allowTextCommands: boolean,
+) {
   if (!allowTextCommands) {
     return null;
   }
@@ -255,4 +260,7 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     shouldContinue: false,
     reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
   };
-};
+}
+
+export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) =>
+  await handleApproveCommandFromContext(params, allowTextCommands);

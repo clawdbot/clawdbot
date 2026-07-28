@@ -186,6 +186,9 @@ beforeAll(async () => {
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
   const { SessionManager: LoadedSessionManager } =
     await import("openclaw/plugin-sdk/agent-sessions");
+  const { installSessionManagerFileCompat } =
+    await import("../../test/helpers/session-manager-file-compat.js");
+  installSessionManagerFileCompat(LoadedSessionManager);
   SessionManager = LoadedSessionManager;
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
@@ -227,7 +230,7 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
   // Builds a session with an orphaned user message to exercise retry/resume
   // cleanup paths from persisted JSONL.
   const sessionFile = nextSessionFile();
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = SessionManager.openFile(sessionFile);
   sessionManager.appendMessage({
     role: "user",
     content: [{ type: "text", text }],
@@ -366,6 +369,28 @@ function firstRunEmbeddedAttemptParams(): { sessionKey?: string } {
 }
 
 describe("runEmbeddedAgent", () => {
+  it("reuses one standalone snapshot across configless runs", async () => {
+    mockSuccessfulEmbeddedAttempt();
+    mockSuccessfulEmbeddedAttempt();
+
+    for (const suffix of ["first", "second"]) {
+      await runEmbeddedAgent({
+        sessionId: `configless-${suffix}`,
+        sessionFile: nextSessionFile(),
+        workspaceDir,
+        prompt: "hello",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        timeoutMs: 5_000,
+        agentDir,
+        runId: nextRunId(`configless-${suffix}`),
+        enqueue: immediateEnqueue,
+      });
+    }
+
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
+  });
+
   it("uses the configured default model when the caller omits provider and model", async () => {
     const sessionFile = nextSessionFile();
     const cfg = {
@@ -521,7 +546,7 @@ describe("runEmbeddedAgent", () => {
     ).toEqual(expect.objectContaining({ provider: "anthropic", id: "claude-sonnet-4-6" }));
   });
 
-  it("skips models.json generation when dynamic model resolution succeeds", async () => {
+  it("publishes the standalone model snapshot before dynamic model resolution", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedAgentRunnerOpenAiConfig([]);
     runEmbeddedAttemptMock.mockResolvedValueOnce(
@@ -555,7 +580,7 @@ describe("runEmbeddedAgent", () => {
     expect(
       (resolveModelCall?.[4] as { skipAgentDiscovery?: boolean } | undefined)?.skipAgentDiscovery,
     ).toBe(true);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
   });
 
   it("resolves explicit OpenAI OpenClaw runs through Codex when auth order starts with Codex OAuth", async () => {
@@ -700,7 +725,7 @@ describe("runEmbeddedAgent", () => {
       expect.objectContaining({ skipAgentDiscovery: true }),
     );
     expect(resolveModelAsyncMock).toHaveBeenCalledTimes(1);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
@@ -774,7 +799,7 @@ describe("runEmbeddedAgent", () => {
         preferBundledStaticCatalogTransport: true,
       }),
     );
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     expect(
       (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
     ).toBe("openai");
@@ -804,7 +829,7 @@ describe("runEmbeddedAgent", () => {
     });
 
     expect(resolveModelAsyncMock).not.toHaveBeenCalled();
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledTimes(1);
     const attempt = firstRunEmbeddedAttemptParams() as Record<string, unknown>;
     expect(attempt).toMatchObject({
       agentHarnessId: "codex",
@@ -822,7 +847,11 @@ describe("runEmbeddedAgent", () => {
     const sessionFile = nextSessionFile();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("request exceeds the model context window"),
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("request exceeds the model context window"),
+        },
       }),
     );
 
@@ -1048,7 +1077,7 @@ describe("runEmbeddedAgent", () => {
       .mockImplementationOnce(async () => {
         expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
         return makeEmbeddedRunnerAttempt({
-          promptError: new Error("401 unauthorized"),
+          terminal: { kind: "failed", source: "prompt", error: new Error("401 unauthorized") },
         });
       })
       .mockImplementationOnce(async () => {
@@ -1166,7 +1195,7 @@ describe("runEmbeddedAgent", () => {
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("boom"),
+        terminal: { kind: "failed", source: "prompt", error: new Error("boom") },
       }),
     );
     await expect(
@@ -1206,7 +1235,7 @@ describe("runEmbeddedAgent", () => {
       const sessionFile = nextSessionFile();
       const sessionKey = nextSessionKey();
 
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = SessionManager.openFile(sessionFile);
       sessionManager.appendMessage({
         role: "user",
         content: [{ type: "text", text: "seed user" }],

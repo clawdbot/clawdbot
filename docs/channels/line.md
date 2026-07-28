@@ -48,6 +48,11 @@ agent processing continues asynchronously. Failed delivery is retried from the
 queue, including after a Gateway restart, and poison events become failed queue
 records after bounded retries. If durable persistence fails, the request returns
 `500` instead of acknowledging an event that could be lost.
+Delivery is at least once across the queue-to-agent boundary: a Gateway shutdown or
+crash during an active delivery can replay the turn. Message events deduplicate by
+LINE message ID; other event types use `webhookEventId`. Retained completion records
+suppress ordinary duplicate webhooks, but handlers that perform external side effects
+should still be idempotent.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 

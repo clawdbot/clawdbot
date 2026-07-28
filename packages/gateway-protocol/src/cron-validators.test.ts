@@ -36,6 +36,17 @@ describe("cron protocol validators", () => {
     expect(validateCronAddParams(minimalAddParams)).toBe(true);
   });
 
+  it("rejects client-authored scheduled authority provenance", () => {
+    const scheduledToolPolicy = { version: 1, mode: "trusted" } as const;
+    expect(validateCronAddParams({ ...minimalAddParams, scheduledToolPolicy })).toBe(false);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: { scheduledToolPolicy },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts failure alert field clears only in update patches", () => {
     const failureAlert = {
       after: null,
@@ -429,6 +440,7 @@ describe("cron protocol validators", () => {
         sortDir: "asc",
         agentId: "ops",
         compact: true,
+        includeDeliveryPreviews: false,
       }),
     ).toBe(true);
     expect(validateCronListParams({ offset: -1 })).toBe(false);

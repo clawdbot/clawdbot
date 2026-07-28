@@ -26,6 +26,7 @@ import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeOptionalString,
   normalizeOptionalString as normalizeSlackApiString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SlackTokenSource } from "./accounts.js";
@@ -38,7 +39,7 @@ import {
   uploadSlackFile,
   withSlackDnsRequestRetry,
 } from "./client-delivery.js";
-import { createSlackTokenCacheKey, createSlackWebClient, getSlackWriteClient } from "./client.js";
+import { createSlackReadClient, createSlackTokenCacheKey, getSlackWriteClient } from "./client.js";
 import { assertSlackDirectSendAllowed } from "./direct-send-admission.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
@@ -195,16 +196,6 @@ function resolveSlackSendIdentity(params: {
   );
 }
 
-function normalizeSlackScopeList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((scope) => {
-    const normalized = normalizeSlackApiString(scope);
-    return normalized ? [normalized] : [];
-  });
-}
-
 function getSlackWebApiErrorData(err: unknown): SlackWebApiErrorData | undefined {
   if (!(err instanceof Error)) {
     return undefined;
@@ -230,11 +221,11 @@ function formatSlackWebApiErrorMessage(err: unknown): string | undefined {
   if (needed) {
     details.push(`needed: ${needed}`);
   }
-  const scopes = normalizeSlackScopeList(data?.response_metadata?.scopes);
+  const scopes = normalizeTrimmedStringList(data?.response_metadata?.scopes);
   if (scopes.length) {
     details.push(`granted: ${scopes.join(", ")}`);
   }
-  const acceptedScopes = normalizeSlackScopeList(data?.response_metadata?.acceptedScopes);
+  const acceptedScopes = normalizeTrimmedStringList(data?.response_metadata?.acceptedScopes);
   if (acceptedScopes.length) {
     details.push(`accepted: ${acceptedScopes.join(", ")}`);
   }
@@ -895,7 +886,7 @@ export async function reconcileSlackUnknownSend(
       retryable: false,
     };
   }
-  const readClient = opts?.client ?? createSlackWebClient(readToken);
+  const readClient = opts?.client ?? createSlackReadClient(readToken);
   const writeClient = opts?.client ?? (writeToken ? getSlackWriteClient(writeToken) : undefined);
   const payloadReplyToId = ctx.payloads[0]?.replyToId;
   const effectiveReplyToId = Object.hasOwn(ctx, "effectiveReplyToId")

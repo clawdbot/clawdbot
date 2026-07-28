@@ -79,7 +79,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runInput.laneController;
   const {
     requestedModelId,
-    beforeAgentStartResult,
     expectedHarnessArtifact,
     nativeModelOwned,
     authStorage,
@@ -105,9 +104,16 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtimeAuthState: runtime.runtimeAuthState,
   });
   const attemptFastMode = resolveAttemptFastModeParam();
-  const trajectorySessionFile = resolvedSessionKey
-    ? (
-        await resolveSessionTranscriptRuntimeReadTarget({
+  const existingSessionTarget = sessionPromptState.sessionTarget;
+  const reusableSessionTarget =
+    existingSessionTarget?.sessionKey === resolvedSessionKey ||
+    sessionPromptState.sessionTargetAdopted
+      ? existingSessionTarget
+      : undefined;
+  const resolvedTranscriptTarget =
+    reusableSessionTarget ??
+    (resolvedSessionKey
+      ? await resolveSessionTranscriptRuntimeReadTarget({
           agentId: workspaceResolution.agentId,
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
@@ -115,8 +121,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
             agentId: workspaceResolution.agentId,
           }),
         })
-      ).sessionFile
-    : sessionPromptState.sessionFile;
+      : undefined);
+  const resolvedSessionTarget = resolvedTranscriptTarget
+    ? { ...sessionPromptState.sessionTarget, ...resolvedTranscriptTarget }
+    : sessionPromptState.sessionTarget;
+  const trajectorySessionFile = resolvedSessionTarget?.sessionKey ?? sessionPromptState.sessionFile;
   if (!input.startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
   }
@@ -128,6 +137,8 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     harnessId: runtime.agentHarness.id,
     harnessRuntime: runtime.agentHarness.id,
     preparedAuthPlan: runtime.activePreparedAuthPlan,
+    metadataSnapshot: runtime.pluginMetadataSnapshot,
+    providerRuntimeHandle: runtime.providerRuntimeHandle,
     config: params.config,
     workspaceDir,
     agentDir,
@@ -150,6 +161,19 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           sessionId: sessionPromptState.sessionId,
           sessionKey: resolvedSessionKey,
           sessionFile: trajectorySessionFile,
+          ...(resolvedSessionTarget?.agentId &&
+          resolvedSessionTarget.sessionId &&
+          resolvedSessionTarget.sessionKey &&
+          resolvedSessionTarget.storePath
+            ? {
+                sessionTarget: {
+                  agentId: resolvedSessionTarget.agentId,
+                  sessionId: resolvedSessionTarget.sessionId,
+                  sessionKey: resolvedSessionTarget.sessionKey,
+                  storePath: resolvedSessionTarget.storePath,
+                },
+              }
+            : {}),
           provider: trajectoryAttribution.provider,
           modelId: trajectoryAttribution.modelId,
           modelApi: trajectoryAttribution.modelApi,
@@ -169,13 +193,14 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     runtime: {
       sessionId: sessionPromptState.sessionId,
       sessionFile: sessionPromptState.sessionFile,
-      sessionTarget: sessionPromptState.sessionTarget,
+      sessionTarget: resolvedSessionTarget,
       sessionKey: resolvedSessionKey,
       trajectorySessionFile,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
       isCanonicalWorkspace,
       agentDir,
+      preparedModelRuntime: runInput.preparedModelRuntime,
       contextEngine: nativeModelOwned ? undefined : contextEngine,
       contextTokenBudget: runtime.contextTokenBudget,
       contextWindowInfo: runtime.contextWindowInfo,
@@ -200,7 +225,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
         : undefined,
       modelRegistry,
       agentId: workspaceResolution.agentId,
-      beforeAgentStartResult,
       thinkLevel: runtime.thinkLevel,
       fastMode: attemptFastMode,
       fastModeStartedAtMs,

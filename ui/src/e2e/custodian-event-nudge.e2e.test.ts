@@ -113,6 +113,7 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
         });
       }
 
+      await gateway.deferNext("openclaw.chat");
       await nudge.click();
       await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(2);
       const requests = await gateway.getRequests("openclaw.chat");
@@ -121,6 +122,12 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
         sessionId: "e2e-custodian",
       });
       await page.locator(".chat-group.user", { hasText: "what happened with telegram?" }).waitFor();
+      await gateway.resolveDeferred("openclaw.chat", {
+        sessionId: "e2e-custodian",
+        reply: "I'm watching the system.",
+        action: "none",
+      });
+      await expect.poll(() => page.locator(".chat-group.assistant").count()).toBe(2);
       expect(await nudge.count()).toBe(0);
 
       await gateway.emitGatewayEvent("health", {
@@ -135,6 +142,111 @@ describeControlUiE2e("Control UI custodian event nudge mocked Gateway E2E", () =
           path: path.join(uiProofArtifactDir, "03-message-sent.png"),
         });
       }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps event nudges out of sensitive wizard input", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+      methodResponses: {
+        "openclaw.chat": {
+          sessionId: "e2e-sensitive-custodian",
+          reply: "Paste your API key.",
+          action: "none",
+          sensitive: true,
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}custodian`);
+      await page.getByPlaceholder("Enter sensitive value").waitFor();
+      await gateway.emitGatewayEvent("health", {
+        channelLabels: { discord: "Discord" },
+        channels: { discord: { configured: true, connected: false, running: true } },
+      });
+
+      const nudge = page.getByRole("button", {
+        name: "Discord just disconnected — ask me what happened",
+      });
+      await nudge.waitFor();
+      await expect.poll(() => nudge.isDisabled()).toBe(true);
+      await nudge.evaluate((element) => (element as HTMLButtonElement).click());
+      await settleUi(page);
+
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
+      expect(await page.getByText("what happened with discord?").count()).toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps nudges out of a closed question and sends a parseable skip answer", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+      methodResponses: {
+        "openclaw.chat": {
+          sessionId: "e2e-wizard-custodian",
+          reply: "Choose one.",
+          action: "none",
+          question: {
+            id: "access",
+            header: "Access",
+            question: "How should OpenClaw work?",
+            options: [{ label: "Full access" }, { label: "Ask first" }],
+            isOther: false,
+          },
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}custodian`);
+      const skip = page.getByRole("button", { name: "Skip for now" });
+      await skip.waitFor();
+      await gateway.emitGatewayEvent("health", {
+        channelLabels: { discord: "Discord" },
+        channels: { discord: { configured: true, connected: false, running: true } },
+      });
+      const nudge = page.getByRole("button", {
+        name: "Discord just disconnected — ask me what happened",
+      });
+      await nudge.waitFor();
+      await expect.poll(() => nudge.isDisabled()).toBe(true);
+      await nudge.evaluate((element) => (element as HTMLButtonElement).click());
+      await settleUi(page);
+      expect(await gateway.getRequests("openclaw.chat")).toHaveLength(1);
+
+      await gateway.setMethodResponse("openclaw.chat", {
+        sessionId: "e2e-wizard-custodian",
+        reply: "Moving on.",
+        action: "none",
+      });
+      await skip.click();
+
+      await expect.poll(async () => (await gateway.getRequests("openclaw.chat")).length).toBe(2);
+      const requests = await gateway.getRequests("openclaw.chat");
+      expect(requests[1]?.params).toMatchObject({
+        message: "cancel",
+        sessionId: "e2e-wizard-custodian",
+      });
+      await page.locator(".chat-group.user", { hasText: "Skip for now" }).waitFor();
+      await page.getByText("Moving on.").waitFor();
+      expect(await page.locator("openclaw-option-card").count()).toBe(0);
     } finally {
       await context.close();
     }

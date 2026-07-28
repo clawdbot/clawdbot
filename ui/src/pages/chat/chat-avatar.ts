@@ -8,6 +8,11 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
+import {
+  identityAvatarClass,
+  renderIdentityAvatarImage,
+  resolveIdentityAvatarView,
+} from "../../components/identity-avatar-view.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
   assistantAvatarFallbackUrl,
@@ -15,6 +20,8 @@ import {
   resolveAssistantTextAvatar,
 } from "../../lib/avatar.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
+import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -28,8 +35,36 @@ export function renderChatAvatar(
   user?: { name?: string | null; avatar?: string | null },
   basePath?: string,
   authToken?: string | null,
+  sender?: SenderIdentity | null,
 ) {
   const normalized = normalizeRoleForGrouping(role);
+  // Attributed multi-user messages show the author's own avatar (profile
+  // upload → gateway Gravatar proxy → initials), not the local viewer's.
+  if (normalized === "user" && sender) {
+    const label = formatSenderLabel(sender) ?? "";
+    const view = resolveIdentityAvatarView(sender);
+    const initialsAvatar = html`<div
+      class="chat-avatar user chat-avatar--sender-initials"
+      style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+      aria-label="${label}"
+    >
+      ${view.fallback.initials}
+    </div>`;
+    if (!view.imageUrl) {
+      return initialsAvatar;
+    }
+    // The derived route may 404 (no upload, no Gravatar); swap to initials
+    // instead of a broken image. Lit reuses DOM parts, so a load must clear a
+    // prior sender's error state.
+    return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+      ${renderIdentityAvatarImage({
+        view,
+        fallbackSelector: ".chat-avatar-slot",
+        className: "chat-avatar user",
+        alt: label,
+      })}${initialsAvatar}
+    </span>`;
+  }
   const assistantName = assistant?.name?.trim() || "Assistant";
   const assistantAvatar = assistant?.avatar?.trim() || "";
   const assistantAvatarText = resolveAssistantTextAvatar(assistantAvatar);

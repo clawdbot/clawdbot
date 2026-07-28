@@ -9,7 +9,7 @@ title: "Install"
 
 ## System requirements
 
-- **Node 22.22.3+, 24.15+, or 25.9+** - Node 24 is the default target; the installer script handles this automatically.
+- **Node 22.22.3+, 24.15+, or 25.9+** - Node 26 is the recommended default; the installer script provisions it automatically when Node is missing.
 - **macOS, Linux, or Windows** - Windows users can start with the native Windows Hub app, the PowerShell CLI installer, or a WSL2 Gateway. See [Windows](/platforms/windows).
 - `pnpm` is only needed if you build from source.
 

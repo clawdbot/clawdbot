@@ -204,12 +204,19 @@ struct OpenClawChatCameraPicker: UIViewControllerRepresentable {
 #endif
 
 struct OpenClawChatMicButton: View {
+    enum DictationPrimaryAction: Equatable {
+        case start
+        case finish
+        case cancel
+    }
+
     let dictationControl: OpenClawChatDictationControl?
     let voiceNoteControl: OpenClawChatVoiceNoteControl?
     let isDictationPending: Bool
     let isRealtimeTalkActive: Bool
     let isComposerEnabled: Bool
     let isAttachmentInputEnabled: Bool
+    let onCancelDictation: @MainActor () -> Void
     let onStartDictation: @MainActor () -> Void
 
     var body: some View {
@@ -224,7 +231,9 @@ struct OpenClawChatMicButton: View {
                 }
                 .menuIndicator(.hidden)
                 .buttonStyle(.plain)
-                .modifier(UnifiedChatMicMetadata(control: dictationControl))
+                .modifier(UnifiedChatMicMetadata(
+                    control: dictationControl,
+                    isPending: self.isDictationPending))
             } else {
                 Menu {
                     self.voiceNoteAction(voiceNoteControl)
@@ -244,23 +253,32 @@ struct OpenClawChatMicButton: View {
             }
             .buttonStyle(.plain)
             .disabled(!self.isDictationActionEnabled)
-            .modifier(UnifiedChatMicMetadata(control: dictationControl))
+            .modifier(UnifiedChatMicMetadata(
+                control: dictationControl,
+                isPending: self.isDictationPending))
         }
     }
 
     private var label: some View {
-        Image(systemName: self.dictationControl?.isActive == true ? "stop.fill" : "mic")
+        let showsStop = self.isDictationPending || self.dictationControl?.isActive == true
+        return Image(systemName: showsStop ? "stop.fill" : "mic")
             .font(OpenClawChatTypography.display(size: 17, weight: .medium, relativeTo: .body))
-            .foregroundStyle(self.dictationControl?.isActive == true ? OpenClawChatTheme.accent : .secondary)
+            .foregroundStyle(showsStop ? OpenClawChatTheme.accent : .secondary)
             .frame(width: 44, height: 44)
             .contentShape(Rectangle())
     }
 
     private func performDictationAction() {
         guard let dictationControl else { return }
-        if dictationControl.isActive {
+        switch Self.dictationPrimaryAction(
+            isPending: self.isDictationPending,
+            isActive: dictationControl.isActive)
+        {
+        case .finish:
             dictationControl.finish()
-        } else {
+        case .cancel:
+            self.onCancelDictation()
+        case .start:
             self.onStartDictation()
         }
     }
@@ -269,6 +287,7 @@ struct OpenClawChatMicButton: View {
         Self.dictationActionEnabled(
             isComposerEnabled: self.isComposerEnabled,
             isAvailable: self.dictationControl?.isAvailable == true,
+            isPending: self.isDictationPending,
             isActive: self.dictationControl?.isActive == true,
             isTalkActive: self.isRealtimeTalkActive || self.voiceNoteControl?.isTalkActive == true,
             isVoiceNoteCaptureActive: self.voiceNoteControl?.recorder.isRecording == true ||
@@ -298,11 +317,21 @@ struct OpenClawChatMicButton: View {
     nonisolated static func dictationActionEnabled(
         isComposerEnabled: Bool,
         isAvailable: Bool,
+        isPending: Bool,
         isActive: Bool,
         isTalkActive: Bool,
         isVoiceNoteCaptureActive: Bool) -> Bool
     {
-        isActive || (isComposerEnabled && isAvailable && !isTalkActive && !isVoiceNoteCaptureActive)
+        isPending || isActive || (isComposerEnabled && isAvailable && !isTalkActive && !isVoiceNoteCaptureActive)
+    }
+
+    nonisolated static func dictationPrimaryAction(
+        isPending: Bool,
+        isActive: Bool) -> DictationPrimaryAction
+    {
+        if isActive { return .finish }
+        if isPending { return .cancel }
+        return .start
     }
 
     nonisolated static func voiceNoteRecordingEnabled(
@@ -326,12 +355,30 @@ struct OpenClawChatMicButton: View {
 
 private struct UnifiedChatMicMetadata: ViewModifier {
     let control: OpenClawChatDictationControl
+    let isPending: Bool
 
     func body(content: Content) -> some View {
         content
-            .accessibilityLabel(self.control.isActive ? "Finish dictation" : "Dictate message")
-            .accessibilityValue(self.control.isActive ? "Listening" : "Not listening")
+            .accessibilityLabel(self.accessibilityLabel)
+            .accessibilityValue(self.accessibilityValue)
             .accessibilityIdentifier("chat-dictation-control")
-            .help(self.control.isActive ? "Finish dictation" : "Transcribe speech into the message")
+            .help(self.helpText)
+    }
+
+    private var accessibilityLabel: Text {
+        if self.control.isActive { return Text("Finish dictation") }
+        if self.isPending { return Text("Cancel") }
+        return Text("Dictate message")
+    }
+
+    private var accessibilityValue: Text {
+        if self.control.isActive { return Text("Listening") }
+        return Text("Not listening")
+    }
+
+    private var helpText: Text {
+        if self.control.isActive { return Text("Finish dictation") }
+        if self.isPending { return Text("Cancel") }
+        return Text("Transcribe speech into the message")
     }
 }

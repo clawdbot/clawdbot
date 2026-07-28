@@ -49,6 +49,8 @@ const mockState = vi.hoisted(() => ({
 
 vi.mock("nostr-tools", () => {
   class MockSimplePool {
+    onRelayConnectionSuccess?: (relay: string) => void;
+
     subscribeMany(
       relays: string[],
       filters: unknown,
@@ -59,6 +61,10 @@ vi.mock("nostr-tools", () => {
       },
     ) {
       mockState.subscribeMany(relays, filters, handlers);
+      const relay = relays[0];
+      if (relay) {
+        this.onRelayConnectionSuccess?.(new URL(relay).toString());
+      }
       mockState.handlers.push(handlers);
       return {
         close: mockState.subscriptionClose,
@@ -195,6 +201,21 @@ describe("startNostrBus inbound guards", () => {
         since: 0,
       });
     }
+
+    await bus.close();
+  });
+
+  it("reports successful relay connections through onConnect", async () => {
+    const onConnect = vi.fn();
+    const bus = await startTestNostrBus({
+      ...buildResolvedNostrAccount({ relays: ["wss://relay.example"] }),
+      onMessage: vi.fn(async () => {}),
+      onConnect,
+      onMetric: () => {},
+    });
+
+    expect(onConnect).toHaveBeenCalledOnce();
+    expect(onConnect).toHaveBeenCalledWith("wss://relay.example/");
 
     await bus.close();
   });

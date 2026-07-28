@@ -63,6 +63,7 @@ const mockConfig = vi.hoisted(() => {
     path: "/tmp/openclaw.json",
     exists: true,
     config: initial as TestConfig,
+    sourceConfigBeforeMigrations: undefined as TestConfig | undefined,
     hash: "mock-hash-0" as string | undefined,
   };
   const cloneConfig = () => structuredClone(state.config);
@@ -73,6 +74,7 @@ const mockConfig = vi.hoisted(() => {
       exists: state.exists,
       raw: state.exists ? `${JSON.stringify(config)}\n` : null,
       parsed: state.exists ? config : undefined,
+      sourceConfigBeforeMigrations: structuredClone(state.sourceConfigBeforeMigrations ?? config),
       sourceConfig: config,
       resolved: config,
       valid: state.exists,
@@ -89,12 +91,14 @@ const mockConfig = vi.hoisted(() => {
       state.path = "/tmp/openclaw.json";
       state.exists = true;
       state.config = {};
+      state.sourceConfigBeforeMigrations = undefined;
       state.hash = "mock-hash-0";
     },
     missing(pathLocal: string) {
       state.path = pathLocal;
       state.exists = false;
       state.config = {};
+      state.sourceConfigBeforeMigrations = undefined;
       state.hash = undefined;
     },
     currentConfig() {
@@ -102,6 +106,11 @@ const mockConfig = vi.hoisted(() => {
     },
     setConfig(config: TestConfig) {
       state.config = structuredClone(config);
+      state.sourceConfigBeforeMigrations = undefined;
+    },
+    setResolvedConfig(config: TestConfig, sourceConfigBeforeMigrations: TestConfig) {
+      state.config = structuredClone(config);
+      state.sourceConfigBeforeMigrations = structuredClone(sourceConfigBeforeMigrations);
     },
     readConfigFileSnapshot: vi.fn(async () => snapshot()),
     mutateConfigFile: vi.fn(
@@ -493,7 +502,7 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-agent-model-rejected-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
+    const createAgent = vi.fn();
     expect(
       isPersistentSystemAgentOperation({
         kind: "create-agent",
@@ -512,11 +521,11 @@ describe("parseSystemAgentOperation", () => {
           model: "openai/gpt-5.5",
         },
         runtime,
-        { approved: true, deps: { runAgentsAdd } },
+        { approved: true, deps: { createAgent } },
       ),
     ).rejects.toThrow("Retry without `model`; the new agent inherits");
 
-    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
     expect(lines.join("\n")).not.toContain("[openclaw] running: agents.create");
     await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
@@ -525,7 +534,7 @@ describe("parseSystemAgentOperation", () => {
     const tempDir = opTempDirs.make("openclaw-agent-id-reserved-");
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
+    const createAgent = vi.fn();
     const operation = {
       kind: "create-agent" as const,
       agentId: "OpenClaw",
@@ -536,18 +545,18 @@ describe("parseSystemAgentOperation", () => {
     await expect(
       executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runAgentsAdd },
+        deps: { createAgent },
       }),
     ).rejects.toThrow('Agent id "openclaw" is reserved');
 
-    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
     expect(lines.join("\n")).not.toContain("[openclaw] running: agents.create");
     await expect(fs.access(path.join(tempDir, "audit", "system-agent.jsonl"))).rejects.toThrow();
   });
 
   it("keeps the retired agent identity reserved", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const runAgentsAdd = vi.fn(async () => {});
+    const createAgent = vi.fn();
     const operation = {
       kind: "create-agent" as const,
       agentId: "crestodian", // reserved retired id
@@ -558,10 +567,10 @@ describe("parseSystemAgentOperation", () => {
     await expect(
       executeSystemAgentOperation(operation, runtime, {
         approved: true,
-        deps: { runAgentsAdd },
+        deps: { createAgent },
       }),
     ).rejects.toThrow('Agent id "crestodian" is reserved'); // reserved retired id
-    expect(runAgentsAdd).not.toHaveBeenCalled();
+    expect(createAgent).not.toHaveBeenCalled();
   });
 
   it("requires approval before restarting gateway", async () => {
@@ -870,6 +879,45 @@ describe("parseSystemAgentOperation", () => {
     expect(runConfigSet).not.toHaveBeenCalled();
 
     // The same routing field on a non-default agent is an approved write.
+    const result = await executeSystemAgentOperation(
+      { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
+      runtime,
+      { approved: true, deps: { runConfigSet } },
+    );
+    expect(result.applied).toBe(true);
+    expect(runConfigSet).toHaveBeenCalledOnce();
+  });
+
+  it("resolves numeric legacy list indices from the authored array order", async () => {
+    const tempDir = opTempDirs.make("openclaw-numeric-agent-route-");
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
+    mockConfig.setResolvedConfig(
+      {
+        agents: {
+          entries: {
+            "2": {},
+            "10": { default: true },
+          },
+        },
+      },
+      {
+        agents: {
+          list: [{ id: "10", default: true }, { id: "2" }],
+        },
+      },
+    );
+    const { runtime } = createSystemAgentTestRuntime();
+    const runConfigSet = vi.fn(async () => {});
+
+    await expect(
+      executeSystemAgentOperation(
+        { kind: "config-set", path: "agents.list[0].model", value: '"openai/gpt-5.5"' },
+        runtime,
+        { approved: true, deps: { runConfigSet } },
+      ),
+    ).rejects.toThrow("openclaw onboard");
+    expect(runConfigSet).not.toHaveBeenCalled();
+
     const result = await executeSystemAgentOperation(
       { kind: "config-set", path: "agents.list[1].model", value: '"openai/gpt-5.5"' },
       runtime,

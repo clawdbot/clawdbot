@@ -7,25 +7,6 @@ import type { PolicyDoctorCheckDeps } from "../types.js";
 export function createPolicyDataAuthChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
   const { evaluatePolicy, findingsForCheck } = deps;
 
-  const policyDataHandlingRedactionDisabledCheck: HealthCheck = {
-    id: CHECK_IDS.policyDataHandlingRedactionDisabled,
-    kind: "plugin",
-    description: "Sensitive logging redaction remains enabled when policy requires it.",
-    source: "policy",
-    async detect(ctx) {
-      return findingsForCheck(
-        await evaluatePolicy(ctx),
-        CHECK_IDS.policyDataHandlingRedactionDisabled,
-      );
-    },
-    repair(ctx, findings) {
-      return repairPolicyAutomaticNarrower(
-        ctx,
-        findings,
-        CHECK_IDS.policyDataHandlingRedactionDisabled,
-      );
-    },
-  };
   const policyDataHandlingTelemetryContentCaptureCheck: HealthCheck = {
     id: CHECK_IDS.policyDataHandlingTelemetryContentCapture,
     kind: "plugin",
@@ -125,7 +106,6 @@ export function createPolicyDataAuthChecks(deps: PolicyDoctorCheckDeps): readonl
   };
 
   return [
-    policyDataHandlingRedactionDisabledCheck,
     policyDataHandlingTelemetryContentCaptureCheck,
     policyDataHandlingSessionRetentionNotEnforcedCheck,
     policyDataHandlingSessionTranscriptMemoryCheck,
