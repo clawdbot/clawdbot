@@ -38,6 +38,7 @@ const preparedSnapshotState = vi.hoisted(() => ({
   enabled: true,
   getInputs: [] as Array<Record<string, unknown>>,
   snapshots: new Map<string, unknown>(),
+  configuredRuntimeModels: [] as unknown[],
 }));
 
 vi.mock("../model-suppression.js", () => {
@@ -176,6 +177,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     }
     const snapshot = {
       ...(workspaceDir ? { workspaceDir } : {}),
+      configuredRuntimeModels: preparedSnapshotState.configuredRuntimeModels,
       createStores: () => ({ authStorage, modelRegistry }),
     };
     preparedSnapshotState.snapshots.set(key, snapshot);
@@ -247,6 +249,7 @@ beforeEach(() => {
   preparedSnapshotState.enabled = true;
   preparedSnapshotState.getInputs.length = 0;
   preparedSnapshotState.snapshots.clear();
+  preparedSnapshotState.configuredRuntimeModels = [];
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
@@ -841,7 +844,7 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
-  it("reuses a prepared configured static model before request-time catalog resolution", async () => {
+  it("reuses configured static models from the loaded snapshot", async () => {
     const preparedModel = {
       provider: "mistral",
       id: "mistral-medium-3-5",
@@ -855,6 +858,14 @@ describe("resolveModel", () => {
       maxTokens: 8192,
     };
 
+    preparedSnapshotState.configuredRuntimeModels = [
+      {
+        provider: "mistral",
+        modelId: "mistral-medium-3-5",
+        model: preparedModel,
+      },
+    ];
+
     const result = await resolveModelAsync(
       "mistral",
       "mistral-medium-3-5",
@@ -862,15 +873,7 @@ describe("resolveModel", () => {
       undefined,
       {
         allowBundledStaticCatalogFallback: true,
-        preparedRuntimeModels: [
-          {
-            provider: "mistral",
-            modelId: "mistral-medium-3-5",
-            model: preparedModel,
-          },
-        ],
         runtimeHooks: createRuntimeHooks(),
-        skipAgentDiscovery: true,
       },
     );
 

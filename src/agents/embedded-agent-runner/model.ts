@@ -307,7 +307,9 @@ export async function resolveModelAsync(
       return undefined;
     }
     staticCatalogLookup ??= (async () => {
-      const preparedModel = options.preparedRuntimeModels?.find((candidate) =>
+      const preparedModel = (
+        options.preparedRuntimeModels ?? preparedSnapshot?.configuredRuntimeModels
+      )?.find((candidate) =>
         staticModelIdMatches({
           candidateId: candidate.modelId,
           rowProvider: candidate.provider,
