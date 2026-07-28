@@ -52,20 +52,20 @@ export type SessionDeliveryState =
       origin: SessionOrigin;
     };
 
-export type PendingFinalDeliveryState = {
+type PendingFinalDeliveryState = {
   createdAt: number;
   context?: DeliveryContext;
   intentId?: string;
 } & ({ kind: "replayable"; text: string } | { kind: "transport-only" });
 
-export type FallbackNoticeState = {
+type FallbackNoticeState = {
   kind: "active";
   selectedModel: string;
   activeModel: string;
   reason?: string;
 };
 
-export type MemoryFlushState =
+type MemoryFlushState =
   | { kind: "succeeded"; compactionCount: number }
   | {
       kind: "failed";
