@@ -16,8 +16,7 @@ import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { sha256HexPrefix } from "./crypto-digest.js";
 import { createFileLockManager } from "./file-lock-manager.js";
 import { isGatewayArgv, isOpenClawCommandArgv, parseProcCmdline } from "./gateway-process-argv.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { isSqliteLockError } from "./sqlite-transaction.js";
+import { tryAcquireExclusiveSqliteCoordinator } from "./node-sqlite.js";
 import {
   readWindowsProcessArgsSync,
   readWindowsProcessStartTimeSync,
@@ -107,28 +106,6 @@ export class GatewayLockError extends Error {
     super(message);
     this.name = "GatewayLockError";
   }
-}
-
-function tryAcquireLegacyCoordinator(lockPath: string): { release: () => void } | null {
-  const database = openNodeSqliteDatabase(`${lockPath}.sqlite`);
-  try {
-    database.exec("PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;");
-  } catch (error) {
-    database.close();
-    if (isSqliteLockError(error)) {
-      return null;
-    }
-    throw error;
-  }
-  return {
-    release: () => {
-      try {
-        database.exec("ROLLBACK");
-      } finally {
-        database.close();
-      }
-    },
-  };
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
@@ -509,9 +486,9 @@ async function acquireLockFile(
     });
 
   while (now() - startedAt < timeoutMs) {
-    let coordinator: ReturnType<typeof tryAcquireLegacyCoordinator>;
+    let coordinator: ReturnType<typeof tryAcquireExclusiveSqliteCoordinator>;
     try {
-      coordinator = tryAcquireLegacyCoordinator(lockPath);
+      coordinator = tryAcquireExclusiveSqliteCoordinator(`${lockPath}.sqlite`);
     } catch (error) {
       throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, error);
     }
