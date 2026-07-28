@@ -651,7 +651,7 @@ describe("openclaw.chat", () => {
     expect(call.ok).toBe(false);
   });
 
-  it("trims and forwards valid UI context for a user turn", async () => {
+  it("trims, canonicalizes, and forwards valid UI context for a user turn", async () => {
     const engine = makeVerifiedEngine();
     const handle = vi
       .spyOn(engine, "handle")
@@ -661,7 +661,7 @@ describe("openclaw.chat", () => {
     const call = await callChat(makeContext(sessions), {
       sessionId: "s1",
       message: "What about this page?",
-      context: { page: "  /settings/channels  " },
+      context: { page: "  /settings/channels  ", source: "client" },
     });
 
     expect(call.ok).toBe(true);

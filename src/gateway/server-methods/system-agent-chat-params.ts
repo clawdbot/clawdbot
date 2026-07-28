@@ -24,8 +24,5 @@ export function sanitizeSystemAgentChatParams(params: unknown): unknown {
     const { context: _droppedContext, ...rest } = record;
     return rest;
   }
-  if (page === contextRecord.page) {
-    return params;
-  }
-  return { ...record, context: { ...contextRecord, page } };
+  return { ...record, context: { page } };
 }
