@@ -241,6 +241,10 @@ describe("openshell backend manager", () => {
     const other = await createBackend("agent:other");
     const legacyRuntimeId = "openclaw-agent-main-25bffc4d";
     const adoptedLegacy = await createBackend("agent:main", [legacyRuntimeId]);
+    const punctuationLegacyRuntimeId = "openclaw-agent-foo-bar-baz-ab401a99";
+    const adoptedPunctuationLegacy = await createBackend("agent:foo_bar.baz", [
+      punctuationLegacyRuntimeId,
+    ]);
     const ignoresUnknown = await createBackend("agent:main", ["unrelated-runtime"]);
     const prefersCurrent = await createBackend("agent:main", [legacyRuntimeId, first.runtimeId]);
 
@@ -249,6 +253,7 @@ describe("openshell backend manager", () => {
     expect(repeated.runtimeId).toBe(first.runtimeId);
     expect(other.runtimeId).not.toBe(first.runtimeId);
     expect(adoptedLegacy.runtimeId).toBe(legacyRuntimeId);
+    expect(adoptedPunctuationLegacy.runtimeId).toBe(punctuationLegacyRuntimeId);
     expect(ignoresUnknown.runtimeId).toBe(first.runtimeId);
     expect(prefersCurrent.runtimeId).toBe(first.runtimeId);
   });

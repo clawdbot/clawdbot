@@ -20,6 +20,7 @@ import {
   shellEscape,
   withTempWorkspace,
 } from "openclaw/plugin-sdk/sandbox";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
   buildValidatedExecRemoteCommand,
@@ -921,9 +922,10 @@ function buildOpenShellSandboxName(scopeKey: string): string {
 
 function buildLegacyOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
-  const safe = trimmed
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
+  // Keep this byte-for-byte compatible with the naming contract shipped before
+  // the 19-character OpenShell limit; registered remote workspaces depend on it.
+  const safe = normalizeLowercaseStringOrEmpty(trimmed)
+    .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);
   const hash = Array.from(trimmed).reduce(
