@@ -21,9 +21,10 @@ struct LaunchAgentManagerTests {
         try await TestIsolation.withEnvValues([
             "OPENCLAW_CONFIG_PATH": "  /tmp/custom&<openclaw>\"'.json  ",
             "OPENCLAW_STATE_DIR": "/tmp/openclaw-state",
-            "PATH": "/tmp/custom&<bin>",
         ]) {
-            let plist = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app")
+            let plist = LaunchAgentManager.plistContents(
+                bundlePath: "/Applications/OpenClaw.app",
+                preferredPaths: ["/tmp/custom&<bin>", "/usr/bin"])
             let data = try #require(plist.data(using: .utf8))
             let object = try #require(
                 PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])

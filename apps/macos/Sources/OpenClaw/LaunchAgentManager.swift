@@ -30,8 +30,11 @@ enum LaunchAgentManager {
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
-    static func plistContents(bundlePath: String) -> String {
-        let path = self.escapePlistText(CommandResolver.preferredPaths().joined(separator: ":"))
+    static func plistContents(
+        bundlePath: String,
+        preferredPaths: [String] = CommandResolver.preferredPaths()) -> String
+    {
+        let path = self.escapePlistText(preferredPaths.joined(separator: ":"))
         let profileEnvironment = self.profileEnvironmentPlistEntries()
         return """
         <?xml version="1.0" encoding="UTF-8"?>
