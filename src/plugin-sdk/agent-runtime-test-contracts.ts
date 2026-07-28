@@ -9,7 +9,6 @@ export { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "./test-helpers/agents/delive
 export {
   createFileBackedSessionManagerForTest,
   openFileBackedSessionManagerForTest,
-  type FileBackedSessionManagerForTest,
 } from "./test-helpers/agents/session-manager-file-fixture.js";
 export {
   createTerminalPresentationContractTool,

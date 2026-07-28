@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseSessionEntries, SessionManager } from "../../agent-sessions.js";
 
-export type FileBackedSessionManagerForTest = SessionManager & {
+type FileBackedSessionManagerForTest = SessionManager & {
   getSessionDir(): string;
   getSessionFile(): string;
 };
