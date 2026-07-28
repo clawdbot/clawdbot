@@ -75,7 +75,8 @@ extension RootTabsSourceGuardTests {
         #expect(forgetGatewayDialog.contains("presenting: self.pendingForgetGateway"))
         #expect(forgetGatewayDialog.contains("{ entry in"))
         #expect(forgetGatewayDialog.contains("Task { await self.forgetGateway(entry) }"))
-        #expect(!forgetGatewayAction.contains("pendingForgetGateway"))
+        #expect(forgetGatewayAction.contains("self.pendingForgetGateway = nil"))
+        #expect(forgetGatewayAction.components(separatedBy: "pendingForgetGateway").count == 2)
 
         #expect(sectionsSource.contains("var gatewayDestination: some View"))
         #expect(sectionsSource.contains("This phone has limited Gateway access."))
