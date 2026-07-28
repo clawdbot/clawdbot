@@ -1554,6 +1554,12 @@ export async function installMockGateway(
   scenario: ControlUiMockGatewayScenario = {},
 ): Promise<MockGatewayControls> {
   const normalizedScenario = normalizeScenario(scenario);
+  // Emulate reduced motion at this shared boundary so cosmetic CSS
+  // animations/transitions settle deterministically on loaded Linux CI
+  // runners instead of stalling visibility and poll waits (#115297). The
+  // Control UI already honors prefers-reduced-motion broadly; a spec that
+  // needs full motion can re-emulate afterwards via page.emulateMedia.
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.route(`**${CONTROL_UI_BOOTSTRAP_CONFIG_PATH}`, (route) =>
     route.fulfill({
       body: JSON.stringify(createControlUiMockBootstrapConfig(normalizedScenario)),
