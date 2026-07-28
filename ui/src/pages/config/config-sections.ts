@@ -7,11 +7,16 @@ export type ConfigPageId =
   | "automation"
   | "mcp"
   | "memory"
+  | "talk"
   | "infrastructure"
   | "ai-agents"
   | "advanced";
 
-const COMMUNICATION_SECTION_KEYS = ["messages", "talk", "tts"] as const;
+const COMMUNICATION_SECTION_KEYS = ["messages", "tts"] as const;
+
+// Curated Talk home: catalog-driven provider/model/voice pickers render above
+// the talk schema section (talk.ts / talk-page.ts).
+const TALK_SECTION_KEYS = ["talk"] as const;
 
 const APPEARANCE_SECTION_KEYS = ["__appearance__", "ui", "wizard"] as const;
 
@@ -46,6 +51,7 @@ const CONFIG_SECTION_KEYS_BY_PAGE = {
   automation: AUTOMATION_SECTION_KEYS,
   mcp: MCP_SECTION_KEYS,
   memory: MEMORY_SECTION_KEYS,
+  talk: TALK_SECTION_KEYS,
   infrastructure: INFRASTRUCTURE_SECTION_KEYS,
   "ai-agents": AI_AGENTS_SECTION_KEYS,
   advanced: undefined,

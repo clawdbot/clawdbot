@@ -102,13 +102,14 @@ describe("settings search target manifest", () => {
 
 describe("settings config section ownership", () => {
   const pages: ReadonlyArray<readonly [ConfigPageId, readonly string[]]> = [
-    ["communications", ["messages", "talk", "tts"]],
+    ["communications", ["messages", "tts"]],
     ["appearance", ["__appearance__", "ui", "wizard"]],
     ["notifications", ["__notifications__"]],
     ["security", ["security", "approvals"]],
     ["automation", ["commands", "hooks", "bindings", "cron", "plugins"]],
     ["mcp", ["mcp"]],
     ["memory", ["memory"]],
+    ["talk", ["talk"]],
     ["infrastructure", ["gateway", "browser", "nodeHost", "discovery", "acp"]],
     ["ai-agents", ["agents", "skills", "tools", "session"]],
   ];

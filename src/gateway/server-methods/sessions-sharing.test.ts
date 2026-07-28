@@ -24,7 +24,7 @@ import {
   authorizeResolvedSessionMutation,
   resolveSessionMutationAuthorization,
   canReceiveSessionEvent,
-  filterDraftSessionsForClient,
+  createSessionListEntryFilter,
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
 import { sessionReadHandlers } from "./sessions-read.js";
@@ -569,11 +569,8 @@ describe("session sharing handlers", () => {
         if (!entry) {
           throw new Error("expected member transition session entry");
         }
-        const listed = filterDraftSessionsForClient({
-          client: memberClient,
-          store: { [sessionKey]: entry },
-        });
-        expect(Object.hasOwn(listed, sessionKey)).toBe(allowed);
+        const listed = createSessionListEntryFilter({ client: memberClient })?.(sessionKey, entry);
+        expect(listed ?? true).toBe(allowed);
         expect(
           canReceiveSessionEvent({
             cfg: {},

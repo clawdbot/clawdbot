@@ -47,8 +47,8 @@ afterEach(() => {
 
 describe("configSelectionFromSearch", () => {
   it("opens a valid linked Settings section", () => {
-    expect(configSelectionFromSearch("communications", "?section=talk")).toEqual({
-      activeSection: "talk",
+    expect(configSelectionFromSearch("communications", "?section=tts")).toEqual({
+      activeSection: "tts",
       activeSubsection: null,
     });
   });
@@ -79,8 +79,12 @@ describe("configSelectionFromSearch", () => {
     });
   });
 
-  it("keeps Communications focused on messages, talk, and voice", () => {
-    expect(configSectionKeysForPage("communications")).toEqual(["messages", "talk", "tts"]);
+  it("keeps Communications focused on messages and text-to-speech", () => {
+    expect(configSectionKeysForPage("communications")).toEqual(["messages", "tts"]);
+  });
+
+  it("gives Talk its own curated page", () => {
+    expect(configSectionKeysForPage("talk")).toEqual(["talk"]);
   });
 
   it("keeps provider models off Agent Defaults", () => {
@@ -92,6 +96,7 @@ describe("ConfigPage moved section routes", () => {
   it.each([
     ["channels", "channels", ""],
     ["broadcast", "advanced", "?section=broadcast"],
+    ["talk", "talk", "?section=talk"],
   ])("redirects the former Communications %s section", (section, routeId, search) => {
     const navigate = vi.fn();
     const page = new ConfigPage();

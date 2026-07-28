@@ -201,10 +201,10 @@ describe("prepared model catalog builder", () => {
 
   it("keeps provider-owned strongest-first order after runtime augmentation", async () => {
     mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValueOnce([
+      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
       { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" },
       { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", provider: "openai" },
-      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
-      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
     ]);
 
     const snapshot = await build({
