@@ -127,9 +127,30 @@ function isLazyLocale(locale: Locale): locale is LazyLocale {
   return LAZY_LOCALES.includes(locale as LazyLocale);
 }
 
+function resolveChineseNavigatorLocale(navLang: string): Locale {
+  let locale: Intl.Locale;
+  try {
+    locale = new Intl.Locale(navLang);
+  } catch {
+    return "zh-CN";
+  }
+  if (locale.script === "Hans") {
+    return "zh-CN";
+  }
+  if (
+    locale.script === "Hant" ||
+    locale.region === "TW" ||
+    locale.region === "HK" ||
+    locale.region === "MO"
+  ) {
+    return "zh-TW";
+  }
+  return "zh-CN";
+}
+
 export function resolveNavigatorLocale(navLang: string): Locale {
-  if (navLang.startsWith("zh")) {
-    return navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
+  if (navLang.toLowerCase().startsWith("zh")) {
+    return resolveChineseNavigatorLocale(navLang);
   }
   if (navLang.startsWith("pt")) {
     return "pt-BR";

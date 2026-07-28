@@ -135,6 +135,20 @@ describe("i18n", () => {
     expect(fresh.t("common.health")).toBe("健康状况");
   });
 
+  it.each(["zh-Hant", "zh-MO", "ZH-hAnT-tW"])(
+    "loads Traditional Chinese for the %s browser locale",
+    async (language) => {
+      vi.stubGlobal("navigator", { language } as Navigator);
+
+      const fresh = await importFreshTranslate();
+
+      await vi.waitFor(() => {
+        expect(fresh.i18n.getLocale()).toBe("zh-TW");
+      });
+      expect(fresh.t("common.health")).toBe(zh_TW.common.health);
+    },
+  );
+
   it("skips node localStorage accessors that warn without a storage file", async () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("navigator", { language: "en-US" } as Navigator);
