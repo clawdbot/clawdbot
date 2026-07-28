@@ -89,7 +89,7 @@ describe("groupSidebarSessionRows", () => {
     ]);
   });
 
-  it("keeps stored-but-empty known groups visible as sections", () => {
+  it("filters out stored-but-empty known groups when scoped to a selected agent", () => {
     const sections = groupSidebarSessionRows(
       [row({ key: "a" }), row({ key: "b", category: "Zulu" })],
       {
@@ -97,13 +97,11 @@ describe("groupSidebarSessionRows", () => {
       },
     );
     expect(sections.map((section) => section.id)).toEqual([
-      "category:Apps",
       "category:Zulu",
       "ungrouped",
       "work",
     ]);
-    expect(sections[0]?.rows).toEqual([]);
-    expect(sections[1]?.rows.map((item) => item.key)).toEqual(["b"]);
+    expect(sections[0]?.rows.map((item) => item.key)).toEqual(["b"]);
   });
 
   it("keeps custom groups in their persisted order", () => {
