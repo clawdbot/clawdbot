@@ -34,10 +34,10 @@ import {
 } from "./dreaming-ingestion-state.js";
 import { writeDailyDreamingPhaseBlock } from "./dreaming-markdown.js";
 import {
-  generateAndAppendDreamNarrative,
+  type DreamNarrativeRequest,
   readRecentDreamDiaryEntries,
   type NarrativePhaseData,
-  runDetachedDreamNarrative,
+  runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
 import {
@@ -1761,12 +1761,13 @@ export function previewRemDreaming(params: {
 }
 
 async function runLightDreaming(params: {
+  agentId?: string;
   workspaceDir: string;
   cfg?: DreamingHostConfig;
   primaryWorkspaceDir?: string;
   config: LightDreamingConfig;
   logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
@@ -1844,37 +1845,28 @@ async function runLightDreaming(params: {
       ...(themes.length > 0 ? { themes } : {}),
       ...(recentDiaryEntries.length > 0 ? { recentDiaryEntries } : {}),
     };
-    if (params.detachNarratives) {
-      runDetachedDreamNarrative({
-        subagent: params.subagent,
-        workspaceDir: params.workspaceDir,
-        data,
-        nowMs,
-        timezone: params.config.timezone,
-        model: params.config.execution?.model,
-        logger: params.logger,
-      });
-    } else {
-      await generateAndAppendDreamNarrative({
-        subagent: params.subagent,
-        workspaceDir: params.workspaceDir,
-        data,
-        nowMs,
-        timezone: params.config.timezone,
-        model: params.config.execution?.model,
-        logger: params.logger,
-      });
-    }
+    await runDreamNarrative({
+      agentId: params.agentId,
+      subagent: params.subagent,
+      workspaceDir: params.workspaceDir,
+      data,
+      nowMs,
+      timezone: params.config.timezone,
+      model: params.config.execution?.model,
+      logger: params.logger,
+      detached: params.detachNarratives,
+    });
   }
 }
 
 async function runRemDreaming(params: {
+  agentId?: string;
   workspaceDir: string;
   cfg?: DreamingHostConfig;
   primaryWorkspaceDir?: string;
   config: RemDreamingConfig;
   logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
@@ -1959,36 +1951,32 @@ async function runRemDreaming(params: {
               .filter(Boolean),
       ...(themes.length > 0 ? { themes } : {}),
     };
-    if (params.detachNarratives) {
-      runDetachedDreamNarrative({
-        subagent: params.subagent,
-        workspaceDir: params.workspaceDir,
-        data,
-        nowMs,
-        timezone: params.config.timezone,
-        model: params.config.execution?.model,
-        logger: params.logger,
-      });
-    } else {
-      await generateAndAppendDreamNarrative({
-        subagent: params.subagent,
-        workspaceDir: params.workspaceDir,
-        data,
-        nowMs,
-        timezone: params.config.timezone,
-        model: params.config.execution?.model,
-        logger: params.logger,
-      });
-    }
+    await runDreamNarrative({
+      agentId: params.agentId,
+      subagent: params.subagent,
+      workspaceDir: params.workspaceDir,
+      data,
+      nowMs,
+      timezone: params.config.timezone,
+      model: params.config.execution?.model,
+      logger: params.logger,
+      detached: params.detachNarratives,
+    });
   }
 }
 
 export async function runDreamingSweepPhases(params: {
+  /**
+   * Agent that owns this workspace; narrative subagent sessions are stored under it.
+   * Absent only when no roster or triggering agent can be attributed, which downgrades
+   * narratives to the local diary fallback without stopping the sweep.
+   */
+  agentId?: string;
   workspaceDir: string;
   pluginConfig?: Record<string, unknown>;
   cfg?: DreamingHostConfig;
   logger: Logger;
-  subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
   nowMs?: number;
 }): Promise<void> {
@@ -2002,6 +1990,7 @@ export async function runDreamingSweepPhases(params: {
   if (light.enabled && light.limit > 0) {
     try {
       await runLightDreaming({
+        agentId: params.agentId,
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         config: light,
@@ -2030,6 +2019,7 @@ export async function runDreamingSweepPhases(params: {
   if (rem.enabled && rem.limit > 0) {
     try {
       await runRemDreaming({
+        agentId: params.agentId,
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
         config: rem,

@@ -289,6 +289,7 @@ function createHarness(
       },
     };
     await runDreamingSweepPhases({
+      agentId: "main",
       workspaceDir: activeWorkspace,
       pluginConfig: selectedPluginConfig,
       cfg: resolvedConfig,
@@ -514,9 +515,10 @@ describe("memory-core dreaming phases", () => {
     };
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
 
     await runDreamingSweepPhases({
+      agentId: "main",
       workspaceDir,
       cfg: testConfig,
       pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
@@ -584,6 +586,7 @@ describe("memory-core dreaming phases", () => {
 
     await expect(
       runDreamingSweepPhases({
+        agentId: "main",
         workspaceDir,
         cfg: testConfig,
         pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
@@ -818,6 +821,7 @@ describe("memory-core dreaming phases", () => {
     };
 
     await runDreamingSweepPhases({
+      agentId: "main",
       workspaceDir,
       cfg: testConfig,
       pluginConfig: resolveMemoryDreamingPluginConfig(testConfig),
@@ -3046,6 +3050,7 @@ describe("memory-core dreaming phases", () => {
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
       await runDreamingSweepPhases({
+        agentId: "main",
         workspaceDir,
         pluginConfig: {
           dreaming: {
