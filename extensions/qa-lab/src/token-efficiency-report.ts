@@ -201,11 +201,12 @@ function runtimeUsage(cell: RuntimeParityCell): TokenEfficiencyRuntimeUsage {
   if (
     cacheWriteTokens !== null &&
     unaccountedCacheTokens >= 0 &&
+    (cacheReadTokens === null || unaccountedCacheTokens === 0) &&
     (completeCacheTelemetry || unaccountedCacheTokens === 0)
   ) {
     processedTokens += cacheWriteTokens;
     processedTokenEvidence = "measured";
-  } else if (cacheReadTokens !== null && completeCacheTelemetry) {
+  } else if (cacheReadTokens !== null && cacheWriteTokens === null && completeCacheTelemetry) {
     const derivedCacheWriteTokens = totalTokens - baseProcessedTokens - cacheReadTokens;
     if (derivedCacheWriteTokens >= 0) {
       processedTokens += derivedCacheWriteTokens;

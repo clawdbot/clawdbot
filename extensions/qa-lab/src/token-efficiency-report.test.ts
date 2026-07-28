@@ -390,6 +390,38 @@ describe("token efficiency report", () => {
     ]);
   });
 
+  it("fails unexplained totals when both cache counters have already been measured", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "unexplained-cache-totals",
+          makeCell("openclaw", {
+            inputTokens: 100,
+            outputTokens: 20,
+            totalTokens: 120,
+          }),
+          makeCell("codex", {
+            inputTokens: 100,
+            outputTokens: 20,
+            totalTokens: 1_000,
+            cacheRead: 100,
+            cacheWrite: 0,
+          }),
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.rows[0]?.codex).toMatchObject({
+      cacheReadTokens: 100,
+      cacheWriteTokens: 0,
+      processedTokenEvidence: "unavailable",
+    });
+    expect(report.failures).toEqual([
+      "unexplained-cache-totals codex live processed-token usage cannot be verified from cache-write telemetry or coherent cache-read totals",
+    ]);
+  });
+
   it("does not derive cache writes from partially observed post-warm cache reads", () => {
     const openclaw = makeCell("openclaw", {
       inputTokens: 100,
