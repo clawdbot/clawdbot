@@ -224,6 +224,7 @@ function setup(entry: SessionEntry = sessionEntry) {
           routeVariants: [],
         },
         configuredRuntimeModels: [],
+        inlineProviderModels: [],
         createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
       },
       release: releaseRuntime,

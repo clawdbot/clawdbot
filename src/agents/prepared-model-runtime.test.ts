@@ -305,6 +305,42 @@ describe("prepared model runtime snapshots", () => {
     ]);
   });
 
+  it("prepares inline provider models once at the snapshot boundary", async () => {
+    const snapshot = await publishPreparedModelRuntimeSnapshot({
+      config: {
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://custom.example.test/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "custom-model",
+                  name: "Custom Model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/prepared-model-runtime-inline",
+    });
+
+    expect(snapshot.inlineProviderModels).toMatchObject([
+      {
+        provider: "custom",
+        id: "custom-model",
+        baseUrl: "https://custom.example.test/v1",
+        api: "openai-responses",
+      },
+    ]);
+  });
+
   it("omits provider runtime APIs outside the catalog contract", async () => {
     mocks.loadStaticCatalog.mockResolvedValueOnce([
       {

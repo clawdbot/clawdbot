@@ -24,6 +24,7 @@ import {
   applyConfiguredProviderOverrides,
   resolveConfiguredProviderConfig,
 } from "./model.configured-overrides.js";
+import type { InlineModelEntry } from "./model.inline-provider.js";
 import {
   DEFAULT_PROVIDER_RUNTIME_HOOKS,
   normalizeResolvedModel,
@@ -65,6 +66,7 @@ type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
   agentRuntimeId?: string;
   skipAgentDiscovery?: boolean;
   preparedRuntimeModels?: readonly PreparedConfiguredRuntimeModel[];
+  preparedInlineProviderModels?: readonly InlineModelEntry[];
 };
 
 /** Creates isolated model/auth stores for harnesses that own model discovery themselves. */
@@ -255,6 +257,8 @@ export async function resolveModelAsync(
     manifestAlias: normalizedRef.manifestAlias,
     workspaceDir,
     runtimeHooks,
+    preparedInlineProviderModels:
+      options?.preparedInlineProviderModels ?? preparedSnapshot?.inlineProviderModels,
   });
   if (explicitModel?.kind === "suppressed") {
     const suppressedRuntimeModel = resolveRuntimePreferredSuppressedModel({

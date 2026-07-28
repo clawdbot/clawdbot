@@ -16,7 +16,7 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api"> & {
   api?: Api;
   provider: string;
   baseUrl?: string;
@@ -139,28 +139,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
 }
 
 /** Builds runtime model records from inline provider config, inheriting provider-level defaults. */
-// Inline entries are a pure projection of `models.providers`, but embedded runs
-// rebuilt them on every model resolution (~4x per agent turn), and the work is
-// synchronous, so it blocked the gateway event loop. Config objects are replaced
-// rather than mutated on reload, so object identity is a safe cache key.
-const inlineProviderModelsCache = new WeakMap<
-  Record<string, InlineProviderConfig>,
-  InlineModelEntry[]
->();
-
 export function buildInlineProviderModels(
-  providers: Record<string, InlineProviderConfig>,
-): InlineModelEntry[] {
-  const cached = inlineProviderModelsCache.get(providers);
-  if (cached) {
-    return cached;
-  }
-  const built = buildInlineProviderModelsUncached(providers);
-  inlineProviderModelsCache.set(providers, built);
-  return built;
-}
-
-function buildInlineProviderModelsUncached(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {
   return Object.entries(providers).flatMap(([providerId, entry]) => {

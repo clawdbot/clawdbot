@@ -25,6 +25,10 @@ import {
   resolveDefaultAgentId,
 } from "./agent-scope.js";
 import {
+  buildInlineProviderModels,
+  type InlineModelEntry,
+} from "./embedded-agent-runner/model.inline-provider.js";
+import {
   loadBundledProviderStaticCatalogContextModels,
   resolveBundledStaticCatalogModel,
 } from "./embedded-agent-runner/model.static-catalog.js";
@@ -54,6 +58,8 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   modelCatalog: ModelCatalogSnapshot;
   /** Full static models for configured refs, resolved once at the lifecycle boundary. */
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
+  /** Inline provider projection prepared once for all resolutions owned by this snapshot. */
+  inlineProviderModels: readonly InlineModelEntry[];
   createStores: () => PreparedModelRuntimeStores;
 }>;
 
@@ -529,6 +535,9 @@ async function buildSnapshot(
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
   });
   const staticEntries = providerStaticModels.map(toStaticCatalogEntry);
+  // Config reload publishes a replacement snapshot. Keep the synchronous inline projection
+  // at that lifecycle boundary instead of rebuilding it on every model resolution in a turn.
+  const inlineProviderModels = buildInlineProviderModels(input.config.models?.providers ?? {});
   const configuredRuntimeModels = prepareConfiguredRuntimeModels({
     config: input.config,
     env,
@@ -552,6 +561,7 @@ async function buildSnapshot(
     ...(mediaCapabilityProviders ? { mediaCapabilityProviders } : {}),
     modelCatalog: { ...modelCatalog, staticEntries },
     configuredRuntimeModels,
+    inlineProviderModels,
     createStores,
   });
 }
