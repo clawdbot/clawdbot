@@ -114,6 +114,7 @@ function runValidation(
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
+        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         options.guardFailure
           ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
           : `review_guard() { REVIEW_MODE=${options.mode ?? "pr"}; }`,
@@ -139,6 +140,7 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
         'fixture_root="$2"',
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
+        'rg() { case " $* " in *" -F "*) grep "$@";; *) grep -E "$@";; esac; }',
         "mark_pr_operation_side_effects_started() { :; }",
         invocation,
       ].join("\n"),

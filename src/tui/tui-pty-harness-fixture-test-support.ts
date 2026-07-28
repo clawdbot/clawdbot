@@ -2,6 +2,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
 export async function writeTuiPtyFixtureScript(dir: string) {
@@ -110,6 +111,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           timestamp: Date.now(),
         };
       }
+
+      ${TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT}
 
       class FixtureBackend implements TuiBackend {
         connection = { url: "pty-fixture://local" };
@@ -253,6 +256,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             }, 0);
             return { runId };
           }
+          if (opts.message === "history gap proof") { return beginGapHistoryRecovery(this, runId, opts.sessionKey); }
           if (opts.message === "skill approval proof" || opts.message === "skill approval gap proof") {
             pendingPluginApproval = {
               id: "plugin:skill-pty",
@@ -387,6 +391,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
           const sessionKey = opts?.sessionKey ?? "main";
           record("loadHistory", { sessionKey });
+          const gapHistory = loadGapHistory(sessionKey);
+          if (gapHistory) { return gapHistory; }
           const rapidSwitchMarker = sessionKey.endsWith("switch-a")
             ? "A"
             : sessionKey.endsWith("switch-b")

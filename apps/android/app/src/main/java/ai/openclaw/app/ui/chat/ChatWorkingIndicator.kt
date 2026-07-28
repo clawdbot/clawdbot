@@ -2,11 +2,8 @@ package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
-import android.database.ContentObserver
-import android.os.Handler
-import android.os.Looper
+import ai.openclaw.app.ui.rememberSystemAnimationsEnabled
 import android.os.SystemClock
-import android.provider.Settings
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
@@ -14,7 +11,6 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -29,7 +25,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.PathParser
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,17 +43,17 @@ internal const val WORKING_PHRASE_ROTATE_EVERY_MS = 45_000L
 private val clawBodyPath by lazy {
   PathParser()
     .parsePathString(
-      "M9.6 9.2 A5.6 5.6 0 1 0 9.6 20.4 A5.6 5.6 0 0 0 9.6 9.2 Z " +
-        "M10 20 C14 20.9 17.9 19.5 20.1 16.1 C20.6 15.4 20.05 14.5 19.25 14.65 " +
-        "C17.1 15 14.9 14.4 13.2 13 L10.6 16 Z",
+      "M8.2 10 A5.2 5.2 0 1 0 8.2 20.4 A5.2 5.2 0 0 0 8.2 10 Z " +
+        "M10.2 20 C14.5 20.8 19 18.6 22.3 13.2 C21 12.9 19.7 12.7 18.4 12.8 " +
+        "L17.5 14.6 L16 12.9 L14.3 14.5 L13.5 13 L11.5 14.2 Z",
     ).toPath()
 }
 private val clawJawPath by lazy {
   PathParser()
     .parsePathString(
-      "M6 10.6 C6.6 4.4 12.4 0.8 17.6 2.8 C20.8 4 22.8 6.8 23 9.8 " +
-        "C23.07 10.9 21.9 11.4 21.1 10.7 C19.4 9.2 16.9 8.7 14.7 9.5 " +
-        "C13.4 10 12.3 10.9 11.6 12.1 L7.2 12.4 Z",
+      "M5.6 12.2 C5.2 5.6 10.4 1.4 15.6 2 C19.4 2.6 21.8 5.2 22.6 8.2 " +
+        "C20.9 7.7 19.2 7.6 17.6 7.9 L16.9 6.3 L15.2 8.5 " +
+        "C13.6 9.4 12.2 10.9 11.6 12.4 L6.8 13 Z",
     ).toPath()
 }
 
@@ -300,27 +295,6 @@ internal fun WorkingClawIcon(
     }
   }
 }
-
-@Composable
-private fun rememberSystemAnimationsEnabled(): Boolean {
-  val context = LocalContext.current
-  val resolver = context.contentResolver
-  var scale by remember(resolver) { mutableFloatStateOf(readAnimatorDurationScale(resolver)) }
-  DisposableEffect(resolver) {
-    val observer =
-      object : ContentObserver(Handler(Looper.getMainLooper())) {
-        override fun onChange(selfChange: Boolean) {
-          scale = readAnimatorDurationScale(resolver)
-        }
-      }
-    resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
-    scale = readAnimatorDurationScale(resolver)
-    onDispose { resolver.unregisterContentObserver(observer) }
-  }
-  return scale > 0f
-}
-
-private fun readAnimatorDurationScale(resolver: android.content.ContentResolver): Float = Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
 
 @Composable
 internal fun rememberWorkingElapsedMs(observedAtElapsedMs: Long): Long {

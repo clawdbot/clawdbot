@@ -40,6 +40,7 @@ export type OllamaModelWithContext = OllamaTagModel & {
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+const MAX_OLLAMA_DISCOVERY_PROBES = OLLAMA_CONTEXT_ENRICH_LIMIT * 4;
 const MAX_OLLAMA_SHOW_CACHE_ENTRIES = 256;
 const ollamaModelShowInfoCache = new Map<string, Promise<OllamaModelShowInfo>>();
 const OLLAMA_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
@@ -259,6 +260,37 @@ export async function enrichOllamaModelsWithContext(
   return enriched;
 }
 
+export async function enrichOllamaCompletionModels(
+  apiBase: string,
+  models: OllamaTagModel[],
+  opts?: { apiKey?: string; requireCompletionCapability?: boolean },
+): Promise<OllamaModelWithContext[]> {
+  const completionModels: OllamaModelWithContext[] = [];
+  const probeLimit = Math.min(models.length, MAX_OLLAMA_DISCOVERY_PROBES);
+  for (
+    let index = 0;
+    index < probeLimit && completionModels.length < OLLAMA_CONTEXT_ENRICH_LIMIT;
+    index += OLLAMA_SHOW_CONCURRENCY
+  ) {
+    const batch = await enrichOllamaModelsWithContext(
+      apiBase,
+      models.slice(index, Math.min(index + OLLAMA_SHOW_CONCURRENCY, probeLimit)),
+      opts?.apiKey ? { apiKey: opts.apiKey } : undefined,
+    );
+    for (const model of batch) {
+      const canComplete = model.capabilities?.includes("completion");
+      if (!canComplete && (opts?.requireCompletionCapability || model.capabilities)) {
+        continue;
+      }
+      completionModels.push(model);
+      if (completionModels.length === OLLAMA_CONTEXT_ENRICH_LIMIT) {
+        break;
+      }
+    }
+  }
+  return completionModels;
+}
+
 export function isOllamaCloudModel(modelName: string | undefined): boolean {
   return isCloudModelRef(modelName);
 }
@@ -404,11 +436,7 @@ export async function buildOllamaProvider(
   if (!reachable && !opts?.quiet) {
     console.warn(`Ollama could not be reached at ${apiBase}.`);
   }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-    auth,
-  );
+  const discovered = await enrichOllamaCompletionModels(apiBase, models, auth);
   return {
     baseUrl: apiBase,
     api: "ollama",

@@ -144,8 +144,7 @@ class MemoryDreamingSettings extends OpenClawLightDomElement {
 
   /**
    * These knobs autosave like the schema editor, so the tab owns the same
-   * status line and restart banner the embedded editor renders on the other
-   * tabs; without them a saved edit looks like nothing happened.
+   * active-write/failure status and restart banner as the other tabs.
    */
   private renderWriteStatus() {
     const runtimeConfig = this.context.runtimeConfig;

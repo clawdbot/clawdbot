@@ -219,6 +219,10 @@ const CONTROLLER_SOURCE = String.raw`
     call: { value: (id, input) => request("call", [id, input]), enumerable: true },
     callValue: { value: (id, input) => request("callValue", [id, input]), enumerable: true },
   });
+  const skills = Object.freeze({
+    list: () => request("skillsList", []),
+    read: (name) => request("skillsRead", [name]),
+  });
 
   if (globalThis.__openclawSwarmEnabled === true) {
     Object.defineProperties(globalThis, {
@@ -317,6 +321,7 @@ const CONTROLLER_SOURCE = String.raw`
     API: { value: api, enumerable: true },
     nodes: { value: nodes, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
+    skills: { value: skills, enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
@@ -356,6 +361,8 @@ function createHostRequestHandler(params: {
       method !== "namespace" &&
       method !== "agentSpawn" &&
       method !== "agentWait" &&
+      method !== "skillsList" &&
+      method !== "skillsRead" &&
       method !== "swarmNote"
     ) {
       throw new Error("unsupported code mode bridge method");

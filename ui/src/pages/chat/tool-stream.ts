@@ -814,6 +814,11 @@ function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPa
   if (!progress) {
     return false;
   }
+  // Preambles belong to the visible run; a sibling run must never replace,
+  // clear, or persist its commentary into this transcript.
+  if (!resolveAcceptedSession(host, payload, { allowSessionScopedWhenIdle: true }).accepted) {
+    return true;
+  }
   if (progress.itemId && !progress.text.trim()) {
     host.chatStreamSegments = host.chatStreamSegments.filter(
       (segment) => segment.itemId !== progress.itemId,

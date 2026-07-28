@@ -55,6 +55,37 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("keeps the active observer digest when another run streams in the same session", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "The active run's status",
+      health: "on-track" as const,
+    };
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate: vi.fn(),
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "delta",
+        runId: "run-2",
+        sessionKey: projectedDigest.sessionKey,
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+  });
+
   it("rejects a run-less observer digest during an identified active run", () => {
     const projectedDigest = {
       sessionKey: "agent:main:current",
