@@ -7,6 +7,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 // NodeSession is plugin-SDK-reachable; importing these types from the
 // gateway-protocol index would retain the whole ProtocolSchemas registry in
 // the public plugin-sdk dts (check-plugin-sdk-exports guards this).
@@ -257,7 +258,13 @@ export class NodeRegistry {
     pendingInvokes: this.pendingInvokes,
     sendCancel: (requestId, pending) => {
       const node = this.nodesById.get(pending.nodeId);
-      if (!node || node.connId !== pending.connId) {
+      // Older nodes only negotiated streamed cancellation. The authenticated
+      // first-party host also aborts ordinary shell, MCP, and inference calls.
+      if (
+        !node ||
+        node.connId !== pending.connId ||
+        (!pending.onProgress && node.clientId !== GATEWAY_CLIENT_IDS.NODE_HOST)
+      ) {
         return;
       }
       this.sendEventToSession(node, "node.invoke.cancel", {
