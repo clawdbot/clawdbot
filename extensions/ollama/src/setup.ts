@@ -1,4 +1,4 @@
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 // Ollama setup module handles plugin onboarding behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type {
@@ -216,7 +216,7 @@ async function readOllamaPullChunkWithIdleTimeout(
       (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(toLintErrorObject(err, "Non-Error rejection"));
+          reject(toErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -952,17 +952,4 @@ export async function ensureOllamaModelPulled(params: {
   }
 }
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
