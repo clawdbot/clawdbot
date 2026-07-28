@@ -11,6 +11,7 @@ import {
   createdSessionListResult,
   installMockGateway,
   pastePng,
+  pollLocatorText,
   replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
@@ -135,9 +136,9 @@ suite.define(() => {
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
       await trigger.click();
-      await expect
-        .poll(() => place.locator(".new-session-page__menu-note").textContent())
-        .toContain("Syncs target-repo to the cloud worker");
+      await pollLocatorText(place.locator(".new-session-page__menu-note")).toContain(
+        "Syncs target-repo to the cloud worker",
+      );
       await captureUiProof(page, "01-cloud-worker-target.png");
       await page.keyboard.press("Escape");
 
@@ -184,9 +185,9 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "allocation response lost",
       });
-      await expect
-        .poll(() => page.locator(".new-session-page__error").textContent())
-        .toContain("cloud worker placement could not be verified");
+      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
+        "cloud worker placement could not be verified",
+      );
       const alert = page.locator(".new-session-page__alert");
       await expect.poll(() => alert.getAttribute("role")).toBe("alert");
       await expect.poll(() => alert.locator("svg").count()).toBe(1);
@@ -357,7 +358,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("environments.list")).length)
         .toBeGreaterThan(profileRequests);
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
-      await expect.poll(() => trigger.textContent()).toContain("Cloud · aws");
+      await pollLocatorText(trigger).toContain("Cloud · aws");
       await expect
         .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
         .toBe(true);
@@ -483,9 +484,9 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
-      await expect
-        .poll(() => page.locator(".new-session-page__error").textContent())
-        .toContain("send outcome unknown");
+      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
+        "send outcome unknown",
+      );
       await gateway.setMethodResponse("sessions.send", {
         runId: "run-reload-recovery",
         status: "started",
@@ -796,9 +797,9 @@ suite.define(() => {
         message: "cleanup unavailable",
       });
 
-      await expect
-        .poll(() => page.locator(".new-session-page__error").textContent())
-        .toContain("cleanup unavailable");
+      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
+        "cleanup unavailable",
+      );
       const stagedIdentity = staged as { messageId: string; profileId: string; agentId: string };
       expect(await readRecovery()).toMatchObject({
         sessionKey,
@@ -908,9 +909,9 @@ suite.define(() => {
         message: "send outcome unknown",
       });
 
-      await expect
-        .poll(() => page.locator(".new-session-page__error").textContent())
-        .toContain("send outcome unknown");
+      await pollLocatorText(page.locator(".new-session-page__error")).toContain(
+        "send outcome unknown",
+      );
       await expect.poll(() => page.locator(".new-session-page__message").isDisabled()).toBe(true);
       expect(await page.locator(".new-session-page__message").inputValue()).toBe(message);
       expect(new URL(page.url()).pathname).toContain("/new");

@@ -12,6 +12,7 @@ import {
   createdSessionListResult,
   installMockGateway,
   pastePng,
+  pollLocatorText,
   reconnectProofArtifactDir,
 } from "./new-session-page.test-support.ts";
 
@@ -175,7 +176,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await page.getByText("SKILL.md", { exact: true }).waitFor();
 
-      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       const userRow = await page.locator(".chat-group.user").boundingBox();
       const toolRow = await page.getByText("SKILL.md", { exact: true }).boundingBox();
       expect(userRow).not.toBeNull();
@@ -217,7 +218,7 @@ suite.define(() => {
         timeout: 30_000,
       });
       await gateway.waitForRequest("chat.startup");
-      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
 
       const socketsBeforeReconnect = await gateway.getSocketCount();
       await gateway.setOnline(false);
@@ -253,7 +254,7 @@ suite.define(() => {
         });
       }
 
-      await expect.poll(() => page.locator(".chat-group.user").textContent()).toContain(message);
+      await pollLocatorText(page.locator(".chat-group.user")).toContain(message);
       await expect.poll(() => page.locator(".chat-group.user").count()).toBe(1);
     } finally {
       await context.close();
@@ -321,8 +322,8 @@ suite.define(() => {
       await expect.poll(() => userImage.getAttribute("src")).toMatch(/^data:image\/png;base64,/u);
       const initialImageSrc = await userImage.getAttribute("src");
       await userImage.evaluate((image) => image.setAttribute("data-initial-image-node", "true"));
-      await expect.poll(() => userRow.textContent()).toContain(message);
-      await expect.poll(() => userRow.textContent()).not.toContain("Attached image");
+      await pollLocatorText(userRow).toContain(message);
+      await pollLocatorText(userRow).not.toContain("Attached image");
 
       await gateway.resolveDeferred("chat.startup");
 
@@ -330,8 +331,8 @@ suite.define(() => {
       await expect.poll(() => userImage.count()).toBe(1);
       await expect.poll(() => userImage.getAttribute("data-initial-image-node")).toBe("true");
       await expect.poll(() => userImage.getAttribute("src")).toBe(initialImageSrc);
-      await expect.poll(() => userRow.textContent()).toContain(message);
-      await expect.poll(() => userRow.textContent()).not.toContain("Attached image");
+      await pollLocatorText(userRow).toContain(message);
+      await pollLocatorText(userRow).not.toContain("Attached image");
     } finally {
       await context.close();
     }

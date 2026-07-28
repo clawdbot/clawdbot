@@ -21,6 +21,8 @@ export const NODE_HOME = "/Users/peter";
 export const NODE_PICKED = "/Users/peter/Projects";
 export const NODE_UNC = "\\\\server\\share\\repo";
 export const EXEC_ONLY_PICKED = "C:\\Users\\peter\\repo";
+const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
+const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(
@@ -42,6 +44,12 @@ export const SESSION_LIST_DEFAULTS = {
   model: "gpt-5.5",
   modelProvider: "openai",
 };
+
+export function pollLocatorText(locator: Locator) {
+  return expect.poll(() => locator.textContent({ timeout: LOCATOR_TEXT_READ_TIMEOUT_MS }), {
+    timeout: LOCATOR_TEXT_POLL_TIMEOUT_MS,
+  });
+}
 
 export function createNewSessionPageE2eSuite() {
   return createControlUiE2eSuite({

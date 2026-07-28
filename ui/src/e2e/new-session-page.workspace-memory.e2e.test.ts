@@ -9,6 +9,7 @@ import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
+  pollLocatorText,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
@@ -162,9 +163,9 @@ suite.define(() => {
       await expect.poll(() => modelSelect.getAttribute("data-chat-thinking-value")).toBe("high");
 
       await page.goto(`${suite.server.baseUrl}new`);
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("packages");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "packages",
+      );
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("true");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
@@ -411,9 +412,9 @@ suite.define(() => {
       });
       await page.reload();
       await navigateInApp(page, "new-session");
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw-next");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw-next",
+      );
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await modelSelect.click();
@@ -510,9 +511,9 @@ suite.define(() => {
         message: `Error: ENOENT: no such file or directory, scandir '${PICKED}'`,
       });
       const placeTrigger = page.locator("#new-session-place-trigger");
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw",
+      );
 
       const pickedListRequests = (await gateway.getRequests("fs.listDir")).filter(
         (request) =>
@@ -524,9 +525,9 @@ suite.define(() => {
       await navigateInApp(page, "chat");
       await waitForCommittedChatRoute(page);
       await navigateInApp(page, "new-session");
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw",
+      );
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
       await expect
         .poll(
@@ -623,9 +624,9 @@ suite.define(() => {
         home: "/home/peter",
         entries: [],
       });
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw",
+      );
 
       await page.locator(".new-session-page__message").fill("keep the newer choice");
       await page.getByRole("button", { name: "Start thread" }).click();
@@ -695,9 +696,9 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("button", { name: "Start thread" }).isDisabled())
         .toBe(false);
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toContain("target-repo");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toContain(
+        "target-repo",
+      );
       const storedPreference = await page.evaluate(() => {
         const key = Array.from({ length: localStorage.length }, (_, index) =>
           localStorage.key(index),

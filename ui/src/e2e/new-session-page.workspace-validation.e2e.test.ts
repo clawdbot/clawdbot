@@ -5,6 +5,7 @@ import {
   WORKSPACE,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  pollLocatorText,
   replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
@@ -450,9 +451,9 @@ suite.define(() => {
           placeSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("target-repo · Gateway · local");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "target-repo · Gateway · local",
+      );
 
       const branchRequests = await gateway.getRequests("worktrees.branches");
       expect(branchRequests.at(-1)?.params).toEqual({
@@ -629,17 +630,15 @@ suite.define(() => {
       const folderLabel = page.locator(
         "#new-session-place-trigger .new-session-page__trigger-label",
       );
-      await expect.poll(() => folderLabel.textContent()).toBe("research");
+      await pollLocatorText(folderLabel).toBe("research");
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=main&catalog=claude");
         dispatchEvent(new PopStateEvent("popstate"));
       });
 
-      await expect
-        .poll(() => page.locator(".new-session-page__runtime").textContent())
-        .toContain("Claude Code");
-      await expect.poll(() => folderLabel.textContent()).toBe("openclaw");
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await pollLocatorText(folderLabel).toBe("openclaw");
       await page.locator(".new-session-page__message").fill("retarget this draft");
       await page.getByRole("button", { name: "Start thread" }).click();
 

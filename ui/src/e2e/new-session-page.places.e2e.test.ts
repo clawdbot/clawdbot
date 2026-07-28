@@ -11,6 +11,7 @@ import {
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  pollLocatorText,
   replaceGatewayClient,
 } from "./new-session-page.test-support.ts";
 
@@ -132,9 +133,9 @@ suite.define(() => {
       // The place trigger labels the workspace and opens the unified menu.
       const placeSelect = page.locator("wa-popover.new-session-page__place-popover");
       const placeTrigger = page.locator("#new-session-place-trigger");
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw",
+      );
 
       // Browse from the workspace, descend one level, then adopt the folder.
       await placeTrigger.click();
@@ -150,9 +151,9 @@ suite.define(() => {
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.id))
         .toBe("new-session-place-trigger");
-      await expect
-        .poll(() => placeTrigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("packages");
+      await pollLocatorText(placeTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "packages",
+      );
 
       // Git-backed custom folders stay direct until the user explicitly chooses isolation.
       await expect.poll(() => placeTrigger.getAttribute("data-worktree")).toBe("false");
@@ -258,9 +259,9 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("home · Gateway · local");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "home · Gateway · local",
+      );
 
       await trigger.click();
       expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
@@ -300,9 +301,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("node.list");
       const trigger = page.locator("#new-session-place-trigger");
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
       await trigger.click();
       const place = page.locator("wa-popover.new-session-page__place-popover");
       expect(await place.getByText("Places", { exact: true }).count()).toBe(0);
@@ -343,9 +342,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("system.info");
       const trigger = page.locator("#new-session-place-trigger");
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw · Gateway · Peters-Mac-Studio");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "openclaw · Gateway · Peters-Mac-Studio",
+      );
       await trigger.click();
       const place = page.locator("wa-popover.new-session-page__place-popover");
       await place.getByRole("button", { name: "Gateway · Peters-Mac-Studio" }).waitFor();
@@ -362,9 +361,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("node.list")).length)
         .toBeGreaterThan(nodeRequests);
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("openclaw");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("openclaw");
       await trigger.click();
       await place.getByText("Runs on Gateway · Peters-Mac-Studio", { exact: true }).waitFor();
     } finally {
@@ -423,18 +420,18 @@ suite.define(() => {
       const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
       const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
       const phone = page.locator('[data-value="node:33333333cccccccc"]');
-      await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("Mac14,12");
-      await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("Mac15,14");
-      await expect.poll(() => phone.locator(".session-menu__text").textContent()).toBe("iPhone");
+      await pollLocatorText(first.locator(".session-menu__sub")).toBe("Mac14,12");
+      await pollLocatorText(second.locator(".session-menu__sub")).toBe("Mac15,14");
+      await pollLocatorText(phone.locator(".session-menu__text")).toBe("iPhone");
       expect(await first.locator(".session-menu__icon svg").count()).toBe(1);
       expect(await second.locator(".session-menu__icon svg").count()).toBe(1);
       expect(await phone.locator(".session-menu__icon svg").count()).toBe(1);
       expect(await first.getAttribute("title")).toBe("macOS · Mac14,12 · 192.168.1.11");
       expect(await second.getAttribute("title")).toContain("192.168.1.12");
       await second.click();
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("Agent workspace · Mac Studio");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "Agent workspace · Mac Studio",
+      );
       expect(await trigger.textContent()).not.toContain("Mac15,14");
       expect(await trigger.textContent()).not.toContain("192.168.1.12");
     } finally {
@@ -472,8 +469,8 @@ suite.define(() => {
       await trigger.click();
       const first = page.locator('[data-value="recent::/a/openclaw"]');
       const second = page.locator('[data-value="recent::/b/openclaw"]');
-      await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("a");
-      await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("b");
+      await pollLocatorText(first.locator(".session-menu__sub")).toBe("a");
+      await pollLocatorText(second.locator(".session-menu__sub")).toBe("b");
       await second.click();
       await page.locator(".new-session-page__message").fill("continue in work checkout");
       await page.getByRole("button", { name: "Start thread" }).click();
@@ -538,9 +535,9 @@ suite.define(() => {
         .locator("wa-popover.new-session-page__place-popover")
         .getByRole("button", { name: "Projects · MacBook", exact: true })
         .click();
-      await expect
-        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
-        .toBe("Projects · MacBook");
+      await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
+        "Projects · MacBook",
+      );
 
       await page.locator(".new-session-page__message").fill("continue on the recent node");
       await page.getByRole("button", { name: "Start thread" }).click();
@@ -694,7 +691,7 @@ suite.define(() => {
       // Pick the node from Places.
       await placeTrigger.click();
       await placeSelect.getByRole("button", { name: "MacBook" }).click();
-      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
+      await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
       // Node sessions cannot use managed worktrees, so the menu drops the item.
       await placeTrigger.click();
       expect(await placeSelect.getByRole("button", { name: "Worktree" }).count()).toBe(0);
@@ -720,7 +717,7 @@ suite.define(() => {
 
       // Destination selection stays in Places; browsing is fixed to the current target.
       await placeSelect.getByRole("button", { name: "Gateway · local" }).click();
-      await expect.poll(() => placeLabel.textContent()).toBe("openclaw · Gateway · local");
+      await pollLocatorText(placeLabel).toBe("openclaw · Gateway · local");
       await placeTrigger.click();
       expect(await placeSelect.getByRole("button", { name: "Offline node" }).count()).toBe(0);
       await placeSelect.getByRole("button", { name: "MacBook" }).click();
@@ -730,7 +727,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
 
       // Using a node folder retargets the draft to that node.
-      await expect.poll(() => placeLabel.textContent()).toBe("Projects · MacBook");
+      await pollLocatorText(placeLabel).toBe("Projects · MacBook");
 
       // A node cwd belongs to the selected agent's draft and must not leak
       // across an agent change, even though the execution node stays selected.
@@ -741,7 +738,7 @@ suite.define(() => {
         .filter({ hasText: "Research" })
         .click();
       await page.getByRole("heading", { name: "Research" }).waitFor();
-      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
+      await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
 
       // Clearing the path applies the node's default directory (empty folder),
       // the state the replaced clearable folder textbox could express.
@@ -750,7 +747,7 @@ suite.define(() => {
       await expect.poll(() => pathInput.inputValue()).toBe(NODE_HOME);
       await pathInput.fill("");
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect.poll(() => placeLabel.textContent()).toBe("Agent workspace · MacBook");
+      await pollLocatorText(placeLabel).toBe("Agent workspace · MacBook");
 
       // Browse back to the custom folder, then retarget to the exec-only node
       // with a manual absolute path for the final create assertion.
@@ -758,7 +755,7 @@ suite.define(() => {
       await placeSelect.getByRole("button", { name: "Browse folders" }).click();
       await browserEntries.getByRole("button", { name: "Projects" }).click();
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect.poll(() => placeLabel.textContent()).toBe("Projects · MacBook");
+      await pollLocatorText(placeLabel).toBe("Projects · MacBook");
 
       await placeTrigger.click();
       await placeSelect.getByRole("button", { name: "Old node" }).click();
@@ -773,7 +770,7 @@ suite.define(() => {
         ),
       ).toHaveLength(0);
       await page.getByRole("button", { name: "Use this folder" }).click();
-      await expect.poll(() => placeLabel.textContent()).toBe("repo · Old node");
+      await pollLocatorText(placeLabel).toBe("repo · Old node");
 
       await page.locator(".new-session-page__message").fill("inspect the remote checkout");
       await page.getByRole("button", { name: "Start thread" }).click();

@@ -6,6 +6,7 @@ import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   installMockGateway,
+  pollLocatorText,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -76,7 +77,7 @@ suite.define(() => {
         catalogId: "claude",
       });
       const runtime = page.locator(".new-session-page__runtime");
-      await expect.poll(() => runtime.textContent()).toContain("Claude Code");
+      await pollLocatorText(runtime).toContain("Claude Code");
       expect(await runtime.getAttribute("title")).toBe(model);
       expect(await page.locator('.new-session-page__trigger[title="Agent"]').count()).toBe(0);
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
@@ -237,9 +238,7 @@ suite.define(() => {
 
       const message = page.locator(".new-session-page__message");
       await message.fill("keep this reconnect draft");
-      await expect
-        .poll(() => page.locator(".new-session-page__runtime").textContent())
-        .toContain("claude");
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
       await expect
         .poll(() => page.getByRole("button", { name: "Start thread" }).isEnabled())
         .toBe(false);
@@ -263,13 +262,9 @@ suite.define(() => {
           timeout: 10_000,
         })
         .toBe(3);
-      await expect
-        .poll(() => page.locator(".new-session-page__runtime").textContent())
-        .toContain("Claude Code");
+      await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
-      await expect
-        .poll(() => page.getByRole("heading").first().textContent())
-        .toContain("Research");
+      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
 
       await page.getByRole("button", { name: "Start thread" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -370,14 +365,10 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("agents.list")).length)
         .toBe(agentRequestsBefore + 1);
       await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
-      await expect
-        .poll(() => page.getByRole("heading").first().textContent())
-        .toContain("Research");
-      await expect
-        .poll(() =>
-          page.locator("#new-session-place-trigger .new-session-page__trigger-label").textContent(),
-        )
-        .toBe("research-next");
+      await pollLocatorText(page.getByRole("heading").first()).toContain("Research");
+      await pollLocatorText(
+        page.locator("#new-session-place-trigger .new-session-page__trigger-label"),
+      ).toBe("research-next");
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).length)
         .toBe(branchRequestsBefore + 1);
