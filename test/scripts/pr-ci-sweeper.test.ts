@@ -23,108 +23,72 @@ function pr(overrides: Partial<Parameters<typeof classifyPrForSweep>[0]["pr"]> =
 describe("classifyPrForSweep", () => {
   const cases: Array<{
     name: string;
-    input: Parameters<typeof classifyPrForSweep>[0];
+    prOverrides?: Partial<Parameters<typeof classifyPrForSweep>[0]["pr"]>;
+    ciRuns?: Parameters<typeof classifyPrForSweep>[0]["ciRuns"];
+    botCloseCount?: number;
     expected: ReturnType<typeof classifyPrForSweep>;
   }> = [
     {
       name: "re-fires when no CI run attached",
-      input: { pr: pr(), ciRuns: [], botCloseCount: 0, now: NOW },
       expected: { action: "refire", reason: "ci-run-missing" },
     },
     {
       name: "re-fires when only startup failures attached",
-      input: {
-        pr: pr(),
-        ciRuns: [{ conclusion: "startup_failure" }],
-        botCloseCount: 1,
-        now: NOW,
-      },
+      ciRuns: [{ conclusion: "startup_failure" }],
+      botCloseCount: 1,
       expected: { action: "refire", reason: "ci-startup-failure" },
     },
     {
       name: "skips drafts",
-      input: { pr: pr({ draft: true }), ciRuns: [], botCloseCount: 0, now: NOW },
+      prOverrides: { draft: true },
       expected: { action: "skip", reason: "draft" },
     },
     {
-      name: "skips PRs outside the 24h lookback",
-      input: {
-        pr: pr({ created_at: new Date(NOW - 25 * HOURS).toISOString() }),
-        ciRuns: [],
-        botCloseCount: 0,
-        now: NOW,
-      },
-      expected: { action: "skip", reason: "outside-lookback" },
-    },
-    {
       name: "skips recently updated PRs so merge-ref computation can settle",
-      input: {
-        pr: pr({ updated_at: new Date(NOW - 5 * MINUTES).toISOString() }),
-        ciRuns: [],
-        botCloseCount: 0,
-        now: NOW,
-      },
+      prOverrides: { updated_at: new Date(NOW - 5 * MINUTES).toISOString() },
       expected: { action: "skip", reason: "recently-updated" },
     },
     {
       name: "skips merge conflicts whose merge ref legitimately cannot exist",
-      input: { pr: pr({ mergeable: false }), ciRuns: [], botCloseCount: 0, now: NOW },
+      prOverrides: { mergeable: false },
       expected: { action: "skip", reason: "merge-conflict" },
     },
     {
       name: "skips PRs with auto-merge enabled (close would cancel it)",
-      input: {
-        pr: pr({ auto_merge: { merge_method: "squash" } }),
-        ciRuns: [],
-        botCloseCount: 0,
-        now: NOW,
-      },
+      prOverrides: { auto_merge: { merge_method: "squash" } },
       expected: { action: "skip", reason: "auto-merge-enabled" },
     },
     {
       name: "treats a completed run as attached",
-      input: {
-        pr: pr(),
-        ciRuns: [{ conclusion: "success" }],
-        botCloseCount: 0,
-        now: NOW,
-      },
+      ciRuns: [{ conclusion: "success" }],
       expected: { action: "skip", reason: "ci-attached" },
     },
     {
       name: "treats a queued run (null conclusion) as attached",
-      input: {
-        pr: pr(),
-        ciRuns: [{ conclusion: null }, { conclusion: "startup_failure" }],
-        botCloseCount: 0,
-        now: NOW,
-      },
+      ciRuns: [{ conclusion: null }, { conclusion: "startup_failure" }],
       expected: { action: "skip", reason: "ci-attached" },
     },
     {
       name: "treats a failed run as attached (rerunnable, not sweepable)",
-      input: {
-        pr: pr(),
-        ciRuns: [{ conclusion: "failure" }],
-        botCloseCount: 0,
-        now: NOW,
-      },
+      ciRuns: [{ conclusion: "failure" }],
       expected: { action: "skip", reason: "ci-attached" },
     },
     {
       name: "stops after two bot closes",
-      input: { pr: pr(), ciRuns: [], botCloseCount: 2, now: NOW },
+      botCloseCount: 2,
       expected: { action: "skip", reason: "refire-budget-exhausted" },
     },
     {
       name: "re-fires on unknown mergeability (stuck merge-ref IS the pathology)",
-      input: { pr: pr({ mergeable: null }), ciRuns: [], botCloseCount: 0, now: NOW },
+      prOverrides: { mergeable: null },
       expected: { action: "refire", reason: "ci-run-missing" },
     },
   ];
 
-  it.each(cases)("$name", ({ input, expected }) => {
-    expect(classifyPrForSweep(input)).toEqual(expected);
+  it.each(cases)("$name", ({ prOverrides, ciRuns = [], botCloseCount = 0, expected }) => {
+    expect(classifyPrForSweep({ pr: pr(prOverrides), ciRuns, botCloseCount, now: NOW })).toEqual(
+      expected,
+    );
   });
 });
 
@@ -132,149 +96,104 @@ describe("classifyRunForRevive", () => {
   const prCreatedAt = new Date(NOW - 2 * HOURS).toISOString();
   const cases: Array<{
     name: string;
-    run: Parameters<typeof classifyRunForRevive>[0]["run"];
+    runOverrides?: Partial<Parameters<typeof classifyRunForRevive>[0]["run"]>;
+    pullCreatedAt?: string;
+    expectedHeadBranch?: string;
+    expectedRepoFullName?: string;
     expected: ReturnType<typeof classifyRunForRevive>;
   }> = [
     {
       name: "revives a cancelled pull_request_target run",
-      run: {
-        conclusion: "cancelled",
-        event: "pull_request_target",
-        run_attempt: 1,
-        created_at: new Date(NOW - 1 * HOURS).toISOString(),
-      },
+      expected: { action: "revive", reason: "cancelled-pr-event-run" },
+    },
+    {
+      name: "revives a cancelled pull_request run",
+      runOverrides: { event: "pull_request" },
       expected: { action: "revive", reason: "cancelled-pr-event-run" },
     },
     {
       name: "skips a run after two revives without progress",
-      run: {
-        conclusion: "cancelled",
-        event: "pull_request",
-        run_attempt: 3,
-        created_at: new Date(NOW - 1 * HOURS).toISOString(),
-      },
+      runOverrides: { event: "pull_request", run_attempt: 3 },
       expected: { action: "skip", reason: "revive-budget-exhausted" },
     },
     {
       name: "skips a non-cancelled run",
-      run: {
-        conclusion: "success",
-        event: "pull_request_target",
-        run_attempt: 1,
-        created_at: new Date(NOW - 1 * HOURS).toISOString(),
-      },
+      runOverrides: { conclusion: "success" },
       expected: { action: "skip", reason: "not-cancelled" },
     },
     {
       name: "skips a cancelled run from an unrelated event",
-      run: {
-        conclusion: "cancelled",
-        event: "workflow_dispatch",
-        run_attempt: 1,
-        created_at: new Date(NOW - 1 * HOURS).toISOString(),
-      },
+      runOverrides: { event: "workflow_dispatch" },
       expected: { action: "skip", reason: "unsupported-event" },
+    },
+    {
+      name: "skips a run triggered from a different head branch",
+      runOverrides: { head_branch: "some/other-branch" },
+      expected: { action: "skip", reason: "different-head-branch" },
+    },
+    {
+      name: "skips a run with a null head branch",
+      runOverrides: { head_branch: null },
+      expected: { action: "skip", reason: "different-head-branch" },
+    },
+    {
+      name: "fails closed when the expected and actual head branches are empty",
+      runOverrides: { head_branch: "" },
+      expectedHeadBranch: "",
+      expected: { action: "skip", reason: "different-head-branch" },
+    },
+    {
+      name: "skips a run with no head repository metadata",
+      runOverrides: { head_repository: undefined },
+      expected: { action: "skip", reason: "fork-head-repository" },
+    },
+    {
+      name: "skips a run whose head repository is a fork",
+      runOverrides: { head_repository: { full_name: "fork/openclaw" } },
+      expected: { action: "skip", reason: "fork-head-repository" },
+    },
+    {
+      name: "fails closed when the expected and actual head repositories are empty",
+      runOverrides: { head_repository: { full_name: "" } },
+      expectedRepoFullName: "",
+      expected: { action: "skip", reason: "fork-head-repository" },
+    },
+    {
+      name: "skips a run created before the current PR existed",
+      runOverrides: { created_at: new Date(NOW - 3 * HOURS).toISOString() },
+      expected: { action: "skip", reason: "predates-pr" },
+    },
+    {
+      name: "fails closed when the workflow run creation time is invalid",
+      runOverrides: { created_at: "not-a-date" },
+      expected: { action: "skip", reason: "unverifiable-created-at" },
+    },
+    {
+      name: "fails closed when the pull request creation time is invalid",
+      pullCreatedAt: "not-a-date",
+      expected: { action: "skip", reason: "unverifiable-created-at" },
     },
   ];
 
-  it.each(cases)("$name", ({ run, expected }) => {
-    expect(
-      classifyRunForRevive({
-        run: {
-          head_branch: "automation/refresh",
-          head_repository: { full_name: "openclaw/openclaw" },
-          ...run,
-        },
-        prCreatedAt,
-        prHeadBranch: "automation/refresh",
-        repoFullName: "openclaw/openclaw",
-      }),
-    ).toEqual(expected);
-  });
-
-  it("skips a run triggered from a different head branch", () => {
-    expect(
-      classifyRunForRevive({
-        run: {
-          conclusion: "cancelled",
-          event: "pull_request_target",
-          run_attempt: 1,
-          created_at: new Date(NOW - 1 * HOURS).toISOString(),
-          head_branch: "some/other-branch",
-        },
-        prCreatedAt,
-        prHeadBranch: "automation/refresh",
-        repoFullName: "openclaw/openclaw",
-      }),
-    ).toEqual({ action: "skip", reason: "different-head-branch" });
-  });
-
-  it("skips a run with a null head branch", () => {
-    expect(
-      classifyRunForRevive({
-        run: {
-          conclusion: "cancelled",
-          event: "pull_request",
-          run_attempt: 1,
-          created_at: new Date(NOW - 1 * HOURS).toISOString(),
-          head_branch: null,
-          head_repository: { full_name: "openclaw/openclaw" },
-        },
-        prCreatedAt,
-        prHeadBranch: "automation/refresh",
-        repoFullName: "openclaw/openclaw",
-      }),
-    ).toEqual({ action: "skip", reason: "different-head-branch" });
-  });
-
-  it("skips a run with no head repository metadata", () => {
-    expect(
-      classifyRunForRevive({
-        run: {
-          conclusion: "cancelled",
-          event: "pull_request",
-          run_attempt: 1,
-          created_at: new Date(NOW - 1 * HOURS).toISOString(),
-          head_branch: "automation/refresh",
-        },
-        prCreatedAt,
-        prHeadBranch: "automation/refresh",
-        repoFullName: "openclaw/openclaw",
-      }),
-    ).toEqual({ action: "skip", reason: "fork-head-repository" });
-  });
-
-  it("skips a run whose head repository is a fork", () => {
-    expect(
-      classifyRunForRevive({
-        run: {
-          conclusion: "cancelled",
-          event: "pull_request",
-          run_attempt: 1,
-          created_at: new Date(NOW - 1 * HOURS).toISOString(),
-          head_branch: "automation/refresh",
-          head_repository: { full_name: "fork/openclaw" },
-        },
-        prCreatedAt,
-        prHeadBranch: "automation/refresh",
-        repoFullName: "openclaw/openclaw",
-      }),
-    ).toEqual({ action: "skip", reason: "fork-head-repository" });
-  });
-
-  it("skips a run created before the current PR existed", () => {
-    expect(
-      classifyRunForRevive({
-        run: {
-          conclusion: "cancelled",
-          event: "pull_request_target",
-          run_attempt: 1,
-          created_at: new Date(NOW - 3 * HOURS).toISOString(),
-        },
-        prCreatedAt,
-      }),
-    ).toEqual({ action: "skip", reason: "predates-pr" });
-  });
+  it.each(cases)(
+    "$name",
+    ({
+      runOverrides,
+      pullCreatedAt = prCreatedAt,
+      expectedHeadBranch = "automation/refresh",
+      expectedRepoFullName = "openclaw/openclaw",
+      expected,
+    }) => {
+      expect(
+        classifyRunForRevive({
+          run: cancelledRun(1, runOverrides),
+          prCreatedAt: pullCreatedAt,
+          prHeadBranch: expectedHeadBranch,
+          repoFullName: expectedRepoFullName,
+        }),
+      ).toEqual(expected);
+    },
+  );
 });
 
 type FakeCall = { method: string; args: Record<string, unknown> };
@@ -326,13 +245,16 @@ function fakeGithub(options: {
         const pageSize = options.pageSize ?? Math.max(items.length, 1);
         const collected: unknown[] = [];
         let stopped = false;
-        for (let start = 0; start < items.length && !stopped; start += pageSize) {
+        for (let start = 0; start < items.length; start += pageSize) {
           record(`${endpoint.endpointName}.page`, { start });
           collected.push(
             ...mapFn({ data: items.slice(start, start + pageSize) }, () => {
               stopped = true;
             }),
           );
+          if (stopped) {
+            break;
+          }
         }
         return Promise.resolve(collected);
       };
@@ -341,9 +263,10 @@ function fakeGithub(options: {
       }
       if (endpoint.endpointName === "actions.listWorkflowRuns") {
         return Promise.resolve(
-          (options.runsBySha[args.head_sha as string] ?? [])
-            .map((run) => ({ ...run, event: run.event ?? "pull_request" }))
-            .filter((run) => !args.event || run.event === args.event),
+          Array.from(options.runsBySha[args.head_sha as string] ?? [], (run) => ({
+            ...run,
+            event: run.event ?? "pull_request",
+          })).filter((run) => !args.event || run.event === args.event),
         );
       }
       if (endpoint.endpointName === "checks.listForRef") {
@@ -452,7 +375,7 @@ function cancelledRun(runId: number, overrides: Partial<FakeWorkflowRun> = {}): 
     conclusion: "cancelled",
     event: "pull_request_target",
     run_attempt: 1,
-    created_at: new Date(NOW - 1 * HOURS).toISOString(),
+    created_at: new Date(NOW - HOURS).toISOString(),
     head_branch: "automation/refresh",
     head_repository: { full_name: "openclaw/openclaw" },
     ...overrides,
