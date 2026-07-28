@@ -10,6 +10,9 @@ const waitForTransportReadyMock = vi.hoisted(() =>
 );
 const createIMessageRpcClientMock = vi.hoisted(() => vi.fn<typeof createIMessageRpcClient>());
 const maybeResolveIMessageApprovalPollVoteMock = vi.hoisted(() => vi.fn());
+const runChannelInboundEventMock = vi.hoisted(() =>
+  vi.fn(async () => ({ admission: { kind: "handled", reason: "test" }, dispatched: false })),
+);
 const ingressLifecycleMocks = vi.hoisted(() => ({
   onAdopted: vi.fn(async () => {}),
   onDeferred: vi.fn(),
@@ -36,6 +39,7 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
         },
       },
     })),
+    runChannelInboundEvent: runChannelInboundEventMock,
   };
 });
 
@@ -118,6 +122,7 @@ describe("iMessage approval poll durable ingress", () => {
     waitForTransportReadyMock.mockReset().mockResolvedValue(undefined);
     createIMessageRpcClientMock.mockReset();
     maybeResolveIMessageApprovalPollVoteMock.mockReset();
+    runChannelInboundEventMock.mockClear();
     for (const mock of Object.values(ingressLifecycleMocks)) {
       mock.mockClear();
     }
@@ -151,6 +156,38 @@ describe("iMessage approval poll durable ingress", () => {
                   original_guid: "approval-poll-guid",
                   vote: { option_id: "approve-once" },
                 },
+              },
+            },
+          });
+          await ingressHarness.done;
+        }),
+        stop: vi.fn(async () => {}),
+      } as never;
+    });
+  }
+
+  function arrangeApprovalCommandNotification() {
+    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
+    createIMessageRpcClientMock.mockImplementation(async (params) => {
+      onNotification = params?.onNotification;
+      return {
+        request: vi.fn(async () => ({ subscription: 1 })),
+        waitForClose: vi.fn(async () => {
+          onNotification?.({
+            method: "message",
+            params: {
+              message: {
+                id: 43,
+                guid: "approval-command-guid",
+                chat_id: 7,
+                chat_guid: "iMessage;-;redacted-peer",
+                chat_identifier: "redacted-peer",
+                sender: "redacted-peer",
+                destination_caller_id: "redacted-agent",
+                is_from_me: false,
+                is_group: false,
+                created_at: new Date().toISOString(),
+                text: "/approve reject exec-1",
               },
             },
           });
@@ -200,5 +237,20 @@ describe("iMessage approval poll durable ingress", () => {
 
     expect(maybeResolveIMessageApprovalPollVoteMock).not.toHaveBeenCalled();
     expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes a valid approval command ahead of the conversation debounce lane", async () => {
+    arrangeApprovalCommandNotification();
+
+    await monitorIMessageProvider({
+      config: {
+        channels: { imessage: { dmPolicy: "open", allowFrom: ["*"] } },
+      } as never,
+      runtime: createRuntime() as never,
+    });
+
+    expect(runChannelInboundEventMock).toHaveBeenCalledTimes(1);
+    expect(ingressLifecycleMocks.onAdopted).toHaveBeenCalledTimes(1);
+    expect(ingressLifecycleMocks.onAbandoned).not.toHaveBeenCalled();
   });
 });

@@ -1368,8 +1368,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     runtime,
     dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
       const bodyText = (message.text ?? "").trim();
+      const isApprovalCommand = /^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(bodyText);
       const isCandidate =
-        message.poll?.kind === "vote" || Boolean(resolveIMessageReactionContext(message, bodyText));
+        isApprovalCommand ||
+        message.poll?.kind === "vote" ||
+        Boolean(resolveIMessageReactionContext(message, bodyText));
       if (!isCandidate) {
         return undefined;
       }
@@ -1378,6 +1381,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
       if (!repairedMessage) {
+        return { kind: "completed" };
+      }
+      if (isApprovalCommand) {
+        // Resolve approval commands through the ordinary authenticated command
+        // pipeline, but ahead of the chat lane containing the run they release.
+        await handleMessageNowInner(repairedMessage);
         return { kind: "completed" };
       }
       const conversation = resolveApprovalControlConversation(repairedMessage);
