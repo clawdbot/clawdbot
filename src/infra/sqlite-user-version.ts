@@ -18,7 +18,8 @@ export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
  * string spans many commits, and a linked source checkout reports its git HEAD
  * even when the built output actually executing is older.
  */
-export function describeRunningOpenClawBuild(moduleUrl = import.meta.url): string {
+export function describeRunningOpenClawBuild(): string {
+  const moduleUrl = import.meta.url;
   const commit = resolveCommitHash({ moduleUrl });
   const root = resolveOpenClawPackageRootSync({ moduleUrl });
   const identity = commit ? `OpenClaw ${VERSION} (${commit})` : `OpenClaw ${VERSION}`;
