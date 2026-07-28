@@ -2176,13 +2176,20 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("enforces the active transcript byte fuse for persisted Codex runtime sessions", async () => {
+  it("enforces the 8 MB transcript fuse and adopts Codex successor continuity", async () => {
+    const maxActiveTranscriptBytes = 8 * 1024 * 1024;
     const sessionFile = path.join(rootDir, "large-codex-session.jsonl");
     await fs.writeFile(
       sessionFile,
-      `${JSON.stringify({ message: { role: "user", content: "x".repeat(256) } })}\n`,
+      `${JSON.stringify({
+        message: {
+          role: "user",
+          content: "x".repeat(maxActiveTranscriptBytes + 1),
+        },
+      })}\n`,
       "utf8",
     );
+    expect((await fs.stat(sessionFile)).size).toBeGreaterThan(maxActiveTranscriptBytes);
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       transcriptPath: sessionFile,
@@ -2193,6 +2200,23 @@ describe("runMemoryFlushIfNeeded", () => {
       compactionCount: 0,
     };
     const sessionStore = { main: sessionEntry };
+    const storePath = path.join(rootDir, "sessions.json");
+    const followupRun = createTestFollowupRun({
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionId: "session",
+      sessionFile,
+      sessionKey: "main",
+    });
+    const replyOperation = createReplyOperation();
+    compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        tokensAfter: 42,
+        sessionId: "session-rotated",
+      },
+    });
 
     const entry = await runPreflightCompactionIfNeeded({
       cfg: {
@@ -2205,28 +2229,32 @@ describe("runMemoryFlushIfNeeded", () => {
           defaults: {
             compaction: {
               truncateAfterCompaction: true,
-              maxActiveTranscriptBytes: "10b",
+              maxActiveTranscriptBytes: "8mb",
             },
           },
         },
       } as never,
-      followupRun: createTestFollowupRun({
-        provider: "openai",
-        model: "gpt-5.5",
-        sessionId: "session",
-        sessionFile,
-        sessionKey: "main",
-      }),
+      followupRun,
       defaultModel: "gpt-5.5",
       sessionEntry,
       sessionStore,
       sessionKey: "main",
-      storePath: path.join(rootDir, "sessions.json"),
+      storePath,
       isHeartbeat: false,
-      replyOperation: createReplyOperation(),
+      replyOperation,
     });
 
+    expect(entry?.sessionId).toBe("session-rotated");
     expect(entry?.compactionCount).toBe(1);
+    expect(followupRun.run.sessionId).toBe("session-rotated");
+    expect(followupRun.run.sessionFile).toBe("main");
+    expect(replyOperation.updateSessionId).toHaveBeenCalledWith("session-rotated");
+    expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
+      key: "main",
+      previousSessionId: "session",
+      nextSessionId: "session-rotated",
+      nextSessionFile: "main",
+    });
     expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
     expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
       sessionId: "session",
