@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { OAuthCredential } from "../../auth-profiles.js";
 import { testing as externalAuthTesting } from "../../auth-profiles/external-auth.test-support.js";
 import { prepareAgentRuntimeAuth } from "../../runtime-plan/prepare-auth.js";
-import { loadEmbeddedRunAuthProfileStore } from "./auth-plan.js";
+import { testing as authPlanTesting } from "./auth-plan.test-support.js";
 
 const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
   vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
@@ -49,7 +49,7 @@ describe("embedded run auth plan provider pin", () => {
     } as OpenClawConfig;
     vi.stubEnv("OPENAI_API_KEY", "platform-api-key");
 
-    const authProfileStore = loadEmbeddedRunAuthProfileStore({
+    const authProfileStore = authPlanTesting.loadEmbeddedRunAuthProfileStore({
       agentDir,
       config,
       externalCliProviderIds: ["openai"],

@@ -21,7 +21,7 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 type ModelResolution = Awaited<ReturnType<typeof resolveModelAsync>>;
 type RuntimeModel = NonNullable<ModelResolution["model"]>;
 
-export function loadEmbeddedRunAuthProfileStore(params: {
+function loadEmbeddedRunAuthProfileStore(params: {
   agentDir: string;
   config: RunEmbeddedAgentParams["config"];
   externalCliProviderIds: Iterable<string>;
@@ -33,6 +33,13 @@ export function loadEmbeddedRunAuthProfileStore(params: {
     externalCliProviderIds: params.externalCliProviderIds,
     allowKeychainPrompt: false,
   });
+}
+
+// Test-only seam access mirrors external-auth.ts; the config-threading regression
+// must stay provable without composing a full embedded runner.
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
+    { loadEmbeddedRunAuthProfileStore };
 }
 
 export async function prepareEmbeddedRunAuthPlan(params: {
