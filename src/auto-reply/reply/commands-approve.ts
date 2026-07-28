@@ -231,6 +231,28 @@ export async function handleApproveCommandFromContext(
     };
   }
 
+  if (parsed.id.startsWith("system-agent:")) {
+    try {
+      await resolveApprovalOverGateway({
+        cfg: params.cfg,
+        approvalId: parsed.id,
+        approvalKind: "system-agent",
+        decision: parsed.decision,
+        senderId: params.command.senderId,
+        clientDisplayName: `Chat approval (${resolvedBy})`,
+      });
+    } catch (error) {
+      return {
+        shouldContinue: false,
+        reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(error)}` },
+      };
+    }
+    return {
+      shouldContinue: false,
+      reply: { text: `✅ Approval ${parsed.decision} submitted for ${parsed.id}.` },
+    };
+  }
+
   for (const [index, method] of methods.entries()) {
     try {
       await callApprovalMethod(method);
