@@ -100,6 +100,12 @@ Self-learning has two conservative paths:
    a stable procedure that would remove at least two future model or tool round
    trips.
 
+Generated proposals follow shared authoring standards: class-level names,
+one-sentence descriptions that lead with the task or trigger, and compact
+evidence-backed imperative steps. They retain supported pitfalls and
+verification checks, capture working fixes, and do not invent commands, paths,
+flags, or APIs.
+
 Good candidates include:
 
 - a reliable recovery after repeated tool or model failures;

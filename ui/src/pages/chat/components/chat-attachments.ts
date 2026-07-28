@@ -554,7 +554,10 @@ export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
               .join(" ")}
           >
             ${att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-              ? html`<img src=${getChatAttachmentPreviewUrl(att)!} alt="Attachment preview" />`
+              ? html`<img
+                  src=${getChatAttachmentPreviewUrl(att)!}
+                  alt=${t("chat.composer.attachmentPreview")}
+                />`
               : isLargePastedTextAttachment(att)
                 ? html`
                     <div class="chat-attachment-file chat-attachment-file--pasted-text">

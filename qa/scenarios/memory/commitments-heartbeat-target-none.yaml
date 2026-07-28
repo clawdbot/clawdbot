@@ -25,9 +25,6 @@ scenario:
     - src/commitments/store.ts
     - extensions/qa-lab/src/qa-channel-transport.ts
   gatewayConfigPatch:
-    commitments:
-      enabled: true
-      maxPerDay: 3
     agents:
       defaults:
         heartbeat:

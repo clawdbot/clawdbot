@@ -6,10 +6,6 @@ export type LobsterPetPersonalityId = "sleepy" | "zoomy" | "friendly" | "showoff
 
 export type LobsterPetPaletteId =
   | "crimson"
-  | "coral"
-  | "teal"
-  | "violet"
-  | "ink"
   | "blue"
   | "gold"
   | "tangerine"
@@ -24,6 +20,7 @@ export type LobsterPetPaletteId =
   | "mood"
   | "bee"
   | "rubberduck"
+  | "watermelon"
   | "clawtron"
   | "selene"
   | "geode"
@@ -34,10 +31,18 @@ export type LobsterPetPaletteId =
   | "zombie"
   | "plush"
   | "cottoncandy"
+  | "cryptid"
+  | "flatpack"
+  | "tinfoil"
+  | "actual"
   | "disco"
+  | "chimera"
   | "pixel"
   | "blueprint"
   | "phosphor"
+  | "notexture"
+  | "loading"
+  | "eclipse"
   | "heisenbug"
   | "invisible"
   | "retro"
@@ -97,6 +102,14 @@ export type LobsterPetLook = {
   // Seeded eye-glint tint for common palettes; rare palettes keep their
   // signature glints via CSS, and null keeps the default teal.
   glint: string | null;
+  // Chimera deliberately mixes four donor palettes. Other variants keep this
+  // null so palette swaps cannot accidentally leak mismatched part colors.
+  chimeraParts: {
+    body: string;
+    clawLeft: string;
+    clawRight: string;
+    antennae: string;
+  } | null;
 };
 
 // One salt per page load: revisiting the UI re-rolls every session's lobster,

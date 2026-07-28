@@ -2979,6 +2979,34 @@ describe("capability cli", () => {
     expect(firstEmbeddingProviderCall()?.model).toBe("text-embedding-3-large");
   });
 
+  it.each([
+    {
+      name: "embedding create",
+      argv: ["capability", "embedding", "create", "--text", "hello"],
+    },
+    {
+      name: "image generate",
+      argv: ["capability", "image", "generate", "--prompt", "portrait"],
+    },
+    {
+      name: "image edit",
+      argv: ["capability", "image", "edit", "--file", "photo.png", "--prompt", "crop it"],
+    },
+    {
+      name: "video generate",
+      argv: ["capability", "video", "generate", "--prompt", "clip"],
+    },
+  ])("rejects malformed model refs before $name provider dispatch", async ({ argv }) => {
+    for (const model of ["openai/", "/gpt-4.1-mini"]) {
+      await expect(runCap(...argv, "--model", model, "--json")).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains("Model overrides must use the form <provider/model>.");
+      expect(mocks.resolveCommandConfigWithSecrets).not.toHaveBeenCalled();
+      expect(mocks.createEmbeddingProvider).not.toHaveBeenCalled();
+      expect(mocks.generateImage).not.toHaveBeenCalled();
+      expect(mocks.generateVideo).not.toHaveBeenCalled();
+    }
+  });
+
   it("cleans provider auth profiles and usage stats on logout", async () => {
     mocks.loadAuthProfileStoreForRuntime.mockReturnValue({
       profiles: {

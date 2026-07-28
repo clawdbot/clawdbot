@@ -238,6 +238,15 @@ describe("settingsSearchTextMatches", () => {
     expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
     expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
   });
+
+  it.each([
+    ["Cámara", "Ca\u0301mara"],
+    ["Ca\u0301mara", "Cámara"],
+    ["Notificación", "Notificacio\u0301n"],
+    ["Notificacio\u0301n", "Notificación"],
+  ])("matches canonically equivalent setting text %j against %j", (value, query) => {
+    expect(settingsSearchTextMatches(value, query)).toBe(true);
+  });
 });
 
 describe("formatDocumentTitle", () => {
@@ -362,7 +371,7 @@ describe("subtitleForRoute", () => {
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
       config: "Language and shortcuts to core settings.",
-      profile: "Your agent's stats, streaks, and life in the reef.",
+      profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages, talk, and voice settings.",
       appearance: "Theme, UI, and setup wizard settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",

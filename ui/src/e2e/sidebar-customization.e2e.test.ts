@@ -341,6 +341,8 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
       await expect.poll(() => identityCard.isVisible()).toBe(true);
       await openSettingsFromIdentity();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/general");
+      // Route changes paint Settings before the previous app sidebar finishes yielding.
+      await sidebar.waitFor({ state: "hidden" });
       const { search: settingsSearch, sidebar: settingsSidebar } =
         await waitForSettingsSidebar(page);
       await expect.poll(() => sidebar.isVisible()).toBe(false);

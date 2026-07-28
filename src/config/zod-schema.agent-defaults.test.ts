@@ -350,17 +350,6 @@ describe("agent defaults schema", () => {
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
-  it("accepts compaction.truncateAfterCompaction", () => {
-    const result = AgentDefaultsSchema.parse({
-      compaction: {
-        truncateAfterCompaction: true,
-        maxActiveTranscriptBytes: "20mb",
-      },
-    })!;
-    expect(result.compaction?.truncateAfterCompaction).toBe(true);
-    expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
-  });
-
   it.each([
     "off",
     "minimal",

@@ -109,6 +109,11 @@ import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-
 import type { QaProviderModeInput } from "./run-config.js";
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+const QA_PASSING_SUITE_SCENARIO = {
+  name: "channel chat baseline",
+  status: "pass" as const,
+  steps: [],
+};
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -162,7 +167,7 @@ function flowSuiteRuntimeResult(params: {
       reportPath: params.reportPath,
       summaryPath: params.summaryPath,
       report: "# QA Suite Report\n",
-      scenarios: params.scenarios ?? [],
+      scenarios: params.scenarios ?? [QA_PASSING_SUITE_SCENARIO],
       watchUrl: "http://127.0.0.1:43124",
     },
   };
@@ -183,7 +188,7 @@ function unifiedSuiteRuntimeResult(params: {
       evidencePath: params.evidencePath,
       summaryPath: params.summaryPath,
       report: "# QA Suite Report\n",
-      scenarios: params.scenarios ?? [],
+      scenarios: params.scenarios ?? [QA_PASSING_SUITE_SCENARIO],
     },
   };
 }
@@ -206,7 +211,41 @@ describe("qa cli runtime", () => {
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
-    await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
+    await fs.writeFile(
+      suiteEvidencePath,
+      JSON.stringify(
+        makeQaEvidence([
+          {
+            test: {
+              kind: "qa-scenario",
+              id: "channel-chat-baseline",
+              title: "Channel chat baseline",
+              source: { path: "qa/scenarios/channels/channel-chat-baseline.yaml" },
+            },
+            coverage: [],
+            execution: {
+              runner: "host",
+              environment: {
+                ref: null,
+                os: process.platform,
+                nodeVersion: process.version,
+              },
+              provider: {
+                id: "openai",
+                live: false,
+                model: { name: "gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
+                fixture: "mock-openai",
+              },
+              channel: { id: "qa-channel", live: false },
+              packageSource: { kind: "source-checkout" },
+              artifacts: [],
+            },
+            result: { status: "pass" },
+          },
+        ]),
+      ),
+      "utf8",
+    );
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
@@ -214,8 +253,9 @@ describe("qa cli runtime", () => {
           total: 1,
           passed: 1,
           failed: 0,
+          skipped: 0,
         },
-        scenarios: [],
+        scenarios: [QA_PASSING_SUITE_SCENARIO],
       }),
       "utf8",
     );
@@ -223,11 +263,12 @@ describe("qa cli runtime", () => {
       telegramSummaryPath,
       JSON.stringify({
         counts: {
-          total: 0,
-          passed: 0,
+          total: 1,
+          passed: 1,
           failed: 0,
+          skipped: 0,
         },
-        scenarios: [],
+        scenarios: [QA_PASSING_SUITE_SCENARIO],
       }),
       "utf8",
     );
@@ -260,7 +301,7 @@ describe("qa cli runtime", () => {
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
-      scenarios: [],
+      scenarios: [QA_PASSING_SUITE_SCENARIO],
     });
     runQaCharacterEval.mockResolvedValue({
       reportPath: "/tmp/character-report.md",
@@ -1374,6 +1415,73 @@ describe("qa cli runtime", () => {
     try {
       await runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps full host suite exit code clear for report-only optional tool skips", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [
+          {
+            name: "Runtime tool fixture — image_generate",
+            status: "skip",
+            details: "image_generate mock provider report-only: tool unavailable",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps explicitly selected optional tool skips blocking", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [
+          {
+            name: "Runtime tool fixture — image_generate",
+            status: "skip",
+            details: "image_generate mock provider report-only: tool unavailable",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["runtime-tool-image-generate"],
       });
       expect(process.exitCode).toBe(1);
     } finally {

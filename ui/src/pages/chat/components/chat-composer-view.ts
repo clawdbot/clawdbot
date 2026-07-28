@@ -182,7 +182,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   <div class="chat-reply-preview">
                     <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
                     <span class="chat-reply-preview__label"
-                      >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+                      >${t("chat.messages.replyingTo", {
+                        name: props.replyTarget.senderLabel ?? t("chat.messages.message"),
+                      })}</span
                     >
                     <span class="chat-reply-preview__text"
                       >${truncateUtf16Safe(props.replyTarget.text, 120)}${props.replyTarget.text

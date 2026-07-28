@@ -810,7 +810,7 @@ export async function sanitizeSessionHistory(params: {
   // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
   // bound to the original prefix; after compaction the prefix changes and Anthropic
   // rejects them. Timestamp comparison with the latest compaction summary identifies
-  // the affected messages regardless of path (standard or truncateAfterCompaction).
+  // the affected messages regardless of which compaction path produced them.
   const compactionStaleStripped =
     signedThinkingProvider || policy.preserveSignatures
       ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)

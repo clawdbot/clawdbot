@@ -1,9 +1,14 @@
 // Qa Channel tests cover inbound plugin behavior.
+import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
+
+const QA_GENERATED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 
 vi.mock("./bus-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bus-client.js")>();
@@ -12,6 +17,19 @@ vi.mock("./bus-client.js", async (importOriginal) => {
     deleteQaBusMessage: vi.fn(async () => ({ message: {} })),
     editQaBusMessage: vi.fn(async () => ({ message: {} })),
     sendQaBusMessage: vi.fn(async () => ({ message: { id: "preview-1" } })),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>();
+  return {
+    ...actual,
+    loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) => ({
+      buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+      kind: "image" as const,
+      contentType: "image/png",
+      fileName: path.basename(mediaUrl),
+    })),
   };
 });
 
@@ -69,6 +87,35 @@ function firstRunAssembledParams(runtime: ReturnType<typeof createPluginRuntimeM
 describe("handleQaInbound", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("delivers generated image bytes and their caption in one final bus message", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+    const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
+
+    await handleQaInbound(createQaInboundParams());
+    const assembled = firstRunAssembledParams(runtime);
+    await assembled.delivery.deliver(
+      { text: "Here is your generated image.", mediaUrls: [mediaPath] },
+      { kind: "final" },
+    );
+
+    expect(loadOutboundMediaFromUrl).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledOnce();
+    expect(sendQaBusMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Here is your generated image.",
+        replyToId: "msg-1",
+        attachments: [
+          expect.objectContaining({
+            kind: "image",
+            mimeType: "image/png",
+            contentBase64: QA_GENERATED_IMAGE_BASE64,
+          }),
+        ],
+      }),
+    );
   });
 
   it("publishes partial replies as one edited preview before final delivery", async () => {

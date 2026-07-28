@@ -405,7 +405,7 @@ describe("scenario-flow-runner", () => {
   it.each([
     "control-ui-qa-channel-image-roundtrip",
     "control-ui-assistant-transcript-role-boundary",
-  ])("opens the selected Control UI session on the chat route for %s", async (scenarioId) => {
+  ])("opens the selected Control UI session from the gateway root for %s", async (scenarioId) => {
     const scenario = readQaScenarioById(scenarioId);
     const actions = scenario.execution.flow?.steps.flatMap((step) => step.actions);
     if (!actions) {
@@ -475,7 +475,7 @@ describe("scenario-flow-runner", () => {
       throw new Error(`scenario did not open its Control UI session: ${scenarioId}`);
     }
     const chatUrl = new URL(openedUrl);
-    expect(chatUrl.pathname).toBe("/chat");
+    expect(chatUrl.pathname).toBe("/");
     expect(chatUrl.searchParams.get("session")).toBe(sessionKey);
     expect(chatUrl.hash).toBe(`#token=${encodeURIComponent(gatewayToken)}`);
   });

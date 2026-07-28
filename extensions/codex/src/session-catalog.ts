@@ -124,7 +124,7 @@ const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
-const CODEX_SESSION_CATALOG_LIST_TTL_MS = 3_000;
+const CODEX_SESSION_CATALOG_LIST_TTL_MS = 32_000;
 const CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 32;
 
 type CodexCatalogRequestOptions = {
@@ -135,6 +135,7 @@ type CodexCatalogRequestOptions = {
 type CodexCatalogPageCacheEntry = {
   expiresAt: number;
   page: Promise<CodexSessionCatalogPage>;
+  stalePage?: Promise<CodexSessionCatalogPage>;
 };
 
 function codexCatalogPageCacheKey(params: CodexSessionCatalogPageParams): string {
@@ -429,17 +430,31 @@ export function createCodexSessionCatalogControl(params: {
       const key = codexCatalogPageCacheKey(pageParams);
       const cached = cache.get(key);
       if (pageParams.forceRefresh !== true && cached && cached.expiresAt > now()) {
-        // The app-server may scan rollout metadata for thread/list. Share a page for three seconds;
-        // config identity and forceRefresh invalidate it so specific actions cannot miss new rows.
+        // thread/list traverses Codex's thread store and rollout metadata. A config-scoped 32s page
+        // survives the 30s poll cadence; TTL and forceRefresh bound staleness for new native rows.
+        // Without this memo every sidebar poll repeats the app-server roundtrip and metadata scan.
         cache.delete(key);
         cache.set(key, cached);
-        return await cached.page;
+        try {
+          return await cached.page;
+        } catch (error) {
+          if (cached.stalePage) {
+            return await cached.stalePage;
+          }
+          throw error;
+        }
       }
       if (cached) {
         cache.delete(key);
       }
+      const serveStaleOnError = pageParams.forceRefresh !== true;
       const page = control.listPage(pageParams);
-      const entry = { expiresAt: now() + CODEX_SESSION_CATALOG_LIST_TTL_MS, page };
+      const stalePage = cached?.stalePage ?? cached?.page;
+      const entry: CodexCatalogPageCacheEntry = {
+        expiresAt: now() + CODEX_SESSION_CATALOG_LIST_TTL_MS,
+        page,
+        ...(stalePage ? { stalePage } : {}),
+      };
       cache.set(key, entry);
       while (cache.size > CODEX_SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES) {
         const oldest = cache.keys().next();
@@ -449,8 +464,27 @@ export function createCodexSessionCatalogControl(params: {
         cache.delete(oldest.value);
       }
       try {
-        return await page;
+        const result = await page;
+        delete entry.stalePage;
+        return result;
       } catch (error) {
+        if (stalePage) {
+          let stale: CodexSessionCatalogPage | undefined;
+          try {
+            stale = await stalePage;
+          } catch {
+            // The prior page was not real data, so propagate the current app-server failure.
+          }
+          if (stale) {
+            if (cache.get(key) === entry) {
+              cache.delete(key);
+              cache.set(key, { expiresAt: now(), page: Promise.resolve(stale) });
+            }
+            if (serveStaleOnError) {
+              return stale;
+            }
+          }
+        }
         if (cache.get(key) === entry) {
           cache.delete(key);
         }
