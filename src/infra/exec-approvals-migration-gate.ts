@@ -6,6 +6,11 @@ import { resolveExecApprovalsPath } from "./exec-approvals-config.js";
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
 const legacyPresenceCache = new Map<string, boolean>();
 
+/** POSIX single-quote so a state directory containing spaces stays one shell word. */
+function shellQuoteStateDir(stateDir: string): string {
+  return `'${stateDir.replaceAll("'", "'\\''")}'`;
+}
+
 /**
  * Doctor repairs whichever state directory its own environment resolves to, so a bare
  * `openclaw doctor --fix` repairs the default root while a scoped install stays blocked.
@@ -13,7 +18,7 @@ const legacyPresenceCache = new Map<string, boolean>();
  */
 function formatDoctorFixCommand(filePath: string): string {
   return process.env.OPENCLAW_STATE_DIR?.trim()
-    ? `OPENCLAW_STATE_DIR=${path.dirname(filePath)} openclaw doctor --fix`
+    ? `OPENCLAW_STATE_DIR=${shellQuoteStateDir(path.dirname(filePath))} openclaw doctor --fix`
     : "openclaw doctor --fix";
 }
 

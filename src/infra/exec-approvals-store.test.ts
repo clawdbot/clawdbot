@@ -407,7 +407,18 @@ describe("exec approvals SQLite store", () => {
       path.join(stateDir, "exec-approvals.json"),
     );
 
-    expect(error.message).toContain(`OPENCLAW_STATE_DIR=${stateDir} openclaw doctor --fix`);
+    expect(error.message).toContain(`OPENCLAW_STATE_DIR='${stateDir}' openclaw doctor --fix`);
+  });
+
+  it("keeps a spaced state directory one shell word", () => {
+    // macOS app state lives under "Application Support"; an unquoted path would
+    // word-split and make the prescribed command repair the wrong directory.
+    const stateDir = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "Application Support");
+    const error = new ExecApprovalsMigrationRequiredError(
+      path.join(stateDir, "exec-approvals.json"),
+    );
+
+    expect(error.message).toContain(`OPENCLAW_STATE_DIR='${stateDir}' openclaw doctor --fix`);
   });
 
   it.each([
