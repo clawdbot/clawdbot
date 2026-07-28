@@ -511,7 +511,7 @@ describe("runSystemAgentTui", () => {
         expected,
         ...(handoff.target === "gateway"
           ? [
-              "log:Done — gateway settings saved. Restart the Gateway to apply them (`restart gateway`).",
+              "log:Done — gateway settings saved. Run `openclaw gateway restart` to apply them.",
             ]
           : []),
       ]);

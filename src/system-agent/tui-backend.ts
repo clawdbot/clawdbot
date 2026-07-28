@@ -436,7 +436,7 @@ async function runSetupHandoff(
     if (opts.runGatewaySetupHandoff) {
       await opts.runGatewaySetupHandoff(runtime, beforePersistentEffect);
       runtime.log(
-        "Done — gateway settings saved. Restart the Gateway to apply them (`restart gateway`).",
+        "Done — gateway settings saved. Run `openclaw gateway restart` to apply them.",
       );
       return;
     }
@@ -476,7 +476,7 @@ async function runSetupHandoff(
       afterWrite: GATEWAY_SETUP_AFTER_WRITE,
     });
     runtime.log(
-      "Done — gateway settings saved. Restart the Gateway to apply them (`restart gateway`).",
+      "Done — gateway settings saved. Run `openclaw gateway restart` to apply them.",
     );
     return;
   }
