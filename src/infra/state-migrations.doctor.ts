@@ -1,6 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  discardLegacyRegistryWorktrees,
+  hasLegacyRegistryWorktrees,
+} from "../agents/worktrees/registry.js";
 import { listBundledChannelLegacyStateMigrationDetectors } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
@@ -34,6 +38,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   type OpenClawStateDatabaseSchemaMigration,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   detectLegacyAcpReplayLedger,
@@ -400,6 +405,12 @@ export async function detectLegacyStateMigrations(params: {
   const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
+  const stateEnv = { ...env, OPENCLAW_STATE_DIR: stateDir };
+  const hasLegacyWorktrees =
+    params.doctorOnlyStateMigrations === true &&
+    stateSchemaMigrations.length === 0 &&
+    fileExists(resolveOpenClawStateSqlitePath(stateEnv)) &&
+    hasLegacyRegistryWorktrees(stateEnv);
   const taskRunsSidecarPath = resolveLegacyTaskRunsSidecarPath(stateDir);
   const flowRunsSidecarPath = resolveLegacyFlowRunsSidecarPath(stateDir);
   const hasPendingTaskRunsSidecarArchive = hasPendingSqliteSidecarArchive(
@@ -631,6 +642,9 @@ export async function detectLegacyStateMigrations(params: {
       "- Rerun doctor after shared SQLite schema repair to detect plugin state migrations",
     );
   }
+  if (hasLegacyWorktrees) {
+    preview.push("- Managed worktrees: discard rows without provisioned-file ledgers");
+  }
   if (fileExists(taskRunsSidecarPath)) {
     preview.push(`- Task registry sidecar: ${taskRunsSidecarPath} → shared SQLite state`);
   } else if (hasPendingTaskRunsSidecarArchive) {
@@ -767,6 +781,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: stateSchemaMigrations.length > 0,
       preview: stateSchemaMigrations.map((migration) => migration.path),
     },
+    worktrees: { hasLegacy: hasLegacyWorktrees },
     taskStateSidecars: {
       taskRunsPath: taskRunsSidecarPath,
       flowRunsPath: flowRunsSidecarPath,
@@ -1015,6 +1030,22 @@ export async function runLegacyStateMigrations(params: {
     run: () => MigrationMessages | Promise<MigrationMessages>;
   };
   const steps: LegacyMigrationStep[] = [
+    {
+      run: () => {
+        const discardedWorktrees = detected.worktrees.hasLegacy
+          ? discardLegacyRegistryWorktrees({ ...env, OPENCLAW_STATE_DIR: stateDir })
+          : 0;
+        return {
+          changes:
+            discardedWorktrees > 0
+              ? [
+                  `Discarded ${discardedWorktrees} legacy managed worktree ${discardedWorktrees === 1 ? "row" : "rows"}; affected worktrees will provision fresh on next use`,
+                ]
+              : [],
+          warnings: [],
+        };
+      },
+    },
     { run: () => migrateLegacyPluginStateSidecar({ stateDir }) },
     { collectNotices: true, run: () => migrateLegacyInstalledPluginIndex({ stateDir }) },
     {

@@ -49,9 +49,11 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
 
 type UpdateFinalizeCommandOptions = {
   acknowledgeClawHubRisk?: boolean;
+  channel?: string;
   json?: boolean;
   timeout?: string;
   restart?: boolean;
+  yes?: boolean;
 };
 
 describe("update cli option collisions", () => {
@@ -155,6 +157,112 @@ describe("update cli option collisions", () => {
 
     assert();
   });
+
+  it.each([
+    { name: "repair", handler: updateFinalizeCommand },
+    { name: "finalize", handler: updateFinalizeCommand },
+    { name: "wizard", handler: updateWizardCommand },
+  ])("rejects parent --dry-run before running update $name", async ({ name, handler }) => {
+    await runRegisteredCli({
+      register: registerUpdateCli as (program: Command) => void,
+      argv: ["update", "--dry-run", name],
+    });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(updateCommand).not.toHaveBeenCalled();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      `--dry-run is not supported for \`openclaw update ${name}\`. Run \`openclaw update --dry-run\` instead.`,
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each(["repair", "finalize"])(
+    "forwards parent channel and confirmation to update %s",
+    async (name) => {
+      await runRegisteredCli({
+        register: registerUpdateCli as (program: Command) => void,
+        argv: ["update", "--channel", "beta", "--yes", name],
+      });
+
+      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
+      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
+        channel: "beta",
+        yes: true,
+      });
+    },
+  );
+
+  it.each(["repair", "finalize"])(
+    "lets the explicit update %s channel override its parent",
+    async (name) => {
+      await runRegisteredCli({
+        register: registerUpdateCli as (program: Command) => void,
+        argv: ["update", "--channel", "beta", "--yes", name, "--channel", "dev"],
+      });
+
+      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
+      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
+        channel: "dev",
+        yes: true,
+      });
+    },
+  );
+
+  it.each(["repair", "finalize"])(
+    "preserves an explicitly empty parent channel for update %s validation",
+    async (name) => {
+      await runRegisteredCli({
+        register: registerUpdateCli as (program: Command) => void,
+        argv: ["update", "--channel", "", name],
+      });
+
+      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
+      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({ channel: "" });
+    },
+  );
+
+  it.each(["repair", "finalize"])(
+    "lets an explicitly empty update %s channel override its parent",
+    async (name) => {
+      await runRegisteredCli({
+        register: registerUpdateCli as (program: Command) => void,
+        argv: ["update", "--channel", "beta", name, "--channel", ""],
+      });
+
+      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
+      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({ channel: "" });
+    },
+  );
+
+  it.each(["repair", "finalize"])(
+    "forwards all explicitly inherited options to update %s",
+    async (name) => {
+      await runRegisteredCli({
+        register: registerUpdateCli as (program: Command) => void,
+        argv: [
+          "update",
+          "--json",
+          "--timeout",
+          "31",
+          "--acknowledge-clawhub-risk",
+          "--channel",
+          "beta",
+          "--yes",
+          name,
+        ],
+      });
+
+      expect(updateFinalizeCommand).toHaveBeenCalledOnce();
+      expect(firstCallOptions(updateFinalizeCommand)).toMatchObject({
+        acknowledgeClawHubRisk: true,
+        channel: "beta",
+        json: true,
+        restart: false,
+        timeout: "31",
+        yes: true,
+      } satisfies UpdateFinalizeCommandOptions);
+    },
+  );
 
   it.each([
     {

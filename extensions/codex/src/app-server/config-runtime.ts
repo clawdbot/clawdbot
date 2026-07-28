@@ -58,6 +58,7 @@ import {
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
+import { isForcedPrivateQaCodexRuntime } from "./dynamic-tool-profile.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
 export function resolveCodexAppServerRuntimeOptions(
@@ -190,11 +191,17 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
-  const resolvedSandbox =
+  const configuredRuntimeSandbox =
     forcedPolicy?.sandbox ??
     configuredSandbox ??
     defaultPolicy?.sandbox ??
     (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
+  // Private QA may bound production yolo, but must never widen a configured
+  // read-only sandbox or override the ordinary policy precedence.
+  const resolvedSandbox =
+    isForcedPrivateQaCodexRuntime(env) && configuredRuntimeSandbox === "danger-full-access"
+      ? "workspace-write"
+      : configuredRuntimeSandbox;
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -490,6 +497,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -497,12 +505,15 @@ export function codexSandboxPolicyForTurn(
   if (mode === "read-only") {
     return { type: "readOnly", networkAccess: false };
   }
+  // Codex includes /tmp and TMPDIR in workspace-write by default. Private QA
+  // workspaces live there, so retaining either root defeats sibling containment.
+  const excludePrivateQaTempRoots = isForcedPrivateQaCodexRuntime(env);
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
     networkAccess: false,
-    excludeTmpdirEnvVar: false,
-    excludeSlashTmp: false,
+    excludeTmpdirEnvVar: excludePrivateQaTempRoots,
+    excludeSlashTmp: excludePrivateQaTempRoots,
   };
 }
 

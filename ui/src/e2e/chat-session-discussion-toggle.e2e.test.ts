@@ -92,9 +92,9 @@ describeControlUiE2e("session discussion toggle", () => {
     await showDiscussion.click();
 
     const hideDiscussion = page.getByRole("button", { name: "Hide discussion" });
-    const closeSidebar = page.getByRole("button", { name: "Close sidebar" });
+    const closeDiscussion = page.getByRole("button", { name: "Close Discussion" });
     await expect.poll(() => hideDiscussion.getAttribute("aria-pressed")).toBe("true");
-    await expect.poll(() => closeSidebar.isVisible()).toBe(true);
+    await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
     expect(await gateway.getRequests("session.discussion.open")).toHaveLength(1);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-open.png") });
@@ -102,7 +102,7 @@ describeControlUiE2e("session discussion toggle", () => {
 
     await hideDiscussion.click();
 
-    await expect.poll(() => closeSidebar.isVisible()).toBe(false);
+    await expect.poll(() => closeDiscussion.isVisible()).toBe(false);
     await expect.poll(() => showDiscussion.getAttribute("aria-pressed")).toBe("false");
     expect(await gateway.getRequests("session.discussion.open")).toHaveLength(1);
     if (captureUiProof) {

@@ -5,6 +5,7 @@ import { chromium, type Browser } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
+  controlUiSessionUrl,
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
@@ -63,7 +64,9 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
   it("keeps an earlier autonomous failure visible after a later turn recovers", async () => {
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
+    const sessionKey = "agent:main:dashboard:tool-turn-outcome";
     await installMockGateway(page, {
+      sessionKey,
       historyMessages: [
         failedTool(1),
         {
@@ -82,7 +85,7 @@ describeControlUiE2e("Control UI autonomous tool-turn outcomes", () => {
       ],
     });
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(controlUiSessionUrl(server.baseUrl, sessionKey));
     await page.getByText("Recovered on the next autonomous turn.", { exact: true }).waitFor();
     await expandCompletedWorkGroups(page);
 

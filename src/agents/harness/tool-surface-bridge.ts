@@ -172,6 +172,7 @@ export function createAgentHarnessToolSurfaceRuntime(params: {
           runId: params.runId,
           catalogRef: toolSearchCatalogRef,
           toolHookContext: options.hookContext,
+          directToolNames: requiredDirectToolNames,
         })
       : toolSearchConfig.mode === "directory"
         ? applyToolSchemaDirectoryCatalog({

@@ -4,7 +4,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { closeQaHttpServer } from "../../bus-server.js";
 import { parseQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
-import { listMockOpenAiServerModelIds } from "../shared/mock-model-config.js";
+import {
+  listMockCodexModelInfos,
+  listMockOpenAiServerModelIds,
+} from "../shared/mock-model-config.js";
 import { buildMessagesPayload } from "./mock-anthropic-messages.js";
 import { buildAssistantText } from "./mock-openai-assistant-text.js";
 import {
@@ -91,6 +94,7 @@ import {
   shouldUseWhatsAppContactMarker,
   shouldUseWhatsAppStickerMarker,
   extractBlockStreamingMarkerDirectives,
+  hasDeclaredCustomTool,
   hasDeclaredTool,
   hasToolDefinition,
   isQaToolSearchFixture,
@@ -136,8 +140,13 @@ import {
   parseToolOutputJson,
 } from "./mock-openai-input.js";
 import {
+  attachQaMockResponsesWebSocketServer,
+  type QaMockResponsesDispatchResult,
+} from "./mock-openai-responses-websocket.js";
+import {
   readTargetFromPrompt,
   execCommandFromToolProgressPrompt,
+  buildCustomToolCallEventsWithInput,
   buildToolCallEventsWithArgs,
   extractOrbitCode,
   extractToolSearchTarget,
@@ -247,6 +256,13 @@ async function buildResponsesPayload(
     const plannedArgs = targetTool
       ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
       : {};
+    if (
+      targetTool === "apply_patch" &&
+      hasDeclaredCustomTool(body, targetTool) &&
+      typeof plannedArgs.input === "string"
+    ) {
+      return buildCustomToolCallEventsWithInput(targetTool, plannedArgs.input);
+    }
     if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
       return buildToolCallEventsWithArgs("tool_search_code", {
         code: [
@@ -1299,6 +1315,59 @@ export async function startQaMockOpenAiServer(params?: {
   const inflightRequests = new Map<number, { prompt: string; allInputText: string }>();
   let nextInflightRequestId = 1;
   const imageGenerationRequests: Array<Record<string, unknown>> = [];
+  const dispatchResponses = async (request: {
+    body: Record<string, unknown>;
+    raw: string;
+  }): Promise<QaMockResponsesDispatchResult> => {
+    const input = Array.isArray(request.body.input)
+      ? (request.body.input as ResponsesInputItem[])
+      : [];
+    if (isRemoteCompactionV2Request(input)) {
+      return { events: buildRemoteCompactionV2Events() };
+    }
+    const prompt = extractLastUserText(input);
+    const allInputText = extractAllRequestTexts(input, request.body);
+    const inflightRequestId = nextInflightRequestId++;
+    inflightRequests.set(inflightRequestId, { prompt, allInputText });
+    let events: StreamEvent[];
+    try {
+      events = await buildResponsesPayload(request.body, scenarioState);
+    } finally {
+      inflightRequests.delete(inflightRequestId);
+    }
+    const resolvedModel = typeof request.body.model === "string" ? request.body.model : "";
+    recordRequest({
+      raw: request.raw,
+      body: request.body,
+      prompt,
+      allInputText,
+      instructions: extractInstructionsText(request.body) || undefined,
+      toolOutput: extractToolOutput(input),
+      model: resolvedModel,
+      providerVariant: resolveProviderVariant(resolvedModel),
+      imageInputCount: countImageInputs(input),
+      plannedToolCallId: extractPlannedToolCallId(events),
+      plannedToolName: extractPlannedToolName(events),
+      plannedToolArgs: extractPlannedToolArgs(events),
+      toolOutputCallId: extractToolOutputCallId(input) || undefined,
+      ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
+    });
+    return {
+      events,
+      ...(QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) && extractToolOutput(input)
+        ? {
+            failure: {
+              status: 503,
+              type: "server_error",
+              message: "Service Unavailable",
+            },
+          }
+        : {}),
+      ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
+        ? { previewPauseMs: finalOnlyMarkerPauseMs }
+        : {}),
+    };
+  };
   const server = createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -1312,6 +1381,7 @@ export async function startQaMockOpenAiServer(params?: {
             id,
             object: "model",
           })),
+          models: listMockCodexModelInfos(params?.modelRefs),
         });
         return;
       }
@@ -1439,45 +1509,17 @@ export async function startQaMockOpenAiServer(params?: {
           }
           return;
         }
-        const prompt = extractLastUserText(input);
-        const allInputText = extractAllRequestTexts(input, body);
-        const inflightRequestId = nextInflightRequestId++;
-        inflightRequests.set(inflightRequestId, { prompt, allInputText });
-        let events: StreamEvent[];
-        try {
-          events = await buildResponsesPayload(body, scenarioState);
-        } finally {
-          inflightRequests.delete(inflightRequestId);
-        }
-        const resolvedModel = typeof body.model === "string" ? body.model : "";
-        recordRequest({
-          raw,
-          body,
-          prompt,
-          allInputText,
-          instructions: extractInstructionsText(body) || undefined,
-          toolOutput: extractToolOutput(input),
-          model: resolvedModel,
-          providerVariant: resolveProviderVariant(resolvedModel),
-          imageInputCount: countImageInputs(input),
-          plannedToolCallId: extractPlannedToolCallId(events),
-          plannedToolName: extractPlannedToolName(events),
-          plannedToolArgs: extractPlannedToolArgs(events),
-          toolOutputCallId: extractToolOutputCallId(input) || undefined,
-          ...(extractToolOutputStructuredError(input) ? { toolOutputStructuredError: true } : {}),
-        });
-        if (
-          QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE.test(allInputText) &&
-          extractToolOutput(input)
-        ) {
-          writeJson(res, 503, {
+        const dispatched = await dispatchResponses({ body, raw });
+        if (dispatched.failure) {
+          writeJson(res, dispatched.failure.status, {
             error: {
-              type: "server_error",
-              message: "Service Unavailable",
+              type: dispatched.failure.type,
+              message: dispatched.failure.message,
             },
           });
           return;
         }
+        const { events } = dispatched;
         if (body.stream === false) {
           const completion = events.at(-1);
           if (!completion || completion.type !== "response.completed") {
@@ -1487,8 +1529,8 @@ export async function startQaMockOpenAiServer(params?: {
           writeJson(res, 200, completion.response);
           return;
         }
-        if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)) {
-          await writeSseWithPreviewPause(res, events, finalOnlyMarkerPauseMs);
+        if (dispatched.previewPauseMs !== undefined) {
+          await writeSseWithPreviewPause(res, events, dispatched.previewPauseMs);
         } else {
           writeSse(res, events);
         }
@@ -1545,6 +1587,10 @@ export async function startQaMockOpenAiServer(params?: {
       writeJson(res, 404, { error: "not found" });
     })();
   });
+  const responsesWebSocket = attachQaMockResponsesWebSocketServer({
+    server,
+    dispatch: dispatchResponses,
+  });
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -1559,6 +1605,7 @@ export async function startQaMockOpenAiServer(params?: {
   return {
     baseUrl: `http://${host}:${address.port}`,
     async stop() {
+      await responsesWebSocket.close();
       await closeQaHttpServer(server);
     },
   };

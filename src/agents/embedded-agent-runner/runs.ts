@@ -33,9 +33,9 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resolveRunStaleThresholdMs,
 } from "../../logging/diagnostic-run-activity.js";
+import { logMessageQueuedWithBacklogPolicy } from "../../logging/diagnostic-runtime.js";
 import {
   diagnosticLogger as diag,
-  logMessageQueued,
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
@@ -324,7 +324,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
-  logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+  logActiveRunMessageAccepted(sessionId);
   void prepared.handle
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
@@ -343,6 +343,18 @@ export function queueEmbeddedAgentMessageWithOutcome(
 
 function formatQueueError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function logActiveRunMessageAccepted(sessionId: string): void {
+  // Active-run steering is consumed by the current turn, not queued as another
+  // turn for the single idle transition to drain. Keep the event and activity.
+  logMessageQueuedWithBacklogPolicy(
+    {
+      sessionId,
+      source: "embedded-agent-runner",
+    },
+    false,
+  );
 }
 
 function isEmbeddedQueueHandleMessageInjectable(
@@ -427,7 +439,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
-    logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+    logActiveRunMessageAccepted(sessionId);
     return {
       queued: true,
       sessionId,
@@ -468,7 +480,7 @@ function prepareEmbeddedAgentQueueMessage(
     }
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text, options);
     if (queuedReplyRunMessage) {
-      logMessageQueued({ sessionId, source: "embedded-agent-runner" });
+      logActiveRunMessageAccepted(sessionId);
       return {
         kind: "complete",
         outcome: {

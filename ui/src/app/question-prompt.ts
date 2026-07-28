@@ -5,7 +5,7 @@ import type {
   QuestionRecord,
   QuestionResolvedEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { GatewayEventFrame } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayEventFrame } from "../api/gateway.ts";
 
 type QuestionClient = {
   request: (method: string, params?: unknown) => Promise<unknown>;
@@ -40,6 +40,8 @@ export type QuestionPrompt = {
 
 type QuestionPromptState = {
   client: QuestionClient | null;
+  ownerClient: QuestionClient | null;
+  clientGeneration: number;
   prompts: Map<string, QuestionPrompt>;
   unmatchedResolutions: Map<string, QuestionResolvedEvent>;
   revision: number;
@@ -250,6 +252,8 @@ function parseQuestionResolvedEvent(payload: unknown): QuestionResolvedEvent | n
 export function createQuestionPromptState(onChange: () => void): QuestionPromptState {
   return {
     client: null,
+    ownerClient: null,
+    clientGeneration: 0,
     prompts: new Map(),
     unmatchedResolutions: new Map(),
     revision: 0,
@@ -401,10 +405,9 @@ function parseQuestionGetResult(value: unknown): QuestionRecord | null {
 
 function isQuestionNotFoundError(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    error.name === "GatewayClientRequestError" &&
-    isRecord((error as Error & { details?: unknown }).details) &&
-    (error as Error & { details: Record<string, unknown> }).details.reason === "QUESTION_NOT_FOUND"
+    error instanceof GatewayRequestError &&
+    isRecord(error.details) &&
+    error.details.reason === "QUESTION_NOT_FOUND"
   );
 }
 
@@ -555,7 +558,47 @@ export function setQuestionPromptClient(
     globalThis.clearTimeout(state.refreshRetryTimer);
     state.refreshRetryTimer = null;
   }
+  if (state.client === client) {
+    return;
+  }
+
+  state.clientGeneration += 1;
+  const ownerChanged =
+    client !== null && state.ownerClient !== null && state.ownerClient !== client;
   state.client = client;
+  if (client !== null) {
+    state.ownerClient = client;
+  }
+
+  if (ownerChanged) {
+    const changed = state.prompts.size > 0 || state.unmatchedResolutions.size > 0;
+    if (state.tickTimer) {
+      globalThis.clearTimeout(state.tickTimer);
+      state.tickTimer = null;
+    }
+    state.prompts.clear();
+    state.unmatchedResolutions.clear();
+    if (changed) {
+      state.revision += 1;
+      state.onChange();
+    }
+    return;
+  }
+
+  let changed = false;
+  for (const prompt of state.prompts.values()) {
+    if (!prompt.submitting) {
+      continue;
+    }
+    // The transport owns this submission. Reconnect must release its spinner
+    // without discarding answers needed for authoritative recovery.
+    prompt.submitting = false;
+    prompt.revision = ++state.revision;
+    changed = true;
+  }
+  if (changed) {
+    state.onChange();
+  }
 }
 
 export function disposeQuestionPromptState(state: QuestionPromptState): void {
@@ -567,7 +610,9 @@ export function disposeQuestionPromptState(state: QuestionPromptState): void {
     globalThis.clearTimeout(state.refreshRetryTimer);
     state.refreshRetryTimer = null;
   }
+  state.clientGeneration += 1;
   state.client = null;
+  state.ownerClient = null;
 }
 
 function buildAnswers(values: QuestionAnswerValues): QuestionAnswers {
@@ -583,6 +628,7 @@ async function resolveQuestionPrompt(
 ): Promise<void> {
   const prompt = state.prompts.get(id);
   const client = state.client;
+  const clientGeneration = state.clientGeneration;
   if (!prompt || prompt.status !== "pending" || prompt.submitting) {
     return;
   }
@@ -603,6 +649,9 @@ async function resolveQuestionPrompt(
       "question.resolve",
       submittedAnswers ? { id, answers: submittedAnswers } : { id, cancel: true },
     );
+    if (state.client !== client || state.clientGeneration !== clientGeneration) {
+      return;
+    }
     const current = state.prompts.get(id);
     if (!current) {
       return;
@@ -615,6 +664,9 @@ async function resolveQuestionPrompt(
     current.revision = ++state.revision;
     state.onChange();
   } catch (error) {
+    if (state.client !== client || state.clientGeneration !== clientGeneration) {
+      return;
+    }
     const current = state.prompts.get(id);
     if (!current) {
       return;

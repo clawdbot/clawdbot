@@ -185,7 +185,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
       // +6: model-picker action/capability and authoritative session-apply contracts.
-      4737,
+      // +1: logger file-transport flush for graceful shutdown drains.
+      4738,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -213,7 +214,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
       // +1: authoritative model-picker session-apply operation.
-      2867,
+      // +1: logger file-transport flush for graceful shutdown drains.
+      2868,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

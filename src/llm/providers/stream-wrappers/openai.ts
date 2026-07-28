@@ -2,7 +2,7 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
-import { emitModelTransportDebug } from "@openclaw/ai/transports";
+import { emitModelTransportDebug, isCodeModeModelVisibleToolName } from "@openclaw/ai/transports";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -163,7 +163,7 @@ function readPayloadToolName(tool: unknown): string | undefined {
 }
 
 function isCodeModePayloadToolName(name: string | undefined): boolean {
-  return name === "exec" || name === "wait";
+  return typeof name === "string" && isCodeModeModelVisibleToolName(name);
 }
 
 function filterCodeModeToolDeclarations(declarations: unknown): unknown[] | undefined {

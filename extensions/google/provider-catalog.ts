@@ -161,6 +161,7 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
   ) {
     return undefined;
   }
+  const staticModel = GOOGLE_GEMINI_TEXT_MODELS.find((model) => model.id === id);
   return {
     id,
     name: readString(record, "displayName") ?? id,
@@ -171,6 +172,7 @@ function buildGoogleLiveModel(row: unknown): ModelDefinitionConfig | undefined {
     cost: GOOGLE_GEMINI_COST,
     contextWindow,
     maxTokens,
+    ...(staticModel?.compat ? { compat: { ...staticModel.compat } } : {}),
   };
 }
 

@@ -229,6 +229,67 @@ describe("Gateway child fixture helpers", () => {
     });
   });
 
+  it("stages native Codex model metadata before starting the private mock runtime", async () => {
+    const tempRoot = await tempDirs.makeTempDir("qa-codex-model-catalog-");
+    const modelCatalogPath = await testing.stageQaCodexMockModelCatalog({
+      tempRoot,
+      forcedRuntime: "codex",
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+    });
+
+    expect(modelCatalogPath).toBe(path.join(tempRoot, "codex-model-catalog.json"));
+    const catalog = JSON.parse(await readFile(modelCatalogPath!, "utf8")) as {
+      models: Array<Record<string, unknown>>;
+    };
+    expect(catalog.models).toEqual([
+      expect.objectContaining({
+        slug: "gpt-5.6-luna",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+      expect.objectContaining({
+        slug: "gpt-5.6-luna-alt",
+        apply_patch_tool_type: "freeform",
+        tool_mode: "direct",
+      }),
+    ]);
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "mock-openai",
+        providerBaseUrl: "http://127.0.0.1:44080/v1",
+        codexModelCatalogPath: modelCatalogPath,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} --listen stdio://`,
+      }),
+    );
+  });
+
+  it("does not stage a Codex catalog for other runtimes or live providers", async () => {
+    const tempRoot = await tempDirs.makeTempDir("qa-codex-model-catalog-unused-");
+    await expect(
+      testing.stageQaCodexMockModelCatalog({
+        tempRoot,
+        forcedRuntime: "openclaw",
+        providerMode: "mock-openai",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      testing.stageQaCodexMockModelCatalog({
+        tempRoot,
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      readFile(path.join(tempRoot, "codex-model-catalog.json"), "utf8"),
+    ).rejects.toThrow();
+  });
+
   it("resolves source and built Gateway CLI commands", async () => {
     const repoRoot = await tempDirs.makeTempDir("qa-gateway-command-");
     await mkdir(path.join(repoRoot, "src"), { recursive: true });
