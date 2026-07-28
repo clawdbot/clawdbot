@@ -17,7 +17,7 @@ describe("root file open shim", () => {
   });
 
   it("separates missing, unreadable, and boundary-violating open failures", () => {
-    const describe_ = (failure: upstream.RootFileOpenFailure) =>
+    const messageFor = (failure: upstream.RootFileOpenFailure) =>
       shim.describeRootFileOpenFailure({
         failure,
         subject: "plugin entry path",
@@ -26,14 +26,14 @@ describe("root file open shim", () => {
       });
 
     expect(
-      describe_({
+      messageFor({
         ok: false,
         reason: "path",
         error: Object.assign(new Error("nope"), { code: "ENOENT" }),
       }),
     ).toBe("plugin entry path not found: /plugins/demo/index.js");
     expect(
-      describe_({
+      messageFor({
         ok: false,
         reason: "path",
         error: Object.assign(new Error("nope"), { code: "ENOTDIR" }),
@@ -41,17 +41,17 @@ describe("root file open shim", () => {
     ).toBe("plugin entry path not found: /plugins/demo/index.js");
     // fs-safe also reports symlink loops as `path`; those are unreadable, not absent.
     expect(
-      describe_({
+      messageFor({
         ok: false,
         reason: "path",
         error: Object.assign(new Error("loop"), { code: "ELOOP" }),
       }),
     ).toBe("plugin entry path could not be read (ELOOP): /plugins/demo/index.js");
-    expect(describe_({ ok: false, reason: "validation" })).toBe(
+    expect(messageFor({ ok: false, reason: "validation" })).toBe(
       "plugin entry path escapes plugin root or fails alias checks: /plugins/demo/index.js",
     );
     expect(
-      describe_({
+      messageFor({
         ok: false,
         reason: "io",
         error: Object.assign(new Error("io"), { code: "EACCES" }),
