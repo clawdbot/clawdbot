@@ -1068,7 +1068,7 @@ describe("SystemAgentChatEngine", () => {
 
     const stopped = await engine.handle("123:abc");
 
-    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("Telegram setup stopped");
     expect(stopped.text).toContain("configuration changed during channel setup");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1138,7 +1138,7 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Bot token");
     const stopped = await engine.handle("123:abc");
 
-    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
     expect(mocks.runCollectedChannelOnboardingPostWriteHooks).not.toHaveBeenCalled();
   });
@@ -1213,7 +1213,7 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Bot token");
     const stopped = await engine.handle("123:abc");
 
-    expect(stopped.text).toContain("Channel setup stopped");
+    expect(stopped.text).toContain("Telegram setup stopped");
     expect(mocks.writeWizardConfigFile).toHaveBeenCalledOnce();
     expect(mocks.runCollectedChannelOnboardingPostWriteHooks).toHaveBeenCalledOnce();
     expect(hook.run).not.toHaveBeenCalled();
