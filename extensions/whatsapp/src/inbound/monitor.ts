@@ -555,12 +555,12 @@ export async function attachWebInboxToSocket(
     canCombine: (bufferedItems, item) =>
       !item.payload.location &&
       !item.quote &&
-      !item.payload.untrustedStructuredContext?.length &&
+      !item.payload.channelStructuredContext?.length &&
       bufferedItems.every(
         (entry) =>
           !entry.payload.location &&
           !entry.quote &&
-          !entry.payload.untrustedStructuredContext?.length,
+          !entry.payload.channelStructuredContext?.length,
       ),
     onFlush: async (entries) => {
       let finishFlush!: () => void;
