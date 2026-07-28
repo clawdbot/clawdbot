@@ -65,12 +65,9 @@ describe("configSelectionFromSearch", () => {
     expect(configSectionKeysForPage("mcp")).toEqual(["mcp"]);
     expect(configSectionKeysForPage("infrastructure")).toEqual([
       "gateway",
-      "web",
       "browser",
       "nodeHost",
-      "canvasHost",
       "discovery",
-      "media",
       "acp",
     ]);
     expect(configSelectionFromSearch("mcp", "?section=browser")).toEqual({
@@ -81,6 +78,38 @@ describe("configSelectionFromSearch", () => {
       activeSection: "gateway",
       activeSubsection: null,
     });
+  });
+
+  it("keeps Communications focused on messages, talk, and voice", () => {
+    expect(configSectionKeysForPage("communications")).toEqual(["messages", "talk", "tts"]);
+  });
+});
+
+describe("ConfigPage moved section routes", () => {
+  it.each([
+    ["channels", "channels", ""],
+    ["broadcast", "advanced", "?section=broadcast"],
+  ])("redirects the former Communications %s section", (section, routeId, search) => {
+    const navigate = vi.fn();
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: { navigate: typeof navigate };
+      pageId: "communications";
+      routeData: {
+        section: string;
+        advanced: boolean;
+        tab: string | null;
+        targetBlockId: string | null;
+      };
+      syncRouteData: () => void;
+    };
+    state.context = { navigate };
+    state.pageId = "communications";
+    state.routeData = { section, advanced: false, tab: null, targetBlockId: null };
+
+    state.syncRouteData();
+
+    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash: "" });
   });
 });
 
@@ -111,6 +140,14 @@ describe("ConfigPage advanced selection guard", () => {
     });
     expect(configSelectionFromSearch("advanced", "?section=mcp")).toEqual({
       activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=tts")).toEqual({
+      activeSection: null,
+      activeSubsection: null,
+    });
+    expect(configSelectionFromSearch("advanced", "?section=broadcast")).toEqual({
+      activeSection: "broadcast",
       activeSubsection: null,
     });
   });
