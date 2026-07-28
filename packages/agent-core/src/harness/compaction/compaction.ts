@@ -739,6 +739,7 @@ export function prepareCompaction(
       break;
     }
   }
+  const boundaryEntryIndex = prevBoundaryIndex;
   const prevBoundary = prevBoundaryIndex >= 0 ? pathEntries[prevBoundaryIndex] : undefined;
 
   let previousSummary: string | undefined;
@@ -776,14 +777,15 @@ export function prepareCompaction(
     contextUsage.lastUsageIndex === null
       ? []
       : contextMessages.slice(0, contextUsage.lastUsageIndex + 1);
-  const usageSourceMessage =
-    contextUsage.lastUsageIndex === null
-      ? undefined
-      : contextMessages.at(contextUsage.lastUsageIndex);
   const usageIsCurrent =
-    !prevBoundary ||
-    (usageSourceMessage?.role === "assistant" &&
-      usageSourceMessage.timestamp > new Date(prevBoundary.timestamp).getTime());
+    boundaryEntryIndex < 0 ||
+    pathEntries.slice(boundaryEntryIndex + 1).some((entry) => {
+      if (entry.type !== "message") {
+        return false;
+      }
+      const usage = getAssistantUsage(entry.message);
+      return usage && usage.contextUsage?.state !== "unavailable";
+    });
   const estimatedUsageCoveredTokens = usageCoveredMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,

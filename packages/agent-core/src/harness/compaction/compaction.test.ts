@@ -419,7 +419,7 @@ describe("session-entry compaction budgeting", () => {
   });
 
   it("does not normalize from provider usage older than the current boundary", () => {
-    const buildEntries = (usageTokens: number): SessionTreeEntry[] => {
+    const buildEntries = (usageTokens: number, postBoundaryUsage = false): SessionTreeEntry[] => {
       const entries = Array.from({ length: 5 }, (_, index) =>
         createMessageEntry(
           {
@@ -442,7 +442,17 @@ describe("session-entry compaction budgeting", () => {
         firstKeptEntryId: "entry-0",
         tokensBefore: 40_000,
       });
-      entries.push(createMessageEntry({ role: "user", content: "new request", timestamp: 8 }, 7));
+      if (postBoundaryUsage) {
+        entries.push(
+          createMessageEntry(createAssistant("new checkpoint", createUsage(40_000), 7), 7),
+        );
+      }
+      entries.push(
+        createMessageEntry(
+          { role: "user", content: "new request", timestamp: 8 },
+          postBoundaryUsage ? 8 : 7,
+        ),
+      );
       return entries;
     };
     const settings = { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 };
@@ -456,6 +466,15 @@ describe("session-entry compaction budgeting", () => {
       throw new Error("expected retained history to be compactable");
     }
     expect(withStaleUsage.value.firstKeptEntryId).toBe(withoutUsage.value.firstKeptEntryId);
+
+    const withCurrentUsage = prepareCompaction(buildEntries(40_000, true), settings);
+    expect(withCurrentUsage.ok && withCurrentUsage.value).toBeTruthy();
+    if (!withCurrentUsage.ok || !withCurrentUsage.value) {
+      throw new Error("expected current usage to normalize the retained budget");
+    }
+    expect(Number(withCurrentUsage.value.firstKeptEntryId.slice("entry-".length))).toBeGreaterThan(
+      Number(withoutUsage.value.firstKeptEntryId.slice("entry-".length)),
+    );
   });
 
   it("keeps reset-filtered tool rows out of later compaction input", () => {
