@@ -684,16 +684,18 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
  * Synchronously release all held locks.
  * Used during process exit when async operations aren't reliable.
  */
-function releaseAllLocksSync(): void {
+function releaseAllLocksSync(options?: { preserveSessionLeases?: boolean }): void {
   SESSION_LOCKS.reset();
-  for (const [sessionKey, entry] of sessionKeyWriteLeaseState.held) {
-    try {
-      releaseSessionKeyWriteLeaseOnce(sessionKey, entry.owner, entry.databaseOptions);
-    } catch {
-      // Fixed expiry still recovers the row after an exit-time SQLite failure.
+  if (!options?.preserveSessionLeases) {
+    for (const [sessionKey, entry] of sessionKeyWriteLeaseState.held) {
+      try {
+        releaseSessionKeyWriteLeaseOnce(sessionKey, entry.owner, entry.databaseOptions);
+      } catch {
+        // Fixed expiry still recovers the row after an exit-time SQLite failure.
+      }
     }
+    sessionKeyWriteLeaseState.held.clear();
   }
-  sessionKeyWriteLeaseState.held.clear();
   stopWatchdogTimer();
 }
 
@@ -753,9 +755,11 @@ function ensureWatchdogStarted(intervalMs: number): void {
 }
 
 function handleTerminationSignal(signal: CleanupSignal): void {
-  releaseAllLocksSync();
-  const cleanupState = resolveCleanupState();
   const shouldReraise = process.listenerCount(signal) === 1;
+  // A graceful gateway handler must drain in-flight transcript writes before
+  // releasing their SQLite leases; legacy file locks remain signal-immediate.
+  releaseAllLocksSync({ preserveSessionLeases: !shouldReraise });
+  const cleanupState = resolveCleanupState();
   if (shouldReraise) {
     const handler = cleanupState.cleanupHandlers.get(signal);
     if (handler) {
