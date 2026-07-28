@@ -316,7 +316,7 @@ describe("iOS Fastlane release upload gates", () => {
     const iosJobEnd = workflow.indexOf("\n  android:\n", iosJobStart);
     const iosJob = workflow.slice(iosJobStart, iosJobEnd);
 
-    expect(iosJob).toContain("timeout-minutes: 75");
+    expect(iosJob).toContain("timeout-minutes: 100");
     expect(iosJob).toContain("Capture iOS release screenshots");
     expect(iosJob).toContain("github.event_name == 'workflow_dispatch'");
     expect(iosJob).toContain("github.event_name == 'pull_request'");
