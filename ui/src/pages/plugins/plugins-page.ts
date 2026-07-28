@@ -626,7 +626,9 @@ class PluginsPage extends OpenClawLightDomElement {
       });
       return;
     }
-    this.context.navigate(tab === "skills" ? "skills" : "skill-workshop");
+    this.context.navigate(
+      tab === "skills" ? "skills" : tab === "claws" ? "claws" : "skill-workshop",
+    );
   }
 
   private changeTab(tab: PluginsTab) {
@@ -1010,6 +1012,8 @@ class PluginsPage extends OpenClawLightDomElement {
             active: this.activeTab,
             tabs: pluginsHubTabs(
               this.result?.plugins.filter((plugin) => plugin.installed).length ?? 0,
+              isGatewayMethodAdvertised(this.context.gateway.snapshot, "claws.status") === true &&
+                isGatewayMethodAdvertised(this.context.gateway.snapshot, "claws.doctor") === true,
             ),
             ariaLabel: t("pluginsPage.hubTablistLabel"),
             panelId: PLUGINS_HUB_PANEL_ID,

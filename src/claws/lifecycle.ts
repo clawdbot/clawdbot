@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { lstat, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
@@ -86,6 +86,21 @@ function blockedWorkspaceFileAction(params: {
     blocked: true,
     reason: params.reason,
   };
+}
+
+function actionsForIntegrity(
+  actions: readonly ClawAddPlanAction[],
+  source: ClawSourceIdentity,
+): ClawAddPlanAction[] {
+  return actions.map((action) => {
+    if (action.kind !== "workspaceFile" || !action.source) {
+      return action;
+    }
+    return {
+      ...action,
+      source: relative(source.packageRoot, action.source).split(sep).join("/"),
+    };
+  });
 }
 
 function workspaceSourceErrorCode(
@@ -662,7 +677,7 @@ export async function buildClawAddPlan(params: {
         clawIntegrity: source.integrity,
         finalId,
         workspace,
-        actions,
+        actions: actionsForIntegrity(actions, source),
         capabilityChanges,
         blockers,
         extensions,

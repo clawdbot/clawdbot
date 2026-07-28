@@ -10,6 +10,6 @@ export function assertExperimentalClawsEnabled(env: NodeJS.ProcessEnv = process.
     return;
   }
   throw new Error(
-    `Claws are experimental and disabled. Set ${EXPERIMENTAL_CLAWS_ENV}=1 for this process to enable the unstable CLI.`,
+    `Claws are experimental and disabled. Set ${EXPERIMENTAL_CLAWS_ENV}=1 for this process to enable the unstable feature.`,
   );
 }

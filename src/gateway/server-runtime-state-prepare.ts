@@ -13,6 +13,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
+import { isGatewayMethodAvailableForEnv } from "./experimental-methods.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
@@ -171,6 +172,7 @@ export async function prepareGatewayRuntimeState(params: {
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
     uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]).filter(
       (method) =>
+        isGatewayMethodAvailableForEnv(method, process.env) &&
         (workerPlacementDispatchAvailable || method !== "sessions.dispatch") &&
         (workerPlacementControlAvailable || method !== "sessions.reclaim"),
     );

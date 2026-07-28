@@ -13,6 +13,10 @@ export function selectPluginsHubTab(
     context.navigate("skills");
     return;
   }
+  if (tab === "claws") {
+    context.navigate("claws");
+    return;
+  }
   context.navigate("plugins", {
     pathname: pathForPluginsHubTab(tab, context.basePath),
   });

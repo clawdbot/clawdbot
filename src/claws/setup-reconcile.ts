@@ -65,6 +65,7 @@ export async function buildClawSetupReconciliation(params: {
   workspace: string;
   workspaceFiles: ReadonlyArray<{ path: string }>;
   answers?: unknown;
+  clearAnswers?: readonly string[];
   regenerateSeeds?: readonly string[];
 }): Promise<ClawSetupReconciliation> {
   const currentIsV2 = params.currentManifestSchemaVersion === CLAW_SETUP_SCHEMA_VERSION;
@@ -170,6 +171,7 @@ export async function buildClawSetupReconciliation(params: {
     (destination) => currentSeeds.has(destination) && !requestedRegeneration.has(destination),
   );
   const answers = suppliedAnswers(params.answers);
+  const clearAnswers = new Set(params.clearAnswers ?? []);
   const blockers: ClawDiagnostic[] = [];
   if (!answers) {
     blockers.push(blocker("setup_answers_invalid", "$.answers", "Answers must be a JSON object."));
@@ -187,12 +189,31 @@ export async function buildClawSetupReconciliation(params: {
   }
 
   const targetInputIds = new Set(target.setup.inputs.map((input) => input.id));
+  for (const answerId of clearAnswers) {
+    if (!targetInputIds.has(answerId)) {
+      blockers.push(
+        blocker(
+          "setup_answer_unknown",
+          `$.clearAnswers.${answerId}`,
+          `Answer does not match a declared setup input ${JSON.stringify(answerId)}.`,
+        ),
+      );
+    } else if (answers && Object.hasOwn(answers, answerId)) {
+      blockers.push(
+        blocker(
+          "setup_answer_conflict",
+          `$.clearAnswers.${answerId}`,
+          `Answer ${JSON.stringify(answerId)} cannot be both set and cleared.`,
+        ),
+      );
+    }
+  }
   const mergedAnswers = Object.fromEntries(
     Object.entries({
       ...persistedAnswers(params.currentSetup),
       ...persistedAnswers(params.currentPending),
       ...answers,
-    }).filter(([id]) => targetInputIds.has(id)),
+    }).filter(([id]) => targetInputIds.has(id) && !clearAnswers.has(id)),
   );
   const setup = await buildClawSetupPlan({
     manifest: target,
@@ -209,6 +230,17 @@ export async function buildClawSetupReconciliation(params: {
           "setup_answer_without_effect",
           `$.answers.${answerId}`,
           `Answer ${JSON.stringify(answerId)} is not used by a created or regenerated personalization seed in this operation.`,
+        ),
+      );
+    }
+  }
+  for (const answerId of clearAnswers) {
+    if (targetInputIds.has(answerId) && !activeInputIds.has(answerId)) {
+      blockers.push(
+        blocker(
+          "setup_answer_without_effect",
+          `$.clearAnswers.${answerId}`,
+          `Cleared answer ${JSON.stringify(answerId)} is not used by a created or regenerated personalization seed in this operation.`,
         ),
       );
     }
@@ -326,7 +358,9 @@ export async function buildClawSetupReconciliation(params: {
     if (materialized) {
       return [materialized];
     }
-    const current = params.currentSetup?.answers.find((answer) => answer.id === input.id);
+    const current = clearAnswers.has(input.id)
+      ? undefined
+      : params.currentSetup?.answers.find((answer) => answer.id === input.id);
     return current ? [current] : [];
   });
   const targetSeeds = target.personalization.seeds.flatMap((declaration) => {

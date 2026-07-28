@@ -14,6 +14,7 @@ import {
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   closeClawHubDetail,
   installFromClawHub,
@@ -385,6 +386,10 @@ class SkillsPage extends OpenClawLightDomElement {
       this.context.navigate("skill-workshop");
       return;
     }
+    if (tab === "claws") {
+      this.context.navigate("claws");
+      return;
+    }
     this.context.navigate("plugins", {
       pathname: pathForPluginsHubTab(tab, this.context.basePath),
     });
@@ -403,7 +408,11 @@ class SkillsPage extends OpenClawLightDomElement {
           ${renderHubTabs({
             id: "plugins",
             active: "skills",
-            tabs: pluginsHubTabs(),
+            tabs: pluginsHubTabs(
+              null,
+              isGatewayMethodAdvertised(this.context.gateway.snapshot, "claws.status") === true &&
+                isGatewayMethodAdvertised(this.context.gateway.snapshot, "claws.doctor") === true,
+            ),
             ariaLabel: t("pluginsPage.hubTablistLabel"),
             panelId: PLUGINS_HUB_PANEL_ID,
             className: "plugins-tabs",

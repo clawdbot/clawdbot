@@ -14,6 +14,7 @@ import {
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
+import { isGatewayMethodAvailableForEnv } from "./experimental-methods.js";
 import { revokeAttachGrantsForSession } from "./mcp-grant-store.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import {
@@ -310,6 +311,7 @@ export async function startGatewayCoreRuntime(input: {
     }
     const coreDescriptors = createCoreGatewayMethodDescriptors(coreDescriptorHandlers).filter(
       (descriptor) =>
+        isGatewayMethodAvailableForEnv(descriptor.name, process.env) &&
         (workerEnvironmentService ||
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy")) &&
@@ -328,7 +330,9 @@ export async function startGatewayCoreRuntime(input: {
   };
   let attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
   const listAttachedGatewayMethods = () => {
-    const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
+    const methods = attachedGatewayMethodRegistry
+      .listAdvertisedMethods()
+      .filter((method) => isGatewayMethodAvailableForEnv(method, process.env));
     methods.push(...listStartupChannelGatewayMethods());
     return uniqueStrings(methods);
   };

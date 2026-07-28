@@ -56,6 +56,7 @@ export async function buildClawConfigurePlan(params: {
   config: OpenClawConfig;
   sourceMcpServers: Record<string, Record<string, unknown>>;
   answers?: unknown;
+  clearAnswers?: readonly string[];
   regenerateSeeds?: readonly string[];
   stateOptions?: OpenClawStateDatabaseOptions;
 }): Promise<ClawConfigurePlan> {
@@ -102,6 +103,7 @@ export async function buildClawConfigurePlan(params: {
         workspace: record.install.workspace,
         workspaceFiles: record.workspaceFiles,
         answers: params.answers,
+        clearAnswers: params.clearAnswers,
         regenerateSeeds: params.regenerateSeeds,
       })
     : undefined;
@@ -154,6 +156,7 @@ export async function applyClawConfigurePlan(
     config: OpenClawConfig;
     sourceMcpServers: Record<string, Record<string, unknown>>;
     answers?: unknown;
+    clearAnswers?: readonly string[];
     regenerateSeeds?: readonly string[];
   },
   options: OpenClawStateDatabaseOptions & {
@@ -187,6 +190,7 @@ export async function applyClawConfigurePlan(
     config: params.config,
     sourceMcpServers: params.sourceMcpServers,
     answers: params.answers,
+    clearAnswers: params.clearAnswers,
     regenerateSeeds: params.regenerateSeeds,
     stateOptions: options,
   });
@@ -214,6 +218,7 @@ export async function applyClawConfigurePlan(
     workspace: record.install.workspace,
     workspaceFiles: record.workspaceFiles,
     answers: params.answers,
+    clearAnswers: params.clearAnswers,
     regenerateSeeds: params.regenerateSeeds,
   });
   if (!reconciliation.materialization || !reconciliation.targetState) {

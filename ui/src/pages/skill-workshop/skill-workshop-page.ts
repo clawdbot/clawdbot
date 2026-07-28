@@ -9,6 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -132,7 +133,11 @@ function renderSkillWorkshopPage(
         ${renderHubTabs({
           id: "plugins",
           active: "workshop",
-          tabs: pluginsHubTabs(),
+          tabs: pluginsHubTabs(
+            null,
+            isGatewayMethodAdvertised(context.gateway.snapshot, "claws.status") === true &&
+              isGatewayMethodAdvertised(context.gateway.snapshot, "claws.doctor") === true,
+          ),
           ariaLabel: t("pluginsPage.hubTablistLabel"),
           panelId: PLUGINS_HUB_PANEL_ID,
           className: "plugins-tabs",

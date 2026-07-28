@@ -4,6 +4,7 @@ import { AgentSkillProtocolSchemas } from "./protocol-schema-fragment-agents-ski
 import { ApprovalProtocolSchemas } from "./protocol-schema-fragment-approvals.js";
 import { BoardProtocolSchemas } from "./protocol-schema-fragment-board.js";
 import { ChannelProtocolSchemas } from "./protocol-schema-fragment-channels.js";
+import { ClawsProtocolSchemas } from "./protocol-schema-fragment-claws.js";
 import { IntegrationProtocolSchemas } from "./protocol-schema-fragment-integrations.js";
 import { NodeProtocolSchemas } from "./protocol-schema-fragment-nodes.js";
 import { OperationsProtocolSchemas } from "./protocol-schema-fragment-operations.js";
@@ -26,6 +27,7 @@ export const ProtocolSchemas = composeProtocolSchemaFragments([
   SessionLifecycleProtocolSchemas,
   OperationsProtocolSchemas,
   ChannelProtocolSchemas,
+  ClawsProtocolSchemas,
   AgentSkillProtocolSchemas,
   SchedulerProtocolSchemas,
   ApprovalProtocolSchemas,

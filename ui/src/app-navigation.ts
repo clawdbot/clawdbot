@@ -34,6 +34,7 @@ const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "plugins",
   "skills",
   "skill-workshop",
+  "claws",
 ]);
 
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
@@ -236,6 +237,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  claws: "bot",
   dashboard: "layoutDashboard",
   dashboards: "layoutDashboard",
   custodian: "lobster",
@@ -345,6 +347,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  claws: { titleKey: "tabs.claws", subtitleKey: "subtitles.claws" },
   dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
   dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },

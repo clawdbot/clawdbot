@@ -159,6 +159,50 @@ describe("createClawWorkspaceFiles", () => {
     );
   });
 
+  it("keeps plan integrity stable across equivalent artifact extraction roots", async () => {
+    const root = tempDirs.make("openclaw-claw-integrity-");
+    const firstRoot = join(root, "preview");
+    const secondRoot = join(root, "apply");
+    const workspace = join(root, "workspace-agent");
+    await writeSource(firstRoot, "content/AGENTS.md", "# Agent\n");
+    await writeSource(secondRoot, "content/AGENTS.md", "# Agent\n");
+    const parsed = parseClawManifest({
+      schemaVersion: 1,
+      agent: { id: "workspace-agent" },
+      workspace: { bootstrapFiles: { "AGENTS.md": { source: "content/AGENTS.md" } } },
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+    const source = (packageRoot: string): ClawSourceIdentity => ({
+      kind: "package",
+      name: "@acme/workspace-agent",
+      version: "1.0.0",
+      packageRoot,
+      manifestPath: join(packageRoot, "openclaw.claw.json"),
+      integrityKind: "artifact",
+      integrity: "sha256:immutable-artifact",
+      byteLength: 1,
+    });
+
+    const preview = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source: source(firstRoot),
+      context: { workspace },
+    });
+    const apply = await buildClawAddPlan({
+      manifest: parsed.manifest,
+      source: source(secondRoot),
+      context: { workspace },
+    });
+    const previewFile = preview.actions.find((action) => action.kind === "workspaceFile");
+    const applyFile = apply.actions.find((action) => action.kind === "workspaceFile");
+
+    expect(previewFile?.source).not.toBe(applyFile?.source);
+    expect(previewFile?.digest).toBe(applyFile?.digest);
+    expect(preview.planIntegrity).toBe(apply.planIntegrity);
+  });
+
   it("creates canonical bootstrap and supporting files and records their hashes", async () => {
     const { root, workspace, plan } = await makePlan();
     const policyAction = plan.actions.find(

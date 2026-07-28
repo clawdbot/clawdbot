@@ -24,6 +24,7 @@ export type {
   WizardNotFoundErrorDetails,
 } from "./schema/error-codes.js";
 export * from "./schema/board.js";
+export * from "./schema/claws.js";
 export {
   SessionCreatedActorSchema,
   SessionToolOverridesSchema,

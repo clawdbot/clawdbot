@@ -146,6 +146,10 @@ type AppSidebarElement = HTMLElement & {
 // Stable references so the sidebar's enabledRouteIds property does not churn
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
+const ROUTE_IDS_WITHOUT_CLAWS = APP_ROUTE_IDS.filter((routeId) => routeId !== "claws");
+const ROUTE_IDS_WITHOUT_WORKBOARD_OR_CLAWS = APP_ROUTE_IDS.filter(
+  (routeId) => routeId !== "workboard" && routeId !== "claws",
+);
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 const EMPTY_OUTBOX_COUNT_FOR_SESSION = () => 0;
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
@@ -1758,9 +1762,17 @@ class OpenClawShell extends OpenClawLightDomElement {
   }
 
   private enabledRouteIds(): readonly RouteId[] {
-    return isWorkboardEnabledInConfigSnapshot(this.context?.runtimeConfig.state.configSnapshot)
-      ? APP_ROUTE_IDS
-      : ROUTE_IDS_WITHOUT_WORKBOARD;
+    const workboardEnabled = isWorkboardEnabledInConfigSnapshot(
+      this.context?.runtimeConfig.state.configSnapshot,
+    );
+    const gatewaySnapshot = this.context?.gateway.snapshot ?? {};
+    const clawsEnabled =
+      isGatewayMethodAdvertised(gatewaySnapshot, "claws.status") === true &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "claws.doctor") === true;
+    if (workboardEnabled) {
+      return clawsEnabled ? APP_ROUTE_IDS : ROUTE_IDS_WITHOUT_CLAWS;
+    }
+    return clawsEnabled ? ROUTE_IDS_WITHOUT_WORKBOARD : ROUTE_IDS_WITHOUT_WORKBOARD_OR_CLAWS;
   }
 
   /** Sidebar draft-row hint while the new-session page is open, keyed off its ?agent param. */

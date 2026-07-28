@@ -303,6 +303,24 @@ import {
   UiCommandParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
+  ClawsAddApplyParamsSchema,
+  ClawsAddPlanParamsSchema,
+  ClawsCatalogDetailParamsSchema,
+  ClawsCatalogDetailResultSchema,
+  ClawsCatalogSearchParamsSchema,
+  ClawsCatalogSearchResultSchema,
+  ClawsConfigureApplyParamsSchema,
+  ClawsConfigurePlanParamsSchema,
+  ClawsDoctorParamsSchema,
+  ClawsDoctorResultSchema,
+  ClawsRemoveApplyParamsSchema,
+  ClawsRemovePlanParamsSchema,
+  ClawsStatusParamsSchema,
+  ClawsStatusResultSchema,
+  ClawsUpdateApplyParamsSchema,
+  ClawsUpdatePlanParamsSchema,
+  ClawLifecycleApplyResultSchema,
+  ClawLifecyclePlanResultSchema,
 } from "./schema-modules.js";
 import type { ValidationError } from "./validation-errors.js";
 
@@ -694,3 +712,21 @@ export const validateUpdateRunParams = lazyCompile(UpdateRunParamsSchema);
 export const validateUiCommandParams = lazyCompile(UiCommandParamsSchema);
 export const validateWebLoginStartParams = lazyCompile(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile(WebLoginWaitParamsSchema);
+export const validateClawsAddApplyParams = lazyCompile(ClawsAddApplyParamsSchema);
+export const validateClawsAddPlanParams = lazyCompile(ClawsAddPlanParamsSchema);
+export const validateClawsCatalogDetailParams = lazyCompile(ClawsCatalogDetailParamsSchema);
+export const validateClawsCatalogDetailResult = lazyCompile(ClawsCatalogDetailResultSchema);
+export const validateClawsCatalogSearchParams = lazyCompile(ClawsCatalogSearchParamsSchema);
+export const validateClawsCatalogSearchResult = lazyCompile(ClawsCatalogSearchResultSchema);
+export const validateClawsConfigureApplyParams = lazyCompile(ClawsConfigureApplyParamsSchema);
+export const validateClawsConfigurePlanParams = lazyCompile(ClawsConfigurePlanParamsSchema);
+export const validateClawsDoctorParams = lazyCompile(ClawsDoctorParamsSchema);
+export const validateClawsDoctorResult = lazyCompile(ClawsDoctorResultSchema);
+export const validateClawsRemoveApplyParams = lazyCompile(ClawsRemoveApplyParamsSchema);
+export const validateClawsRemovePlanParams = lazyCompile(ClawsRemovePlanParamsSchema);
+export const validateClawsStatusParams = lazyCompile(ClawsStatusParamsSchema);
+export const validateClawsStatusResult = lazyCompile(ClawsStatusResultSchema);
+export const validateClawsUpdateApplyParams = lazyCompile(ClawsUpdateApplyParamsSchema);
+export const validateClawsUpdatePlanParams = lazyCompile(ClawsUpdatePlanParamsSchema);
+export const validateClawLifecycleApplyResult = lazyCompile(ClawLifecycleApplyResultSchema);
+export const validateClawLifecyclePlanResult = lazyCompile(ClawLifecyclePlanResultSchema);

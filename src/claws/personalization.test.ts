@@ -38,7 +38,7 @@ function manifest(): ClawManifestV2 {
     mcpServers: {},
     cronJobs: [],
     setup: {
-      inputs: [{ id: "name", type: "string", label: "Name", required: true }],
+      inputs: [{ id: "name", type: "string", label: "Name" }],
     },
     personalization: {
       seeds: [{ source: "setup/USER.md.tmpl", destination: "USER.md" }],
@@ -610,6 +610,71 @@ describe("Claw personalization update reconciliation", () => {
     expect(await readFile(join(current.root, "workspace", "USER.md"), "utf8")).toContain("Jordan");
     expect(readClawSetupState("personalized", { env: current.env })?.answers).toContainEqual(
       expect.objectContaining({ id: "name", value: "Jordan" }),
+    );
+  });
+
+  it("clears an optional stored answer while regenerating its seed", async () => {
+    const current = await fixture();
+    let config: OpenClawConfig = {};
+    await applyClawAddPlan(current.plan, {
+      env: current.env,
+      consentPlanIntegrity: current.plan.planIntegrity,
+      setupMaterialization: current.setup.materialization,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    const configureParams = {
+      target: "personalized",
+      manifest: current.claw,
+      source: source(current.root),
+      config,
+      sourceMcpServers: {},
+      clearAnswers: ["name"],
+      regenerateSeeds: ["USER.md"],
+      stateOptions: { env: current.env },
+    };
+    const configurePlan = await buildClawConfigurePlan(configureParams);
+    expect(configurePlan.blockers).toEqual([]);
+    await applyClawConfigurePlan(configurePlan, configureParams, {
+      env: current.env,
+      consentPlanIntegrity: configurePlan.planIntegrity,
+    });
+
+    expect(await readFile(join(current.root, "workspace", "USER.md"), "utf8")).toBe(
+      "# User\n\nName: \n",
+    );
+    expect(readClawSetupState("personalized", { env: current.env })?.answers).toEqual([]);
+  });
+
+  it("rejects clearing an answer without regenerating its user-owned seed", async () => {
+    const current = await fixture();
+    let config: OpenClawConfig = {};
+    await applyClawAddPlan(current.plan, {
+      env: current.env,
+      consentPlanIntegrity: current.plan.planIntegrity,
+      setupMaterialization: current.setup.materialization,
+      commitConfig: async (transform) => {
+        config = transform(config);
+      },
+    });
+
+    const plan = await buildClawConfigurePlan({
+      target: "personalized",
+      manifest: current.claw,
+      source: source(current.root),
+      config,
+      sourceMcpServers: {},
+      clearAnswers: ["name"],
+      stateOptions: { env: current.env },
+    });
+
+    expect(plan.blockers).toContainEqual(
+      expect.objectContaining({
+        code: "setup_answer_without_effect",
+        path: "$.clearAnswers.name",
+      }),
     );
   });
 });
