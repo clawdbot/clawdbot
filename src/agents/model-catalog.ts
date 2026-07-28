@@ -544,11 +544,12 @@ export async function buildPreparedModelCatalogSnapshot(
     );
     // Runtime declarations describe possible models, not account entitlement.
     // Only live registry or refreshed rows may publish those provider models.
-    const manifestModels = loadManifestModelCatalog({
+    const declaredManifestModels = loadManifestModelCatalog({
       config: cfg,
       env,
       metadataSnapshot: manifestMetadataSnapshot,
-    }).filter((entry) =>
+    });
+    const manifestModels = declaredManifestModels.filter((entry) =>
       supplementalManifestKeys.has(catalogEntryDedupeKey(entry.provider, entry.id)),
     );
     mergeCatalogRouteVariants(routeVariants, manifestModels);
@@ -633,7 +634,12 @@ export async function buildPreparedModelCatalogSnapshot(
             id,
           });
         }
-        const orderedSupplemental = assignProviderModelOrder(normalizedSupplemental);
+        // Manifest ranks are provider-owned policy. Live discovery enriches
+        // those rows and appends unknown models without replacing the ranking.
+        const orderedSupplemental = assignProviderModelOrder(
+          normalizedSupplemental,
+          declaredManifestModels,
+        );
         mergeCatalogRouteVariants(routeVariants, orderedSupplemental);
         mergeCatalogEntries(models, orderedSupplemental);
       }

@@ -87,7 +87,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     expect(result.map((entry) => entry.id)).toEqual(["off", "old"]);
   });
 
-  it("preserves provider-owned strongest-first order", async () => {
+  it("preserves provider-owned strongest-first order through route projection", async () => {
     const catalog: ModelCatalogEntry[] = [
       { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", providerOrder: 3 },
       { provider: "openai", id: "gpt-5.6-luna", name: "GPT-5.6 Luna", providerOrder: 2 },
@@ -101,7 +101,16 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       defaultProvider: "openai",
       view: "all",
       routePolicy: openAIModelCatalogRoutePolicy,
-      evaluateEntry: evaluateAvailableEntry,
+      evaluateEntry: async (entry) =>
+        resolveLogicalModelCatalogEntryState({
+          entry,
+          evaluation: {
+            availability: true,
+            routeResolution: { kind: "routes", routes: [selectedRoute] },
+            selectedRoute,
+          },
+          routePolicy: openAIModelCatalogRoutePolicy,
+        }),
     });
 
     expect(result.map((entry) => entry.id)).toEqual([
