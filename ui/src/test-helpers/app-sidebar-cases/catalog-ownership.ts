@@ -23,11 +23,13 @@ describe("AppSidebar session catalog ownership", () => {
       expandedCatalog.capabilities.createSession = catalog.capabilities.createSession;
       const request = vi.fn().mockResolvedValueOnce(firstPage).mockResolvedValueOnce(expandedPage);
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
-      gateway.publish({
-        hello: {
-          features: { methods: ["sessions.catalog.list"] },
-        } as ApplicationGatewaySnapshot["hello"],
-      });
+      const catalogHello = {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.admin"] },
+        features: { methods: ["sessions.catalog.list"] },
+      } satisfies NonNullable<ApplicationGatewaySnapshot["hello"]>;
+      gateway.publish({ hello: catalogHello });
       const mounted = await mountSidebar(
         gateway.gateway,
         createSessions("main", ["agent:main:main"]),
@@ -54,7 +56,7 @@ describe("AppSidebar session catalog ownership", () => {
       gateway.publish({
         phase: "connected",
         assistantAgentId: null,
-        hello: { features: { methods: [] } } as ApplicationGatewaySnapshot["hello"],
+        hello: { ...catalogHello, features: { ...catalogHello.features, methods: [] } },
       });
       await sidebar.updateComplete;
       await vi.advanceTimersByTimeAsync(0);

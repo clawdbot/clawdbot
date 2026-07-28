@@ -114,14 +114,14 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<(event: { event: string; payload: unknown }) => void>();
   const gateway = {
+    get snapshot() {
+      return snapshot;
+    },
     connection: {
       gatewayUrl: "ws://gateway.test",
       token: "",
       bootstrapToken: "",
       password: "",
-    },
-    get snapshot() {
-      return snapshot;
     },
     setSessionKey: () => undefined,
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
