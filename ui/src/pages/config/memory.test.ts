@@ -7,7 +7,6 @@ import {
   memoryTabForRoute,
   memoryVisibleSchemaKeys,
   narrowMemorySchema,
-  normalizeMemoryTab,
   resolveMemoryBackend,
 } from "./memory-schema.ts";
 import { renderMemory } from "./memory.ts";
@@ -145,12 +144,12 @@ describe("renderMemory", () => {
   });
 });
 
-describe("normalizeMemoryTab", () => {
+describe("memoryTabForRoute", () => {
   it("keeps old shared links working with the new destinations", () => {
-    expect(normalizeMemoryTab("search")).toBe("settings");
-    expect(normalizeMemoryTab("dreaming")).toBe("dreams");
-    expect(normalizeMemoryTab("overview")).toBe("overview");
-    expect(normalizeMemoryTab("unknown")).toBeNull();
+    expect(memoryTabForRoute({ tab: "search" })).toBe("settings");
+    expect(memoryTabForRoute({ tab: "dreaming" })).toBe("dreams");
+    expect(memoryTabForRoute({ tab: "overview" })).toBe("overview");
+    expect(memoryTabForRoute({ tab: "unknown" })).toBeNull();
   });
 
   it("routes old tabless schema links to Settings without changing the plain landing", () => {

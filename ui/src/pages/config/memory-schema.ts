@@ -29,7 +29,7 @@ export const MEMORY_BACKEND_ANCHOR_ID = "memory-backend";
 const MEMORY_TABS: readonly MemoryTab[] = ["overview", "dreams", "settings"];
 
 /** Reads a `?tab=` value from a settings-search destination or a shared link. */
-export function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
+function normalizeMemoryTab(value: string | null | undefined): MemoryTab | null {
   if (value === "search") {
     return "settings";
   }
