@@ -47,7 +47,10 @@ function makeRuntimeParity(
     scenarioId,
     ...(runtimeParityUsage ? { runtimeParityUsage } : {}),
     drift: "none",
-    cells: { openclaw, codex },
+    cells: {
+      openclaw: { ...openclaw, status: "pass" },
+      codex: { ...codex, status: "pass" },
+    },
   };
 }
 

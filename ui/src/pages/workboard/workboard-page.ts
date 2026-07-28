@@ -12,7 +12,10 @@ import {
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
 import { renderWorkboardBoardGlyph } from "../../components/workboard-board-glyph.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
 import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { resetDraftState } from "../../lib/workboard/card-state.ts";
 import {
@@ -28,7 +31,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { matchesAgentScope } from "./agent-filter.ts";
-import { WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
+import { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER } from "./board-filter.ts";
 import type { WorkboardRouteData } from "./route.ts";
 import { renderWorkboard } from "./view.ts";
 
@@ -250,7 +253,19 @@ class WorkboardPage extends OpenClawLightDomElement {
     if (!context || !boardFilter || context.workboard.state.boardFilter === boardFilter) {
       return;
     }
-    context.workboard.state.boardFilter = boardFilter;
+    const state = context.workboard.state;
+    const remainsVisible = (cardId: string) => {
+      const card = state.cards.find((entry) => entry.id === cardId);
+      return Boolean(card && matchesBoardFilter(card, boardFilter));
+    };
+    if (state.detailCardId && !remainsVisible(state.detailCardId)) {
+      state.detailCardId = null;
+      state.detailCommentBody = "";
+    }
+    if (state.editingCardId && !remainsVisible(state.editingCardId)) {
+      resetDraftState(state);
+    }
+    state.boardFilter = boardFilter;
     context.workboard.notify();
   }
 
@@ -374,11 +389,21 @@ class WorkboardPage extends OpenClawLightDomElement {
         pluginEnablementError:
           !config.configSnapshot && !config.configLoading ? config.lastError : null,
         agentsList: context.agents.state.agentsList,
+        defaultAgentId: gateway.assistantAgentId,
         sessions: context.sessions.state.result?.sessions ?? [],
         scopeAgentId: context.agentSelection.state.scopeId,
         showAgentFilter: context.agentSelection.state.scopeId === null,
         onOpenSession: (sessionKey) => {
-          context.navigate("chat", { search: searchForSession(sessionKey), hash: "" });
+          const face = resolveSessionPreferredFaceForKey(context, sessionKey);
+          context.navigate(face, {
+            ...sessionNavigationTarget({
+              context,
+              face,
+              sessionKey,
+              preferenceDerivedFace: true,
+            }).options,
+            hash: "",
+          });
         },
         onReloadConfig: () => this.reloadConfig(),
         onBoardFilterChange: (boardFilter) => this.setWorkboardBoardFilter(boardFilter),

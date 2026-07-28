@@ -7,6 +7,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { consultRealtimeVoiceAgent } from "./agent-consult-runtime.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "./agent-consult-tool.js";
 import {
@@ -59,16 +60,7 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       modelSelectionLocked?: boolean;
       forkedFromParent?: boolean;
       totalTokens?: number;
-      deliveryContext?: {
-        channel?: string;
-        to?: string;
-        accountId?: string;
-        threadId?: string | number;
-      };
-      lastChannel?: string;
-      lastTo?: string;
-      lastAccountId?: string;
-      lastThreadId?: string | number;
+      delivery?: SessionEntry["delivery"];
     }
   > = {};
   const runEmbeddedAgent = vi.fn(async () => ({
@@ -642,11 +634,9 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["agent:main:discord:channel:123"] = {
       sessionId: "parent-session",
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "default",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:123", accountId: "default" },
+      }),
       updatedAt: 1,
     };
 
@@ -684,15 +674,9 @@ describe("realtime voice agent consult runtime", () => {
       createdVia: "talk",
       createdActor: { type: "agent", id: "agent:main:discord:channel:123" },
       createdAt: voiceEntry.createdAt,
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "default",
-      },
-      lastChannel: "discord",
-      lastTo: "channel:123",
-      lastAccountId: "default",
-      lastThreadId: undefined,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "discord", to: "channel:123", accountId: "default" },
+      }),
       updatedAt: voiceEntry.updatedAt,
     });
     expectNonEmptyString(voiceEntry.sessionId);
@@ -703,12 +687,14 @@ describe("realtime voice agent consult runtime", () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
     sessionStore["voice:google-meet:meet-1"] = {
       sessionId: "call-session",
-      deliveryContext: {
-        channel: "discord",
-        to: "channel:123",
-        accountId: "default",
-        threadId: "thread-456",
-      },
+      delivery: normalizeSessionDeliveryState({
+        context: {
+          channel: "discord",
+          to: "channel:123",
+          accountId: "default",
+          threadId: "thread-456",
+        },
+      }),
       updatedAt: 1,
     };
 

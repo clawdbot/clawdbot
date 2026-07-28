@@ -116,6 +116,24 @@ public enum SessionSharingAction: String, Codable, Sendable {
     case memberRemoved = "member-removed"
 }
 
+public enum SessionSuggestionState: String, Codable, Sendable {
+    case pending = "pending"
+    case accepted = "accepted"
+    case dismissed = "dismissed"
+}
+
+public enum SessionSuggestionAction: String, Codable, Sendable {
+    case added = "added"
+    case resolved = "resolved"
+}
+
+public enum SessionSuggestionResolution: String, Codable, Sendable {
+    case send = "send"
+    case queue = "queue"
+    case edit = "edit"
+    case dismiss = "dismiss"
+}
+
 public enum SessionPlacementState: String, Codable, Sendable {
     case local = "local"
     case requested = "requested"
@@ -4000,6 +4018,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
+    public let boardface: AnyCodable?
     public let creatorid: String?
     public let spawnedby: String?
     public let agentid: String?
@@ -4018,6 +4037,7 @@ public struct SessionsListParams: Codable, Sendable {
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil,
         label: String? = nil,
+        boardface: AnyCodable? = nil,
         creatorid: String? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
@@ -4035,6 +4055,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
+        self.boardface = boardface
         self.creatorid = creatorid
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -4054,6 +4075,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label
+        case boardface = "boardFace"
         case creatorid = "creatorId"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
@@ -4856,6 +4878,7 @@ public struct SessionObserverPlanProgress: Codable, Sendable {
 
 public struct SessionObserverDigest: Codable, Sendable {
     public let sessionkey: String
+    public let agentid: String?
     public let runid: String?
     public let revision: Int
     public let updatedat: Int
@@ -4866,6 +4889,7 @@ public struct SessionObserverDigest: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        agentid: String? = nil,
         runid: String? = nil,
         revision: Int,
         updatedat: Int,
@@ -4875,6 +4899,7 @@ public struct SessionObserverDigest: Codable, Sendable {
         planprogress: SessionObserverPlanProgress? = nil)
     {
         self.sessionkey = sessionkey
+        self.agentid = agentid
         self.runid = runid
         self.revision = revision
         self.updatedat = updatedat
@@ -4886,6 +4911,7 @@ public struct SessionObserverDigest: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case agentid = "agentId"
         case runid = "runId"
         case revision
         case updatedat = "updatedAt"
@@ -4896,12 +4922,35 @@ public struct SessionObserverDigest: Codable, Sendable {
     }
 }
 
+public struct SessionCompanionExchange: Codable, Sendable {
+    public let question: String
+    public let answer: String
+    public let ts: Int
+
+    public init(
+        question: String,
+        answer: String,
+        ts: Int)
+    {
+        self.question = question
+        self.answer = answer
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case question
+        case answer
+        case ts
+    }
+}
+
 public struct SessionRow: Codable, Sendable {
     public let key: String
     public let sessionid: String?
     public let incognito: Bool?
     public let kind: AnyCodable
     public let label: String?
+    public let boardface: AnyCodable?
     public let displayname: String?
     public let derivedtitle: String?
     public let lastmessagepreview: String?
@@ -4957,6 +5006,7 @@ public struct SessionRow: Codable, Sendable {
         incognito: Bool? = nil,
         kind: AnyCodable,
         label: String? = nil,
+        boardface: AnyCodable? = nil,
         displayname: String? = nil,
         derivedtitle: String? = nil,
         lastmessagepreview: String? = nil,
@@ -5011,6 +5061,7 @@ public struct SessionRow: Codable, Sendable {
         self.incognito = incognito
         self.kind = kind
         self.label = label
+        self.boardface = boardface
         self.displayname = displayname
         self.derivedtitle = derivedtitle
         self.lastmessagepreview = lastmessagepreview
@@ -5067,6 +5118,7 @@ public struct SessionRow: Codable, Sendable {
         case incognito
         case kind
         case label
+        case boardface = "boardFace"
         case displayname = "displayName"
         case derivedtitle = "derivedTitle"
         case lastmessagepreview = "lastMessagePreview"
@@ -5118,7 +5170,7 @@ public struct SessionRow: Codable, Sendable {
     }
 }
 
-public struct SessionsObserverAskParams: Codable, Sendable {
+public struct SessionsCompanionAskParams: Codable, Sendable {
     public let sessionkey: String
     public let question: String
 
@@ -5136,21 +5188,77 @@ public struct SessionsObserverAskParams: Codable, Sendable {
     }
 }
 
-public struct SessionsObserverAskResult: Codable, Sendable {
+public struct SessionsCompanionAskResult: Codable, Sendable {
     public let answer: String
-    public let digestrevision: Int?
+    public let ts: Int
 
     public init(
         answer: String,
-        digestrevision: Int? = nil)
+        ts: Int)
     {
         self.answer = answer
-        self.digestrevision = digestrevision
+        self.ts = ts
     }
 
     private enum CodingKeys: String, CodingKey {
         case answer
-        case digestrevision = "digestRevision"
+        case ts
+    }
+}
+
+public struct SessionsCompanionResetParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionsCompanionResetResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+    }
+}
+
+public struct SessionsCompanionStateParams: Codable, Sendable {
+    public let sessionkey: String
+
+    public init(
+        sessionkey: String)
+    {
+        self.sessionkey = sessionkey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+    }
+}
+
+public struct SessionsCompanionStateResult: Codable, Sendable {
+    public let exchanges: [SessionCompanionExchange]
+
+    public init(
+        exchanges: [SessionCompanionExchange])
+    {
+        self.exchanges = exchanges
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case exchanges
     }
 }
 
@@ -5422,6 +5530,252 @@ public struct SessionSharingEvent: Codable, Sendable {
         case actor
         case visibility
         case identityid = "identityId"
+        case ts
+    }
+}
+
+public struct SessionSuggestion: Codable, Sendable {
+    public let id: String
+    public let sessionkey: String
+    public let agentid: String
+    public let author: SessionSharingIdentity
+    public let text: String
+    public let createdat: Int
+    public let state: SessionSuggestionState
+
+    public init(
+        id: String,
+        sessionkey: String,
+        agentid: String,
+        author: SessionSharingIdentity,
+        text: String,
+        createdat: Int,
+        state: SessionSuggestionState)
+    {
+        self.id = id
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.author = author
+        self.text = text
+        self.createdat = createdat
+        self.state = state
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case author
+        case text
+        case createdat = "createdAt"
+        case state
+    }
+}
+
+public struct SessionSuggestionsAddParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let text: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        text: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.text = text
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case text
+    }
+}
+
+public struct SessionSuggestionsAddResult: Codable, Sendable {
+    public let suggestion: SessionSuggestion
+
+    public init(
+        suggestion: SessionSuggestion)
+    {
+        self.suggestion = suggestion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suggestion
+    }
+}
+
+public struct SessionSuggestionsListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionSuggestionsListResult: Codable, Sendable {
+    public let suggestions: [SessionSuggestion]
+    public let role: SessionSharingRole
+
+    public init(
+        suggestions: [SessionSuggestion],
+        role: SessionSharingRole)
+    {
+        self.suggestions = suggestions
+        self.role = role
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suggestions
+        case role
+    }
+}
+
+public struct SessionSuggestionsResolveParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let id: String
+    public let resolution: SessionSuggestionResolution
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        id: String,
+        resolution: SessionSuggestionResolution)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.id = id
+        self.resolution = resolution
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case id
+        case resolution
+    }
+}
+
+public struct SessionSuggestionsResolveResult: Codable, Sendable {
+    public let suggestion: SessionSuggestion
+
+    public init(
+        suggestion: SessionSuggestion)
+    {
+        self.suggestion = suggestion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case suggestion
+    }
+}
+
+public struct SessionSuggestionEvent: Codable, Sendable {
+    public let action: SessionSuggestionAction
+    public let suggestion: SessionSuggestion
+
+    public init(
+        action: SessionSuggestionAction,
+        suggestion: SessionSuggestion)
+    {
+        self.action = action
+        self.suggestion = suggestion
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case action
+        case suggestion
+    }
+}
+
+public struct SessionTypingParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let sessionid: String
+    public let typing: Bool
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        sessionid: String,
+        typing: Bool)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.sessionid = sessionid
+        self.typing = typing
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case sessionid = "sessionId"
+        case typing
+    }
+}
+
+public struct SessionTypingResult: Codable, Sendable {
+    public let ok: Bool
+    public let broadcast: Bool
+
+    public init(
+        ok: Bool,
+        broadcast: Bool)
+    {
+        self.ok = ok
+        self.broadcast = broadcast
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case broadcast
+    }
+}
+
+public struct SessionTypingEvent: Codable, Sendable {
+    public let sessionkey: String
+    public let sessionid: String
+    public let agentid: String
+    public let actor: SessionSharingIdentity
+    public let typing: Bool
+    public let ts: Int
+
+    public init(
+        sessionkey: String,
+        sessionid: String,
+        agentid: String,
+        actor: SessionSharingIdentity,
+        typing: Bool,
+        ts: Int)
+    {
+        self.sessionkey = sessionkey
+        self.sessionid = sessionid
+        self.agentid = agentid
+        self.actor = actor
+        self.typing = typing
+        self.ts = ts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
+        case agentid = "agentId"
+        case actor
+        case typing
         case ts
     }
 }
@@ -6320,15 +6674,19 @@ public struct SessionsRewindParams: Codable, Sendable {
 
 public struct SessionsRewindResult: Codable, Sendable {
     public let editortext: String?
+    public let editorattachments: [[String: AnyCodable]]?
 
     public init(
-        editortext: String? = nil)
+        editortext: String? = nil,
+        editorattachments: [[String: AnyCodable]]? = nil)
     {
         self.editortext = editortext
+        self.editorattachments = editorattachments
     }
 
     private enum CodingKeys: String, CodingKey {
         case editortext = "editorText"
+        case editorattachments = "editorAttachments"
     }
 }
 
@@ -6357,18 +6715,22 @@ public struct SessionsForkParams: Codable, Sendable {
 public struct SessionsForkResult: Codable, Sendable {
     public let sessionkey: String
     public let editortext: String?
+    public let editorattachments: [[String: AnyCodable]]?
 
     public init(
         sessionkey: String,
-        editortext: String? = nil)
+        editortext: String? = nil,
+        editorattachments: [[String: AnyCodable]]? = nil)
     {
         self.sessionkey = sessionkey
         self.editortext = editortext
+        self.editorattachments = editorattachments
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
         case editortext = "editorText"
+        case editorattachments = "editorAttachments"
     }
 }
 
@@ -7114,29 +7476,36 @@ public struct SessionsAbortParams: Codable, Sendable {
     public let key: String?
     public let runid: String?
     public let agentid: String?
+    public let clearqueued: Bool?
 
     public init(
         key: String? = nil,
         runid: String? = nil,
-        agentid: String? = nil)
+        agentid: String? = nil,
+        clearqueued: Bool? = nil)
     {
         self.key = key
         self.runid = runid
         self.agentid = agentid
+        self.clearqueued = clearqueued
     }
 
     private enum CodingKeys: String, CodingKey {
         case key
         case runid = "runId"
         case agentid = "agentId"
+        case clearqueued = "clearQueued"
     }
 }
 
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
+    public let expectedsessionid: String?
+    public let expectedlifecyclerevision: String?
     public let label: AnyCodable?
     public let category: AnyCodable?
+    public let boardface: AnyCodable?
     public let icon: AnyCodable?
     public let statusnote: AnyCodable?
     public let attention: AnyCodable?
@@ -7166,8 +7535,11 @@ public struct SessionsPatchParams: Codable, Sendable {
     public init(
         key: String,
         agentid: String? = nil,
+        expectedsessionid: String? = nil,
+        expectedlifecyclerevision: String? = nil,
         label: AnyCodable? = nil,
         category: AnyCodable? = nil,
+        boardface: AnyCodable? = nil,
         icon: AnyCodable? = nil,
         statusnote: AnyCodable? = nil,
         attention: AnyCodable? = nil,
@@ -7196,8 +7568,11 @@ public struct SessionsPatchParams: Codable, Sendable {
     {
         self.key = key
         self.agentid = agentid
+        self.expectedsessionid = expectedsessionid
+        self.expectedlifecyclerevision = expectedlifecyclerevision
         self.label = label
         self.category = category
+        self.boardface = boardface
         self.icon = icon
         self.statusnote = statusnote
         self.attention = attention
@@ -7228,8 +7603,11 @@ public struct SessionsPatchParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+        case expectedsessionid = "expectedSessionId"
+        case expectedlifecyclerevision = "expectedLifecycleRevision"
         case label
         case category
+        case boardface = "boardFace"
         case icon
         case statusnote = "statusNote"
         case attention
@@ -7396,29 +7774,37 @@ public struct SessionsGroupsListParams: Codable, Sendable {}
 
 public struct SessionsGroupsListResult: Codable, Sendable {
     public let groups: [SessionGroup]
+    public let sectionorder: [String]?
 
     public init(
-        groups: [SessionGroup])
+        groups: [SessionGroup],
+        sectionorder: [String]? = nil)
     {
         self.groups = groups
+        self.sectionorder = sectionorder
     }
 
     private enum CodingKeys: String, CodingKey {
         case groups
+        case sectionorder = "sectionOrder"
     }
 }
 
 public struct SessionsGroupsPutParams: Codable, Sendable {
     public let names: [String]
+    public let sectionorder: [String]?
 
     public init(
-        names: [String])
+        names: [String],
+        sectionorder: [String]? = nil)
     {
         self.names = names
+        self.sectionorder = sectionorder
     }
 
     private enum CodingKeys: String, CodingKey {
         case names
+        case sectionorder = "sectionOrder"
     }
 }
 
@@ -7457,21 +7843,25 @@ public struct SessionsGroupsDeleteParams: Codable, Sendable {
 public struct SessionsGroupsMutationResult: Codable, Sendable {
     public let ok: Bool
     public let groups: [SessionGroup]
+    public let sectionorder: [String]?
     public let updatedsessions: Int?
 
     public init(
         ok: Bool,
         groups: [SessionGroup],
+        sectionorder: [String]? = nil,
         updatedsessions: Int? = nil)
     {
         self.ok = ok
         self.groups = groups
+        self.sectionorder = sectionorder
         self.updatedsessions = updatedsessions
     }
 
     private enum CodingKeys: String, CodingKey {
         case ok
         case groups
+        case sectionorder = "sectionOrder"
         case updatedsessions = "updatedSessions"
     }
 }
@@ -8747,6 +9137,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
     public let message: String?
     public let welcomevariant: AnyCodable?
     public let reset: Bool?
+    public let context: [String: AnyCodable]?
     public let delegation: [String: AnyCodable]?
 
     public init(
@@ -8754,12 +9145,14 @@ public struct SystemAgentChatParams: Codable, Sendable {
         message: String? = nil,
         welcomevariant: AnyCodable? = nil,
         reset: Bool? = nil,
+        context: [String: AnyCodable]? = nil,
         delegation: [String: AnyCodable]? = nil)
     {
         self.sessionid = sessionid
         self.message = message
         self.welcomevariant = welcomevariant
         self.reset = reset
+        self.context = context
         self.delegation = delegation
     }
 
@@ -8768,6 +9161,7 @@ public struct SystemAgentChatParams: Codable, Sendable {
         case message
         case welcomevariant = "welcomeVariant"
         case reset
+        case context
         case delegation
     }
 }
@@ -10932,6 +11326,7 @@ public struct AgentsFileEntry: Codable, Sendable {
     public let name: String
     public let path: String
     public let missing: Bool
+    public let expectedabsent: Bool?
     public let size: Int?
     public let updatedatms: Int?
     public let content: String?
@@ -10940,6 +11335,7 @@ public struct AgentsFileEntry: Codable, Sendable {
         name: String,
         path: String,
         missing: Bool,
+        expectedabsent: Bool? = nil,
         size: Int? = nil,
         updatedatms: Int? = nil,
         content: String? = nil)
@@ -10947,6 +11343,7 @@ public struct AgentsFileEntry: Codable, Sendable {
         self.name = name
         self.path = path
         self.missing = missing
+        self.expectedabsent = expectedabsent
         self.size = size
         self.updatedatms = updatedatms
         self.content = content
@@ -10956,6 +11353,7 @@ public struct AgentsFileEntry: Codable, Sendable {
         case name
         case path
         case missing
+        case expectedabsent = "expectedAbsent"
         case size
         case updatedatms = "updatedAtMs"
         case content
@@ -11423,17 +11821,20 @@ public struct ArtifactsDownloadResult: Codable, Sendable {
     public let encoding: String?
     public let data: String?
     public let url: String?
+    public let expiresat: String?
 
     public init(
         artifact: ArtifactSummary,
         encoding: String? = nil,
         data: String? = nil,
-        url: String? = nil)
+        url: String? = nil,
+        expiresat: String? = nil)
     {
         self.artifact = artifact
         self.encoding = encoding
         self.data = data
         self.url = url
+        self.expiresat = expiresat
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -11441,6 +11842,7 @@ public struct ArtifactsDownloadResult: Codable, Sendable {
         case encoding
         case data
         case url
+        case expiresat = "expiresAt"
     }
 }
 
@@ -12967,6 +13369,7 @@ public struct CronJob: Codable, Sendable {
     public let declarationkey: String?
     public let displayname: String?
     public let owner: [String: AnyCodable]?
+    public let scheduledtoolpolicy: AnyCodable?
     public let agentid: String?
     public let sessionkey: String?
     public let name: String
@@ -13001,6 +13404,7 @@ public struct CronJob: Codable, Sendable {
         declarationkey: String? = nil,
         displayname: String? = nil,
         owner: [String: AnyCodable]? = nil,
+        scheduledtoolpolicy: AnyCodable? = nil,
         agentid: String? = nil,
         sessionkey: String? = nil,
         name: String,
@@ -13034,6 +13438,7 @@ public struct CronJob: Codable, Sendable {
         self.declarationkey = declarationkey
         self.displayname = displayname
         self.owner = owner
+        self.scheduledtoolpolicy = scheduledtoolpolicy
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.name = name
@@ -13069,6 +13474,7 @@ public struct CronJob: Codable, Sendable {
         case declarationkey = "declarationKey"
         case displayname = "displayName"
         case owner
+        case scheduledtoolpolicy = "scheduledToolPolicy"
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case name
@@ -13112,6 +13518,7 @@ public struct CronListParams: Codable, Sendable {
     public let sortdir: AnyCodable?
     public let agentid: String?
     public let compact: Bool?
+    public let includedeliverypreviews: Bool?
 
     public init(
         includedisabled: Bool? = nil,
@@ -13124,7 +13531,8 @@ public struct CronListParams: Codable, Sendable {
         sortby: AnyCodable? = nil,
         sortdir: AnyCodable? = nil,
         agentid: String? = nil,
-        compact: Bool? = nil)
+        compact: Bool? = nil,
+        includedeliverypreviews: Bool? = nil)
     {
         self.includedisabled = includedisabled
         self.limit = limit
@@ -13137,6 +13545,7 @@ public struct CronListParams: Codable, Sendable {
         self.sortdir = sortdir
         self.agentid = agentid
         self.compact = compact
+        self.includedeliverypreviews = includedeliverypreviews
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -13151,6 +13560,7 @@ public struct CronListParams: Codable, Sendable {
         case sortdir = "sortDir"
         case agentid = "agentId"
         case compact
+        case includedeliverypreviews = "includeDeliveryPreviews"
     }
 }
 
@@ -15073,6 +15483,7 @@ public struct QuestionRecord: Codable, Sendable {
     public let questions: [Question]
     public let agentid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let createdatms: Int
     public let expiresatms: Int
     public let status: QuestionStatus
@@ -15084,6 +15495,7 @@ public struct QuestionRecord: Codable, Sendable {
         questions: [Question],
         agentid: String? = nil,
         sessionkey: String? = nil,
+        runid: String? = nil,
         createdatms: Int,
         expiresatms: Int,
         status: QuestionStatus,
@@ -15094,6 +15506,7 @@ public struct QuestionRecord: Codable, Sendable {
         self.questions = questions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.createdatms = createdatms
         self.expiresatms = expiresatms
         self.status = status
@@ -15106,6 +15519,7 @@ public struct QuestionRecord: Codable, Sendable {
         case questions
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case createdatms = "createdAtMs"
         case expiresatms = "expiresAtMs"
         case status
@@ -15119,6 +15533,7 @@ public struct QuestionRequestParams: Codable, Sendable {
     public let questions: [QuestionRequestQuestion]
     public let agentid: String?
     public let sessionkey: String?
+    public let runid: String?
     public let timeoutms: Int?
 
     public init(
@@ -15126,12 +15541,14 @@ public struct QuestionRequestParams: Codable, Sendable {
         questions: [QuestionRequestQuestion],
         agentid: String? = nil,
         sessionkey: String? = nil,
+        runid: String? = nil,
         timeoutms: Int? = nil)
     {
         self.id = id
         self.questions = questions
         self.agentid = agentid
         self.sessionkey = sessionkey
+        self.runid = runid
         self.timeoutms = timeoutms
     }
 
@@ -15140,6 +15557,7 @@ public struct QuestionRequestParams: Codable, Sendable {
         case questions
         case agentid = "agentId"
         case sessionkey = "sessionKey"
+        case runid = "runId"
         case timeoutms = "timeoutMs"
     }
 }

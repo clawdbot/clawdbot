@@ -19,6 +19,8 @@ const GOOGLECHAT_MEDIA_MAX_TIMEOUT_MS = 15 * 60_000;
 const GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS = 30_000;
 const GOOGLECHAT_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLECHAT_ERROR_BODY_MAX_BYTES = 16 * 1024;
+const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
+const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
 function resolveGoogleChatMediaTimeoutMs(maxBytes?: number): number {
   if (!maxBytes) {
@@ -153,18 +155,13 @@ async function fetchBuffer(
     // response body is still bounded independently below.
     timeoutMs: resolveGoogleChatMediaTimeoutMs(options?.maxBytes),
     handleResponse: async (res) => {
-      const maxBytes = options?.maxBytes;
+      const maxBytes = options?.maxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
       const lengthHeader = res.headers.get("content-length");
-      if (maxBytes && lengthHeader) {
+      if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
         if (length !== null && length > maxBytes) {
           throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
         }
-      }
-      if (!maxBytes) {
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const contentType = res.headers.get("content-type") ?? undefined;
-        return { buffer, contentType };
       }
       const buffer = await readResponseWithLimit(res, maxBytes, {
         chunkTimeoutMs: GOOGLECHAT_RESPONSE_READ_IDLE_TIMEOUT_MS,

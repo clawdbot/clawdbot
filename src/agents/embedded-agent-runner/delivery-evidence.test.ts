@@ -2,12 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   collectAutomaticDeliveredMediaUrls,
   collectDeliveredMediaUrls,
+  hasAmbiguousPayloadSendBeforeError,
   hasCompleteAutomaticMediaDeliveryOutcomeEvidence,
   hasCompletedSourceReplyDeliveryEvidence,
+  hasIncompletePartialPayloadOutcomeEvidence,
+  hasPayloadOutcomeSendEvidence,
   hasUnaccountedMessagingToolAggregateEvidence,
   hasVisibleOutboundDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./delivery-evidence.js";
+import {
+  hasIntentionalSilentAgentPayload,
+  hasVisibleAgentPayload,
+  isMeaningfulTranscriptMessage,
+  isTerminalSilentAssistantMessage,
+} from "./message-visibility.js";
 
 describe("explicit final source-reply delivery evidence", () => {
   it("distinguishes progress from a delivered final reply", () => {
@@ -234,5 +243,78 @@ describe("queued delivery evidence", () => {
         },
       }),
     ).toEqual(["/tmp/committed.png"]);
+  });
+
+  it("classifies partial payload outcomes in one canonical state machine", () => {
+    const complete = {
+      payloads: [{ text: "sent" }, { mediaUrls: ["/tmp/proof.png"] }],
+      deliveryStatus: {
+        status: "partial_failed",
+        payloadOutcomes: [
+          { index: 0, status: "sent" },
+          { index: 1, status: "failed", sentBeforeError: true },
+        ],
+      },
+    };
+    expect(hasPayloadOutcomeSendEvidence(complete)).toBe(true);
+    expect(hasAmbiguousPayloadSendBeforeError(complete)).toBe(true);
+    expect(hasIncompletePartialPayloadOutcomeEvidence(complete)).toBe(false);
+    expect(
+      hasIncompletePartialPayloadOutcomeEvidence({
+        ...complete,
+        deliveryStatus: {
+          ...complete.deliveryStatus,
+          payloadOutcomes: complete.deliveryStatus.payloadOutcomes.slice(1),
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("credits an ambiguous single-payload send only when requested", () => {
+    const result = {
+      payloads: [{ mediaUrls: ["/tmp/proof.png"] }],
+      deliveryStatus: {
+        status: "partial_failed",
+        payloadOutcomes: [{ index: 0, status: "failed", sentBeforeError: true }],
+      },
+    };
+    expect(
+      collectAutomaticDeliveredMediaUrls(result, { includeSuppressedOutcomes: false }),
+    ).toEqual([]);
+    expect(
+      collectAutomaticDeliveredMediaUrls(result, {
+        includeAmbiguousSinglePayloadFailure: true,
+        includeSuppressedOutcomes: false,
+      }),
+    ).toEqual(["/tmp/proof.png"]);
+  });
+});
+
+describe("agent reply visibility", () => {
+  it("distinguishes visible replies from intentional silent payloads", () => {
+    const result = { payloads: [{ text: "NO_REPLY" }] };
+    expect(hasVisibleAgentPayload(result)).toBe(true);
+    expect(hasVisibleAgentPayload(result, { includeSilentReplyPayloads: false })).toBe(false);
+    expect(hasIntentionalSilentAgentPayload(result)).toBe(true);
+    expect(
+      hasIntentionalSilentAgentPayload({
+        payloads: [{ text: "NO_REPLY", mediaUrls: ["/tmp/proof.png"] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("classifies terminal silent transcript messages and meaningful tails", () => {
+    expect(
+      isTerminalSilentAssistantMessage({
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          { type: "thinking", text: "internal" },
+          { type: "text", text: "NO_REPLY" },
+        ],
+      }),
+    ).toBe(true);
+    expect(isMeaningfulTranscriptMessage({ role: "system" })).toBe(false);
+    expect(isMeaningfulTranscriptMessage({ role: "toolResult" })).toBe(true);
   });
 });

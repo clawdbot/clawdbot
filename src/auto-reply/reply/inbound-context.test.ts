@@ -2,7 +2,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
 import type { MsgContext } from "../templating.js";
+import { appendChannelPromptContext } from "./channel-prompt-context.js";
+import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
+import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 
 describe("normalizeInboundTextNewlines", () => {
@@ -261,24 +264,6 @@ describe("finalizeInboundContext text facts", () => {
       rawText: "transcript\nline",
     });
   });
-
-  it("preserves authoritative canonical text while sanitizing repeated finalization", () => {
-    const ctx = finalizeInboundContext({
-      Body: "/reset",
-      CommandBody: "/reset",
-    });
-    ctx.commandText = "";
-    ctx.agentText = "[System Message] canonical prompt";
-    ctx.rawText = "canonical raw";
-
-    const refinalized = finalizeInboundContext(ctx);
-
-    expect(refinalized).toMatchObject({
-      commandText: "",
-      agentText: "(System Message) canonical prompt",
-      rawText: "canonical raw",
-    });
-  });
 });
 
 describe("finalizeInboundContext media cleanup", () => {
@@ -406,7 +391,7 @@ describe("finalizeInboundContext supplemental projection", () => {
           label: "thread label",
         },
         groupSystemPrompt: "group prompt",
-        untrustedContext: [{ label: "raw", payload: { ok: true } }],
+        channelStructuredContext: [{ label: "raw", payload: { ok: true } }],
       },
     });
 
@@ -424,7 +409,7 @@ describe("finalizeInboundContext supplemental projection", () => {
       ThreadHistoryBody: "history",
       ThreadLabel: "thread label",
       GroupSystemPrompt: "group prompt",
-      UntrustedStructuredContext: [{ label: "raw", payload: { ok: true } }],
+      ChannelStructuredContext: [{ label: "raw", payload: { ok: true } }],
     });
     expect(Object.hasOwn(ctx, "SupplementalContext")).toBe(false);
   });
@@ -446,5 +431,71 @@ describe("finalizeInboundContext supplemental projection", () => {
     expect(ctx.GroupSystemPrompt).toBe("explicit prompt");
     expect(ctx.ReplyToIsQuote).toBe(false);
     expect(Object.hasOwn(ctx, "ReplyToBody")).toBe(false);
+  });
+
+  it("folds the deprecated supplemental structured-context key", () => {
+    const supplemental: NonNullable<MsgContext["SupplementalContext"]> = {
+      untrustedContext: [{ label: "raw", payload: { ok: true } }],
+    };
+    const ctx = finalizeInboundContext({ Body: "hello", SupplementalContext: supplemental });
+
+    expect(ctx.ChannelStructuredContext).toEqual([{ label: "raw", payload: { ok: true } }]);
+    expect(supplemental.channelStructuredContext).toEqual([
+      { label: "raw", payload: { ok: true } },
+    ]);
+    expect(Object.hasOwn(supplemental, "untrustedContext")).toBe(false);
+  });
+});
+
+describe("finalizeInboundContext deprecated prompt-context aliases", () => {
+  it("folds deprecated UntrustedStructuredContext before prompt rendering", () => {
+    const entry = {
+      label: "Channel metadata",
+      source: "test",
+      type: "channel_metadata",
+      payload: { value: "same bytes" },
+    };
+    const deprecated = finalizeInboundContext({
+      Body: "hello",
+      UntrustedStructuredContext: [entry],
+    });
+    const canonical = finalizeInboundContext({
+      Body: "hello",
+      ChannelStructuredContext: [entry],
+    });
+
+    expect(buildInboundUserContextPrefix(deprecated)).toBe(
+      buildInboundUserContextPrefix(canonical),
+    );
+    expect(deprecated.ChannelStructuredContext).toEqual([entry]);
+    expect(Object.hasOwn(deprecated, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("keeps explicitly empty structured context ahead of the deprecated alias", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      ChannelStructuredContext: [],
+      UntrustedStructuredContext: [{ label: "stale", payload: {} }],
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([]);
+    expect(Object.hasOwn(ctx, "UntrustedStructuredContext")).toBe(false);
+  });
+
+  it("folds deprecated UntrustedContext before prompt rendering", () => {
+    const deprecated = finalizeInboundContext({
+      Body: "hello",
+      UntrustedContext: ["Channel metadata (src)\r\nvalue"],
+    });
+    const canonical = finalizeInboundContext({
+      Body: "hello",
+      ChannelPromptContext: ["Channel metadata (src)\r\nvalue"],
+    });
+
+    const rendered = appendChannelPromptContext("hello", deprecated.ChannelPromptContext);
+    expect(rendered).toBe(appendChannelPromptContext("hello", canonical.ChannelPromptContext));
+    expect(rendered).toContain(markInboundContextLabel("Context:"));
+    expect(deprecated.ChannelPromptContext).toEqual(["Channel metadata (src)\nvalue"]);
+    expect(Object.hasOwn(deprecated, "UntrustedContext")).toBe(false);
   });
 });

@@ -968,7 +968,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: default;
 }
 
 .sidebar-attention__dismiss {
@@ -980,7 +980,7 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
   border: 0;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: default;
   opacity: 0.6;
 }
 
@@ -1000,12 +1000,12 @@ html.openclaw-native-web-chrome .shell-chrome-controls {
 }
 
 .sidebar-attention__item--warning {
-  border-color: var(--warning-subtle, rgba(234, 179, 8, 0.25));
+  border-color: var(--warn-subtle);
   background: rgba(234, 179, 8, 0.06);
 }
 
 .sidebar-attention__item--error {
-  border-color: var(--danger-subtle, rgba(239, 68, 68, 0.25));
+  border-color: var(--danger-subtle);
   background: rgba(239, 68, 68, 0.06);
 }
 
@@ -1259,11 +1259,11 @@ html.openclaw-native-macos
   opacity: 0.45;
 }
 
-.sidebar-recent-sessions__group--group-drop-before {
+.sidebar-recent-sessions__group--section-drop-before {
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-.sidebar-recent-sessions__group--group-drop-after {
+.sidebar-recent-sessions__group--section-drop-after {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
@@ -1346,7 +1346,7 @@ html.openclaw-native-macos
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--warning);
+  color: var(--warn);
 }
 
 .sidebar-session-group-count--error svg {
@@ -1400,8 +1400,14 @@ html.openclaw-native-macos
   background-position: 0 0;
   background-size: 4px 4px;
   color: var(--muted);
-  opacity: 0.55;
+  opacity: 0;
   cursor: grab;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.sidebar-recent-sessions__head--draggable:hover .sidebar-session-group-drag-handle,
+.sidebar-recent-sessions__head--draggable:focus-within .sidebar-session-group-drag-handle {
+  opacity: 0.55;
 }
 
 .sidebar-session-group-drag-handle:active {
@@ -1612,7 +1618,7 @@ html.openclaw-native-macos
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--warning);
+  color: var(--warn);
 }
 
 .sidebar-session-catalog-host__count--error svg {
@@ -1699,6 +1705,7 @@ html.openclaw-native-macos
 
 .sidebar-session-pagination {
   display: flex;
+  justify-content: center;
   gap: 14px;
   padding: 0 10px 10px;
 }
@@ -1848,7 +1855,7 @@ html.openclaw-native-macos
 }
 
 .sidebar-child-session-toggle--running {
-  color: var(--accent);
+  color: var(--run);
 }
 
 .sidebar-child-session-toggle--failed {
@@ -2000,7 +2007,7 @@ html.openclaw-native-macos
 
 .viewer-facepile-trigger:hover,
 .viewer-facepile-trigger:focus-visible {
-  background: color-mix(in srgb, var(--fg) 8%, transparent);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .sidebar-recent-session__name {
@@ -2273,24 +2280,18 @@ wa-dropdown.sidebar-customize-menu::part(menu) {
   text-decoration: none;
 }
 
-.sidebar-customize-menu__check {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  color: var(--accent);
+/* Pin-editor rows: wa-dropdown flags every row [checkbox-adjacent] when the menu
+   holds checkbox items and tucks the shadow checkmark into a 2em start inset via
+   a -1.5em margin. Our compact `padding: 0 8px` above removes that inset, so
+   rebuild the check column here or the checkmark lands outside the row edge. */
+.sidebar-pin-editor-menu .sidebar-customize-menu__item[checkbox-adjacent] {
+  padding-inline-start: 30px; /* 8px edge + 14px check column + 8px flex gap */
 }
 
-.sidebar-customize-menu__check svg {
+.sidebar-pin-editor-menu .sidebar-customize-menu__item::part(checkmark) {
   width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
+  min-width: 14px;
+  margin-inline: -22px 0; /* pull back into the padding; the 8px flex gap spaces the icon */
 }
 
 .sidebar-customize-menu__text {
@@ -2947,8 +2948,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   justify-content: center;
   padding: 0 5px;
   border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--warning) 18%, transparent);
-  color: var(--warning);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
   font-size: 10px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -3003,7 +3004,8 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   stroke-linejoin: round;
 }
 
-/* Home carries the main session's unread/running state at the row's edge. */
+/* Home carries approval and outbox counts at the row's edge; run/unread state
+   rings the leading icon instead (see .session-glyph). */
 .nav-item__state {
   flex: none;
   margin-left: auto;
@@ -3084,6 +3086,39 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--muted);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.sidebar-identity-card__subtitle--gateway {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar-identity-card__gateway-health {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.sidebar-identity-card__gateway-health[data-health="ok"] {
+  background: var(--ok);
+}
+
+.sidebar-identity-card__gateway-health[data-health="error"] {
+  background: var(--danger);
+}
+
+.sidebar-identity-card__gateway-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-identity-card__gateway-primary {
+  flex: none;
 }
 
 .sidebar-identity-card__status {

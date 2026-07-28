@@ -209,6 +209,9 @@ describe("createCodexNativeWebSearchWrapper", () => {
         onPayload: async () => ({
           tools: [
             { type: "function", name: "exec" },
+            { type: "function", name: "computer" },
+            { type: "function", name: "image" },
+            { type: "function", name: "message" },
             {
               type: "function",
               get function(): { name: string } {
@@ -226,6 +229,9 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(nextPayload).toEqual({
       tools: [
         { type: "function", name: "exec" },
+        { type: "function", name: "computer" },
+        { type: "function", name: "image" },
+        { type: "function", name: "message" },
         { type: "function", name: "wait" },
       ],
     });
@@ -273,6 +279,9 @@ describe("createCodexNativeWebSearchWrapper", () => {
         tools: [
           { type: "function", name: "exec" },
           { type: "function", name: "wait" },
+          { type: "function", name: "computer" },
+          { type: "function", name: "image" },
+          { type: "function", name: "message" },
           { type: "function", name: "read" },
         ],
       };
@@ -304,6 +313,9 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]?.tools).toEqual([
       { type: "function", name: "exec" },
       { type: "function", name: "wait" },
+      { type: "function", name: "computer" },
+      { type: "function", name: "image" },
+      { type: "function", name: "message" },
     ]);
   });
 
@@ -316,6 +328,9 @@ describe("createCodexNativeWebSearchWrapper", () => {
           {
             functionDeclarations: [
               { name: "exec", description: "Run code" },
+              { name: "computer", description: "Control a desktop" },
+              { name: "image", description: "Read an image" },
+              { name: "message", description: "Deliver the response" },
               { name: "read", description: "Read a file" },
               { name: "wait", description: "Resume code" },
             ],
@@ -351,6 +366,9 @@ describe("createCodexNativeWebSearchWrapper", () => {
       {
         functionDeclarations: [
           { name: "exec", description: "Run code" },
+          { name: "computer", description: "Control a desktop" },
+          { name: "image", description: "Read an image" },
+          { name: "message", description: "Deliver the response" },
           { name: "wait", description: "Resume code" },
         ],
       },

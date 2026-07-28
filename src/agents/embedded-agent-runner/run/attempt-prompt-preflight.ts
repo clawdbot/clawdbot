@@ -2,6 +2,7 @@
  * Reports prompt pressure and owns explicit mid-turn recovery routing.
  */
 import type { AssembleResult } from "../../../context-engine/types.js";
+import type { AgentRunAttemptFailureSource } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { SessionManager } from "../../sessions/index.js";
@@ -31,7 +32,7 @@ type AttemptPromptPreflightState = {
   contextBudgetStatus: EmbeddedRunAttemptResult["contextBudgetStatus"];
   preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
   promptError: unknown;
-  promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"];
+  promptErrorSource: AgentRunAttemptFailureSource | null;
   skipPromptSubmission: boolean;
 };
 

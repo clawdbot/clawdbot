@@ -73,6 +73,7 @@ type MeetingPlatformAdapterOptions<
     "captions" | "classifyManualAction" | "parseLeaveResult" | "parseStatus" | "permissionNotes"
   > & {
     captions: Omit<MeetingBrowserAdapter<Mode, Health, Transcript>["captions"], "parseTranscript">;
+    permissionNotes?: MeetingBrowserAdapter<Mode, Health, Transcript>["permissionNotes"];
   };
   parsing: {
     classifyManualActionReason(reason: string): MeetingManualActionCategory;
@@ -91,6 +92,17 @@ function browserResultString(result: unknown): string | undefined {
   }
   const value = (result as Record<string, unknown>).result;
   return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function parseMeetingManualAction(value: unknown): MeetingBrowserHealth["manualAction"] {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const action = value as Record<string, unknown>;
+  if (typeof action.reason !== "string" || typeof action.message !== "string") {
+    return undefined;
+  }
+  return { reason: action.reason, message: action.message };
 }
 
 function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
@@ -167,12 +179,7 @@ function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
       typeof parsed.audioOutputRouteRetryable === "boolean"
         ? parsed.audioOutputRouteRetryable
         : undefined,
-    manualActionRequired:
-      typeof parsed.manualActionRequired === "boolean" ? parsed.manualActionRequired : undefined,
-    manualActionReason:
-      typeof parsed.manualActionReason === "string" ? parsed.manualActionReason : undefined,
-    manualActionMessage:
-      typeof parsed.manualActionMessage === "string" ? parsed.manualActionMessage : undefined,
+    manualAction: parseMeetingManualAction(parsed.manualAction),
     browserUrl: typeof parsed.url === "string" ? parsed.url : undefined,
     browserTitle: typeof parsed.title === "string" ? parsed.title : undefined,
     status: "browser-control",
@@ -310,17 +317,13 @@ function createMeetingPlatformAdapter<
       ...browser,
       parseStatus: (result) => parseMeetingBrowserStatus(result, parsing),
       classifyManualAction: (health) => {
-        if (
-          !health.manualActionRequired ||
-          !health.manualActionReason ||
-          !health.manualActionMessage
-        ) {
+        if (!health.manualAction) {
           return undefined;
         }
         return {
-          category: parsing.classifyManualActionReason(health.manualActionReason),
-          reason: health.manualActionReason,
-          message: health.manualActionMessage,
+          category: parsing.classifyManualActionReason(health.manualAction.reason),
+          reason: health.manualAction.reason,
+          message: health.manualAction.message,
         };
       },
       parseLeaveResult: parseMeetingLeaveResult,
@@ -328,34 +331,59 @@ function createMeetingPlatformAdapter<
         ...browser.captions,
         parseTranscript: (result) => parseMeetingTranscript(result, parsing),
       },
-      permissionNotes: ({ allowMicrophone, error, result }) => {
-        if (!allowMicrophone) {
-          return [`Observe-only mode does not request ${parsing.displayName} microphone access.`];
-        }
-        if (error) {
-          return [
-            `Could not grant ${parsing.displayName} media permissions automatically: ${formatErrorMessage(error)}`,
+      permissionNotes:
+        browser.permissionNotes ??
+        (({ allowMicrophone, error, result }) => {
+          if (!allowMicrophone) {
+            return [`Observe-only mode does not request ${parsing.displayName} microphone access.`];
+          }
+          if (error) {
+            return [
+              `Could not grant ${parsing.displayName} media permissions automatically: ${formatErrorMessage(error)}`,
+            ];
+          }
+          const record =
+            result && typeof result === "object" ? (result as Record<string, unknown>) : {};
+          const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
+            ? record.unsupportedPermissions.filter(
+                (value): value is string => typeof value === "string",
+              )
+            : [];
+          const notes = [
+            `Granted ${parsing.displayName} microphone permission through browser control.`,
           ];
-        }
-        const record =
-          result && typeof result === "object" ? (result as Record<string, unknown>) : {};
-        const unsupportedPermissions = Array.isArray(record.unsupportedPermissions)
-          ? record.unsupportedPermissions.filter(
-              (value): value is string => typeof value === "string",
-            )
-          : [];
-        const notes = [
-          `Granted ${parsing.displayName} microphone permission through browser control.`,
-        ];
-        if (unsupportedPermissions.includes("speakerSelection")) {
-          notes.push(
-            `Chrome did not accept the optional ${parsing.displayName} speaker-selection permission.`,
-          );
-        }
-        return notes;
-      },
+          if (unsupportedPermissions.includes("speakerSelection")) {
+            notes.push(
+              `Chrome did not accept the optional ${parsing.displayName} speaker-selection permission.`,
+            );
+          }
+          return notes;
+        }),
     },
   };
+}
+
+function isMeetingTalkBackMode(mode: string): boolean {
+  return mode === "agent" || mode === "bidi";
+}
+
+function isMeetingRealtimeRouteReady(
+  mode: string,
+  health:
+    | (MeetingBrowserHealth & {
+        audioInputRouted?: boolean;
+        audioOutputRouted?: boolean;
+      })
+    | undefined,
+): boolean {
+  return (
+    isMeetingTalkBackMode(mode) &&
+    health?.inCall === true &&
+    health.micMuted === false &&
+    health.audioInputRouted === true &&
+    health.audioOutputRouted === true &&
+    health.manualAction === undefined
+  );
 }
 
 export const MeetingPlatformAdapter = {
@@ -366,4 +394,6 @@ export const MeetingPlatformAdapter = {
   createPluginEntry: createMeetingPluginEntryOptions,
   createStatusCallSource: createMeetingStatusCallSource,
   createStatusPreludeSource: createMeetingStatusPreludeSource,
+  isRealtimeRouteReady: isMeetingRealtimeRouteReady,
+  isTalkBackMode: isMeetingTalkBackMode,
 };

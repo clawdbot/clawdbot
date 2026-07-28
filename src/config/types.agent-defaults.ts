@@ -154,7 +154,7 @@ export type AgentDefaultsConfig = {
   modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
-  /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
+  /** Optional default allowlist of skills for agents that do not set agents.entries.*.skills. */
   skills?: string[];
   /** Silent-reply policy by conversation type. */
   silentReply?: SilentReplyPolicyShape;
@@ -166,7 +166,7 @@ export type AgentDefaultsConfig = {
   /**
    * List of optional bootstrap filenames to skip writing to the workspace root.
    * Applies to: SOUL.md, USER.md, IDENTITY.md ("HEARTBEAT.md" is accepted but a no-op).
-   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Required workspace setup such as AGENTS.md still runs.
    * Example: ["SOUL.md", "USER.md", "IDENTITY.md"]
    */
   skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
@@ -286,6 +286,8 @@ export type AgentDefaultsConfig = {
   typingMode?: TypingMode;
   /** Periodic background heartbeat runs. */
   heartbeat?: {
+    /** Agent that owns ambient heartbeat runs when no per-agent heartbeat is configured. */
+    agentId?: string;
     /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
     every?: string;
     /** Optional active-hours window (local time); heartbeats run only inside this window. */
@@ -326,7 +328,11 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 4. */
+  /** Owner for ambient OpenClaw system-agent/Custodian inference. */
+  systemAgent?: {
+    agentId?: string;
+  };
+  /** Max concurrent agent runs across all conversations. Default: min(16, max(8, available CPU parallelism)). */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
@@ -376,6 +382,8 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 };
 
 export type AgentCompactionConfig = {
+  /** Enable embedded proactive auto-compaction. Default: true. */
+  enabled?: boolean;
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
   /** Override the session thinking level for embedded OpenClaw compaction summaries. */

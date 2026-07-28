@@ -2,6 +2,7 @@
 // Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
@@ -22,6 +23,7 @@ function createEmbeddedRunMockExports() {
     compactEmbeddedAgentSession: (...args: unknown[]) =>
       embeddedRunMock.compactEmbeddedAgentSession(...args),
     isEmbeddedAgentRunActive: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
+    isEmbeddedAgentRunInProgress: (sessionId: string) => embeddedRunMock.activeIds.has(sessionId),
     abortEmbeddedAgentRun: (sessionId: string) => {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
@@ -71,6 +73,20 @@ function createDispatchInboundMessageMockExports(
             typeof actual.dispatchInboundMessage
           >)
         : actual.dispatchInboundMessage(...args);
+    },
+    dispatchInboundMessageWithProjectedDispatcher: (
+      ...args: Parameters<typeof actual.dispatchInboundMessageWithProjectedDispatcher>
+    ) => {
+      const impl = gatewayTestHoisted.dispatchInboundMessage.getMockImplementation();
+      if (!impl) {
+        return actual.dispatchInboundMessageWithProjectedDispatcher(...args);
+      }
+      const [params] = args;
+      const { dispatcherOptions, ...dispatchParams } = params;
+      return gatewayTestHoisted.dispatchInboundMessage({
+        ...dispatchParams,
+        dispatcher: createReplyDispatcher(dispatcherOptions),
+      }) as ReturnType<typeof actual.dispatchInboundMessageWithProjectedDispatcher>;
     },
   };
 }

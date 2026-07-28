@@ -173,6 +173,7 @@ export class GatewayProtocolClient<TPlan> {
   private connectRequestSent = false;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly reconnectSupervisor: RetrySupervisor;
+  private reconnectSignal: AbortSignal | null = null;
   private socketOpened = false;
   private helloReceived = false;
   private connectFailure: GatewayProtocolCloseContext["connectFailure"];
@@ -205,6 +206,9 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   start(): void {
+    if (this.socket || this.reconnectSignal) {
+      return;
+    }
     this.stopped = false;
     this.reconnectSupervisor.cancel();
     this.connect();
@@ -213,6 +217,7 @@ export class GatewayProtocolClient<TPlan> {
   stop(): void {
     this.stopped = true;
     this.clearHandshakeTimer();
+    this.reconnectSignal = null;
     this.reconnectSupervisor.reset();
     const socket = this.socket;
     if (socket && this.opts.notifyStoppedClose) {
@@ -315,6 +320,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   resetReconnectBackoff(initialMs: number): void {
+    this.reconnectSignal = null;
     this.reconnectSupervisor.reset(initialMs);
   }
 
@@ -672,10 +678,21 @@ export class GatewayProtocolClient<TPlan> {
     if (!retry) {
       return;
     }
+    this.reconnectSignal = retry.signal;
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
     void sleepWithAbort(retry.delayMs, retry.signal).then(
-      () => this.connect(),
-      () => {},
+      () => {
+        if (this.reconnectSignal !== retry.signal) {
+          return;
+        }
+        this.reconnectSignal = null;
+        this.connect();
+      },
+      () => {
+        if (this.reconnectSignal === retry.signal) {
+          this.reconnectSignal = null;
+        }
+      },
     );
   }
 

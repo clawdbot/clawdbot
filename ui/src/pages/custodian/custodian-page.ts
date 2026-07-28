@@ -8,11 +8,11 @@ import type {
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -22,12 +22,13 @@ import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import { renderChatAvatar } from "../chat/chat-avatar.ts";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
+import { pathForCustodianAgentHandoff } from "./custodian-navigation.ts";
 import * as eventNudgeState from "./event-nudge.ts";
 import {
+  custodianChatParams,
   isCustodianSessionInvalidatedError,
   sessionVariant,
   type CustodianSessionVariant,
-  welcomeVariant,
 } from "./session-lifecycle.ts";
 import { parseCustodianQuestion, type CustodianStructuredQuestion } from "./structured-question.ts";
 import {
@@ -151,7 +152,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.sessionStarted = true;
     void this.initializeSession(
       client,
-      { sessionId: this.sessionId, ...welcomeVariant(variant) },
+      { sessionId: this.sessionId, ...custodianChatParams(variant) },
       loadTranscript,
     );
   }
@@ -444,13 +445,19 @@ export class CustodianPage extends OpenClawLightDomElement {
             agentId: result.agentId,
             mainKey: roster?.mainKey,
           });
-          this.context.gateway.setSessionKey(sessionKey);
+          selectApplicationSession({
+            selection: this.context.agentSelection,
+            gateway: this.context.gateway,
+            sessionKey,
+            agentId: result.agentId,
+          });
         }
         if (result.agentDraft === "hatch" && sessionKey) {
           // Preserve the destination session while preloading the localized
           // birth-sequence opener; draft-only chat routes are intentionally invalid.
           this.context.navigate("chat", {
-            search: `${searchForSession(sessionKey)}&draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
+            pathname: pathForCustodianAgentHandoff(this.context, sessionKey),
+            search: `?draft=${encodeURIComponent(t("custodian.hatchDraft"))}`,
           });
         } else {
           this.exitSetup();
@@ -516,8 +523,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     this.input = "";
     const reply = this.requestReply(client, {
       sessionId: this.sessionId,
-      ...welcomeVariant(sessionVariant(this.onboarding, this.newAgentIntent)),
-      message,
+      ...custodianChatParams(sessionVariant(this.onboarding, this.newAgentIntent), message),
     });
     const replyEpoch = this.requestEpoch;
     const outcome = await reply;

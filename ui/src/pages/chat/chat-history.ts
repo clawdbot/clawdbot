@@ -15,12 +15,7 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "../../lib/chat/heartbeat-display.ts";
-import { extractText } from "../../lib/chat/message-extract.ts";
-import {
-  retirePendingChatSideQuestion,
-  type ChatSideResult,
-  type ChatSideResultPending,
-} from "../../lib/chat/side-result.ts";
+import { extractText, isEmptyUserTextOnlyMessage } from "../../lib/chat/message-extract.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -45,6 +40,7 @@ import {
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 import {
   isRetryableStartupUnavailable,
@@ -60,7 +56,10 @@ import {
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
-import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
+import {
+  isPendingInitialUserMessage,
+  reconcileInitialUserMessageHandoff,
+} from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -97,6 +96,10 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
 const chatBranchRequestVersions = new WeakMap<object, number>();
 const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
+const pendingSessionMessageSubscriptionReleases = new WeakMap<
+  object,
+  Set<SessionMessageSubscription>
+>();
 
 type ChatHistoryRequestOwnership = {
   version: number;
@@ -179,55 +182,6 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   }
   const text = extractText(message);
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
-}
-
-function isTextOnlyContent(content: unknown): boolean {
-  if (typeof content === "string") {
-    return true;
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string") {
-      return false;
-    }
-  }
-  return sawText;
-}
-
-function isEmptyUserTextOnlyMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
-    return false;
-  }
-  const mediaPaths = Array.isArray(entry.MediaPaths)
-    ? entry.MediaPaths
-    : typeof entry.MediaPath === "string"
-      ? [entry.MediaPath]
-      : [];
-  if (mediaPaths.some((value) => typeof value === "string" && value.trim())) {
-    return false;
-  }
-  if (!isTextOnlyContent(entry.content ?? entry.text)) {
-    return false;
-  }
-  return (extractText(message)?.trim() ?? "") === "";
 }
 
 function isHeartbeatAckStream(text: string): boolean {
@@ -353,12 +307,6 @@ export type ChatState = {
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: { summary: string } | null;
-  /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
-  chatSideChatTurns?: ChatSideResult[];
-  chatSideResultPending?: ChatSideResultPending | null;
-  chatSideResultTerminalRuns?: Set<string>;
-  /** Panel closed via X/Escape; conversation kept until cleared or reset. */
-  chatSideChatHidden?: boolean;
   chatReplyTarget?: unknown;
   agentsError?: string | null;
   onAgentsList?: (agentsList: AgentsListResult, client: GatewayBrowserClient) => void;
@@ -367,6 +315,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello: GatewayHelloOk | null;
+  canvasPluginSurfaceUrl?: string | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
   sessions?: Partial<SessionCapability>;
   chatBranches?: SessionBranch[];
@@ -654,6 +603,39 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
   );
 }
 
+function rememberPendingSessionMessageSubscriptionRelease(
+  state: ChatSessionMessageSubscriptionState,
+  subscription: SessionMessageSubscription,
+): void {
+  const key = state as object;
+  const pending = pendingSessionMessageSubscriptionReleases.get(key) ?? new Set();
+  pending.add(subscription);
+  pendingSessionMessageSubscriptionReleases.set(key, pending);
+}
+
+async function retryPendingSessionMessageSubscriptionReleases(
+  state: ChatSessionMessageSubscriptionState,
+): Promise<void> {
+  const key = state as object;
+  const pending = pendingSessionMessageSubscriptionReleases.get(key);
+  if (!pending) {
+    return;
+  }
+  await Promise.all(
+    [...pending].map(async (subscription) => {
+      try {
+        await state.sessions.unsubscribeMessages(subscription);
+        pending.delete(subscription);
+      } catch {
+        // Keep the handle for the next synchronization attempt or connection cleanup.
+      }
+    }),
+  );
+  if (pending.size === 0) {
+    pendingSessionMessageSubscriptionReleases.delete(key);
+  }
+}
+
 export async function syncSelectedSessionMessageSubscription(
   state: ChatSessionMessageSubscriptionState,
   opts?: { force?: boolean },
@@ -666,6 +648,7 @@ export async function syncSelectedSessionMessageSubscription(
   if (!nextKey) {
     return;
   }
+  await retryPendingSessionMessageSubscriptionReleases(state);
   const generation = beginSelectedSessionMessageSubscriptionSync(state);
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
@@ -699,19 +682,62 @@ export async function syncSelectedSessionMessageSubscription(
       requestedAgentId: nextSubscriptionAgentId,
     });
   try {
+    let unsubscribePromise: Promise<void> = Promise.resolve();
     if (shouldUnsubscribePrevious && previousSubscription) {
+      unsubscribePromise = state.sessions.unsubscribeMessages(previousSubscription);
+    }
+    const subscribePromise =
+      shouldSubscribe && isCurrent()
+        ? state.sessions.subscribeMessages(nextKey, {
+            agentId: nextSubscriptionAgentId ?? undefined,
+          })
+        : Promise.resolve(null);
+    // Gateway subscriptions are independent canonical-key entries. Overlap the old
+    // release with the new acquire so a session switch pays one RTT, not two.
+    const [unsubscribeResult, subscribeResult] = await Promise.allSettled([
+      unsubscribePromise,
+      subscribePromise,
+    ]);
+    if (unsubscribeResult.status === "rejected") {
+      if (subscribeResult.status === "fulfilled" && subscribeResult.value) {
+        try {
+          await state.sessions.unsubscribeMessages(subscribeResult.value);
+        } catch (replacementReleaseError) {
+          if (isCurrent()) {
+            if (previousSubscription) {
+              // Both live handles stay owned: the replacement becomes active while the
+              // failed previous release remains queued until a later sync releases it.
+              rememberPendingSessionMessageSubscriptionRelease(state, previousSubscription);
+            }
+            state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+            state.chatSessionMessageSubscription = subscribeResult.value;
+            state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
+          } else {
+            rememberPendingSessionMessageSubscriptionRelease(state, subscribeResult.value);
+          }
+          return;
+        }
+      }
       if (isCurrent()) {
+        state.sessionsError = String(unsubscribeResult.reason);
+      }
+      return;
+    }
+    if (subscribeResult.status === "rejected") {
+      if (isCurrent() && shouldUnsubscribePrevious) {
         state.chatSessionMessageSubscriptionRequestedKey = null;
         state.chatSessionMessageSubscription = null;
       }
-      await state.sessions.unsubscribeMessages(previousSubscription);
+      throw subscribeResult.reason;
     }
-    if (!shouldSubscribe || !isCurrent()) {
+    const subscribed = subscribeResult.value;
+    if (!subscribed) {
+      if (isCurrent() && shouldUnsubscribePrevious) {
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscription = null;
+      }
       return;
     }
-    const subscribed = await state.sessions.subscribeMessages(nextKey, {
-      agentId: nextSubscriptionAgentId ?? undefined,
-    });
     if (!isCurrent()) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
       await state.sessions.unsubscribeMessages(subscribed).catch(() => undefined);
@@ -735,6 +761,7 @@ type InFlightChatHistoryRequest = {
 };
 
 type LoadChatHistoryOptions = {
+  deferBranches?: boolean;
   startup?: boolean;
 };
 
@@ -882,8 +909,6 @@ export async function clearChatHistory(
   }
   state.chatMessages = [];
   state.chatRunError = null;
-  state.chatSideChatTurns = [];
-  state.chatSideChatHidden = false;
   state.chatReplyTarget = null;
   reconcileChatRunLifecycle(state, {
     outcome: hadActiveRun ? "interrupted" : undefined,
@@ -893,13 +918,8 @@ export async function clearChatHistory(
     clearLocalRun: true,
     clearChatStream: true,
     clearToolStream: true,
-    clearSideResultTerminalRuns: true,
     clearRunStatus: !hadActiveRun,
   });
-  // After the suppression-set wipe above: retire (not just drop) a pending
-  // BTW run so its late resultless terminal event cannot re-enter the freshly
-  // cleared transcript.
-  retirePendingChatSideQuestion(state);
   await loadChatHistory(state);
   scheduleChatScroll(state);
   return "completed";
@@ -935,6 +955,12 @@ export async function rewindChatHistory(
     if (!visibleSessionMatches(state, sessionKey, agentParams.agentId)) {
       return null;
     }
+    // Restored images intentionally stay in this tab's memory; persisted composer drafts remain
+    // text-only so large payloads do not enter local storage.
+    state.chatAttachments = replaceChatAttachmentsFromEditor(
+      state.chatAttachments,
+      result.editorAttachments,
+    );
     state.handleChatDraftChange(editorText);
     return result;
   } catch (error) {
@@ -1052,8 +1078,9 @@ export async function loadChatHistory(
     return inFlight.promise;
   }
   if (
-    state.chatBranchesSessionKey !== sessionKey ||
-    state.chatBranchesConnectionEpoch !== connectionEpoch
+    opts.deferBranches !== true &&
+    (state.chatBranchesSessionKey !== sessionKey ||
+      state.chatBranchesConnectionEpoch !== connectionEpoch)
   ) {
     void loadChatBranches(state);
   }
@@ -1244,6 +1271,9 @@ async function loadChatHistoryUncached(
       reconciledTerminal.previousMessages,
       reconciledTerminal.currentMessages,
       authoritativeMessages,
+    ).filter(
+      (message) =>
+        !isPendingInitialUserMessage(state.initialUserMessage, state, sessionKey, message),
     );
     state.chatMessages = preserveOptimisticTailMessages(
       authoritativeMessages,

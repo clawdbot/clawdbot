@@ -31,6 +31,7 @@ import {
 } from "../../plugins/conversation-binding.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
@@ -72,6 +73,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     ctx,
     deliverBindingPayload,
     dispatcher,
+    getDispatchReplyOperation,
     hookRunner,
     isInternalWebchatTurn,
     markIdle,
@@ -198,7 +200,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
     channel:
       (shouldRouteToOriginating ? routeReplyChannel : undefined) ??
-      sessionStoreEntry.entry?.channel ??
+      sessionDeliveryChannel(sessionStoreEntry.entry) ??
       replyRoute.channel ??
       ctx.Surface ??
       ctx.Provider ??
@@ -222,7 +224,11 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
   const chatType = normalizeChatType(ctx.ChatType);
   const silentReplyConversationType = resolveRoutedPolicyConversationType(ctx);
   const silentReplySurface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
+  // Group silent-reply policy sanctions silence for ambient chatter only. A turn
+  // that explicitly addressed the bot (mention) must never end silently, matching
+  // the hard-coded direct-chat rule in resolveSilentReplyPolicyFromPolicies.
   const emptyFinalAllowedAsSilent =
+    ctx.WasMentioned !== true &&
     silentReplyConversationType !== undefined &&
     resolveSilentReplyPolicyFromPolicies({
       conversationType: silentReplyConversationType,
@@ -425,12 +431,26 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     });
   };
   const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
+    const operation = getDispatchReplyOperation();
+    // Feedback only for pre-run drops: the user never saw output. Finalization or
+    // terminal-settle stalls already produced/settled output, so a notice is noise.
+    const droppedBeforeOutput =
+      operation?.result?.kind === "failed" &&
+      operation.result.code === "run_stalled" &&
+      (operation.staleExpiryReason === "no_activity" ||
+        operation.staleExpiryReason === "stuck_recovery");
+    const queuedFinal = droppedBeforeOutput
+      ? dispatcher.sendFinalReply({
+          text: "⚠️ Your reply was dropped because the gateway was overloaded. Please retry.",
+          isError: true,
+        })
+      : false;
     commitInboundDedupeIfClaimed();
     recordProcessed("completed", { reason: "reply_operation_aborted" });
     markIdle("message_completed");
     completeDispatchReplyOperation();
     return attachSourceReplyDeliveryMode({
-      queuedFinal: false,
+      queuedFinal,
       counts: dispatcher.getQueuedCounts(),
     });
   };

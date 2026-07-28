@@ -10,6 +10,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessageSync,
+  listSessionChildEntriesReadOnly,
+  listSessionEntriesReadOnly,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -19,9 +21,11 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { capArrayByJsonBytes } from "./session-transcript-readers.js";
+import { buildSingleRowStoreChildSessionsByKey } from "./session-utils-projection.js";
 import {
   canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
@@ -378,7 +382,7 @@ describe("gateway session utils", () => {
 
   test("session lists separate archived rows and sort pinned sessions first", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
-    const store = {
+    const store: Record<string, SessionEntry> = {
       recent: { sessionId: "recent", updatedAt: 30 },
       pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40, icon: "name:spark" },
       archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
@@ -443,19 +447,25 @@ describe("gateway session utils", () => {
 
   test("session list search includes direct-session origin display labels", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const store = {
+    const store: Record<string, SessionEntry> = {
       "agent:main:telegram:direct:42": {
+        sessionId: "direct-42",
         chatType: "direct",
-        channel: "telegram",
-        origin: { label: "openclaw-tui" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "42" },
+          origin: { label: "openclaw-tui" },
+        }),
         updatedAt: 2,
-      } as SessionEntry,
+      },
       "agent:main:telegram:direct:99": {
+        sessionId: "direct-99",
         chatType: "direct",
-        channel: "telegram",
-        origin: { label: "other-direct" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "99" },
+          origin: { label: "other-direct" },
+        }),
         updatedAt: 1,
-      } as SessionEntry,
+      },
     };
 
     const listed = listSessionsFromStore({
@@ -1209,11 +1219,15 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "direct-42",
+      updatedAt: 1,
       chatType: "direct",
-      channel: "telegram",
-      origin: { label: "openclaw-tui" },
-    } as SessionEntry;
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "42" },
+        origin: { label: "openclaw-tui" },
+      }),
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1226,11 +1240,12 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow keeps dashboard sender identity out of the session title", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "dashboard-1",
+      updatedAt: 1,
       chatType: "direct",
-      channel: "webchat",
-      origin: { label: "Peter", provider: "webchat", chatType: "direct" },
-    } as SessionEntry;
+      delivery: { kind: "internal" as const },
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1253,12 +1268,16 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "group-99",
+      updatedAt: 1,
       chatType: "group",
-      channel: "telegram",
       subject: "Engineering",
-      origin: { label: "openclaw-tui" },
-    } as SessionEntry;
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "group:99" },
+        origin: { label: "openclaw-tui" },
+      }),
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1271,12 +1290,14 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const channelEntry = {
+    const channelEntry: SessionEntry = {
+      sessionId: "channel-C1",
+      updatedAt: 1,
       chatType: "channel",
-      channel: "slack",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "channel:C1" } }),
       groupChannel: "general",
       space: "Acme",
-    } as SessionEntry;
+    };
     const channelRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1296,7 +1317,12 @@ describe("gateway session utils", () => {
     });
     expect(labeledRow.displayName).toBe("Team room");
 
-    const opaque = { chatType: "group", channel: "telegram" } as SessionEntry;
+    const opaque: SessionEntry = {
+      sessionId: "group-opaque",
+      updatedAt: 1,
+      chatType: "group",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "group:99" } }),
+    };
     const opaqueRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1309,7 +1335,7 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow projects worktree and execNode bindings", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
       sessionId: "s1",
       updatedAt: 1,
       spawnedCwd: "/state/worktrees/abc/wt-1234",
@@ -1331,12 +1357,16 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "direct-labeled",
+      updatedAt: 1,
       chatType: "direct",
-      channel: "telegram",
       label: "Alice",
-      origin: { label: "openclaw-tui" },
-    } as SessionEntry;
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "42" },
+        origin: { label: "openclaw-tui" },
+      }),
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1372,7 +1402,11 @@ describe("gateway session utils", () => {
         responseUsage: { default: "off", discord: "full", telegram: "tokens" },
       },
     } as OpenClawConfig;
-    const discordEntry = { sessionId: "d1", updatedAt: 1, channel: "discord" } as SessionEntry;
+    const discordEntry: SessionEntry = {
+      sessionId: "d1",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
+    };
     const discordRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1382,7 +1416,11 @@ describe("gateway session utils", () => {
     });
     expect(discordRow.effectiveResponseUsage).toBe("full");
 
-    const telegramEntry = { sessionId: "t1", updatedAt: 1, channel: "telegram" } as SessionEntry;
+    const telegramEntry: SessionEntry = {
+      sessionId: "t1",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
+    };
     const telegramRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1393,7 +1431,11 @@ describe("gateway session utils", () => {
     expect(telegramRow.effectiveResponseUsage).toBe("tokens");
 
     // A channel with no entry falls back to the config "default" (off).
-    const slackEntry = { sessionId: "x1", updatedAt: 1, channel: "slack" } as SessionEntry;
+    const slackEntry: SessionEntry = {
+      sessionId: "x1",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "slack" } }),
+    };
     const slackRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1886,7 +1928,11 @@ describe("gateway session utils", () => {
 
         const loaded = loadSessionEntry("agent:main:main", { clone: false });
 
-        expect(loaded.entry).toEqual({ sessionId: "sess-main", updatedAt: 7 });
+        expect(loaded.entry).toEqual({
+          sessionId: "sess-main",
+          updatedAt: 7,
+          delivery: { kind: "none" },
+        });
       });
     } finally {
       resetConfigRuntimeState();
@@ -1910,6 +1956,131 @@ describe("gateway session utils", () => {
 
         expect(loaded.entry).toBeUndefined();
         expect(fs.existsSync(path.join(stateDir, "agents", "missing"))).toBe(false);
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntryReadOnly clones only the selected row and direct children", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-exact-read-only-", async ({ stateDir }) => {
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const cfg = {
+          session: { mainKey: "main", store: storePath },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        const parentKey = "agent:main:main";
+        const childKey = "agent:main:child";
+        const now = Date.now();
+        await seedSessionEntries(storePath, {
+          [parentKey]: { sessionId: "parent", updatedAt: now },
+          [childKey]: { sessionId: "child", spawnedBy: parentKey, updatedAt: now + 1 },
+          ...Object.fromEntries(
+            Array.from({ length: 40 }, (_, index) => [
+              `agent:main:unrelated-${index}`,
+              { sessionId: `unrelated-${index}`, updatedAt: now + index + 2 },
+            ]),
+          ),
+        });
+        setRuntimeConfigSnapshot(cfg, cfg);
+        expect(
+          listSessionEntriesReadOnly({ agentId: "main", storePath }).map((item) => item.sessionKey),
+        ).toContain(childKey);
+        const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+        try {
+          expect(loadSessionEntryReadOnly(childKey, { clone: false }).entry).toMatchObject({
+            sessionId: "child",
+            spawnedBy: parentKey,
+          });
+          expect(
+            listSessionChildEntriesReadOnly({
+              agentId: "main",
+              clone: false,
+              sessionKey: parentKey,
+              storePath,
+            }).map((item) => item.sessionKey),
+          ).toEqual([childKey]);
+          const loaded = loadSessionEntryReadOnly("main", {
+            includeStoreChildEntries: true,
+          });
+
+          expect(loaded.entry?.sessionId).toBe("parent");
+          expect(Object.keys(loaded.store).toSorted()).toEqual([childKey, parentKey]);
+          expect(loaded.entry).not.toBe(loaded.store[parentKey]);
+          expect(cloneSpy).toHaveBeenCalledTimes(1);
+        } finally {
+          cloneSpy.mockRestore();
+        }
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("single-row child candidates reuse stable entry identities across sparse stores", () => {
+    const parentKey = "agent:main:main";
+    let spawnedByReads = 0;
+    const parent = { sessionId: "parent", updatedAt: 1 } as SessionEntry;
+    const child = {
+      sessionId: "child",
+      updatedAt: Date.now(),
+      get spawnedBy() {
+        spawnedByReads += 1;
+        return parentKey;
+      },
+    } as SessionEntry;
+    const storePath = "/tmp/openclaw-single-row-child-cache";
+
+    const first = buildSingleRowStoreChildSessionsByKey({
+      store: { [parentKey]: parent, "agent:main:child": child },
+      storePath,
+      key: parentKey,
+      now: Date.now(),
+    });
+    const second = buildSingleRowStoreChildSessionsByKey({
+      store: { [parentKey]: parent, "agent:main:child": child },
+      storePath,
+      key: parentKey,
+      now: Date.now(),
+    });
+
+    expect(first.get(parentKey)).toEqual(["agent:main:child"]);
+    expect(second.get(parentKey)).toEqual(["agent:main:child"]);
+    expect(spawnedByReads).toBe(1);
+  });
+
+  test("loadSessionEntryReadOnly keeps children linked through a main alias", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-exact-alias-children-", async ({ stateDir }) => {
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const cfg = {
+          session: { mainKey: "work", store: storePath },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        const legacyParentKey = "agent:main:main";
+        const childKey = "agent:main:child";
+        const now = Date.now();
+        await seedSessionEntries(storePath, {
+          [legacyParentKey]: { sessionId: "parent", updatedAt: now },
+          [childKey]: {
+            sessionId: "child",
+            spawnedBy: legacyParentKey,
+            updatedAt: now + 1,
+          },
+        });
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntryReadOnly("main", {
+          clone: false,
+          includeStoreChildEntries: true,
+        });
+
+        expect(loaded.canonicalKey).toBe("agent:main:work");
+        expect(loaded.entry?.sessionId).toBe("parent");
+        expect(loaded.store[childKey]?.spawnedBy).toBe(legacyParentKey);
       });
     } finally {
       resetConfigRuntimeState();

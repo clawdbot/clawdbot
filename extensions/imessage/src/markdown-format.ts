@@ -1,5 +1,5 @@
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   markdownToIR,
   renderMarkdownWithAttributedRanges,
 } from "openclaw/plugin-sdk/text-chunking";
@@ -12,13 +12,9 @@ type IMessageFormatRange = {
   styles: IMessageFormatStyle[];
 };
 
-const IMESSAGE_FORMAT_PROFILE = {
+const IMESSAGE_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "ranges",
   constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
     spoiler: "strip",
     codeInline: "fallback",
     codeBlock: "fallback",
@@ -34,12 +30,12 @@ const IMESSAGE_FORMAT_PROFILE = {
     mention: "strip",
   },
   chunk: { limit: 4_000, unit: "utf16" },
-} satisfies FormatCapabilityProfile;
+});
 
-const IMESSAGE_CODE_PROFILE = {
+const IMESSAGE_CODE_PROFILE = FormatCapabilityProfile.define({
   ...IMESSAGE_FORMAT_PROFILE,
   constructs: { ...IMESSAGE_FORMAT_PROFILE.constructs, codeInline: "native" },
-} satisfies FormatCapabilityProfile;
+});
 
 const IMESSAGE_STYLE_MAP = {
   bold: "bold",

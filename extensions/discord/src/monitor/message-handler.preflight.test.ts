@@ -1890,6 +1890,10 @@ describe("preflightDiscordMessage", () => {
       sender: "Alice",
       body: "<media:image>",
       messageId: "m-history-image",
+      senderProvenance: {
+        id: "user-1",
+        memberRoleIds: [],
+      },
       media: [
         {
           contentType: "image/png",

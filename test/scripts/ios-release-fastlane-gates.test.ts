@@ -178,15 +178,20 @@ describe("iOS Fastlane release upload gates", () => {
     expect(uploadCall).toBeGreaterThan(validationCall);
   });
 
-  it("validates with Apple and rechecks the plan before the first remote mutation", () => {
-    const releaseUpload = laneBody(readFastfile(), "release_upload");
-    const binaryValidation = releaseUpload.indexOf("verify_app_store_binary!");
+  it("rechecks the plan after local validation and before the first App Store mutation", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+    const build = releaseUpload.indexOf("build = build_app_store_release(context)");
     const planRecheck = releaseUpload.lastIndexOf("resolve_ios_release_plan!");
     const metadata = releaseUpload.indexOf("\n    metadata(");
+    const upload = releaseUpload.indexOf("upload_to_testflight(");
 
-    expect(binaryValidation).toBeGreaterThanOrEqual(0);
-    expect(planRecheck).toBeGreaterThan(binaryValidation);
+    expect(fastfile).not.toContain("def verify_app_store_binary!");
+    expect(releaseUpload).not.toContain("verify_only: true");
+    expect(build).toBeGreaterThanOrEqual(0);
+    expect(planRecheck).toBeGreaterThan(build);
     expect(metadata).toBeGreaterThan(planRecheck);
+    expect(upload).toBeGreaterThan(planRecheck);
   });
 
   it("waits for Apple build processing without submitting to TestFlight review", () => {

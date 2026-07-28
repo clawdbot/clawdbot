@@ -92,7 +92,6 @@ describe("Codex app-server attempt context", () => {
         bootstrapFiles: [],
         contextFiles: [],
         promptContextFiles: [],
-        developerInstructionFiles: [],
       },
       skillsPrompt: "",
       tools,

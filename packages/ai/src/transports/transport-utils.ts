@@ -21,7 +21,7 @@ export function sha256Hex(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function sha256HexPrefix(value: string | Uint8Array, length: number): string {
+function sha256HexPrefix(value: string | Uint8Array, length: number): string {
   return sha256Hex(value).slice(0, length);
 }
 
@@ -84,7 +84,13 @@ export function supportsModelTools(model: { compat?: unknown }): boolean {
 }
 
 export function isCodeModeModelVisibleToolName(name: string): boolean {
-  return name === "exec" || name === "wait" || name === "computer" || name === "image";
+  return (
+    name === "exec" ||
+    name === "wait" ||
+    name === "computer" ||
+    name === "image" ||
+    name === "message"
+  );
 }
 
 function isGoogleGemini3Model(modelId: string, family: "flash" | "pro"): boolean {

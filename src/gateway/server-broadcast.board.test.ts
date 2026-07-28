@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 type RecordingSocket = {
@@ -80,5 +82,78 @@ describe("board event scope guards", () => {
     expect(hidden.socket.events).toEqual([]);
     expect(visible.socket.events).toEqual(["board.changed"]);
     expect(canReceiveSessionEvent).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("collaboration event scope guards", () => {
+  it("uses the payload session scope for observer subscription filtering", () => {
+    const subscribed = makeClient("subscribed", "operator", ["operator.read"]);
+    const otherSession = makeClient("other-session", "operator", ["operator.read"]);
+    const unsubscribed = makeClient("unsubscribed", "operator", ["operator.read"]);
+    for (const entry of [subscribed, otherSession, unsubscribed]) {
+      entry.client.connect.caps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
+    }
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    sessionMessageSubscribers.subscribe(subscribed.client.connId, "agent:main:main");
+    sessionMessageSubscribers.subscribe(otherSession.client.connId, "agent:main:other");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([subscribed.client, otherSession.client, unsubscribed.client]),
+      sessionMessageSubscribers,
+    });
+
+    broadcast(
+      "session.observer",
+      { sessionKey: "agent:main:main", revision: 1 },
+      { dropIfSlow: true },
+    );
+
+    expect(subscribed.socket.events).toEqual(["session.observer"]);
+    expect(otherSession.socket.events).toEqual([]);
+    expect(unsubscribed.socket.events).toEqual([]);
+  });
+
+  it("guards suggestion and typing events and forwards payloads to visibility filtering", () => {
+    const pairing = makeClient("pairing", "operator", ["operator.pairing"]);
+    const reader = makeClient("reader", "operator", ["operator.read"]);
+    const unrelated = makeClient("unrelated", "operator", ["operator.read"]);
+    const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+    sessionMessageSubscribers.subscribe("reader", "agent:main:main");
+    const canReceiveSessionEvent = vi.fn(
+      (
+        _client: GatewayWsClient,
+        sessionKeys: readonly string[],
+        agentId: string | undefined,
+        event: string | undefined,
+        payload: unknown,
+      ) => {
+        expect(sessionKeys).toEqual(["agent:main:main"]);
+        expect(agentId).toBe("main");
+        expect(payload).toBeDefined();
+        return event === "session.typing";
+      },
+    );
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new Set([pairing.client, reader.client, unrelated.client]),
+      canReceiveSessionEvent,
+      sessionMessageSubscribers,
+    });
+
+    broadcast("session.suggestion", {
+      suggestion: { sessionKey: "agent:main:main", agentId: "main" },
+    });
+    broadcast(
+      "session.typing",
+      {
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        typing: true,
+      },
+      { sessionKeys: ["agent:main:main"], agentId: "main" },
+    );
+
+    expect(pairing.socket.events).toEqual([]);
+    expect(reader.socket.events).toEqual(["session.typing"]);
+    expect(unrelated.socket.events).toEqual([]);
+    expect(canReceiveSessionEvent).toHaveBeenCalledTimes(4);
   });
 });

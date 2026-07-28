@@ -1,5 +1,8 @@
 import { expect, vi } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
+import type { SessionOrigin } from "../config/sessions/types.js";
+import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { RegisterSubagentRunParams } from "./subagent-registry-run-manager.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -42,8 +45,18 @@ export function mockGatewayMethods<TRequest extends GatewayRequest, TResult>(
   mock.mockImplementation(createGatewayMethodMock(responses, fallback));
 }
 
+export type SessionEntryFixture = Partial<InternalSessionEntry> & {
+  channel?: string;
+  deliveryContext?: DeliveryContext;
+  origin?: SessionOrigin;
+  lastChannel?: string;
+  lastTo?: string;
+  lastAccountId?: string;
+  lastThreadId?: string | number;
+};
+
 export function createSessionStore(
-  overrides: Partial<InternalSessionEntry> = {},
+  overrides: SessionEntryFixture = {},
   sessionKey = "agent:main:subagent:child",
 ): Record<string, InternalSessionEntry> {
   return {
@@ -51,14 +64,12 @@ export function createSessionStore(
   };
 }
 
-export function createSessionEntry(
-  overrides: Partial<InternalSessionEntry> = {},
-): InternalSessionEntry {
-  return {
+export function createSessionEntry(overrides: SessionEntryFixture = {}): InternalSessionEntry {
+  return normalizeLegacySessionEntryDelivery({
     sessionId: "sess-child",
     updatedAt: 1,
     ...overrides,
-  };
+  } as InternalSessionEntry);
 }
 
 export function createAssistantToolCallMessage(content: unknown[]) {

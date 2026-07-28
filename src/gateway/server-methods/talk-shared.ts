@@ -13,7 +13,6 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../../packages/speech-core/voice-models.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveRealtimeBootstrapContextInstructions } from "../../agents/realtime-bootstrap-context.js";
 import type { TalkRealtimeConfig } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -22,9 +21,9 @@ import {
   listRealtimeTranscriptionProviders,
 } from "../../realtime-transcription/provider-registry.js";
 import type { RealtimeTranscriptionProviderConfig } from "../../realtime-transcription/provider-types.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME } from "../../talk/agent-run-control-shared.js";
+import { resolveTalkSessionAgentId, resolveTalkTargetAgentId } from "../../talk/agent-target.js";
 import { listRealtimeVoiceProviders } from "../../talk/provider-registry.js";
 import type {
   RealtimeVoiceBrowserSession,
@@ -72,11 +71,12 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
   warn: (message: string) => void;
 }): Promise<{ agentId: string; instructions: string; requestedSessionKey?: string }> {
   const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+  const defaultAgentId = resolveTalkTargetAgentId(params.config);
   // Older clients can prefetch without a key. Client-owned creates bind to the
   // default agent immediately, so its workspace profile stays consistent there.
   const agentId = requestedSessionKey
-    ? resolveAgentIdFromSessionKey(requestedSessionKey)
-    : resolveDefaultAgentId(params.config);
+    ? resolveTalkSessionAgentId(params.config, requestedSessionKey)
+    : defaultAgentId;
   const bootstrapContext =
     params.requireSessionKeyForProfile && !requestedSessionKey
       ? undefined

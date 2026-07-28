@@ -96,6 +96,48 @@ describe("classifyControlUiRequest", () => {
         expected: { kind: "not-control-ui" as const },
       },
       {
+        name: "keeps the OpenAI-compatible API root outside the SPA catch-all",
+        pathname: "/v1",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps the OpenAI-compatible API root slash outside the SPA catch-all",
+        pathname: "/v1/",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps OpenAI-compatible model discovery outside the SPA catch-all",
+        pathname: "/v1/models",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps OpenAI-compatible model details outside the SPA catch-all",
+        pathname: "/v1/models/openclaw",
+        method: "GET",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "keeps OpenAI-compatible responses outside the SPA catch-all",
+        pathname: "/v1/responses",
+        method: "HEAD",
+        expected: { kind: "not-control-ui" as const },
+      },
+      {
+        name: "preserves the SPA root that only resembles the OpenAI-compatible API",
+        pathname: "/v12",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
+        name: "preserves SPA routes that only resemble the OpenAI-compatible API",
+        pathname: "/v12/models",
+        method: "GET",
+        expected: { kind: "serve" as const },
+      },
+      {
         name: "returns not-found for legacy ui routes",
         pathname: "/ui/settings",
         method: "GET",

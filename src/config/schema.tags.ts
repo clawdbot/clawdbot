@@ -202,10 +202,6 @@ function deriveTagsForPath(path: string, hint?: ConfigUiHint): ConfigTag[] {
     tags.add("advanced");
   }
 
-  if (tags.size === 0) {
-    tags.add("advanced");
-  }
-
   return normalizeTags([...tags]);
 }
 

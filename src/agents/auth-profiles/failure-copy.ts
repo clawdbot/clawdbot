@@ -81,6 +81,7 @@ function shouldIncludeRecoveryHint(reason: FailoverReason): boolean {
     case "rate_limit":
     case "overloaded":
     case "timeout":
+    case "tls_certificate":
     case "server_error":
     case "model_not_found":
     case "format":

@@ -1,5 +1,5 @@
 /** Reserves session-entry keys so plugin extension slots cannot collide with core session state. */
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntryCore as SessionEntry } from "../config/sessions/types.js";
 
 const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "__proto__",
@@ -27,6 +27,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "markedUnreadAt",
   "lastActivityAt",
   "sessionFile",
+  "transcriptPath",
   "spawnedBy",
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
@@ -91,6 +92,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideRouteResolution",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
   "modelFallback",
@@ -156,22 +158,17 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "memoryFlushLastFailureError",
   "cliSessionIds",
   "cliSessionBindings",
+  "acpSessionBinding",
   "claudeCliSessionId",
   "label",
   "category",
+  "boardFace",
   "displayName",
-  "channel",
+  "delivery",
   "groupId",
   "subject",
   "groupChannel",
   "space",
-  "origin",
-  "route",
-  "deliveryContext",
-  "lastChannel",
-  "lastTo",
-  "lastAccountId",
-  "lastThreadId",
   "skillsSnapshot",
   "systemPromptReport",
   "pluginDebugEntries",
@@ -179,7 +176,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "acp",
   "quotaSuspension",
   "visibility",
-] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
+] as const satisfies ReadonlyArray<
+  keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
+>;
 
 type ReservedSessionEntrySlotKey = Extract<
   (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],
@@ -194,6 +193,16 @@ type SessionEntryReservedSlotSetValue = [MissingSessionEntryReservedSlotKey] ext
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<SessionEntryReservedSlotSetValue>(
   SESSION_ENTRY_RESERVED_SLOT_KEY_LIST,
 );
+const RETIRED_SESSION_DELIVERY_SLOT_KEYS = new Set<string>([
+  "channel",
+  "origin",
+  "route",
+  "deliveryContext",
+  "lastChannel",
+  "lastTo",
+  "lastAccountId",
+  "lastThreadId",
+]);
 const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
   "prototype",
   ...Object.getOwnPropertyNames(Object.prototype),
@@ -217,7 +226,7 @@ export function normalizeSessionEntrySlotKey(
       error: "sessionEntrySlotKey must be an identifier-style field name",
     };
   }
-  if (SESSION_ENTRY_RESERVED_SLOT_KEYS.has(key)) {
+  if (SESSION_ENTRY_RESERVED_SLOT_KEYS.has(key) || RETIRED_SESSION_DELIVERY_SLOT_KEYS.has(key)) {
     return {
       ok: false,
       error: `sessionEntrySlotKey is reserved by SessionEntry: ${key}`,

@@ -47,6 +47,7 @@ function createGatewayHarness(
     client: initialClient,
     phase: initialConnected ? "connected" : "stopped",
     offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     lastError: null,
     lastErrorCode: null,

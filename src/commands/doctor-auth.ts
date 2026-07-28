@@ -5,7 +5,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveDefaultAgentDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -175,7 +175,7 @@ function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boole
 }
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const targets = new Map<string, AuthProfileHealthTarget>();
   const addTarget = (agentId: string, agentDir: string, isDefault: boolean) => {
     const key = path.resolve(agentDir);
@@ -185,7 +185,9 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
     }
   };
 
-  addTarget(defaultAgentId, resolveDefaultAgentDir(cfg), true);
+  if (defaultAgentId) {
+    addTarget(defaultAgentId, resolveDefaultAgentDir(cfg), true);
+  }
   for (const agentId of listAgentIds(cfg)) {
     if (agentId === defaultAgentId) {
       continue;

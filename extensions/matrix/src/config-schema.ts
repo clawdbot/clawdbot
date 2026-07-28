@@ -105,11 +105,43 @@ const matrixStreamingSchema = z
   })
   .strict();
 
+const retiredMatrixAccountStreamingKeys = [
+  "streamMode",
+  "chunkMode",
+  "blockStreaming",
+  "blockStreamingCoalesce",
+  "draftChunk",
+] as const;
+
+function hasCanonicalMatrixAccountStreaming(account: unknown): boolean {
+  if (typeof account !== "object" || account === null || Array.isArray(account)) {
+    return true;
+  }
+  if (retiredMatrixAccountStreamingKeys.some((key) => Object.hasOwn(account, key))) {
+    return false;
+  }
+  if (!Object.hasOwn(account, "streaming")) {
+    return true;
+  }
+  const streaming = (account as { streaming?: unknown }).streaming;
+  return typeof streaming === "object" && streaming !== null && !Array.isArray(streaming);
+}
+
 const MatrixConfigSchema = z.object({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  accounts: z.record(z.string(), z.unknown()).optional(),
+  // Accounts stay schema-open, but retired scalar streaming must fail loudly
+  // instead of silently resolving to "off"; doctor migrates the old spelling.
+  accounts: z
+    .record(
+      z.string(),
+      z.unknown().refine(hasCanonicalMatrixAccountStreaming, {
+        message:
+          'flat or scalar streaming values are no longer supported; use streaming.* and run "openclaw doctor --fix"',
+      }),
+    )
+    .optional(),
   markdown: MarkdownConfigSchema,
   homeserver: z.string().optional(),
   network: matrixNetworkSchema,

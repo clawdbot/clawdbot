@@ -1,7 +1,7 @@
 // Markdown → Bot API 10.2 InputRichBlock[] for Telegram rich messages.
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
-  type FormatCapabilityProfile,
+  FormatCapabilityProfile,
   isAutoLinkedFileRef,
   markdownToIRWithMeta,
   renderMarkdownWithMarkers,
@@ -33,29 +33,10 @@ import {
 
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 
-const TELEGRAM_RICH_FORMAT_PROFILE = {
+const TELEGRAM_RICH_FORMAT_PROFILE = FormatCapabilityProfile.define({
   mechanism: "blocks",
-  constructs: {
-    bold: "native",
-    italic: "native",
-    underline: "native",
-    strikethrough: "native",
-    spoiler: "native",
-    codeInline: "native",
-    codeBlock: "native",
-    codeLanguage: "native",
-    linkLabel: "native",
-    heading: "native",
-    bulletList: "native",
-    orderedList: "native",
-    taskList: "native",
-    table: "native",
-    blockquote: "native",
-    image: "native",
-    mention: "native",
-  },
   chunk: { limit: 32_768, unit: "chars" },
-} satisfies FormatCapabilityProfile;
+});
 
 const INLINE_STYLE_RANK: Record<string, number> = {
   spoiler: 0,

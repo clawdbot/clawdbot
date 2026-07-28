@@ -1,9 +1,7 @@
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -50,14 +48,7 @@ function createAttempt(): EmbeddedRunAttemptParams {
 
 function createSettledAttempt(): EmbeddedRunAttemptResult {
   return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
+    terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
     messagesSnapshot: [
       {

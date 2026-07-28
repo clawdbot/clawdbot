@@ -1,6 +1,7 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
+import { CLOUD_WORKER_FIELD_LABELS } from "./zod-schema.cloud-workers.js";
 
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
@@ -98,11 +99,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.agentRuntime": "Legacy Agent Runtime",
   "agents.entries.*.agentRuntime.id": "Legacy Agent Runtime ID",
   cloudWorkers: "Cloud Workers",
-  "cloudWorkers.profiles": "Cloud Worker Profiles",
-  "cloudWorkers.profiles.*": "Cloud Worker Profile",
-  "cloudWorkers.profiles.*.provider": "Cloud Worker Provider",
-  "cloudWorkers.profiles.*.install": "Cloud Worker Install Method",
-  "cloudWorkers.profiles.*.settings": "Cloud Worker Provider Settings",
+  ...CLOUD_WORKER_FIELD_LABELS,
   gateway: "Gateway",
   "gateway.port": "Gateway Port",
   "gateway.mode": "Gateway Mode",
@@ -236,8 +233,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
   "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",
   "tools.agentToAgent.allow": "Agent-to-Agent Target Allowlist",
-  "tools.experimental": "Experimental Tools",
-  "tools.experimental.planTool": "Enable Structured Plan Tool",
+  "tools.updatePlan": "Enable Structured Plan Tool",
   "tools.toolSearch": "Tool Search",
   "tools.toolSearch.enabled": "Enable Tool Search",
   "tools.toolSearch.mode": "Tool Search Surface",
@@ -499,8 +495,9 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.runtime.installCommand": "ACP Runtime Install Command",
   models: "Models",
   "models.mode": "Model Catalog Mode",
-  "models.pricing": "Model Pricing",
-  "models.pricing.enabled": "Model Pricing Enabled",
+  "models.catalogRefresh": "Model Catalog Refresh",
+  "models.catalogRefresh.enabled": "Model Catalog Refresh Enabled",
+  "models.catalogRefresh.url": "Model Catalog Refresh URL",
   "models.providers": "Model Providers",
   "models.providers.*.baseUrl": "Model Provider Base URL",
   "models.providers.*.apiKey": "Model Provider API Key", // pragma: allowlist secret
@@ -608,6 +605,7 @@ export const FIELD_LABELS: Record<string, string> = {
     "Agent Sandbox Docker Allow Container Namespace Join",
   "agents.entries.*.sandbox.docker.gpus": "Agent Sandbox Docker GPUs",
   "agents.defaults.compaction": "Compaction",
+  "agents.defaults.compaction.enabled": "Embedded Auto-Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.provider": "Compaction Provider",
   "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
@@ -641,9 +639,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.entries.*.embeddedAgent": "Agent Embedded OpenClaw",
   "agents.entries.*.embeddedAgent.executionContract": "Agent Embedded OpenClaw Execution Contract",
   "agents.defaults.heartbeat.directPolicy": "Heartbeat Direct Policy",
+  "agents.defaults.heartbeat.agentId": "Heartbeat Agent",
   "agents.entries.*.heartbeat.directPolicy": "Heartbeat Direct Policy",
   "agents.defaults.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
   "agents.entries.*.heartbeat.timeoutSeconds": "Heartbeat Timeout (Seconds)",
+  "agents.defaults.systemAgent": "System Agent Target",
+  "agents.defaults.systemAgent.agentId": "System Agent Owner",
   "agents.defaults.sandbox.browser.network": "Sandbox Browser Network",
   "agents.defaults.sandbox.browser.cdpSourceRange": "Sandbox Browser CDP Source Port Range",
   "agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
@@ -825,6 +826,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "discovery.wideArea.domain": "Wide-area Discovery Domain",
   "discovery.mdns": "mDNS Discovery",
   talk: "Talk",
+  "talk.agentId": "Talk Agent",
   "talk.speechLocale": "Talk Speech Locale",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",

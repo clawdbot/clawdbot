@@ -9,7 +9,7 @@ import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metada
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
@@ -121,7 +121,8 @@ function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
     return runtimeAgentIds;
   }
   if (usesClaudeCliModelSelection(cfg)) {
-    return [resolveDefaultAgentId(cfg)];
+    const defaultAgentId = tryResolveDefaultAgentId(cfg);
+    return defaultAgentId ? [defaultAgentId] : [];
   }
   return [];
 }
@@ -141,7 +142,7 @@ function resolveClaudeCliWorkspaceTargets(params: {
   workspaceDir?: string;
 }): ClaudeCliWorkspaceTarget[] {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
   const seen = new Set<string>();
   return agentIds
     .filter((agentId) => {
@@ -212,7 +213,7 @@ export function noteClaudeCliHealth(
   const commandPath = resolveCommandPath(command, env);
   const authStorePath = resolveAuthStorePathForDisplay();
   const storedProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
     workspaceTargets.some((target) => target.agentId !== defaultAgentId);

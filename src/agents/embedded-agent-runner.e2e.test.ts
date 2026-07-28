@@ -186,6 +186,9 @@ beforeAll(async () => {
   ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
   const { SessionManager: LoadedSessionManager } =
     await import("openclaw/plugin-sdk/agent-sessions");
+  const { installSessionManagerFileCompat } =
+    await import("../../test/helpers/session-manager-file-compat.js");
+  installSessionManagerFileCompat(LoadedSessionManager);
   SessionManager = LoadedSessionManager;
   e2eWorkspace = await createEmbeddedAgentRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
@@ -227,7 +230,7 @@ const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string
   // Builds a session with an orphaned user message to exercise retry/resume
   // cleanup paths from persisted JSONL.
   const sessionFile = nextSessionFile();
-  const sessionManager = SessionManager.open(sessionFile);
+  const sessionManager = SessionManager.openFile(sessionFile);
   sessionManager.appendMessage({
     role: "user",
     content: [{ type: "text", text }],
@@ -844,7 +847,11 @@ describe("runEmbeddedAgent", () => {
     const sessionFile = nextSessionFile();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("request exceeds the model context window"),
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("request exceeds the model context window"),
+        },
       }),
     );
 
@@ -1070,7 +1077,7 @@ describe("runEmbeddedAgent", () => {
       .mockImplementationOnce(async () => {
         expect(disposeSessionMcpRuntimeMock).not.toHaveBeenCalled();
         return makeEmbeddedRunnerAttempt({
-          promptError: new Error("401 unauthorized"),
+          terminal: { kind: "failed", source: "prompt", error: new Error("401 unauthorized") },
         });
       })
       .mockImplementationOnce(async () => {
@@ -1188,7 +1195,7 @@ describe("runEmbeddedAgent", () => {
     const sessionKey = nextSessionKey();
     runEmbeddedAttemptMock.mockResolvedValueOnce(
       makeEmbeddedRunnerAttempt({
-        promptError: new Error("boom"),
+        terminal: { kind: "failed", source: "prompt", error: new Error("boom") },
       }),
     );
     await expect(
@@ -1228,7 +1235,7 @@ describe("runEmbeddedAgent", () => {
       const sessionFile = nextSessionFile();
       const sessionKey = nextSessionKey();
 
-      const sessionManager = SessionManager.open(sessionFile);
+      const sessionManager = SessionManager.openFile(sessionFile);
       sessionManager.appendMessage({
         role: "user",
         content: [{ type: "text", text: "seed user" }],

@@ -14,7 +14,7 @@ const FAILURE_CONCLUSIONS = new Set([
   "STALE",
   "TIMED_OUT",
 ]);
-const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100){totalCount nodes{kind:__typename ... on CheckRun{name status conclusion} ... on StatusContext{context state}}}}}}}`;
+const ROLLUP_QUERY = `query($owner:String!,$name:String!,$pr:Int!,$cursor:String){repository(owner:$owner,name:$name){pullRequest(number:$pr){state mergeable headRefOid statusCheckRollup{state contexts(first:100,after:$cursor){totalCount pageInfo{hasNextPage endCursor} nodes{kind:__typename ... on CheckRun{name status conclusion databaseId checkSuite{workflowRun{databaseId workflow{databaseId}}}} ... on StatusContext{context state}}}}}}}`;
 // Adapted from Node's MIT-licensed util.stripVTControlCharacters implementation.
 const ANSI_ESCAPE_SEQUENCE = new RegExp(
   "[\\u001B\\u009B][[\\]()#;?]*" +
@@ -79,22 +79,84 @@ export function parseArgs(argv) {
 const checkName = (check) => (check.kind === "StatusContext" ? check.context : check.name);
 export const sanitizeCheckName = (name) =>
   name.replaceAll(ANSI_ESCAPE_SEQUENCE, "\u0000").replaceAll(UNSAFE_CHECK_NAME_RUN, "?");
-const isSuccess = (check) =>
-  check.kind === "StatusContext" ? check.state === "SUCCESS" : check.conclusion === "SUCCESS";
 const isAutoResponse = (check) =>
   checkName(check)
     ?.toLowerCase()
     .replaceAll(/[^a-z0-9]+/gu, " ")
     .trim() === "auto response";
 
+// Run identity for supersession; undefined when any id is missing so ambiguous
+// nodes are never dropped (fails toward FAILING, never toward false GREEN).
+// These databaseIds are GraphQL Int fields, but GitHub serializes Actions-scale
+// 64-bit values in them (live-verified; no fullDatabaseId exists on these types).
+// If GitHub ever nulls them, filtering degrades to pre-supersession behavior.
+function checkRunIdentity(check) {
+  if (check.kind !== "CheckRun") {
+    return undefined;
+  }
+  const runId = check.checkSuite?.workflowRun?.databaseId;
+  const workflowId = check.checkSuite?.workflowRun?.workflow?.databaseId;
+  if (typeof runId !== "number" || typeof workflowId !== "number") {
+    return undefined;
+  }
+  return { runId, workflowId };
+}
+// Strict recency ordering for same-name checks: newest run wins; within one run
+// (rerun attempts reuse the run id) the newest check-run id wins.
+const newerJob = (a, b) => (a.runId !== b.runId ? a.runId > b.runId : a.checkId > b.checkId);
+
 export function classifyRollup(rollup) {
-  const nodes = rollup?.contexts?.nodes ?? [];
+  const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
     0,
-    (rollup?.contexts?.totalCount ?? nodes.length) - nodes.length,
+    (rollup?.contexts?.totalCount ?? rawNodes.length) - rawNodes.length,
   );
+  const newestRunByWorkflow = new Map();
+  const bestByJob = new Map();
+  for (const check of rawNodes) {
+    const identity = checkRunIdentity(check);
+    if (!identity) {
+      continue;
+    }
+    newestRunByWorkflow.set(
+      identity.workflowId,
+      Math.max(newestRunByWorkflow.get(identity.workflowId) ?? 0, identity.runId),
+    );
+    if (check.name && typeof check.databaseId === "number") {
+      const key = `${identity.workflowId}:${check.name}`;
+      const candidate = { runId: identity.runId, checkId: check.databaseId };
+      const best = bestByJob.get(key);
+      if (!best || newerJob(candidate, best)) {
+        bestByJob.set(key, candidate);
+      }
+    }
+  }
+  let supersededCount = 0;
+  // Re-triggers leave every prior run's check runs on the SHA forever and GitHub's aggregate
+  // counts them. A check is superseded when a newer same-workflow check shares its name
+  // (GitHub's latest-name-wins semantics), or when it was cancelled and its workflow has a
+  // newer run (draft->ready cancels the old run before the replacement posts check runs).
+  // Older-run checks with unique names stay visible so distinct invocations are not dropped.
+  const nodes = rawNodes.filter((check) => {
+    const identity = checkRunIdentity(check);
+    if (!identity) {
+      return true;
+    }
+    if (check.name && typeof check.databaseId === "number") {
+      const best = bestByJob.get(`${identity.workflowId}:${check.name}`);
+      if (best && newerJob(best, { runId: identity.runId, checkId: check.databaseId })) {
+        supersededCount += 1;
+        return false;
+      }
+    }
+    const newestRun = newestRunByWorkflow.get(identity.workflowId);
+    if (check.conclusion === "CANCELLED" && newestRun > identity.runId) {
+      supersededCount += 1;
+      return false;
+    }
+    return true;
+  });
   const checks = nodes.filter((check) => !isAutoResponse(check));
-  const successfulNames = new Set(checks.filter(isSuccess).map(checkName));
   const pendingCount = checks.filter((check) =>
     check.kind === "StatusContext"
       ? check.state === "PENDING" || check.state === "EXPECTED"
@@ -113,33 +175,36 @@ export function classifyRollup(rollup) {
     .toSorted()
     .filter((name, index, names) => name !== names[index - 1]);
   if (rollup?.state === "SUCCESS") {
-    return { verdict: "GREEN", pendingCount, failingNames: [] };
+    return { verdict: "GREEN", pendingCount, failingNames: [], supersededCount };
   }
   if (rollup?.state === "ERROR" || rollup?.state === "FAILURE") {
-    const staleCancelled =
-      hiddenContextCount === 0 &&
-      pendingCount === 0 &&
-      failingChecks.length > 0 &&
-      failingChecks.every(
-        (check) =>
-          check.kind === "CheckRun" &&
-          check.conclusion === "CANCELLED" &&
-          Boolean(check.name) &&
-          successfulNames.has(check.name),
-      );
-    if (staleCancelled) {
-      return { verdict: "STALE-CANCELLED", pendingCount, failingNames };
+    if (failingChecks.length > 0) {
+      return {
+        verdict: "FAILING",
+        pendingCount,
+        failingNames: [
+          ...(failingNames.length > 0 ? failingNames : ["status rollup"]),
+          ...(hiddenContextCount > 0 ? [`+${hiddenContextCount} more contexts not shown`] : []),
+        ],
+        supersededCount,
+      };
     }
-    return {
-      verdict: "FAILING",
-      pendingCount,
-      failingNames: [
-        ...(failingNames.length > 0 ? failingNames : ["status rollup"]),
-        ...(hiddenContextCount > 0 ? [`+${hiddenContextCount} more contexts not shown`] : []),
-      ],
-    };
+    if (hiddenContextCount > 0) {
+      return {
+        verdict: "FAILING",
+        pendingCount,
+        failingNames: ["status rollup", `+${hiddenContextCount} more contexts not shown`],
+        supersededCount,
+      };
+    }
+    if (pendingCount > 0) {
+      return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
+    }
+    // GitHub's aggregate permanently counts superseded cancellations. With full visibility,
+    // an all-green newest-run set is green; main() also requires the attached run to succeed.
+    return { verdict: "GREEN", pendingCount, failingNames: [], supersededCount };
   }
-  return { verdict: "PENDING", pendingCount, failingNames: [] };
+  return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
 }
 
 function ghJson(...args) {
@@ -189,20 +254,71 @@ export function classifyRunAttachment(runId, run, after) {
   };
 }
 
+export function collectRollupContexts(fetchPage) {
+  const firstPage = fetchPage(null);
+  const firstContexts = firstPage?.statusCheckRollup?.contexts;
+  if (!firstContexts) {
+    return firstPage;
+  }
+
+  const nodes = [...(firstContexts.nodes ?? [])];
+  let pageInfo = firstContexts.pageInfo;
+  let pageCount = 1;
+  // Polling work stays bounded at 1,000 contexts. Any truncation remains visible through
+  // totalCount and must classify conservatively rather than reading as success.
+  while (pageInfo?.hasNextPage && pageCount < 10) {
+    if (typeof pageInfo.endCursor !== "string") {
+      throw new Error("rollup page advertised a next page without a cursor");
+    }
+    const page = fetchPage(pageInfo.endCursor);
+    const contexts = page?.statusCheckRollup?.contexts;
+    pageCount += 1;
+    // Losing an advertised page (head moved, transient API gap) or reading a changed snapshot
+    // must not pass off the partial first page as complete; the watch loop catches this error
+    // and re-reads the rollup on its next bounded poll.
+    if (!contexts) {
+      throw new Error("rollup snapshot changed during pagination");
+    }
+    if (
+      page.headRefOid !== firstPage.headRefOid ||
+      page.statusCheckRollup?.state !== firstPage.statusCheckRollup?.state ||
+      contexts.totalCount !== firstContexts.totalCount
+    ) {
+      throw new Error("rollup snapshot changed during pagination");
+    }
+    nodes.push(...(contexts.nodes ?? []));
+    pageInfo = contexts.pageInfo;
+  }
+
+  return {
+    ...firstPage,
+    statusCheckRollup: {
+      ...firstPage.statusCheckRollup,
+      contexts: { ...firstContexts, nodes },
+    },
+  };
+}
+
 function readRollup(pr, repo) {
   const [owner, name] = repo.split("/");
-  return ghJson(
-    "api",
-    "graphql",
-    "-f",
-    `query=${ROLLUP_QUERY}`,
-    "-f",
-    `owner=${owner}`,
-    "-f",
-    `name=${name}`,
-    "-F",
-    `pr=${pr}`,
-  ).data?.repository?.pullRequest;
+  return collectRollupContexts((cursor) => {
+    const queryArgs = [
+      "api",
+      "graphql",
+      "-f",
+      `query=${ROLLUP_QUERY}`,
+      "-f",
+      `owner=${owner}`,
+      "-f",
+      `name=${name}`,
+      "-F",
+      `pr=${pr}`,
+    ];
+    if (cursor !== null) {
+      queryArgs.push("-f", `cursor=${cursor}`);
+    }
+    return ghJson(...queryArgs).data?.repository?.pullRequest;
+  });
 }
 
 const emit = (line, code) => {
@@ -310,13 +426,9 @@ async function main(argv = process.argv.slice(2)) {
         const result = classifyRollup(pr.statusCheckRollup);
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
-        console.log(`STATUS state=${lastState} pending=${lastPending}`);
-        if (result.verdict === "STALE-CANCELLED") {
-          return emit(
-            'STALE-CANCELLED hint="aggregate FAILURE but every failing context is a CANCELLED check run with a same-name SUCCESS — likely stale attempts; verify manually"',
-            17,
-          );
-        }
+        console.log(
+          `STATUS state=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
+        );
         if (result.verdict === "FAILING") {
           return emit(`FAILING checks=${result.failingNames.join(", ")}`, 15);
         }

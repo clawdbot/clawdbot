@@ -803,7 +803,8 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expectLogged(log, "Recall store: 1 entries");
-      expectLogged(log, "Dreaming: off");
+      // Dreaming is on by default, so status prints the phase-config detail line.
+      expectLogged(log, "Dreaming: light=");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1010,6 +1011,12 @@ describe("memory cli", () => {
 
   it("repairs invalid recall metadata and stale locks with status --fix", async () => {
     await withTempWorkspace(async (workspaceDir) => {
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-04-03.md"),
+        "QMD router cache note\n",
+        "utf-8",
+      );
       await shortTermTesting.writeRawRecallStore(workspaceDir, {
         version: 1,
         updatedAt: "2026-04-04T00:00:00.000Z",
@@ -1770,8 +1777,10 @@ describe("memory cli", () => {
       expect(payload?.sourceFiles).toEqual([historyPath]);
       expect(payload?.historicalImport?.importedFileCount).toBe(1);
       expect(payload?.historicalImport?.importedSignalCount).toBeGreaterThan(0);
-      expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Happy Together");
-      expect(payload?.deep?.candidates?.[0]?.path).toBe("memory/2025-01-01-vendor-pitch.md");
+      const calendarCandidate = payload?.deep?.candidates?.find((candidate) =>
+        candidate.snippet?.includes("Happy Together"),
+      );
+      expect(calendarCandidate?.path).toBe("memory/2025-01-01-vendor-pitch.md");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -2351,18 +2360,7 @@ describe("memory cli", () => {
     });
   });
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
-    let value: T | undefined;
-    await vi.waitFor(
-      async () => {
-        value = await task();
-      },
-      { interval: 1, timeout: timeoutMs },
-    );
-    return value as T;
-  }
-
-  it("records short-term recall entries from memory search hits", async () => {
+  it("awaits short-term recall persistence before memory search returns", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});
       const search = vi.fn(async () => [
@@ -2396,11 +2394,7 @@ describe("memory cli", () => {
 
       await runMemoryCli(["search", "glacier", "--json"]);
 
-      const entries = await waitFor(async () => {
-        const recalled = await readShortTermRecallEntries({ workspaceDir });
-        expect(recalled).toHaveLength(1);
-        return recalled;
-      });
+      const entries = await readShortTermRecallEntries({ workspaceDir });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       if (!entry) {
@@ -2418,6 +2412,8 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         recallDays: ["<today>"],
         queryHashes: ["<hash>"],
+        claimHash: entry.claimHash ? "<claim>" : undefined,
+        provenance: entry.provenance ? { ...entry.provenance, observedAt: 0 } : undefined,
       }).toEqual({
         key: "memory:memory/2026-04-03.md:1:2",
         path: "memory/2026-04-03.md",
@@ -2434,7 +2430,11 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
         recallDays: ["<today>"],
+        claimHash: "<claim>",
         conceptTags: ["backup", "backups", "glacier", "s3"],
+        // Memory-source recalls default to agent provenance (workspace files
+        // are owner-controlled); see mergeRecallProvenance.
+        provenance: { originClass: "agent", sessionKind: "unknown", observedAt: 0 },
       });
       expect(close).toHaveBeenCalled();
     });

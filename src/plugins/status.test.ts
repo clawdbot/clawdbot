@@ -372,10 +372,11 @@ function expectBundleInspectState(
   params: {
     bundleCapabilities: readonly string[];
     shape: string;
+    mcpServers?: readonly { name: string; hasStdioTransport: boolean }[];
   },
 ) {
   expect(inspect.bundleCapabilities).toEqual(params.bundleCapabilities);
-  expect(inspect.mcpServers).toStrictEqual([]);
+  expect(inspect.mcpServers).toStrictEqual(params.mcpServers ?? []);
   expect(inspect.shape).toBe(params.shape);
 }
 
@@ -972,6 +973,7 @@ describe("plugin status reports", () => {
       expectedId: "claude-bundle",
       expectedBundleCapabilities: ["skills", "commands", "agents", "settings"],
       expectedShape: "non-capability",
+      expectedMcpServers: [],
     },
     {
       name: "returns empty bundleCapabilities and mcpServers for non-bundle plugins",
@@ -984,17 +986,38 @@ describe("plugin status reports", () => {
       expectedId: "plain-plugin",
       expectedBundleCapabilities: [],
       expectedShape: "plain-capability",
+      expectedMcpServers: [],
     },
-  ])("$name", ({ plugin, expectedId, expectedBundleCapabilities, expectedShape }) => {
-    setSinglePluginLoadResult(plugin);
+    {
+      name: "reports MCP servers declared by native plugins",
+      plugin: createPluginRecord({
+        id: "native-mcp",
+        name: "Native MCP",
+        description: "A native plugin with an MCP App server",
+        rootDir: "/tmp/native-mcp",
+        mcpServers: {
+          app: { transport: "stdio", command: "node", args: ["./mcp-server.js"] },
+        },
+      }),
+      expectedId: "native-mcp",
+      expectedBundleCapabilities: [],
+      expectedShape: "non-capability",
+      expectedMcpServers: [{ name: "app", hasStdioTransport: true }],
+    },
+  ])(
+    "$name",
+    ({ plugin, expectedId, expectedBundleCapabilities, expectedShape, expectedMcpServers }) => {
+      setSinglePluginLoadResult(plugin);
 
-    const inspect = expectInspectReport(expectedId);
+      const inspect = expectInspectReport(expectedId);
 
-    expectBundleInspectState(inspect, {
-      bundleCapabilities: expectedBundleCapabilities,
-      shape: expectedShape,
-    });
-  });
+      expectBundleInspectState(inspect, {
+        bundleCapabilities: expectedBundleCapabilities,
+        shape: expectedShape,
+        mcpServers: expectedMcpServers,
+      });
+    },
+  );
 
   it("formats and summarizes compatibility notices", () => {
     const notice = createCompatibilityNotice({ pluginId: "legacy-plugin", code: "hook-only" });

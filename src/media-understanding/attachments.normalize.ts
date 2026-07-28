@@ -5,7 +5,7 @@ import { getFileExtension, isAudioFileName, kindFromMime } from "@openclaw/media
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RuntimeMsgContext as MsgContext } from "../auto-reply/templating.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
-import { resolveMediaFacts } from "../media/media-facts.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
 import type { MediaAttachment } from "./types.js";
 
 /** Normalizes a local attachment path while rejecting remote file URLs and Windows UNC paths. */
@@ -31,7 +31,7 @@ export function normalizeAttachmentPath(raw?: string | null): string | undefined
 
 /** Converts ordered media facts into indexed attachment records. */
 export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
-  return resolveMediaFacts(ctx)
+  return normalizeMediaFacts(ctx.media)
     .map((fact, index) => ({
       path: normalizeOptionalString(fact.path),
       url: normalizeOptionalString(fact.url),

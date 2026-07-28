@@ -1433,19 +1433,6 @@ def resolve_release_build_number(api_key:, short_version:, explicit_build_number
   next_build.to_s
 end
 
-def verify_app_store_binary!(api_key:, ipa_path:)
-  deliver(
-    api_key: api_key,
-    app_identifier: APP_STORE_APP_IDENTIFIER,
-    ipa: ipa_path,
-    platform: "ios",
-    verify_only: true,
-    skip_metadata: true,
-    skip_screenshots: true,
-    submit_for_review: false
-  )
-end
-
 def release_build_number_needs_app_store_connect_auth?(explicit_build_number: nil)
   explicit = explicit_build_number.to_s.strip
   !env_present?(explicit)
@@ -1984,9 +1971,9 @@ platform :ios do
     end
     verify_apple_release_source!(release_sha)
     build = build_app_store_release(context)
-    verify_app_store_binary!(api_key: context[:api_key], ipa_path: build[:ipa_path])
     # Release operations have one active uploader by policy. This final read
-    # catches human state changes; it is not a cross-uploader lock.
+    # catches human state changes before the first App Store mutation; it is
+    # not a cross-uploader lock.
     resolve_ios_release_plan!(
       release_version: context[:version],
       app_store_revision: context[:app_store_revision],

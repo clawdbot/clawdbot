@@ -72,6 +72,7 @@ export interface LineSendResult {
 }
 
 export type LineProbeResult = BaseProbeResult<string> & {
+  elapsedMs?: number;
   bot?: {
     displayName?: string;
     userId?: string;

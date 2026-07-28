@@ -389,6 +389,42 @@ describe("createCodexDynamicToolBridge", () => {
     );
   });
 
+  it("retains only MCP App preview details for OpenClaw transcript projection", async () => {
+    const mcpAppPreview = {
+      kind: "canvas",
+      view: { id: "mcp-app-view-1", title: "Nearby food" },
+      presentation: { target: "assistant_message", sandbox: "scripts" },
+      mcpApp: {
+        viewId: "mcp-app-view-1",
+        serverName: "sample",
+        toolName: "show_options",
+        uiResourceUri: "ui://sample/options.html",
+        toolCallId: "call-options",
+      },
+    };
+    const bridge = createBridgeWithToolResult(
+      "sample__show_options",
+      textToolResult("Found four nearby restaurants.", {
+        mcpAppPreview,
+        structuredContent: { privateModelPayload: true },
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-options",
+      namespace: null,
+      tool: "sample__show_options",
+      arguments: { limit: 4 },
+    });
+
+    expect(result.transcriptDetails).toEqual({ mcpAppPreview });
+    expect(Object.keys(result)).not.toContain("transcriptDetails");
+    expect(JSON.stringify(result)).not.toContain("mcpAppPreview");
+    expect(JSON.stringify(result)).not.toContain("privateModelPayload");
+  });
+
   it("still reports a forbidden sessions_spawn result as a failed dynamic tool call", async () => {
     // Deny symmetry: a genuinely rejected spawn (status "forbidden") must stay an
     // error so the accepted-status allowlist entry does not over-correct.

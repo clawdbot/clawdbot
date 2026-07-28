@@ -10,22 +10,38 @@ export interface WatchPrCiArgs {
 
 export interface RollupCheck {
   kind: "CheckRun" | "StatusContext";
+  databaseId?: number;
   name?: string;
   context?: string;
   status?: string;
   conclusion?: string | null;
   state?: string;
+  checkSuite?: {
+    workflowRun?: { databaseId?: number; workflow?: { databaseId?: number } } | null;
+  } | null;
 }
 
 export interface RollupPayload {
   state?: string;
-  contexts?: { totalCount?: number; nodes?: RollupCheck[] };
+  contexts?: {
+    totalCount?: number;
+    nodes?: RollupCheck[];
+    pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+  };
+}
+
+export interface RollupPage {
+  state?: string;
+  mergeable?: boolean | string;
+  headRefOid?: string;
+  statusCheckRollup?: RollupPayload | null;
 }
 
 export interface RollupClassification {
-  verdict: "GREEN" | "FAILING" | "PENDING" | "STALE-CANCELLED";
+  verdict: "GREEN" | "FAILING" | "PENDING";
   pendingCount: number;
   failingNames: string[];
+  supersededCount: number;
 }
 
 export interface RunListItem {
@@ -54,6 +70,9 @@ export interface PollUntilDeadlineOptions<T> {
 export function parseArgs(argv: string[]): WatchPrCiArgs;
 export function sanitizeCheckName(name: string): string;
 export function classifyRollup(rollup: RollupPayload | null | undefined): RollupClassification;
+export function collectRollupContexts(
+  fetchPage: (cursor: string | null) => RollupPage | null | undefined,
+): RollupPage | null | undefined;
 export function buildFindRunArgs(repo: string, sha: string): string[];
 export function selectRunAfter(runs: RunListItem[], after?: number): RunListItem | undefined;
 export function classifyRunAttachment(

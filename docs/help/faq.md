@@ -477,7 +477,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?">
     These live in the **agent workspace**, not `~/.openclaw`.
 
-    - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`. Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix` can merge it into `MEMORY.md` when both exist.
+    - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`. Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix` can merge it into `MEMORY.md` when both exist.
     - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs, shared skills (`~/.openclaw/skills`).
 
     Default workspace is `~/.openclaw/workspace`, configurable:
@@ -585,6 +585,8 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
   <Accordion title="Why do I need a token on localhost now?">
     OpenClaw enforces gateway auth by default, including loopback. If no explicit auth path is configured, startup resolves to token mode and generates a runtime-only token for that startup, so local WS clients must authenticate. This blocks other local processes from calling the Gateway.
+
+    On a fresh loopback start, the Gateway prepares the canonical same-user CLI device credential before `/readyz`, so normal `openclaw` CLI calls can authenticate without persisting the generated token. Other clients still need an explicit shared secret or an approved device pairing.
 
     Configure `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` explicitly when clients need a stable secret across restarts. You can also choose password mode, or `trusted-proxy` for identity-aware reverse proxies. For open loopback, set `gateway.auth.mode: "none"` explicitly. `openclaw doctor --generate-gateway-token` generates a token any time.
 
@@ -1036,7 +1038,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, ATX headings, fence markers, or empty list-item stubs), OpenClaw skips the heartbeat run to save API calls. If the file is missing, the heartbeat still runs and the model decides what to do.
+    Heartbeat instructions live in the monitor's cron scratch. Effectively empty scratch skips the heartbeat run to save API calls; without scratch, the heartbeat still runs and the model decides what to do.
 
     Per-agent overrides use `agents.entries.*.heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
 
@@ -1570,7 +1572,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or open a [GitHub discussion](https://github.com/openclaw/openclaw/discussions).
+Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
 
 ## Related
 

@@ -1705,7 +1705,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.CUSTOM_TOOL_HOME).toBe("/Users/test/.custom-tool");
   });
 
-  it("keeps source metadata for EnvironmentFile-backed preserved vars", async () => {
+  it("keeps differently-cased source metadata for EnvironmentFile-backed preserved vars", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/from-service",
@@ -1723,9 +1723,9 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
         OPENCLAW_GATEWAY_TOKEN: "old-token",
       },
       existingEnvironmentValueSources: {
-        OPENROUTER_API_KEY: "file",
-        CUSTOM_TOOL_HOME: "inline",
-        OPENCLAW_GATEWAY_TOKEN: "file",
+        openrouter_api_key: "file",
+        custom_tool_home: "inline",
+        openclaw_gateway_token: "file",
       },
     });
 

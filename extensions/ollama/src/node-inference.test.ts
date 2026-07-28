@@ -27,6 +27,7 @@ async function withOllamaServer<T>(
     chatRequests: Record<string, unknown>[],
     showRequests: string[],
   ) => Promise<T>,
+  options?: { models: Array<Record<string, unknown>> },
 ): Promise<T> {
   const chatRequests: Record<string, unknown>[] = [];
   const showRequests: string[] = [];
@@ -35,11 +36,21 @@ async function withOllamaServer<T>(
     if (request.url === "/api/tags") {
       response.end(
         JSON.stringify({
-          models: [
+          models: options?.models ?? [
             {
               name: "remote:cloud",
               size: 1,
               remote_host: "https://ollama.com",
+              details: {},
+            },
+            {
+              name: "tagged-only:cloud",
+              size: 1,
+              details: {},
+            },
+            {
+              name: "tagged-only:120b-cloud",
+              size: 1,
               details: {},
             },
             {
@@ -74,7 +85,7 @@ async function withOllamaServer<T>(
         response.end(JSON.stringify({ error: "show failed" }));
         return;
       }
-      const embedding = body.name === "embedding:latest";
+      const embedding = body.name?.startsWith("embedding") === true;
       response.end(
         JSON.stringify({
           capabilities: embedding ? ["embedding"] : ["completion", "tools"],
@@ -160,6 +171,29 @@ describe("Ollama node host inference", () => {
     });
   });
 
+  it("discovers a local chat model after 200 embedding-only node models", async () => {
+    const models = [
+      ...Array.from({ length: 200 }, (_, index) => ({ name: `embedding-${index}:latest` })),
+      { name: "chat:small", size: 500 },
+    ];
+
+    await withOllamaServer(
+      async (baseUrl, _chatRequests, showRequests) => {
+        const result = JSON.parse(await commandByName(baseUrl, OLLAMA_MODELS_COMMAND).handle()) as {
+          provider: string;
+          models: Array<{ name: string }>;
+        };
+
+        expect(result).toEqual({
+          provider: "ollama",
+          models: [expect.objectContaining({ name: "chat:small" })],
+        });
+        expect(showRequests).toHaveLength(201);
+      },
+      { models },
+    );
+  });
+
   it("runs bounded chat and returns compact usage", async () => {
     await withOllamaServer(async (baseUrl, chatRequests, showRequests) => {
       const result = JSON.parse(
@@ -206,6 +240,16 @@ describe("Ollama node host inference", () => {
       ).rejects.toThrow("is not a local chat model");
       await expect(
         commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
+          JSON.stringify({ model: "tagged-only:cloud", prompt: "hello" }),
+        ),
+      ).rejects.toThrow("is not a local chat model");
+      await expect(
+        commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
+          JSON.stringify({ model: "tagged-only:120b-cloud", prompt: "hello" }),
+        ),
+      ).rejects.toThrow("is not a local chat model");
+      await expect(
+        commandByName(baseUrl, OLLAMA_CHAT_COMMAND).handle(
           JSON.stringify({ model: "embedding:latest", prompt: "hello" }),
         ),
       ).rejects.toThrow("is not a local chat model");
@@ -237,6 +281,15 @@ describe("Ollama node host inference", () => {
 });
 
 describe("node_inference agent tool", () => {
+  it("uses a flat action enum supported by local model providers", () => {
+    const tool = createOllamaNodeInferenceTool(createTestPluginApi());
+    const action = (tool.parameters as { properties: { action: unknown } }).properties.action;
+
+    expect(action).toMatchObject({ type: "string", enum: ["discover", "run"] });
+    expect(action).not.toHaveProperty("anyOf");
+    expect(action).not.toHaveProperty("oneOf");
+  });
+
   it("discovers models through the connected node runtime", async () => {
     const invoke = vi.fn(async () => ({
       payload: { provider: "ollama", models: [{ name: "chat:small", loaded: true }] },
@@ -281,6 +334,83 @@ describe("node_inference agent tool", () => {
         },
       ],
     });
+  });
+
+  it("discovers only nodes authorized for local model discovery", async () => {
+    const invoke = vi.fn(async () => ({
+      payload: { provider: "ollama", models: [{ name: "chat:small" }] },
+    }));
+    const api = createTestPluginApi({
+      runtime: {
+        nodes: {
+          list: async () => ({
+            nodes: [
+              {
+                nodeId: "denied-node",
+                connected: true,
+                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
+                invocableCommands: [],
+              },
+              {
+                nodeId: "allowed-node",
+                connected: true,
+                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
+                invocableCommands: [OLLAMA_MODELS_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as never,
+    });
+
+    const result = await createOllamaNodeInferenceTool(api).execute("call-discover", {
+      action: "discover",
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ nodeId: "allowed-node" }));
+    expect(result.details).toMatchObject({ nodes: [{ nodeId: "allowed-node", ok: true }] });
+  });
+
+  it("routes inference to the node authorized for model discovery and chat", async () => {
+    const invoke = vi.fn(async () => ({
+      payload: { provider: "ollama", model: "chat:small", response: "done" },
+    }));
+    const api = createTestPluginApi({
+      runtime: {
+        nodes: {
+          list: async () => ({
+            nodes: [
+              {
+                nodeId: "denied-node",
+                connected: true,
+                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
+                invocableCommands: [OLLAMA_MODELS_COMMAND],
+              },
+              {
+                nodeId: "allowed-node",
+                connected: true,
+                commands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
+                invocableCommands: [OLLAMA_MODELS_COMMAND, OLLAMA_CHAT_COMMAND],
+              },
+            ],
+          }),
+          invoke,
+        },
+      } as never,
+    });
+
+    await createOllamaNodeInferenceTool(api).execute("call-authorized", {
+      action: "run",
+      model: "chat:small",
+      prompt: "answer fast",
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({ nodeId: "allowed-node", command: OLLAMA_CHAT_COMMAND }),
+    );
   });
 
   it("routes a run to the sole capable node", async () => {

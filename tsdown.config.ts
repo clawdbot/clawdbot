@@ -233,7 +233,11 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/retry" ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
-    ["@openclaw/acp-core", "@openclaw/workboard-contract"].includes(id) ||
+    [
+      "@openclaw/acp-core",
+      "@openclaw/session-url-contract",
+      "@openclaw/workboard-contract",
+    ].includes(id) ||
     id.startsWith("@openclaw/acp-core/") ||
     id === "zod" ||
     id.startsWith("zod/")
@@ -560,9 +564,6 @@ const configs = [
     deps: {
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
-  }),
-  nodeWorkspacePackageBuildConfig("web-content-core", {
-    outDir: "packages/web-content-core/dist",
   }),
   nodeWorkspacePackageBuildConfig("speech-core", {
     entry: buildSpeechCoreDistEntries(),

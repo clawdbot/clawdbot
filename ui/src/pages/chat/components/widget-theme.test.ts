@@ -75,6 +75,24 @@ describe("widget theme bridge", () => {
     });
   });
 
+  it("targets the exact origin for authenticated cross-origin embeds", () => {
+    document.documentElement.dataset.themeMode = "dark";
+    stubComputedStyles({ "--bg": "#0e1015", "--accent": "#ff5c5c" });
+    const postMessage = vi.fn();
+    const frame = { contentWindow: { postMessage } } as unknown as HTMLIFrameElement;
+
+    postWidgetTheme(frame, "https://discussion.example");
+
+    expect(postedMessage(postMessage)).toEqual([
+      {
+        type: "openclaw:widget-theme",
+        mode: "dark",
+        tokens: { surface: "#0e1015", accent: "#ff5c5c" },
+      },
+      "https://discussion.example",
+    ]);
+  });
+
   it("posts theme changes to connected frames and installs once", () => {
     class FakeMutationObserver {
       static instances: FakeMutationObserver[] = [];
