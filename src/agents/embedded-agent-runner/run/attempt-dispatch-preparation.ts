@@ -195,7 +195,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
       sessionFile: sessionPromptState.sessionFile,
       sessionTarget: resolvedSessionTarget,
       sessionKey: resolvedSessionKey,
-      trajectorySessionFile,
       trajectoryRecorder: trajectoryRecorder ?? undefined,
       workspaceDir,
       isCanonicalWorkspace,
