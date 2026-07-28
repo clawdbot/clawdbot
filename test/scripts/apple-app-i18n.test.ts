@@ -95,8 +95,11 @@ describe("Apple app i18n catalogs", () => {
         "Enable debug tools",
         "Everyday OpenClaw app behavior.",
         "General",
+        "Searching…",
         "Shelling",
+        "Stopped",
         "Voice Wake requires macOS 26 or newer",
+        "Waiting",
       ]),
     );
     expect(keys).not.toContain("OpenClaw");
