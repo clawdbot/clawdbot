@@ -437,11 +437,14 @@ describePosix("scripts/pr review artifact validation", () => {
     const { result, localDir, reviewSource, markdownBody } = runArtifactsRepin();
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    const repinnedReview = readFileSync(join(localDir, "review.json"), "utf8");
-    const expectedReview = reviewSource
-      .replace(`"number": ${SUPERSEDED_PR}`, `"number": ${REVIEWED_PR}`)
-      .replace(`"headSha": "${SUPERSEDED_HEAD}"`, `"headSha": "${REVIEWED_HEAD}"`);
-    expect(repinnedReview).toBe(expectedReview);
+    const repinned = JSON.parse(readFileSync(join(localDir, "review.json"), "utf8"));
+    const expected = JSON.parse(reviewSource);
+    expected.pr.number = REVIEWED_PR;
+    expected.pr.headSha = REVIEWED_HEAD;
+    // Deep-equal, so every authored field outside `pr` must survive verbatim.
+    expect(repinned).toEqual(expected);
+    // Key order matters for readability of an artifact humans hand-edit.
+    expect(Object.keys(repinned)).toEqual(Object.keys(expected));
     expect(readFileSync(join(localDir, "review.md"), "utf8")).toBe(
       `${REVIEWED_IDENTITY_LINE}\n${markdownBody}`,
     );
