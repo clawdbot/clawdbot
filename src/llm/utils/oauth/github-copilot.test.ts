@@ -1,5 +1,6 @@
 // GitHub Copilot OAuth tests cover device flow polling and timeout behavior.
 import { getEventListeners } from "node:events";
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Model } from "../../types.js";
 import { githubCopilotOAuthProvider } from "./github-copilot.js";
@@ -301,12 +302,17 @@ describe("GitHub Copilot OAuth model routing", () => {
     expect(githubCopilotOAuthProvider.getApiKey(credential({}))).toBe("refresh-token");
   });
 
-  it("does not exchange an expired legacy access token during runtime resolution", async () => {
+  it("normalizes an expired legacy access token without exchanging it", async () => {
     const expired = credential({ expires: 1 });
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(githubCopilotOAuthProvider.refreshToken(expired)).resolves.toBe(expired);
+    await expect(githubCopilotOAuthProvider.refreshToken(expired)).resolves.toEqual({
+      ...expired,
+      access: "refresh-token",
+      expires: MAX_DATE_TIMESTAMP_MS,
+    });
+    expect(expired).toMatchObject({ access: "access-token", expires: 1 });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

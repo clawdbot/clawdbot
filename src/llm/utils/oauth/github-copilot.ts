@@ -2,7 +2,10 @@
  * GitHub Copilot OAuth flow
  */
 
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   assertOkOrThrowProviderError,
   readProviderJsonResponse,
@@ -45,6 +48,7 @@ const INITIAL_POLL_INTERVAL_MULTIPLIER = 1.2;
 const SLOW_DOWN_POLL_INTERVAL_MULTIPLIER = 1.4;
 const COPILOT_ROUTER_ID_PREFIX = "accounts/";
 const COPILOT_REQUEST_TIMEOUT_MS = 30_000;
+const COPILOT_SOURCE_CREDENTIAL_EXPIRES_AT_MS = MAX_DATE_TIMESTAMP_MS;
 
 function resolveExpiresAtFromDurationSeconds(value: unknown): number | undefined {
   return resolveExpiresAtMsFromDurationSeconds(value);
@@ -566,10 +570,14 @@ export const githubCopilotOAuthProvider: OAuthProviderInterface = {
   },
 
   async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
-    // `expires` belongs to the legacy exchanged Copilot token. Runtime auth now
-    // validates and sends the durable GitHub credential, so expiry must not
-    // force upgraded profiles back through the retired exchange.
-    return credentials;
+    // Legacy profiles expire the retired exchanged token, not the durable
+    // GitHub credential. Normalize once so generic OAuth persistence records
+    // the source token as active and never infers a successful no-op refresh.
+    return {
+      ...credentials,
+      access: credentials.refresh,
+      expires: COPILOT_SOURCE_CREDENTIAL_EXPIRES_AT_MS,
+    };
   },
 
   getApiKey(credentials: OAuthCredentials): string {

@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 /**
  * OAuth credential manager.
  * Resolves usable access tokens, refreshes expired credentials under global
@@ -621,18 +620,6 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         );
         if (!refreshedCredentials) {
           return null;
-        }
-        if (isDeepStrictEqual(refreshedCredentials, credentialToRefresh)) {
-          // Providers may declare legacy access expiry irrelevant by returning
-          // the same bundle. Use their formatted credential without rewriting
-          // unchanged state or requiring a refreshable account identity.
-          return {
-            apiKey: await adapter.buildApiKey(cred.provider, refreshedCredentials, {
-              cfg: params.cfg,
-              agentDir: params.agentDir,
-            }),
-            credential: refreshedCredentials,
-          };
         }
         store.profiles[params.profileId] = refreshedCredentials;
         const persisted = await saveOAuthCredentialWithStoreLock({

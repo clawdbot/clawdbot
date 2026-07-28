@@ -132,41 +132,6 @@ describe("SQLite auth storage", () => {
     expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual(unreadableStore);
   });
 
-  it("uses a provider-owned unchanged refresh result without rewriting the profile", async () => {
-    const agentDir = makeAgentDir();
-    const credential = {
-      type: "oauth" as const,
-      provider: "test-oauth",
-      access: "expired-access",
-      refresh: "durable-source-token",
-      expires: 1,
-    };
-    writePersistedAuthProfileStoreRaw(
-      { version: 1, profiles: { "test-oauth:default": credential } },
-      agentDir,
-    );
-    const storage = AuthStorage.forAgent(agentDir);
-    getAuthStorageOAuthProviderRegistry(storage).register({
-      id: "test-oauth",
-      name: "Test OAuth",
-      async login() {
-        throw new Error("not used");
-      },
-      async refreshToken(credentials) {
-        return credentials;
-      },
-      getApiKey(credentials) {
-        return credentials.refresh;
-      },
-    });
-
-    await expect(storage.getApiKey("test-oauth")).resolves.toBe("durable-source-token");
-    expect(readPersistedAuthProfileStoreRaw(agentDir)).toEqual({
-      version: 1,
-      profiles: { "test-oauth:default": credential },
-    });
-  });
-
   it("does not commit a refresh when a legacy source appears during the provider call", async () => {
     const agentDir = makeAgentDir();
     writePersistedAuthProfileStoreRaw(
