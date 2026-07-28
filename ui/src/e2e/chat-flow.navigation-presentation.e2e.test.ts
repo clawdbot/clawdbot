@@ -625,7 +625,7 @@ suite.define(() => {
   });
 
   it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
-    const context = await newBrowserContext({
+    const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -643,7 +643,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
       await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
       await page.waitForTimeout(500);
@@ -696,7 +696,7 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.list", sessions);
       }
     } finally {
-      await closeBrowserContext(context);
+      await suite.closeBrowserContext(context);
     }
   });
 
@@ -887,7 +887,7 @@ suite.define(() => {
   });
 
   it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
-    const context = await newBrowserContext({
+    const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
@@ -912,7 +912,7 @@ suite.define(() => {
     });
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${suite.server.baseUrl}chat`);
       const documentMarker = await page.evaluate(() => {
         const marker = crypto.randomUUID();
         (window as Window & { __openclawAvatarTestDocument?: string })[
@@ -951,7 +951,7 @@ suite.define(() => {
         ),
       ).toBe(documentMarker);
     } finally {
-      await closeBrowserContext(context);
+      await suite.closeBrowserContext(context);
     }
   });
 });
