@@ -1960,6 +1960,70 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("materializes each distinct assistant media row once", async () => {
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-multiple-assistant-media-",
+      async (fixtureDir) => {
+        const firstMediaUrl = path.join(fixtureDir, "first.png");
+        const secondMediaUrl = path.join(fixtureDir, "second.png");
+        fs.writeFileSync(firstMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+        fs.writeFileSync(secondMediaUrl, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [
+          { path: firstMediaUrl, contentType: "image/png" },
+          { path: secondMediaUrl, contentType: "image/png" },
+        ];
+        mockState.triggerAgentRunStart = true;
+        mockState.runtimeAssistantTextsBeforeDelivery = [
+          `First image\nMEDIA:${firstMediaUrl}`,
+          `Second image\nMEDIA:${secondMediaUrl}`,
+        ];
+        mockState.dispatchedReplies = [
+          {
+            kind: "block",
+            payload: setReplyPayloadMetadata(
+              { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptMediaUrls: [firstMediaUrl],
+              },
+            ),
+          },
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              { text: "Second image", mediaUrl: secondMediaUrl, mediaUrls: [secondMediaUrl] },
+              {
+                assistantMessageIndex: 2,
+                assistantTranscriptMediaUrls: [secondMediaUrl],
+              },
+            ),
+          },
+        ];
+        const { send } = createChatRequestFixture();
+
+        await send({
+          idempotencyKey: "idem-multiple-assistant-media",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
+
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages).toHaveLength(2);
+        for (const [index, expectedText] of ["First image", "Second image"].entries()) {
+          const content = Array.isArray(messages[index]?.content)
+            ? (messages[index].content as Array<Record<string, unknown>>)
+            : [];
+          expect(content.filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: expectedText },
+          ]);
+          expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+          expect(JSON.stringify(content)).not.toContain("MEDIA:");
+        }
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+      },
+    );
+  });
+
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
     const transcriptDir = await createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
     const audioPath = path.join(transcriptDir, "tts.mp3");

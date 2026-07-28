@@ -129,9 +129,28 @@ export function createChatSendReplyDispatch(params: {
     channel: INTERNAL_MESSAGE_CHANNEL,
   });
   const deliveredReplies: DeliveredChatSendReply[] = [];
+  const finalizedAgentMediaTranscriptKeys = new Set<string>();
   let appendedWebchatAgentMedia = false;
+  const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
+    const metadata = getReplyPayloadMetadata(payload);
+    const ownedIdempotencyKey =
+      metadata?.assistantTranscriptOwned === true
+        ? metadata.assistantTranscriptIdempotencyKey?.trim()
+        : undefined;
+    if (ownedIdempotencyKey) {
+      return `owned:${ownedIdempotencyKey}`;
+    }
+    if (metadata?.assistantMessageIndex !== undefined) {
+      return `index:${metadata.assistantMessageIndex}`;
+    }
+    return "unkeyed";
+  };
   const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
-    if (!isAgentRunStarted() || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
+    if (!isAgentRunStarted() || !isMediaBearingPayload(payload)) {
+      return;
+    }
+    const finalizationKey = agentMediaTranscriptKey(payload);
+    if (finalizedAgentMediaTranscriptKeys.has(finalizationKey)) {
       return;
     }
     if (isSourceReplyTranscriptMirrorPayload(payload)) {
@@ -214,6 +233,7 @@ export function createChatSendReplyDispatch(params: {
       });
       if (rewritten) {
         appendedWebchatAgentMedia = true;
+        finalizedAgentMediaTranscriptKeys.add(finalizationKey);
         await publishAssistantTranscriptRewrite({
           scope: transcriptScope,
           rewritten: [rewritten],
@@ -261,6 +281,7 @@ export function createChatSendReplyDispatch(params: {
       });
       if (rewritten) {
         appendedWebchatAgentMedia = true;
+        finalizedAgentMediaTranscriptKeys.add(finalizationKey);
         await publishAssistantTranscriptRewrite({
           scope: transcriptScope,
           rewritten: [rewritten],
@@ -282,7 +303,12 @@ export function createChatSendReplyDispatch(params: {
       storePath: latestStorePath,
       agentId,
       createIfMissing: true,
-      idempotencyKey: `${clientRunId}:assistant-media`,
+      // Runtime message identity is the dedupe boundary; distinct rows must not collapse
+      // onto the single unkeyed media fallback used by tool/audio-only payloads.
+      idempotencyKey:
+        assistantMessageIndex !== undefined && assistantMessageIndex >= 1
+          ? `${clientRunId}:assistant-media:${assistantMessageIndex}`
+          : `${clientRunId}:assistant-media`,
       ttsSupplement: ttsSupplementMarker,
       cfg,
     });
@@ -294,6 +320,7 @@ export function createChatSendReplyDispatch(params: {
         });
       }
       appendedWebchatAgentMedia = true;
+      finalizedAgentMediaTranscriptKeys.add(finalizationKey);
       return;
     }
     logGateway.warn(
@@ -331,15 +358,27 @@ export function createChatSendReplyDispatch(params: {
     },
   };
   const finalizeAgentMediaTranscript = async () => {
-    try {
-      for (const { payload } of deliveredReplies) {
-        await appendWebchatAgentMediaTranscriptIfNeeded(payload);
-        if (appendedWebchatAgentMedia) {
-          return;
+    const latestPayloadByKey = new Map<string, ReplyPayload>();
+    const orderedKeys: string[] = [];
+    for (const { payload } of deliveredReplies) {
+      if (!isMediaBearingPayload(payload)) {
+        continue;
+      }
+      const key = agentMediaTranscriptKey(payload);
+      if (!latestPayloadByKey.has(key)) {
+        orderedKeys.push(key);
+      }
+      latestPayloadByKey.set(key, payload);
+    }
+    for (const key of orderedKeys) {
+      const payload = latestPayloadByKey.get(key);
+      if (payload) {
+        try {
+          await appendWebchatAgentMediaTranscriptIfNeeded(payload);
+        } catch (error) {
+          logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
         }
       }
-    } catch (error) {
-      logGateway.warn(`webchat media finalization failed: ${formatForLog(error)}`);
     }
   };
   const runAgentMediaTranscript = async <T>(

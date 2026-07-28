@@ -14,6 +14,7 @@ import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
+import { stripInlineDirectiveTagsForDisplay } from "../../utils/directive-tags.js";
 import {
   sanitizeAssistantDisplayText,
   type AssistantDisplayContentBlock,
@@ -161,7 +162,10 @@ function mergeManagedMediaIntoAssistantContent(params: {
       continue;
     }
     const split = splitMediaFromOutput(block.text);
-    const visibleText = sanitizeAssistantDisplayText(split.text, { preserveBoundaries: true });
+    const directiveTagsChanged = stripInlineDirectiveTagsForDisplay(split.text).changed;
+    const visibleText = sanitizeAssistantDisplayText(split.text, {
+      preserveBoundaries: !directiveTagsChanged,
+    });
     if (visibleText) {
       const { textSignature: _textSignature, ...rest } = block;
       merged.push({ ...rest, text: visibleText });
@@ -458,12 +462,18 @@ export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(param
   }
   return await withTranscriptWriteLock(params.scope, async (transcript) => {
     const currentWatermark = readSessionTranscriptWatermark(params.scope);
-    if (currentWatermark.generation !== params.expectedGeneration) {
+    const initialGenerationMaterialized =
+      params.expectedGeneration === null && params.afterSeq === 0;
+    if (
+      currentWatermark.generation !== params.expectedGeneration &&
+      !initialGenerationMaterialized
+    ) {
       return null;
     }
     const events = await transcript.readEvents();
     // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
-    // A generation change invalidates that boundary, so callers fall back without rewriting history.
+    // Later generation changes invalidate it. A new transcript instead materializes its first
+    // generation during this turn, and exact message index plus media still identifies the row.
     const currentTurnEvents = loadTranscriptEventRowsAfterSeqSync(
       params.scope,
       params.afterSeq,
