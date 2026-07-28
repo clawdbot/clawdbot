@@ -1,6 +1,8 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agents/agent-run-terminal-outcome.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getSubagentRunByChildSessionKeyAndRunId } from "../../agents/subagent-registry-read.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import { stripToolMessages } from "../../agents/tools/chat-history-text.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
@@ -131,6 +133,39 @@ function buildTaskTerminalOutcome(task: TaskRecord | undefined) {
   });
 }
 
+function buildRegistryTerminalOutcome(entry: SubagentRunRecord | null | undefined) {
+  const outcome = entry?.execution?.outcome ?? entry?.outcome;
+  if (!outcome || outcome.status === "unknown") {
+    return undefined;
+  }
+  return buildAgentRunTerminalOutcomeFromWaitResult({
+    status: outcome.status === "ok" ? "ok" : outcome.status === "timeout" ? "timeout" : "error",
+    error: outcome.status === "error" ? outcome.error : undefined,
+    startedAt: outcome.startedAt ?? entry?.execution?.startedAt ?? entry?.startedAt,
+    endedAt: outcome.endedAt ?? entry?.execution?.endedAt ?? entry?.endedAt,
+  });
+}
+
+function isActiveRegistryRun(entry: SubagentRunRecord | null | undefined): boolean {
+  return (
+    entry?.execution?.status === "queued" ||
+    entry?.execution?.status === "running" ||
+    entry?.execution?.status === "interrupted" ||
+    (entry !== null &&
+      entry !== undefined &&
+      typeof entry.endedAt !== "number" &&
+      entry.outcome === undefined)
+  );
+}
+
+function registryStartedAt(entry: SubagentRunRecord | null | undefined): number | undefined {
+  return entry?.execution?.startedAt ?? entry?.startedAt ?? entry?.execution?.acceptedAt;
+}
+
+function registryEndedAt(entry: SubagentRunRecord | null | undefined): number | undefined {
+  return entry?.execution?.endedAt ?? entry?.endedAt;
+}
+
 async function callCanonicalHandler(
   handler: GatewayRequestHandler,
   opts: GatewayRequestHandlerOptions,
@@ -223,6 +258,9 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
     await respondWithContract(opts.params, opts.respond, async (input) => {
       const tracked = statusAgenticOsSession(input, authenticatedPrincipalId(opts.client));
       const sessionKey = tracked.session_key;
+      if (typeof sessionKey !== "string" || !sessionKey) {
+        throw new Error("tracked session_key missing");
+      }
       let canonical: Record<string, unknown>;
       try {
         canonical = await callCanonicalHandler(sessionReadHandlers["sessions.get"]!, opts, {
@@ -242,14 +280,17 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       const runId = typeof tracked.runId === "string" ? tracked.runId : undefined;
       const runtimeTask = runId ? findTaskByRunIdForStatus(runId) : undefined;
       const runSnapshot = runId ? await waitForAgentJob({ runId, timeoutMs: 0 }) : null;
+      const registryRun = runId ? getSubagentRunByChildSessionKeyAndRunId(sessionKey, runId) : null;
       const terminalOutcome =
         buildAgentRunTerminalOutcomeFromWaitResult(runSnapshot ?? undefined) ??
-        buildTaskTerminalOutcome(runtimeTask);
+        buildTaskTerminalOutcome(runtimeTask) ??
+        buildRegistryTerminalOutcome(registryRun);
+      const runtimeActive = runtimeTask !== undefined || isActiveRegistryRun(registryRun);
       const lifecycleStatus = terminalOutcome
         ? terminalOutcome.reason === "completed"
           ? "completed"
           : "failed"
-        : runtimeTask
+        : runtimeActive
           ? "running"
           : "unknown";
       return {
@@ -261,10 +302,12 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
           session_exists: sessionExists,
           transcript_available: sessionExists,
           lifecycle_status: lifecycleStatus,
-          runtime_status: terminalOutcome?.reason ?? (runtimeTask ? "running" : "unavailable"),
+          runtime_status: terminalOutcome?.reason ?? (runtimeActive ? "running" : "unavailable"),
           terminal: terminalOutcome !== undefined,
-          started_at_ms: terminalOutcome?.startedAt ?? runtimeTask?.startedAt,
-          ended_at_ms: terminalOutcome?.endedAt ?? runtimeTask?.endedAt,
+          started_at_ms:
+            terminalOutcome?.startedAt ?? runtimeTask?.startedAt ?? registryStartedAt(registryRun),
+          ended_at_ms:
+            terminalOutcome?.endedAt ?? runtimeTask?.endedAt ?? registryEndedAt(registryRun),
         },
       };
     });

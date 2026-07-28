@@ -262,7 +262,7 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         expect(status.runtime_session).toMatchObject({
           key: firstSpawn.session_key,
           lifecycle_status: "completed",
-          runtime_status: "ok",
+          runtime_status: "completed",
           terminal: true,
         });
         expect(history.session_key).toBe(firstSpawn.session_key);
@@ -333,7 +333,7 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         }>("sessions_status", { session_key: failureSpawn.session_key });
         expect(failedStatus.runtime_session).toMatchObject({
           lifecycle_status: "failed",
-          runtime_status: "error",
+          runtime_status: "failed",
         });
         expect(modelServer.requests.filter((body) => body.includes(FAILURE_MARKER))).toHaveLength(
           1,
