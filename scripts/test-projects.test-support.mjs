@@ -8,6 +8,8 @@ import os from "node:os";
 import path from "node:path";
 import {
   agentsCoreIsolatedTestFiles,
+  agentsEmbeddedIncompleteTurnTestFiles,
+  agentsEmbeddedOverflowCompactionTestFiles,
   isAgentsCoreIsolatedTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
@@ -88,6 +90,7 @@ import {
 } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
+const AGENTS_EMBEDDED_AGENT_TEST_ROOT = "src/agents/embedded-agent-runner";
 const AGENTS_CORE_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.agents-core-isolated.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
 const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
@@ -4247,7 +4250,32 @@ function classifyTarget(arg, cwd) {
     return "autoReply";
   }
   if (isPathAtOrUnder(relative, "src/agents")) {
-    return "agent";
+    // Focused runs must preserve the full suite's isolated harness and hook-timeout contracts.
+    if (relative === "src/agents" || relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
+      return "agent";
+    }
+    if (agentsEmbeddedIncompleteTurnTestFiles.includes(relative)) {
+      return "agentEmbeddedIncompleteTurn";
+    }
+    if (agentsEmbeddedOverflowCompactionTestFiles.includes(relative)) {
+      return "agentEmbeddedOverflowCompaction";
+    }
+    if (isPathAtOrUnder(relative, `${AGENTS_EMBEDDED_AGENT_TEST_ROOT}/run`)) {
+      return "agentEmbeddedRun";
+    }
+    if (isPathAtOrUnder(relative, AGENTS_EMBEDDED_AGENT_TEST_ROOT)) {
+      return isGlobTarget(relative) ? "agent" : "agentEmbedded";
+    }
+    if (isPathAtOrUnder(relative, "src/agents/tools")) {
+      return "agentTools";
+    }
+    if (isGlobTarget(relative)) {
+      const owner = relative.slice("src/agents/".length).split("/", 1)[0];
+      return isGlobTarget(owner) ? "agent" : "agentSupport";
+    }
+    return isFileLikeTarget(relative) && path.posix.dirname(relative) === "src/agents"
+      ? "agentCore"
+      : "agentSupport";
   }
   if (isPathAtOrUnder(relative, "src/plugins")) {
     return "plugin";
@@ -4409,6 +4437,27 @@ export function buildVitestRunPlans(
 
   const groupedTargets = new Map();
   for (const targetArg of activeTargetArgs) {
+    if (!watchMode && toRepoRelativeTarget(targetArg, cwd) === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
+      // The recursive parent spans four harness owners; keep every isolated project intact.
+      const embeddedTargetsByKind = [
+        ["agentEmbedded", [`${AGENTS_EMBEDDED_AGENT_TEST_ROOT}/*.test.ts`]],
+        ["agentEmbeddedIncompleteTurn", agentsEmbeddedIncompleteTurnTestFiles],
+        ["agentEmbeddedOverflowCompaction", agentsEmbeddedOverflowCompactionTestFiles],
+        ["agentEmbeddedRun", [`${AGENTS_EMBEDDED_AGENT_TEST_ROOT}/run`]],
+      ];
+
+      for (const [kind, targets] of embeddedTargetsByKind) {
+        const current = groupedTargets.get(kind) ?? [];
+        for (const target of targets) {
+          if (!current.includes(target)) {
+            current.push(target);
+          }
+        }
+        groupedTargets.set(kind, current);
+      }
+      continue;
+    }
+
     const kind = classifyTarget(targetArg, cwd);
     const current = groupedTargets.get(kind) ?? [];
     current.push(targetArg);

@@ -147,9 +147,11 @@ function __${rootCmd}_command_path_matches
     end
     set -a command_tokens $token
   end
-  for i in (seq (count $expected))
-    if test "$command_tokens[$i]" != "$expected[$i]"
-      return 1
+  if test (count $expected) -gt 0
+    for i in (seq (count $expected))
+      if test "$command_tokens[$i]" != "$expected[$i]"
+        return 1
+      end
     end
   end
 ${rejectDescendantCommands}
@@ -164,7 +166,8 @@ function fishCommandPathCondition(
   parents: readonly string[],
 ): string {
   const valueOptions = collectFishPathOptionFlags(program, parents, true);
-  return `__${rootCmd}_command_path_matches ${parents.join(" ")} -- ${fishWords(valueOptions)}`.trimEnd();
+  const commandPath = parents.length > 0 ? ` ${parents.join(" ")}` : "";
+  return `__${rootCmd}_command_path_matches${commandPath} -- ${fishWords(valueOptions)}`.trimEnd();
 }
 
 async function writeCompletionCache(params: {
@@ -626,9 +629,7 @@ function generateFishCompletion(program: Command): string {
     // One condition per alias-expanded parent path so completion keeps working
     // after the user typed an alias segment.
     const conditions = parentVariants.map((parents) =>
-      parents.length === 0
-        ? "__fish_use_subcommand"
-        : fishCommandPathCondition(program, rootCmd, parents),
+      fishCommandPathCondition(program, rootCmd, parents),
     );
     for (const condition of conditions) {
       // Subcommands (canonical names and aliases)

@@ -1,3 +1,4 @@
+import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
@@ -29,10 +30,8 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   private client: GatewayBrowserClient | null = null;
   private agentId: string | null = null;
   private connected = false;
-  private epoch = 0;
   private eligibleSignature = "";
-  private refresh: Promise<void> | null = null;
-  private refreshAgain = false;
+  private readonly refreshTask: Task;
   private refreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private refreshScheduled = false;
 
@@ -41,6 +40,62 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
     private readonly options: SessionPullRequestIndicatorsOptions,
   ) {
     host.addController(this);
+    this.refreshTask = new Task(host, {
+      autoRun: false,
+      // Rows are represented by a deterministic primitive so Lit can shallow-compare args.
+      args: () => [null as GatewayBrowserClient | null, "", ""] as const,
+      task: async ([client, selectedAgentId, signature], { signal }) => {
+        if (!client || !signature) {
+          return initialState;
+        }
+        const eligibleRows = this.options
+          .getRows()
+          .filter((session) => !session.isChild && session.worktreeId);
+        const currentSignature = JSON.stringify(
+          eligibleRows.map((session) => [session.key, session.worktreeId]),
+        );
+        if (currentSignature !== signature) {
+          return initialState;
+        }
+        const entries: Array<readonly [string, IndicatorEntry]> = [];
+        for (const session of eligibleRows) {
+          if (signal.aborted) {
+            break;
+          }
+          try {
+            const state = await fetchSessionPullRequestIndicatorState({
+              client,
+              pullRequestsAvailable: true,
+              sessionKey: session.key,
+              agentId: parseAgentSessionKey(session.key)?.agentId ?? selectedAgentId,
+            });
+            if (state !== null && session.worktreeId) {
+              entries.push([session.key, { state, worktreeId: session.worktreeId }]);
+            }
+          } catch {
+            // Optional metadata: preserve the last-known indicator and retry next poll.
+          }
+        }
+        return { client, entries };
+      },
+      onComplete: ({ client, entries }) => {
+        if (this.options.getSnapshot()?.client !== client) {
+          return;
+        }
+        let changed = false;
+        for (const [sessionKey, entry] of entries) {
+          const current = this.states.get(sessionKey);
+          if (current?.state !== entry.state || current.worktreeId !== entry.worktreeId) {
+            this.states.set(sessionKey, entry);
+            changed = true;
+          }
+        }
+        if (changed) {
+          this.host.requestUpdate();
+        }
+        this.scheduleRefreshTimer();
+      },
+    });
   }
 
   hostConnected(): void {
@@ -95,9 +150,11 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
   }
 
   private reset(requestUpdate: boolean): void {
-    this.epoch += 1;
+    const shouldInvalidate = this.eligibleSignature !== "";
     this.eligibleSignature = "";
-    this.refreshAgain = false;
+    if (shouldInvalidate) {
+      void this.refreshTask.run([null, "", ""]);
+    }
     this.clearRefreshTimer();
     if (this.states.size === 0) {
       return;
@@ -140,8 +197,12 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       this.host.requestUpdate();
     }
     if (eligibleRows.length === 0) {
+      const shouldInvalidate = this.eligibleSignature !== "";
       this.eligibleSignature = "";
       this.clearRefreshTimer();
+      if (shouldInvalidate) {
+        void this.refreshTask.run([null, "", ""]);
+      }
       return;
     }
 
@@ -149,93 +210,13 @@ export class SessionPullRequestIndicatorsController implements ReactiveControlle
       eligibleRows.map((session) => [session.key, session.worktreeId]),
     );
     if (!force && signature === this.eligibleSignature) {
-      if (this.refresh === null) {
+      if (this.refreshTask.status !== TaskStatus.PENDING) {
         this.scheduleRefreshTimer();
       }
       return;
     }
     this.eligibleSignature = signature;
-    if (this.refresh) {
-      this.refreshAgain = true;
-      return;
-    }
-
     this.clearRefreshTimer();
-    const epoch = this.epoch;
-    const refresh = this.load({
-      client: snapshot.client,
-      selectedAgentId,
-      eligibleRows,
-      epoch,
-      signature,
-    });
-    this.refresh = refresh;
-    void refresh.finally(() => {
-      if (this.refresh !== refresh) {
-        return;
-      }
-      this.refresh = null;
-      if (!this.connected) {
-        return;
-      }
-      if (this.refreshAgain) {
-        this.refreshAgain = false;
-        this.refreshVisible(true);
-        return;
-      }
-      if (epoch === this.epoch && signature === this.eligibleSignature) {
-        this.scheduleRefreshTimer();
-      }
-    });
-  }
-
-  private async load(params: {
-    client: GatewayBrowserClient;
-    selectedAgentId: string;
-    eligibleRows: readonly SidebarRecentSession[];
-    epoch: number;
-    signature: string;
-  }): Promise<void> {
-    for (const session of params.eligibleRows) {
-      if (!this.isCurrent(params)) {
-        return;
-      }
-      try {
-        const indicatorState = await fetchSessionPullRequestIndicatorState({
-          client: params.client,
-          pullRequestsAvailable: true,
-          sessionKey: session.key,
-          agentId: parseAgentSessionKey(session.key)?.agentId ?? params.selectedAgentId,
-        });
-        if (indicatorState === null || !this.isCurrent(params)) {
-          continue;
-        }
-        const worktreeId = session.worktreeId;
-        const current = this.states.get(session.key);
-        if (
-          worktreeId &&
-          (current?.state !== indicatorState || current.worktreeId !== worktreeId)
-        ) {
-          this.states.set(session.key, { state: indicatorState, worktreeId });
-          this.host.requestUpdate();
-        }
-      } catch {
-        // Optional metadata: preserve the last-known indicator and retry next poll.
-      }
-    }
-  }
-
-  private isCurrent(params: {
-    client: GatewayBrowserClient;
-    epoch: number;
-    signature: string;
-  }): boolean {
-    return (
-      this.connected &&
-      this.options.getConnected() &&
-      params.epoch === this.epoch &&
-      params.signature === this.eligibleSignature &&
-      this.options.getSnapshot()?.client === params.client
-    );
+    void this.refreshTask.run([snapshot.client, selectedAgentId, signature]);
   }
 }

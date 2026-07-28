@@ -314,6 +314,44 @@ describe("qa run config", () => {
     );
   });
 
+  it("keeps portable thread scenarios in unpinned live profiles", () => {
+    const catalog = readQaScenarioPack();
+    const scenarioIds = new Set(["thread-follow-up", "thread-isolation"]);
+    const selected = catalog.scenarios.filter((scenario) => scenarioIds.has(scenario.id));
+
+    const execution = resolveQaRunProfileExecutionSelection({
+      scenarios: selected,
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      channelDriver: "live",
+    });
+
+    expect(execution.selectedScenarios.map((scenario) => scenario.id)).toEqual([
+      "thread-follow-up",
+      "thread-isolation",
+    ]);
+    expect(execution.excludedScenarios).toEqual([]);
+  });
+
+  it("selects a supported declared transport for portable live scenarios", () => {
+    const catalog = readQaScenarioPack();
+    const scenario = catalog.scenarios.find((entry) => entry.id === "thread-follow-up");
+    if (!scenario) {
+      throw new Error("thread-follow-up scenario is missing from the QA catalog");
+    }
+
+    const execution = resolveQaRunProfileExecutionSelection({
+      scenarios: [scenario],
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      channelDriver: "live",
+      supportsChannel: (channel) => channel === "matrix",
+    });
+
+    expect(execution.selectedScenarios).toEqual([scenario]);
+    expect(execution.excludedScenarios).toEqual([]);
+  });
+
   it("excludes live-only and unsupported thread scenarios from Crabline plans", () => {
     const catalog = readQaScenarioPack();
     const scenarioIds = new Set([

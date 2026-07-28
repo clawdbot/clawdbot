@@ -1,6 +1,7 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import type { AgentsRouteData } from "./agents-page.ts";
@@ -27,9 +28,7 @@ async function loadAgentsRouteData(
 }
 
 export const page = definePage({
-  id: "agents",
-  path: "/settings/agents",
-  aliases: ["/agents"],
+  ...routePageSpec("agents"),
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
   loader: (context: ApplicationContext, { location }) => loadAgentsRouteData(context, location),
   component: () =>

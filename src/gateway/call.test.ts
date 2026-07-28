@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -332,6 +333,7 @@ describe("callGateway url resolution", () => {
   ]);
 
   beforeEach(() => {
+    resetConfigRuntimeState();
     envSnapshot.restore();
     deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
     deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
@@ -343,6 +345,7 @@ describe("callGateway url resolution", () => {
   });
 
   afterEach(() => {
+    resetConfigRuntimeState();
     envSnapshot.restore();
     testing.resetDepsForTests();
   });
@@ -1376,6 +1379,79 @@ describe("buildGatewayConnectionDetails", () => {
       expect(details.url).toBe("ws://127.0.0.1:18789");
       expect(details.urlSource).toBe("local loopback");
     } finally {
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the reduced dispatch config for default RPC loading", async () => {
+    resetConfigRuntimeState();
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    const configPath = path.join(tempStateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
+        channels: { telegram: { dmPolicy: 42 } },
+      }),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    try {
+      testing.setDepsForTests({
+        createGatewayClient: (opts) =>
+          new StubGatewayClient(
+            opts as ConstructorParameters<typeof StubGatewayClient>[0],
+          ) as never,
+        loadOrCreateDeviceIdentity: () => {
+          throw new Error("auth mode none should not load a device identity");
+        },
+        loadDeviceAuthToken: () => null,
+        resolveGatewayPort: (config) => config?.gateway?.port ?? 18789,
+      });
+
+      await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+      expect(lastClientOptions?.deviceIdentity).toBeNull();
+    } finally {
+      resetConfigRuntimeState();
+      fs.rmSync(tempStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the active runtime snapshot authoritative for default RPC loading", async () => {
+    resetConfigRuntimeState();
+    const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
+    const configPath = path.join(tempStateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: { mode: "local", bind: "loopback", port: 18800, auth: { mode: "none" } },
+      }),
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    setRuntimeConfigSnapshot({
+      gateway: { mode: "local", bind: "loopback", port: 18801, auth: { mode: "none" } },
+    });
+    try {
+      testing.setDepsForTests({
+        createGatewayClient: (opts) =>
+          new StubGatewayClient(
+            opts as ConstructorParameters<typeof StubGatewayClient>[0],
+          ) as never,
+        loadOrCreateDeviceIdentity: () => {
+          throw new Error("auth mode none should not load a device identity");
+        },
+        loadDeviceAuthToken: () => null,
+        resolveGatewayPort: (config) => config?.gateway?.port ?? 18789,
+      });
+
+      await expect(callGateway({ method: "health" })).resolves.toEqual({ ok: true });
+
+      expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18801");
+    } finally {
+      resetConfigRuntimeState();
       fs.rmSync(tempStateDir, { recursive: true, force: true });
     }
   });

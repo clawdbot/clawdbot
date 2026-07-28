@@ -2437,14 +2437,19 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       mockCallArg(state.deliverAgentCommandResultMock),
       "delivery params",
     );
-    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual([
-      { text: "ready" },
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
-    ]);
-    expect(deliveryParams.payloads).toEqual([
-      { text: "ready" },
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
-    ]);
+    const expectedRecoveryPayloads = [
+      {
+        text: "ready",
+        mediaUrl: "/tmp/missing.png",
+        mediaUrls: ["/tmp/missing.png"],
+        audioAsVoice: undefined,
+        trustedLocalMedia: true,
+      },
+    ];
+    expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual(
+      expectedRecoveryPayloads,
+    );
+    expect(deliveryParams.payloads).toEqual(expectedRecoveryPayloads);
     expect(
       state.persistSessionEntryMock.mock.calls.some((call) => {
         const params = call[0] as { entry?: SessionEntry };

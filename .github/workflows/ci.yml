@@ -3171,7 +3171,7 @@ jobs:
     needs: [preflight]
     if: needs.preflight.outputs.run_ios_build == 'true'
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
-    timeout-minutes: 75
+    timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -3316,11 +3316,11 @@ jobs:
           retention-days: 14
 
       - name: Capture iOS release screenshots
-        if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && env.HISTORICAL_TARGET != 'true' }}
+        if: ${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         run: pnpm ios:screenshots
 
       - name: Upload iOS release screenshot evidence
-        if: ${{ always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && env.HISTORICAL_TARGET != 'true' }}
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && needs.preflight.outputs.run_macos == 'true')) && env.HISTORICAL_TARGET != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-release-screenshots-${{ needs.preflight.outputs.checkout_revision }}

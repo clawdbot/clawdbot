@@ -160,9 +160,11 @@ describe("new-session model runtime", () => {
     const control = new NewSessionModelControl(() => undefined);
     control.load(context, "main", true);
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("chat.metadata", {
-        agentId: "main",
-      }),
+      expect(request).toHaveBeenCalledWith(
+        "chat.metadata",
+        { agentId: "main" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     await vi.waitFor(() => {
       control.selected = "openai/gpt-5.6-luna";
