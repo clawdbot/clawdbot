@@ -1,10 +1,10 @@
 // Synology Chat plugin module implements inbound event behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import { sendMessage } from "./client.js";
 import type { SynologyInboundMessage } from "./inbound-context.js";
 import { getSynologyRuntime } from "./runtime.js";
 import { buildSynologyChatInboundSessionKey } from "./session-key.js";
+import { chunkSynologyChatText } from "./text-chunking.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import type { SynologyIngressLifecycle } from "./webhook-ingress.js";
 
@@ -41,16 +41,6 @@ function resolveSynologyChatInboundRoute(params: {
   };
 }
 
-// Synology Chat rejects payloads over ~4000 chars ("msg too long"); keep a safety
-// margin and chunk longer replies into sequential messages the way the slack, twitch,
-// and sms channels already do, instead of dropping the whole reply.
-export const SYNOLOGY_CHAT_MAX_MESSAGE_CHARS = 3800;
-export const SYNOLOGY_CHAT_CHUNK_DELAY_MS = 1000;
-
-export function chunkSynologyChatReply(text: string): string[] {
-  return chunkTextForOutbound(text, SYNOLOGY_CHAT_MAX_MESSAGE_CHARS);
-}
-
 async function deliverSynologyChatReply(params: {
   account: ResolvedSynologyChatAccount;
   sendUserId: string;
@@ -60,21 +50,18 @@ async function deliverSynologyChatReply(params: {
   if (!text) {
     return { visibleReplySent: false };
   }
-  const chunks = chunkSynologyChatReply(text);
-  let visibleReplySent = false;
-  for (let i = 0; i < chunks.length; i++) {
-    const ok = await sendMessage(
+  for (const chunk of chunkSynologyChatText(text)) {
+    const visibleReplySent = await sendMessage(
       params.account.incomingUrl,
-      chunks[i],
+      chunk,
       params.sendUserId,
       params.account.allowInsecureSsl,
     );
-    visibleReplySent = visibleReplySent || ok;
-    if (i < chunks.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, SYNOLOGY_CHAT_CHUNK_DELAY_MS));
+    if (!visibleReplySent) {
+      return { visibleReplySent: false };
     }
   }
-  return { visibleReplySent };
+  return { visibleReplySent: true };
 }
 
 export async function dispatchSynologyChatInboundEvent(params: {

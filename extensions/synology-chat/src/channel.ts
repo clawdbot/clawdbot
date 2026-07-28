@@ -52,11 +52,14 @@ import {
   synologyChatSetupContract,
   synologyChatSetupWizard,
 } from "./setup-surface.js";
+import {
+  chunkSynologyChatText,
+  SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
+  SYNOLOGY_MARKDOWN_LINK_RE,
+} from "./text-chunking.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 const CHANNEL_ID = "synology-chat";
-const SYNOLOGY_MARKDOWN_LINK_RE =
-  /(?<!!)\[((?:\\[^\n]|[^\\\]\n])+)\]\((https?:\/\/(?:\\[^\n]|[^()\s<>\\])+(?:\((?:\\[^\n]|[^()\s<>\\])*\)(?:\\[^\n]|[^()\s<>\\])*)*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'|\([^()\n]*\)))?\)/g;
 
 const resolveSynologyChatDmPolicy = createScopedDmSecurityResolver<ResolvedSynologyChatAccount>({
   channelKey: CHANNEL_ID,
@@ -191,6 +194,7 @@ type SynologyChatPlugin = Omit<
   };
   outbound: {
     deliveryMode: "gateway";
+    chunker: NonNullable<ChannelOutboundAdapter["chunker"]>;
     textChunkLimit: number;
     sanitizeText: NonNullable<ChannelOutboundAdapter["sanitizeText"]>;
     sendText: (ctx: SynologyChannelSendTextContext) => Promise<SynologyChatOutboundResult>;
@@ -468,7 +472,8 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
     },
     outbound: {
       deliveryMode: "gateway" as const,
-      textChunkLimit: 2000,
+      chunker: chunkSynologyChatText,
+      textChunkLimit: SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT,
       sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendText: sendSynologyChatText,
       sendMedia: async (ctx) => {

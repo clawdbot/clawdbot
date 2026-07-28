@@ -1,7 +1,12 @@
 import { once } from "node:events";
 import * as http from "node:http";
+import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { synologyChatPlugin } from "./channel.js";
 import { resolveLegacyWebhookNameToChatUserId, sendMessage } from "./client.js";
+import type { SynologyInboundMessage } from "./inbound-context.js";
+import { dispatchSynologyChatInboundEvent } from "./inbound-event.js";
+import { setSynologyRuntime } from "./runtime.js";
 
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
@@ -30,6 +35,140 @@ describe("Synology Chat user_list loopback", () => {
       server = undefined;
     }
   });
+
+  const chunkingCases = [
+    { name: "long unbroken text", text: "x".repeat(4_501), requests: 3, joiner: "" },
+    { name: "Unicode surrogate pairs", text: "😀".repeat(1_201), requests: 2, joiner: "" },
+    {
+      name: "Markdown and newline boundaries",
+      text: "Read [the documentation](https://example.com/guide).\n".repeat(90).trim(),
+      requests: 3,
+      joiner: " ",
+    },
+    { name: "short messages", text: "A short 😀 message.", requests: 1, joiner: "" },
+  ];
+
+  it.each(
+    chunkingCases.flatMap((entry) => [
+      { ...entry, delivery: "outbound" as const },
+      { ...entry, delivery: "inbound reply" as const },
+    ]),
+  )(
+    "delivers $name via $delivery within the Synology Chat payload limit",
+    async ({ text, requests, joiner, delivery }) => {
+      const receivedTexts: string[] = [];
+      const port = await listenLoopback((req, res) => {
+        let body = "";
+        req.setEncoding("utf8");
+        req.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        req.on("end", () => {
+          const rawPayload = new URLSearchParams(body).get("payload");
+          const payload = JSON.parse(rawPayload ?? "{}") as {
+            text?: string;
+            user_ids?: number[];
+          };
+          const receivedText = payload.text ?? "";
+          receivedTexts.push(receivedText);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          if (receivedText.length > 2_000) {
+            res.end(
+              JSON.stringify({ success: false, error: { code: 410, errors: "msg too long" } }),
+            );
+            return;
+          }
+          res.end(JSON.stringify({ success: true }));
+        });
+      });
+      const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
+      const cfg = {
+        channels: {
+          "synology-chat": {
+            enabled: true,
+            token: "loopback-token",
+            incomingUrl,
+          },
+        },
+      };
+
+      if (delivery === "outbound") {
+        const result = await sendTextMediaPayload({
+          channel: "synology-chat",
+          ctx: { cfg, to: "42", payload: { text } },
+          adapter: synologyChatPlugin.outbound,
+        });
+        expect(result.channel).toBe("synology-chat");
+      } else {
+        const inboundRun = vi.fn(
+          async (params: {
+            raw: SynologyInboundMessage;
+            adapter: {
+              ingest: (raw: SynologyInboundMessage) => unknown;
+              resolveTurn: (
+                input: unknown,
+                admission: { kind: "message"; canStartAgentTurn: true },
+              ) => Promise<{
+                delivery: { deliver: (payload: { text: string }) => Promise<unknown> };
+              }>;
+            };
+          }) => {
+            const input = params.adapter.ingest(params.raw);
+            const resolved = await params.adapter.resolveTurn(input, {
+              kind: "message",
+              canStartAgentTurn: true,
+            });
+            return await resolved.delivery.deliver({ text });
+          },
+        );
+        setSynologyRuntime({
+          config: { current: () => cfg },
+          channel: {
+            routing: {
+              resolveAgentRoute: () => ({
+                agentId: "main",
+                accountId: "default",
+                sessionKey: "agent:main:synology-chat:default:direct:42",
+              }),
+            },
+            inbound: {
+              run: inboundRun,
+              buildContext: (context: unknown) => context,
+            },
+          },
+        } as unknown as Parameters<typeof setSynologyRuntime>[0]);
+        const account = synologyChatPlugin.config.resolveAccount(cfg, "default");
+        await dispatchSynologyChatInboundEvent({
+          account,
+          msg: {
+            body: "Trigger the reply",
+            from: "42",
+            chatUserId: "42",
+            senderName: "Loopback User",
+            provider: "synology-chat",
+            chatType: "direct",
+            accountId: "default",
+            commandAuthorized: true,
+          },
+        });
+        expect(inboundRun).toHaveBeenCalledOnce();
+      }
+
+      expect(receivedTexts).toHaveLength(requests);
+      for (const receivedText of receivedTexts) {
+        expect(receivedText.length).toBeLessThanOrEqual(2_000);
+        expect(receivedText).not.toMatch(/\p{Surrogate}/u);
+      }
+
+      const expectedWireText =
+        delivery === "outbound"
+          ? text.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, "<$2|$1>")
+          : text;
+      expect(receivedTexts.join(joiner).replace(/\s+/g, " ")).toBe(
+        expectedWireText.replace(/\s+/g, " "),
+      );
+    },
+  );
 
   it("aborts a streamed overflow and returns the stale cached identity", async () => {
     let requestCount = 0;
