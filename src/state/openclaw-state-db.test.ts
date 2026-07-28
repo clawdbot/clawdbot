@@ -3182,6 +3182,58 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
     },
   );
 
+  it("runs additive column migration before canonical schema assertion for legacy tables missing agent_id", () => {
+    // Regression test: ensureAdditiveStateColumns must run regardless of
+    // whether audit_events exists. The old code gated the additive migration
+    // behind tableExists("audit_events"), so when audit_events was absent
+    // (e.g. pre-beta.2 databases that never had it), the additive columns
+    // agent_id, cleanup_pending, and original_media_root were silently
+    // skipped. Subsequent canonical DDL creating indexes on agent_id would
+    // then fail with "no such column: agent_id".
+    // Fixes #109867 — "no such column: agent_id" during doctor --fix.
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    replaceManagedImageRecordsWithLegacyTable(legacyDb, { withRow: true });
+    // Drop audit_events so tableExists("audit_events") is false —
+    // this is the condition that caused ensureAdditiveStateColumns
+    // to be skipped before the fix.
+    legacyDb.exec("DROP TABLE IF EXISTS audit_events");
+    legacyDb.exec("DROP TABLE IF EXISTS audit_identity_keys");
+    // Set user_version below AUDIT_EVENT_STATE_SCHEMA_VERSION so
+    // hasCanonicalAuditEventsSchema returns true without audit_events
+    // (the table never existed in this database), allowing the repair
+    // path to proceed past the schema assertion.
+    legacyDb.exec("PRAGMA user_version = 1");
+    legacyDb.close();
+
+    // The repair must succeed without throwing any error.
+    const result = repairOpenClawStateDatabaseSchema(options);
+    expect(result.warnings).toEqual([]);
+
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(managed_outgoing_image_records)")
+      .all() as Array<{ name?: unknown }>;
+    // Additive columns must exist after repair —
+    // ensureAdditiveStateColumns runs unconditionally with the fix.
+    expect(columns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
+    expect(columns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
+    expect(columns).toContainEqual(expect.objectContaining({ name: "original_media_root" }));
+
+    // Legacy row data must be preserved.
+    const row = reopened.db
+      .prepare(
+        "SELECT attachment_id, agent_id, cleanup_pending FROM managed_outgoing_image_records",
+      )
+      .get() as { agent_id?: unknown; attachment_id?: unknown; cleanup_pending?: unknown };
+    expect(row).toEqual({ agent_id: null, attachment_id: "legacy-attachment", cleanup_pending: 0 });
+  });
+
   it("backfills diagnostic event sequences in legacy creation order", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
