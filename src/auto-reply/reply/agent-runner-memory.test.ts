@@ -44,6 +44,20 @@ function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolve
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
 
+function registerClaudeCliBackend(ownsNativeCompaction = false): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        ownsNativeCompaction,
+      },
+    ],
+  });
+}
+
 type TestReplyOperation = ReplyOperation & {
   setPhase: ReturnType<typeof vi.fn<ReplyOperation["setPhase"]>>;
   updateSessionId: ReturnType<typeof vi.fn<ReplyOperation["updateSessionId"]>>;
@@ -420,8 +434,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const persisted = loadMainSessionEntry(storePath);
     expect(persisted.sessionId).toBe("session-rotated");
     expect(persisted.compactionCount).toBe(2);
-    expect(persisted.memoryFlushCompactionCount).toBe(1);
-    expect(persisted.memoryFlushAt).toBe(1_700_000_000_000);
+    expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
   });
 
   it("records the least-trusted provenance across a multi-write flush", async () => {
@@ -656,8 +669,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const persisted = loadMainSessionEntry(storePath);
     expect(persisted.sessionId).toBe("session-rotated");
     expect(persisted.compactionCount).toBe(2);
-    expect(persisted.memoryFlushFailureCount).toBe(1);
-    expect(persisted.memoryFlushAt).toBeUndefined();
+    expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
   });
 
   it("reports restricted memory-flush write failures for visible delivery", async () => {
@@ -835,9 +847,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("failed");
-    expect(persisted.memoryFlushFailureCount).toBe(1);
-    expect(persisted.memoryFlushLastFailedAt).toBe(1_700_000_000_000);
-    expect(persisted.memoryFlushLastFailureError).toBe(`${"a".repeat(198)}…`);
+    expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 1 });
     expect(emitAgentEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",
@@ -857,7 +867,6 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 80_000,
       compactionCount: 1,
-      memoryFlushFailureCount: 0,
     };
     await writeTestSessionStore(storePath, "main", sessionEntry);
     const abortErr = new Error("operation aborted by user");
@@ -881,9 +890,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("failed");
-    expect(persisted.memoryFlushFailureCount).toBe(0);
-    expect(persisted.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted.memoryFlush).toBeUndefined();
   });
 
   it("clears failure counters on successful flush", async () => {
@@ -893,9 +900,7 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 80_000,
       compactionCount: 1,
-      memoryFlushFailureCount: 2,
-      memoryFlushLastFailedAt: 1_699_999_999_000,
-      memoryFlushLastFailureError: "provider crashed during flush",
+      memoryFlush: { kind: "failed", failureCount: 2 },
     };
     await writeTestSessionStore(storePath, "main", sessionEntry);
 
@@ -916,9 +921,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("completed");
-    expect(persisted.memoryFlushFailureCount).toBe(0);
-    expect(persisted.memoryFlushLastFailedAt).toBeUndefined();
-    expect(persisted.memoryFlushLastFailureError).toBeUndefined();
+    expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
   });
 
   it("marks flush as completed after MAX_FLUSH_FAILURES to break retry loop", async () => {
@@ -928,7 +931,7 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 80_000,
       compactionCount: 1,
-      memoryFlushFailureCount: TEST_MAX_FLUSH_FAILURES - 1,
+      memoryFlush: { kind: "failed", failureCount: TEST_MAX_FLUSH_FAILURES - 1 },
     };
     await writeTestSessionStore(storePath, "main", sessionEntry);
     runWithModelFallbackMock.mockRejectedValueOnce(new Error("provider crashed during flush"));
@@ -954,8 +957,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const persisted = loadMainSessionEntry(storePath);
     expect(result.outcome).toBe("exhausted");
-    expect(persisted.memoryFlushCompactionCount).toBe(1);
-    expect(persisted.memoryFlushFailureCount).toBe(TEST_MAX_FLUSH_FAILURES);
+    expect(persisted.memoryFlush).toEqual({ kind: "succeeded", compactionCount: 1 });
     expect(emitAgentEventMock).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",
@@ -1006,7 +1008,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
 
     const persisted = loadMainSessionEntry(storePath);
-    expect(persisted.memoryFlushFailureCount).toBe(2);
+    expect(persisted.memoryFlush).toEqual({ kind: "failed", failureCount: 2 });
   });
 
   it("next message retries flush after failure", async () => {
@@ -1311,16 +1313,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("skips memory flush for compatible CLI session runtime pins", async () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-    });
+    registerClaudeCliBackend();
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -2177,16 +2170,7 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("skips preflight compaction for compatible CLI session runtime pins", async () => {
-    cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [
-        {
-          id: "claude-cli",
-          modelProvider: "anthropic",
-          pluginId: "anthropic",
-          config: { command: "claude" },
-        },
-      ],
-    });
+    registerClaudeCliBackend();
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,
       forceFlushTranscriptBytes: 1_000_000_000,
@@ -2680,7 +2664,87 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 
-  it("triggers preflight compaction when a SQLite-backed transcript exceeds the configured byte threshold", async () => {
+  it("skips OpenClaw maintenance when model policy routes a SQLite session to native-compacting claude-cli", async () => {
+    registerClaudeCliBackend(true);
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 10,
+      reserveTokensFloor: 20_000,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const storePath = path.join(rootDir, "sqlite-cli-owned-session.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+          compaction: {
+            memoryFlush: {},
+            maxActiveTranscriptBytes: "10b",
+          },
+        },
+      },
+    } as const;
+    const followupRun = createTestFollowupRun({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      sessionId: "session",
+      sessionKey,
+    });
+
+    const flushResult = await runMemoryFlushIfNeeded({
+      cfg,
+      followupRun,
+      sessionCtx: { Provider: "whatsapp" } as unknown as TemplateContext,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+    const preflightEntry = await runPreflightCompactionIfNeeded({
+      cfg,
+      followupRun,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(flushResult).toEqual({ sessionEntry, outcome: "skipped" });
+    expect(preflightEntry).toBe(sessionEntry);
+    expect(preflightEntry?.compactionCount).toBe(0);
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("still byte-guards a genuine embedded SQLite-backed session", async () => {
     const storePath = path.join(rootDir, "sqlite-large-session.json");
     const sessionKey = "agent:main:main";
     const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };

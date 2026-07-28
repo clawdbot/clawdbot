@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
+import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
 import {
   createCodeModeNamespaceRuntime,
   type CodeModeNamespaceRuntime,
@@ -78,6 +79,7 @@ export async function runExec(params: {
       telemetry: telemetry(runtime),
     };
   }
+  const deadlineMs = Date.now() + config.timeoutMs;
   const catalog = runtime.all({ includeMcp: false });
   const namespaceCatalog = runtime.namespaceEntries();
   const swarmEnabled = resolveSwarmConfig(
@@ -92,33 +94,30 @@ export async function runExec(params: {
   );
   const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
   const apiFiles = createCodeModeApiFilesForRun(namespaceCatalog, swarmEnabled);
-  let source: string;
   try {
-    source = await prepareSource({ code: params.code, language: params.language, config });
-  } catch (error) {
-    return {
-      status: "failed" as const,
-      error: codeModeFailureMessage(error),
-      code: codeModeFailureCode(error),
-      output: [],
-      replaySafe: params.restartSafe,
-      telemetry: telemetry(runtime),
-    };
-  }
-  const deadlineMs = Date.now() + config.timeoutMs;
-  try {
+    const source = await awaitCodeModeDeadline({
+      operation: () => prepareSource({ code: params.code, language: params.language, config }),
+      deadlineMs,
+      signal: params.signal,
+      createTimeoutError: () => new Error("interrupted"),
+      createAbortError: () => new Error("code mode execution aborted"),
+    });
+    const remainingMs = deadlineMs - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error("interrupted");
+    }
     const result = normalizeCodeModeWorkerResult(
       await runCodeModeWorker(
         {
           kind: "exec",
           source,
-          config,
+          config: { ...config, timeoutMs: remainingMs },
           catalog,
           apiFiles,
           namespaces: namespaceRuntime.descriptors,
           swarmEnabled,
         },
-        config.timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+        remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
         undefined,
         params.signal,
       ),
@@ -140,8 +139,8 @@ export async function runExec(params: {
   } catch (error) {
     return {
       status: "failed" as const,
-      error: codeModeFailureMessage(error),
-      code: codeModeFailureCode(error),
+      error: params.signal?.aborted ? "code mode execution aborted" : codeModeFailureMessage(error),
+      code: params.signal?.aborted ? ("aborted" as const) : codeModeFailureCode(error),
       output: [],
       replaySafe: params.restartSafe,
       telemetry: telemetry(runtime),
@@ -219,6 +218,7 @@ async function settleCodeModeResult(params: {
   deliveredOutputCount?: number;
   pending?: PendingBridgeState[];
   activeRunId?: string;
+  reservedActiveRunSlot?: boolean;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }) {
@@ -284,7 +284,9 @@ async function settleCodeModeResult(params: {
         config: params.config,
         output,
       });
-      releaseReservation = reserveActiveRunSlot();
+      if (!params.reservedActiveRunSlot) {
+        releaseReservation = reserveActiveRunSlot();
+      }
       const pendingIds = new Set(pending.map((entry) => entry.id));
       pending.push(
         ...createPendingBridgeStates({
@@ -400,7 +402,9 @@ async function settleCodeModeResult(params: {
         });
         // Reserve before launching fresh work; transferred snapshots must
         // obey the same process-wide active-run cap as initial suspensions.
-        releaseReservation = reserveActiveRunSlot();
+        if (!params.reservedActiveRunSlot) {
+          releaseReservation = reserveActiveRunSlot();
+        }
         const pendingIds = new Set(pending.map((entry) => entry.id));
         pending.push(
           ...createPendingBridgeStates({
@@ -450,6 +454,7 @@ async function settleCodeModeResult(params: {
       namespaceRuntime: params.namespaceRuntime,
       output,
       deliveredOutputCount,
+      reservedActiveRunSlot: params.reservedActiveRunSlot,
       replaySafe: params.replaySafe,
       settlementMode: result.settlementMode,
       signal: params.signal,
@@ -501,6 +506,7 @@ export async function runWait(params: {
   // One wait call shares a single wall-clock deadline across draining the prior
   // pending calls, the resume worker, and the inline settle phase.
   const deadlineMs = Date.now() + state.config.timeoutMs;
+  let releaseActiveRunSlot: (() => void) | undefined;
   try {
     const ready = await waitForPending(
       state.pending,
@@ -542,9 +548,9 @@ export async function runWait(params: {
       state.pending,
     );
     const pending = state.pending.filter((entry) => !entry.settled);
-    // Transfer outstanding calls to the next snapshot; dispose would abort a
-    // still-live sibling before the guest observes the completed frontier.
-    activeRuns.delete(state.runId);
+    // Keep the run's existing slot reserved while its live sibling calls and
+    // snapshot move through the worker; a new exec must not claim this slot.
+    releaseActiveRunSlot = reserveActiveRunSlot(state.runId);
     // The resumed guest inherits only the remaining shared budget as its QuickJS
     // interrupt deadline; the extra host margin is watchdog grace only.
     const result = normalizeCodeModeWorkerResult(
@@ -580,6 +586,7 @@ export async function runWait(params: {
       deliveredOutputCount: state.deliveredOutputCount,
       pending,
       activeRunId: state.runId,
+      reservedActiveRunSlot: true,
       signal: params.signal,
       onUpdate: params.onUpdate,
     });
@@ -598,6 +605,7 @@ export async function runWait(params: {
       telemetry: telemetry(state.runtime),
     };
   } finally {
+    releaseActiveRunSlot?.();
     resumingRunIds.delete(state.runId);
   }
 }

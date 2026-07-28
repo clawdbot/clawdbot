@@ -3619,11 +3619,14 @@ describe("gateway server chat", () => {
       caseName: "pending final delivery",
       runId: "idem-pending-final-delivery",
       entry: {
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "older reply",
-        pendingFinalDeliveryContext: {
-          channel: "whatsapp",
-          to: "+15551234567",
+        pendingFinalDelivery: {
+          kind: "replayable" as const,
+          text: "older reply",
+          createdAt: Date.now(),
+          context: {
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
         },
       },
     },

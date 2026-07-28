@@ -143,7 +143,7 @@ export function resolveRestartRecoveryDeliveryContext(params: {
   const hasActiveRunDeliveryClaim =
     normalizeOptionalString(params.entry.restartRecoveryDeliveryRunId) !== undefined;
   const deliveryContext =
-    normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
+    normalizeDeliveryContext(params.entry.pendingFinalDelivery?.context) ??
     activeRunDeliveryContext ??
     (params.includeSessionDeliveryFallback && !hasActiveRunDeliveryClaim
       ? deliveryContextFromSession(params.entry)

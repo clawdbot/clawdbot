@@ -181,6 +181,159 @@ export function ACTUAL_LOBSTER(openEyeStyle: string, closedEyeStyle: string): Te
   `;
 }
 
+export function BALLOON_LOBSTER(openEyeStyle: string, closedEyeStyle: string): TemplateResult {
+  return svg`
+    <g class="lob-balloon">
+      <g fill="none" stroke="var(--lob-shell)" stroke-width="4" stroke-linecap="round">
+        <path d="M48 13 Q45 5 42 3" />
+        <path d="M72 13 Q75 5 78 3" />
+      </g>
+
+      <g class="lob-claw lob-claw--l" fill="var(--lob-claw)">
+        <ellipse cx="29" cy="29" rx="9" ry="7" transform="rotate(-20 29 29)" />
+        <ellipse cx="20" cy="35" rx="8" ry="6" transform="rotate(18 20 35)" />
+      </g>
+      <g class="lob-claw lob-claw--r" fill="var(--lob-claw)">
+        <ellipse cx="91" cy="29" rx="9" ry="7" transform="rotate(20 91 29)" />
+        <ellipse cx="100" cy="35" rx="8" ry="6" transform="rotate(-18 100 35)" />
+      </g>
+
+      <ellipse cx="60" cy="29" rx="24" ry="19" fill="var(--lob-shell)" />
+      <circle cx="60" cy="48" r="4" fill="#d94b72" />
+      <ellipse cx="60" cy="61" rx="18" ry="14" fill="var(--lob-shell)" />
+      <circle cx="60" cy="75" r="3.5" fill="#d94b72" />
+      <ellipse cx="60" cy="86" rx="13" ry="10" fill="var(--lob-shell)" />
+
+      <g fill="#ffffff" opacity="0.55">
+        <ellipse cx="50" cy="22" rx="4" ry="10" transform="rotate(35 50 22)" />
+        <ellipse cx="52" cy="56" rx="3" ry="7" transform="rotate(32 52 56)" />
+        <ellipse cx="54" cy="82" rx="2.4" ry="5" transform="rotate(28 54 82)" />
+      </g>
+
+      <g class="lob-eye-open" style=${openEyeStyle}>
+        <circle cx="50" cy="30" r="4.5" fill="#0a1014" />
+        <circle cx="70" cy="30" r="4.5" fill="#0a1014" />
+        <circle cx="51.3" cy="28.7" r="1.8" fill="var(--lob-glint, #00e5cc)" />
+        <circle cx="71.3" cy="28.7" r="1.8" fill="var(--lob-glint, #00e5cc)" />
+      </g>
+      <g
+        class="lob-eye-closed"
+        style=${closedEyeStyle}
+        fill="none"
+        stroke="#0a1014"
+        stroke-width="2.5"
+        stroke-linecap="round"
+      >
+        <path d="M45 31 Q50 27 55 31" />
+        <path d="M65 31 Q70 27 75 31" />
+      </g>
+
+      <path d="M55 96 L60 91 L65 96 L60 101 Z" fill="#d94b72" />
+      <path
+        d="M60 100 Q67 102 62 105 Q57 108 65 111"
+        fill="none"
+        stroke="#c9d2da"
+        stroke-width="1.2"
+        stroke-linecap="round"
+      />
+    </g>
+  `;
+}
+
+export function ASCII_LOBSTER(openEyeStyle: string, closedEyeStyle: string): TemplateResult {
+  return svg`
+    <!-- Like pet names and lore, terminal glyph art is an English-only easter-egg channel. -->
+    <g
+      class="lob-ascii"
+      fill="var(--lob-shell)"
+      font-family="ui-monospace, SFMono-Regular, Menlo, monospace"
+      font-size="11"
+      text-anchor="middle"
+      xml:space="preserve"
+    >
+      <text x="60" y="17">\\ /         \\ /</text>
+      <text x="60" y="31">{  \\_______/  }</text>
+      <g class="lob-eye-open" style=${openEyeStyle}>
+        <text x="60" y="45">(o)     (o)</text>
+      </g>
+      <g class="lob-eye-closed" style=${closedEyeStyle}>
+        <text x="60" y="45">(-)     (-)</text>
+      </g>
+      <text x="60" y="59">(    '---'    )</text>
+      <text x="60" y="73"> \\   _____   /</text>
+      <text x="60" y="87">  (_________)</text>
+      <text x="60" y="101">    | | | |</text>
+    </g>
+  `;
+}
+
+export function PORTAL_LOBSTER(openEyeStyle: string, closedEyeStyle: string): TemplateResult {
+  return svg`
+    <g class="lob-portal">
+      <ellipse
+        class="lob-portal-ring lob-portal-ring--blue"
+        cx="30"
+        cy="50"
+        rx="14"
+        ry="30"
+        fill="#0d1b33"
+        fill-opacity="0.85"
+        stroke="currentColor"
+        stroke-width="3"
+        transform="rotate(-12 30 50)"
+      />
+
+      <!-- Fixed lobster red preserves the split-body gag while shell/claw vars carry portal identity. -->
+      <path d="M31 30 Q45 20 56 30 Q62 39 60 53 Q58 64 47 70 L31 67 Z" fill="#b0432f" />
+      <g class="lob-claw lob-claw--l">
+        <path
+          d="M52 54 Q58 48 63 51 Q67 56 63 62 Q58 67 52 63 Z"
+          fill="#b0432f"
+        />
+      </g>
+      <g fill="none" stroke="#b0432f" stroke-width="2" stroke-linecap="round">
+        <path d="M42 31 Q43 16 50 7" />
+        <path d="M52 28 Q58 14 66 9" />
+      </g>
+      <g class="lob-eye-open" style=${openEyeStyle}>
+        <circle cx="45" cy="39" r="4" fill="#0a1014" />
+        <circle cx="57" cy="37" r="4" fill="#0a1014" />
+        <circle cx="46" cy="38" r="1.5" fill="var(--lob-glint, #00e5cc)" />
+        <circle cx="58" cy="36" r="1.5" fill="var(--lob-glint, #00e5cc)" />
+      </g>
+      <g
+        class="lob-eye-closed"
+        style=${closedEyeStyle}
+        fill="none"
+        stroke="#0a1014"
+        stroke-width="2.2"
+        stroke-linecap="round"
+      >
+        <path d="M41 40 Q45 37 49 40" />
+        <path d="M53 38 Q57 35 61 38" />
+      </g>
+
+      <g class="lob-portal-rear" fill="#b0432f">
+        <path d="M91 44 Q82 40 75 44 L82 51 L74 56 L82 61 L75 68 Q83 70 92 64 Z" />
+        <path d="M88 52 Q82 49 78 45" fill="none" stroke="#7f3022" stroke-width="2" />
+        <path d="M88 61 Q82 64 78 69" fill="none" stroke="#7f3022" stroke-width="2" />
+      </g>
+      <ellipse
+        class="lob-portal-ring lob-portal-ring--orange"
+        cx="92"
+        cy="58"
+        rx="14"
+        ry="30"
+        fill="#0d1b33"
+        fill-opacity="0.85"
+        stroke="currentColor"
+        stroke-width="3"
+        transform="rotate(10 92 58)"
+      />
+    </g>
+  `;
+}
+
 export const WATERMELON_RIND = svg`
   <g class="lob-watermelon">
     <g fill="none" stroke="#2c7a4a" stroke-width="4" stroke-linecap="round">

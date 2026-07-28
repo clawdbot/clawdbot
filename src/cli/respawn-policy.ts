@@ -29,7 +29,7 @@ const GATEWAY_RUN_VALUE_FLAGS = [
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
 
-function isNativeHookRelayArgv(argv: string[]): boolean {
+export function isNativeHookRelayArgv(argv: string[]): boolean {
   const { commandPath } = resolveCliArgvInvocation(argv);
   return commandPath[0] === "hooks" && commandPath[1] === "relay";
 }

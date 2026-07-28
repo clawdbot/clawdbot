@@ -2636,7 +2636,7 @@ describe("package artifact reuse", () => {
       '--shard "${{ matrix.shard }}/5"',
     );
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).toContain(
-      "Selected target predates profile-free Matrix catalog sharding",
+      'matrix_selection=(--shard "${{ matrix.shard }}/5")',
     );
     expect(readWorkflow(QA_LIVE_TRANSPORTS_WORKFLOW).jobs?.run_live_matrix_sharded).toBeUndefined();
     expect(releaseTelegramWorkflow).toContain(
@@ -2645,8 +2645,24 @@ describe("package artifact reuse", () => {
     expect(workflowStep(matrixJob, "Run Matrix live lane").run).not.toContain("for attempt in");
     expect(qaWorkflow).not.toContain("Matrix live lane failed on attempt");
     expect(qaWorkflow).not.toContain("OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS");
-    expect(qaWorkflow).not.toContain("--profile");
+    expect(qaWorkflow).toContain('matrix_selection=(--profile "${legacy_profile}")');
     expect(qaWorkflow).not.toContain("--fail-fast");
+  });
+
+  it("keeps modern Matrix shards and legacy profile partitions coverage-equivalent", () => {
+    const matrixJob = workflowJob(QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_matrix");
+    const run = workflowStep(matrixJob, "Run Matrix live lane").run;
+
+    expect(run).toContain('grep -Fq -- "--shard <index/total>"');
+    expect(run).toContain('matrix_selection=(--shard "${{ matrix.shard }}/5")');
+    expect(run).toContain("legacy_profiles=(transport media e2ee-smoke e2ee-deep e2ee-cli)");
+    expect(run).toContain('legacy_profile="${legacy_profiles[shard_index - 1]}"');
+    expect(run).toContain('matrix_selection=(--profile "${legacy_profile}")');
+    expect(run).toContain('"${matrix_selection[@]}" \\');
+    expect(run).toContain(
+      "Selected target predates profile-free Matrix catalog sharding; using legacy profile",
+    );
+    expect(matrixJob.strategy?.matrix?.shard).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("runs live transport lanes nightly while release checks stay gated", () => {

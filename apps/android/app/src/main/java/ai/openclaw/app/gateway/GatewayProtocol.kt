@@ -23,6 +23,7 @@ data class GatewayRequestFrame(
   val id: String,
   val method: String,
   val params: JsonElement? = null,
+  val traceparent: String? = null,
 )
 
 @Serializable
@@ -499,6 +500,7 @@ enum class GatewayMethod(
   SessionsCompanionAsk("sessions.companion.ask"),
   SessionsCompanionState("sessions.companion.state"),
   SessionsCompanionReset("sessions.companion.reset"),
+  MemorySearch("memory.search"),
 }
 
 enum class GatewayEvent(

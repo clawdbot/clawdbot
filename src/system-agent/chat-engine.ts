@@ -92,6 +92,11 @@ export type SystemAgentChatEngineOptions = {
     prompter: WizardPrompterLike,
     beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   ) => Promise<void | HostedWizardCompletion>;
+  /** Test seam for local Gateway configuration hosted by the chat bridge. */
+  runGatewaySetupWizard?: (
+    prompter: WizardPrompterLike,
+    beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+  ) => Promise<void | HostedWizardCompletion>;
   /** Exact route/credential that passed the host's live inference gate. */
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   /** Delegated chats accept approval only from the operator registry. */
@@ -126,7 +131,7 @@ type HostedWizardCompletion = "applied" | "kept-current";
 type ActiveWizardBridge = {
   session: WizardSession;
   step: WizardStep | null;
-  kind: "channel" | "skills" | "search";
+  kind: "channel" | "skills" | "search" | "gateway";
   label: string;
   completion: { status: HostedWizardCompletion };
   /** Channel to auto-answer in the first selection step ("connect telegram"). */
@@ -138,6 +143,22 @@ type CaptureRuntime = RuntimeEnv & {
 };
 
 const log = createSubsystemLogger("system-agent/chat-engine");
+
+export const GATEWAY_SETUP_AFTER_WRITE = {
+  mode: "none",
+  reason: "Gateway setup defers runtime apply until explicit restart",
+} as const;
+
+export function assertLocalGatewaySetupMode(
+  config: import("../config/types.openclaw.js").OpenClawConfig,
+): void {
+  if (config.gateway?.mode === "local") {
+    return;
+  }
+  throw new Error(
+    "Hosted Gateway setup manages only a local Gateway. Use `openclaw onboard` for fresh setup or `openclaw configure` for the mode question, then retry after selecting local mode.",
+  );
+}
 
 function createHostedWizardRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return {
@@ -163,6 +184,7 @@ function createCaptureRuntime(): CaptureRuntime {
 async function runHostedConfigWizard(params: {
   label: string;
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>;
+  afterWrite?: import("../config/runtime-snapshot.js").ConfigWriteAfterWrite;
   run: (context: {
     baseConfig: import("../config/types.openclaw.js").OpenClawConfig;
     runtime: RuntimeEnv;
@@ -196,6 +218,7 @@ async function runHostedConfigWizard(params: {
     allowConfigSizeDrop: false,
     baseHash: snapshot.hash,
     migrationBaseConfig: baseConfig,
+    ...(params.afterWrite ? { afterWrite: params.afterWrite } : {}),
   });
   await result.afterWrite?.(committedConfig);
   return "applied";
@@ -291,6 +314,41 @@ async function defaultSearchSetupWizardRunner(
         throw new Error(reason);
       }
       return { nextConfig: result.config };
+    },
+  });
+}
+
+async function defaultGatewaySetupWizardRunner(
+  prompter: WizardPrompterLike,
+  beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
+): Promise<HostedWizardCompletion> {
+  const [
+    { resolveGatewayPort },
+    { configureGatewayForSetup },
+    { resolveQuickstartGatewayDefaults },
+  ] = await Promise.all([
+    import("../config/config.js"),
+    import("../wizard/setup.gateway-config.js"),
+    import("../wizard/setup.shared.js"),
+  ]);
+  // A later restart can strand this Gateway-hosted client on a new address or credential.
+  // The host warns before prompting, persists config only, and never restarts itself.
+  return await runHostedConfigWizard({
+    label: "Gateway setup",
+    beforePersistentApply,
+    afterWrite: GATEWAY_SETUP_AFTER_WRITE,
+    run: async ({ baseConfig, runtime }) => {
+      assertLocalGatewaySetupMode(baseConfig);
+      const result = await configureGatewayForSetup({
+        flow: "advanced",
+        baseConfig,
+        nextConfig: baseConfig,
+        localPort: resolveGatewayPort(baseConfig),
+        quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
+        prompter,
+        runtime,
+      });
+      return { nextConfig: result.nextConfig };
     },
   });
 }
@@ -662,6 +720,7 @@ export class SystemAgentChatEngine {
       typed.kind === "channel-setup" ||
       typed.kind === "skills-setup" ||
       typed.kind === "search-setup" ||
+      typed.kind === "gateway-config-setup" ||
       typed.kind === "model-setup"
     ) {
       // Exact host-navigation commands do not depend on model interpretation.
@@ -973,6 +1032,13 @@ export class SystemAgentChatEngine {
         action: "none",
       };
     }
+    if (loopReply.directive?.kind === "gateway-config-setup") {
+      const wizardIntro = await this.startGatewaySetupWizard();
+      return {
+        text: [loopReply.text, wizardIntro].filter(Boolean).join("\n\n"),
+        action: "none",
+      };
+    }
     if (loopReply.directive?.kind === "model-setup") {
       const setup = await this.startModelSetup(loopReply.directive.workspace);
       return {
@@ -1011,6 +1077,7 @@ export class SystemAgentChatEngine {
       kind === "channel-setup" ||
       kind === "skills-setup" ||
       kind === "search-setup" ||
+      kind === "gateway-config-setup" ||
       kind === "model-setup" ||
       kind === "open-setup" ||
       kind === "open-tui"
@@ -1047,7 +1114,11 @@ export class SystemAgentChatEngine {
           action: "none",
         };
       }
-      if (operation.target !== "channels" && operation.target !== "search") {
+      if (
+        operation.target !== "channels" &&
+        operation.target !== "search" &&
+        operation.target !== "gateway"
+      ) {
         return {
           text: "Setup can replace the inference route powering this session. Exit OpenClaw and run `openclaw onboard`; it saves only a route that passes a live test. Then start OpenClaw again.",
           action: "none",
@@ -1070,7 +1141,9 @@ export class SystemAgentChatEngine {
       const label =
         handoff.target === "channels"
           ? `${handoff.channel ?? "channel"} setup`
-          : "web search setup";
+          : handoff.target === "search"
+            ? "web search setup"
+            : "Gateway setup";
       return {
         text: `Opening the ${label} wizard.`,
         action: "open-setup",
@@ -1088,6 +1161,9 @@ export class SystemAgentChatEngine {
     }
     if (operation.kind === "search-setup") {
       return { text: await this.startSearchSetupWizard(), action: "none" };
+    }
+    if (operation.kind === "gateway-config-setup") {
+      return { text: await this.startGatewaySetupWizard(), action: "none" };
     }
     if (operation.kind === "model-setup") {
       return await this.startModelSetup(operation.workspace);
@@ -1317,6 +1393,29 @@ export class SystemAgentChatEngine {
     });
   }
 
+  private async startGatewaySetupWizard(): Promise<string> {
+    this.clearPendingProposals();
+    const beforePersistentApply = async (runtime: RuntimeEnv) => {
+      await this.requirePersistentApplyInference(runtime);
+    };
+    const runWizard = this.opts.runGatewaySetupWizard ?? defaultGatewaySetupWizardRunner;
+    const firstStep = await this.startHostedWizard({
+      kind: "gateway",
+      label: "gateway",
+      run: (prompter) => runWizard(prompter, beforePersistentApply),
+    });
+    // Warn only while an interactive wizard is actually pending; a refusal
+    // (remote mode, invalid snapshot) already finished and needs no lockout note.
+    if (this.opts.surface !== "gateway" || this.wizardBridge === null) {
+      return firstStep;
+    }
+    const warning = [
+      "Before we start: changing the Gateway port, bind address, or auth credential requires a Gateway restart to apply.",
+      "That restart may disconnect this chat, and you may need to sign in to the Control UI again with the new address or credential.",
+    ].join(" ");
+    return [warning, firstStep].filter(Boolean).join("\n\n");
+  }
+
   private async startHostedWizard(params: {
     kind: ActiveWizardBridge["kind"];
     label: string;
@@ -1400,11 +1499,17 @@ export class SystemAgentChatEngine {
                   summary: "Completed skills dependency setup via chat",
                   details: { capability: "skills" },
                 }
-              : {
-                  operation: "search.setup",
-                  summary: "Configured web search via chat setup",
-                  details: { capability: "web-search" },
-                };
+              : bridge.kind === "search"
+                ? {
+                    operation: "search.setup",
+                    summary: "Configured web search via chat setup",
+                    details: { capability: "web-search" },
+                  }
+                : {
+                    operation: "gateway.setup",
+                    summary: "Configured Gateway via chat setup",
+                    details: { capability: "gateway" },
+                  };
         try {
           const appendAuditEntry =
             this.opts.appendAuditEntry ?? (await import("./audit.js")).appendSystemAgentAuditEntry;
@@ -1425,10 +1530,15 @@ export class SystemAgentChatEngine {
               ]
             : bridge.kind === "skills"
               ? ["Done — skills dependency setup is complete."]
-              : [
-                  "Done — web search setup is complete.",
-                  "Restart the Gateway if the selected provider or plugin changed.",
-                ];
+              : bridge.kind === "search"
+                ? [
+                    "Done — web search setup is complete.",
+                    "Restart the Gateway if the selected provider or plugin changed.",
+                  ]
+                : [
+                    "Done — gateway settings saved.",
+                    "Restart the Gateway to apply them (`restart gateway`).",
+                  ];
         return [...success, verify ?? ""].filter(Boolean).join("\n");
       }
       if (result.status === "cancelled") {
@@ -1453,6 +1563,12 @@ export class SystemAgentChatEngine {
           return [
             "Sensitive input is not accepted in the OpenClaw chat because terminal input is visible.",
             `Say \`open channel wizard\` and I'll hand you to the masked terminal wizard for ${bridge.label}, or run \`openclaw channels add --channel ${bridge.label}\` yourself later.`,
+          ].join("\n");
+        }
+        if (bridge.kind === "gateway") {
+          return [
+            "Sensitive input is not accepted in the OpenClaw chat because terminal input is visible.",
+            "Say `open gateway wizard` and I'll hand you to the masked terminal wizard, or run `openclaw configure --section gateway` yourself later.",
           ].join("\n");
         }
         return [

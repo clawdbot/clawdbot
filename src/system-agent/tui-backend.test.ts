@@ -447,10 +447,16 @@ describe("runSystemAgentTui", () => {
         handoff: { kind: "open-setup", target: "search" },
         expected: "search:function",
       },
+      {
+        handoff: { kind: "open-setup", target: "gateway" },
+        expected: "gateway:guarded",
+      },
     ];
 
     for (const { handoff, expected } of cases) {
       const events: string[] = [];
+      const runtime = createRuntime();
+      runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
       const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
       await runSystemAgentTui(
         {
@@ -492,11 +498,21 @@ describe("runSystemAgentTui", () => {
           runSearchSetupHandoff: async (_runtime, beforePersistentEffect) => {
             events.push(`search:${typeof beforePersistentEffect}`);
           },
+          runGatewaySetupHandoff: async (_runtime, beforePersistentEffect) => {
+            await beforePersistentEffect();
+            events.push("gateway:guarded");
+          },
         },
-        createRuntime(),
+        runtime,
       );
 
-      expect(events).toEqual(["disposed", expected]);
+      expect(events).toEqual([
+        "disposed",
+        expected,
+        ...(handoff.target === "gateway"
+          ? ["log:Done — gateway settings saved. Run `openclaw gateway restart` to apply them."]
+          : []),
+      ]);
     }
   });
 });

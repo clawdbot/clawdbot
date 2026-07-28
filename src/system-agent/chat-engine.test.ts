@@ -278,6 +278,16 @@ class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   }
 }
 
+async function advanceGatewayWizardToToken(engine: SystemAgentChatEngine) {
+  const portStep = await engine.handle("configure gateway");
+  expect((await engine.handle("19001")).text).toContain("Gateway bind address");
+  expect((await engine.handle("2")).text).toContain("Gateway access protection");
+  expect((await engine.handle("1")).text).toContain("Tailscale exposure");
+  expect((await engine.handle("1")).text).toContain("provide the gateway token");
+  const tokenStep = await engine.handle("1");
+  return { portStep, tokenStep };
+}
+
 beforeAll(async () => {
   const fixture = await createSystemAgentVerifiedInferenceTestFixture(
     sharedVerifiedInferenceConfig,
@@ -880,6 +890,179 @@ describe("SystemAgentChatEngine", () => {
     );
     expect(JSON.stringify(engine.historySince(0))).not.toContain("search-secret-value");
     expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+  });
+
+  it("hosts full Gateway setup with a lockout warning, audited config write, and no restart", async () => {
+    const baseConfig: OpenClawConfig = {
+      ...structuredClone(sharedVerifiedInferenceConfig),
+      gateway: { mode: "local" },
+    };
+    const appendAuditEntry = vi.fn(async () => "state/openclaw.sqlite");
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "gateway-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      appendAuditEntry,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const { portStep, tokenStep } = await advanceGatewayWizardToToken(engine);
+    expect(portStep.text).toContain(
+      "changing the Gateway port, bind address, or auth credential requires a Gateway restart",
+    );
+    expect(portStep.text).toContain(
+      "sign in to the Control UI again with the new address or credential",
+    );
+    expect(portStep.text).toContain("Gateway port");
+
+    expect(tokenStep.text).toContain("Gateway token");
+    expect(tokenStep.sensitive).toBe(true);
+
+    const done = await engine.handle("gateway-secret-value");
+
+    expect(done.text).toContain("Done — gateway settings saved.");
+    expect(done.text).toContain("Restart the Gateway to apply them (`restart gateway`).");
+    expect(done.text).not.toContain("restarted");
+    expect(mocks.writeWizardConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          port: 19001,
+          bind: "lan",
+          auth: expect.objectContaining({ mode: "token", token: "gateway-secret-value" }),
+          tailscale: expect.objectContaining({ mode: "off" }),
+        }),
+      }),
+      {
+        allowConfigSizeDrop: false,
+        baseHash: "gateway-base-hash",
+        migrationBaseConfig: baseConfig,
+        afterWrite: {
+          mode: "none",
+          reason: "Gateway setup defers runtime apply until explicit restart",
+        },
+      },
+    );
+    expect(appendAuditEntry).toHaveBeenCalledWith({
+      operation: "gateway.setup",
+      summary: "Configured Gateway via chat setup",
+      details: { capability: "gateway" },
+    });
+    expect(JSON.stringify(engine.historySince(0))).not.toContain("gateway-secret-value");
+    expect(JSON.stringify(engine.historySince(0))).toContain("<redacted secret>");
+  });
+
+  it("rechecks inference authority immediately before a hosted Gateway write", async () => {
+    useTempStateDir();
+    const baseConfig: OpenClawConfig = {
+      ...structuredClone(sharedVerifiedInferenceConfig),
+      gateway: { mode: "local" },
+    };
+    const currentConfig = structuredClone(baseConfig);
+    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
+    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "gateway-base-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    mocks.writeWizardConfigFile.mockImplementation(async (config: OpenClawConfig) => config);
+    const changedConfig: OpenClawConfig = {
+      agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "changed-test-key",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    };
+    // The route flips between the final turn's entry gate and the
+    // persistent-apply recheck; only the apply boundary can catch it.
+    let baseReadsRemaining = Number.POSITIVE_INFINITY;
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: {
+        loadOverview: fakeOverviewLoader(),
+        readConfigFileSnapshot: vi.fn(async () => {
+          const config = baseReadsRemaining > 0 ? currentConfig : changedConfig;
+          baseReadsRemaining -= 1;
+          return configSnapshot(config);
+        }) as never,
+      },
+    });
+
+    const { tokenStep } = await advanceGatewayWizardToToken(engine);
+    expect(tokenStep.sensitive).toBe(true);
+    baseReadsRemaining = 1;
+
+    const stopped = await engine.handle("gateway-secret-value");
+
+    expect(stopped.text).toContain("Gateway setup stopped");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("keeps remote Gateway mode guidance-only", async () => {
+    const baseConfig: OpenClawConfig = { gateway: { mode: "remote" } };
+    mocks.readSetupConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      hash: "remote-gateway-hash",
+      config: baseConfig,
+      sourceConfig: baseConfig,
+    });
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+    });
+
+    const reply = await engine.handle("configure gateway");
+
+    expect(reply.text).toContain("manages only a local Gateway");
+    expect(reply.text).toContain("`openclaw onboard` for fresh setup");
+    expect(reply.text).toContain("`openclaw configure` for the mode question");
+    expect(reply.text).not.toContain("Gateway port");
+    expect(mocks.writeWizardConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("hands CLI Gateway credentials to the masked terminal wizard", async () => {
+    const engine = new SystemAgentChatEngine({
+      surface: "cli",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runGatewaySetupWizard: async (prompter) => {
+        await prompter.text({ message: "Gateway token", sensitive: true });
+      },
+    });
+
+    const stopped = await engine.handle("configure gateway");
+    expect(stopped.text).toContain("Sensitive input is not accepted");
+    expect(stopped.text).toContain("open gateway wizard");
+    expect(stopped.text).toContain("openclaw configure --section gateway");
+    expect(stopped.sensitive).toBeUndefined();
+
+    const handoff = await engine.handle("open gateway wizard");
+    expect(handoff.action).toBe("open-setup");
+    expect(handoff.handoff).toEqual({ kind: "open-setup", target: "gateway" });
   });
 
   it("reports a failed hosted search-provider install without writing or auditing", async () => {

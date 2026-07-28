@@ -10,6 +10,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
+import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
@@ -1227,12 +1228,13 @@ function loadSkillEntries(
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
-  const personalAgentsSkills = workspaceOnly
-    ? []
-    : loadSkills({
-        dir: personalAgentsSkillsDir,
-        source: "agents-skills-personal",
-      });
+  const personalAgentsSkills =
+    workspaceOnly || !isDefaultStateDir()
+      ? []
+      : loadSkills({
+          dir: personalAgentsSkillsDir,
+          source: "agents-skills-personal",
+        });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
   const projectAgentsSkills = workspaceOnly
     ? []

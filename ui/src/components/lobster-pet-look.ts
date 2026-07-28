@@ -25,8 +25,11 @@ import {
 } from "./lobster-pet-palettes.ts";
 import {
   ACTUAL_LOBSTER,
+  ASCII_LOBSTER,
+  BALLOON_LOBSTER,
   FLATPACK_LOBSTER,
   LOADING_LOBSTER,
+  PORTAL_LOBSTER,
   TINFOIL_PARTS,
 } from "./lobster-pet-sprites-wild.ts";
 import {
@@ -60,6 +63,7 @@ const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retr
 const PALETTE_FRAME_CLASSES: Partial<Record<LobsterPetPaletteId, string>> = {
   heisenbug: "lob-heisenbug-frame",
   cryptid: "lob-cryptid-frame",
+  balloon: "lob-balloon-frame",
 };
 
 // A neutral look used to render catalog minis outside the pet lifecycle.
@@ -294,6 +298,10 @@ export function renderLobsterSvg(
   const isFlatpack = look.palette.id === "flatpack";
   const isLoading = look.palette.id === "loading";
   const isActual = look.palette.id === "actual";
+  const isBalloon = look.palette.id === "balloon";
+  const isAscii = look.palette.id === "ascii";
+  const isPortal = look.palette.id === "portal";
+  const isNewReplacementGeometry = isBalloon || isAscii || isPortal;
   const hasRetroGeometry = RETRO_GEOMETRY_PALETTES.has(look.palette.id);
   const openEyeStyle = options.shell || options.sleeping ? "display:none" : "";
   const closedEyeStyle =
@@ -314,9 +322,15 @@ export function renderLobsterSvg(
               ? LOADING_LOBSTER(openEyeStyle, closedEyeStyle)
               : isActual
                 ? ACTUAL_LOBSTER(openEyeStyle, closedEyeStyle)
-                : isPixel
-                  ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
-                  : svg`
+                : isBalloon
+                  ? BALLOON_LOBSTER(openEyeStyle, closedEyeStyle)
+                  : isAscii
+                    ? ASCII_LOBSTER(openEyeStyle, closedEyeStyle)
+                    : isPortal
+                      ? PORTAL_LOBSTER(openEyeStyle, closedEyeStyle)
+                      : isPixel
+                        ? PIXEL_LOBSTER(openEyeStyle, closedEyeStyle)
+                        : svg`
               ${hasRetroGeometry ? RETRO_ANTENNAE : ANTENNAE_SPRITES[look.antennae]}
               ${look.tailFan ? TAIL_FAN : nothing}
               <g class="lob-claw lob-claw--l">
@@ -364,7 +378,12 @@ export function renderLobsterSvg(
           : nothing
       }
       ${
-        options.grumpy && !hasRetroGeometry && !isFlatpack && !isLoading && !isActual
+        options.grumpy &&
+        !hasRetroGeometry &&
+        !isFlatpack &&
+        !isLoading &&
+        !isActual &&
+        !isNewReplacementGeometry
           ? GRUMPY_FACE
           : nothing
       }

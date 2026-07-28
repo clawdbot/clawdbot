@@ -15,6 +15,7 @@ import {
 } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { patchSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   deleteCronJobScratch,
   readCronJobScratchState,
@@ -544,9 +545,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         await patchSessionEntry(
           { storePath, sessionKey },
           () => ({
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: pendingText,
-            pendingFinalDeliveryCreatedAt: Date.now(),
+            pendingFinalDelivery: {
+              kind: "replayable",
+              text: pendingText,
+              createdAt: Date.now(),
+            },
           }),
           { preserveActivity: true },
         );
@@ -565,13 +568,14 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
 
       const sessionStore = readSessionStoreForTest<{
-        pendingFinalDelivery?: boolean;
-        pendingFinalDeliveryText?: string;
+        pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
       }>(storePath);
       expectTelegramSend(sendTelegram, { text: warning, cfg });
       expect(sessionStore[sessionKey]).toMatchObject({
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: pendingText,
+        pendingFinalDelivery: expect.objectContaining({
+          kind: "replayable",
+          text: pendingText,
+        }),
       });
     });
   });
@@ -589,9 +593,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
         await patchSessionEntry(
           { storePath, sessionKey },
           () => ({
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: warning,
-            pendingFinalDeliveryCreatedAt: Date.now(),
+            pendingFinalDelivery: {
+              kind: "replayable",
+              text: warning,
+              createdAt: Date.now(),
+            },
           }),
           { preserveActivity: true },
         );
@@ -610,12 +616,10 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       ).resolves.toEqual({ status: "failed", reason: "agent-tool-failure" });
 
       const sessionStore = readSessionStoreForTest<{
-        pendingFinalDelivery?: boolean;
-        pendingFinalDeliveryText?: string;
+        pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
       }>(storePath);
       expectTelegramSend(sendTelegram, { text: warning, cfg });
       expect(sessionStore[sessionKey]?.pendingFinalDelivery).toBeUndefined();
-      expect(sessionStore[sessionKey]?.pendingFinalDeliveryText).toBeUndefined();
     });
   });
 

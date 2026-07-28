@@ -112,9 +112,6 @@ export function createProcessSupervisor(): ProcessSupervisor {
   const cancel = (runId: string, reason: TerminationReason = "manual-cancel") => {
     const current = active.get(runId);
     if (current) {
-      registry.updateState(runId, "exiting", {
-        terminationReason: reason,
-      });
       current.run.cancel(reason);
       return;
     }

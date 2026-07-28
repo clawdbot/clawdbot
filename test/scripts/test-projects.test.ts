@@ -33,7 +33,7 @@ import {
 } from "../../scripts/test-projects.test-support.mjs";
 import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { toRepoPath } from "../../src/test-utils/repo-files.js";
-import { agentsCoreIsolatedTestFiles } from "../vitest/vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "../vitest/vitest.agents-paths.mjs";
 import {
   channelConfigContractPatterns,
   channelRegistryContractPatterns,
@@ -2617,7 +2617,7 @@ describe("scripts/test-projects changed-target routing", () => {
     ]);
   });
 
-  it.each(agentsCoreIsolatedTestFiles)(
+  it.each(agentVitestProjectOwners.coreIsolated.include)(
     "routes isolated agent test %s to the isolated agents-core shard",
     (testFile) => {
       expect(buildVitestRunPlans([testFile])).toEqual([
@@ -2630,6 +2630,153 @@ describe("scripts/test-projects changed-target routing", () => {
       ]);
     },
   );
+
+  it.each([
+    ["src/agents/agent-scope.test.ts", "test/vitest/vitest.agents-core.config.ts"],
+    [
+      "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.incomplete-turn.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+    ],
+    [
+      "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan/tools.test.ts", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools/cron-tool.pacing.test.ts", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent test %s to its owning shard", (testFile, config) => {
+    expect(buildVitestRunPlans([testFile])).toEqual([
+      {
+        config,
+        forwardedArgs: [],
+        includePatterns: [testFile],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "src/agents/embedded-agent-runner/run",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent directory %s to its owning shard", (directory, config) => {
+    const plans = buildVitestRunPlans([directory]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: [`${directory}/**/*.test.ts`],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain(
+      "test/vitest/vitest.agents-core.config.ts",
+    );
+  });
+
+  it("splits the embedded-agent parent directory across every isolated harness", () => {
+    const root = "src/agents/embedded-agent-runner";
+    const plans = buildVitestRunPlans([root]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config: "test/vitest/vitest.agents-embedded-agent.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/*.test.ts`],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/run.incomplete-turn.test.ts`],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/run.overflow-compaction.test.ts`],
+          watchMode: false,
+        },
+        {
+          config: "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+          forwardedArgs: [],
+          includePatterns: [`${root}/run/**/*.test.ts`],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain("test/vitest/vitest.agents.config.ts");
+  });
+
+  it("keeps the broad agent test glob in the all-agents shard", () => {
+    const target = "src/agents/**/*.test.ts";
+
+    expect(buildVitestRunPlans([target])).toEqual([
+      {
+        config: "test/vitest/vitest.agents.config.ts",
+        forwardedArgs: [],
+        includePatterns: [target],
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it.each([
+    [
+      "src/agents/embedded-agent-runner/run/*.test.ts",
+      "test/vitest/vitest.agents-embedded-agent-run.config.ts",
+    ],
+    ["src/agents/runtime-plan/**/*.test.ts", "test/vitest/vitest.agents-support.config.ts"],
+    ["src/agents/tools/**/*.test.ts", "test/vitest/vitest.agents-tools.config.ts"],
+  ])("routes focused agent glob %s to its owning shard", (target, config) => {
+    const plans = buildVitestRunPlans([target]);
+
+    expect(plans).toEqual(
+      expect.arrayContaining([
+        {
+          config,
+          forwardedArgs: [],
+          includePatterns: [target],
+          watchMode: false,
+        },
+      ]),
+    );
+    expect(plans.map((plan) => plan.config)).not.toContain("test/vitest/vitest.agents.config.ts");
+  });
+
+  it("keeps mixed embedded-agent and cron-tool targets in their owning shards", () => {
+    const embeddedTest = "src/agents/embedded-agent-runner/run.before-agent-reply-cron.test.ts";
+    const cronToolTest = "src/agents/tools/cron-tool.pacing.test.ts";
+
+    expect(buildVitestRunPlans([embeddedTest, cronToolTest])).toEqual([
+      {
+        config: "test/vitest/vitest.agents-embedded-agent.config.ts",
+        forwardedArgs: [],
+        includePatterns: [embeddedTest],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents-tools.config.ts",
+        forwardedArgs: [],
+        includePatterns: [cronToolTest],
+        watchMode: false,
+      },
+    ]);
+  });
 
   it("routes Docker E2E script targets to their owner tooling tests", () => {
     const targets = [

@@ -1,5 +1,6 @@
 import { stableStringify } from "../stable-stringify.js";
 import { normalizeToolName } from "../tool-policy.js";
+import { codexNativeHookRelayResponseCodec } from "./native-hook-relay-response-codec.js";
 import type {
   JsonValue,
   NativeHookRelayInvocation,
@@ -27,22 +28,7 @@ const nativeHookRelayProviderAdapters: Record<
     normalizeMetadata: normalizeCodexHookMetadata,
     readToolInput: readCodexToolInput,
     readToolResponse: readCodexToolResponse,
-    renderNoopResponse: () => {
-      // Codex treats empty stdout plus exit 0 as no decision/no additional context.
-      return { stdout: "", stderr: "", exitCode: 0 };
-    },
-    renderPreToolUseBlockResponse: (reason, failureDisposition) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: reason,
-        },
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-      ...(failureDisposition ? { failureDisposition } : {}),
-    }),
+    ...codexNativeHookRelayResponseCodec,
     renderBeforeAgentFinalizeReviseResponse: (reason) => ({
       stdout: `${JSON.stringify({
         decision: "block",
@@ -55,22 +41,6 @@ const nativeHookRelayProviderAdapters: Record<
       stdout: `${JSON.stringify({
         continue: false,
         ...(reason?.trim() ? { stopReason: reason.trim() } : {}),
-      })}\n`,
-      stderr: "",
-      exitCode: 0,
-    }),
-    renderPermissionDecisionResponse: (decision, message) => ({
-      stdout: `${JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PermissionRequest",
-          decision:
-            decision === "allow"
-              ? { behavior: "allow" }
-              : {
-                  behavior: "deny",
-                  message: message?.trim() || "Denied by OpenClaw",
-                },
-        },
       })}\n`,
       stderr: "",
       exitCode: 0,
