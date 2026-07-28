@@ -391,6 +391,33 @@ describe("session-entry compaction budgeting", () => {
     ).toBeGreaterThan(0);
   });
 
+  it("does not scale estimated messages after the provider usage snapshot", () => {
+    const entries: SessionTreeEntry[] = Array.from({ length: 5 }, (_, index) =>
+      createMessageEntry(
+        { role: "user", content: `old ${index} ${"x".repeat(4_000)}`, timestamp: index + 1 },
+        index,
+      ),
+    );
+    entries.push(createMessageEntry(createAssistant("checkpoint", createUsage(40_000), 6), 5));
+    entries.push(
+      createMessageEntry({ role: "user", content: "a".repeat(20_000), timestamp: 7 }, 6),
+      createMessageEntry({ role: "user", content: "b".repeat(20_000), timestamp: 8 }, 7),
+    );
+
+    const result = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 16_384,
+      keepRecentTokens: 20_000,
+    });
+
+    expect(result.ok && result.value).toBeTruthy();
+    if (!result.ok || !result.value) {
+      throw new Error("expected the usage-covered prefix to be compactable");
+    }
+    expect(Number(result.value.firstKeptEntryId.slice("entry-".length))).toBeLessThan(6);
+    expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
+  });
+
   it("keeps reset-filtered tool rows out of later compaction input", () => {
     const entries: SessionTreeEntry[] = [
       createMessageEntry({ role: "user", content: "discarded", timestamp: 1 }, 0),

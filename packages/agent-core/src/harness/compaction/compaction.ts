@@ -770,17 +770,25 @@ export function prepareCompaction(
   const boundaryEnd = effectiveEntries.length;
 
   const contextMessages = buildSessionContext(pathEntries).messages;
-  const tokensBefore = estimateContextTokens(contextMessages).tokens;
-  const estimatedContextTokens = contextMessages.reduce(
+  const contextUsage = estimateContextTokens(contextMessages);
+  const tokensBefore = contextUsage.tokens;
+  const usageCoveredMessages =
+    contextUsage.lastUsageIndex === null
+      ? []
+      : contextMessages.slice(0, contextUsage.lastUsageIndex + 1);
+  const estimatedUsageCoveredTokens = usageCoveredMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,
   );
   // Provider usage and transcript estimates must use compatible units here;
   // otherwise a high usage-to-estimate ratio can make every cut a no-op.
   const usageToEstimateRatio =
-    estimatedContextTokens > 0 && Number.isFinite(tokensBefore)
-      ? Math.max(1, tokensBefore / estimatedContextTokens)
+    estimatedUsageCoveredTokens > 0 && Number.isFinite(contextUsage.usageTokens)
+      ? Math.max(1, contextUsage.usageTokens / estimatedUsageCoveredTokens)
       : 1;
+  const trailingKeepTokens = Math.min(settings.keepRecentTokens, contextUsage.trailingTokens);
+  const normalizedKeepRecentTokens =
+    trailingKeepTokens + (settings.keepRecentTokens - trailingKeepTokens) / usageToEstimateRatio;
   const resetPreludeTokens = resetPreludeMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,
@@ -789,7 +797,7 @@ export function prepareCompaction(
   // other model-visible boundary context so a large kept tail moves the cut earlier.
   const keepRecentTokens = Math.min(
     Number.MAX_SAFE_INTEGER,
-    settings.keepRecentTokens / usageToEstimateRatio + resetPreludeTokens,
+    normalizedKeepRecentTokens + resetPreludeTokens,
   );
 
   const cutPoint = findCutPoint(effectiveEntries, boundaryStart, boundaryEnd, keepRecentTokens);
