@@ -208,6 +208,28 @@ it("keeps identity UI and profile RPCs absent for unidentified connections", asy
   expect(page.querySelector(".profile-refresh")).toBeNull();
 });
 
+it("rerenders on connection transitions for unidentified connections", async () => {
+  const request = vi.fn();
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  expect(page.querySelector(".profile-hero")).not.toBeNull();
+
+  // With no @state change (selfUser stays null), the snapshot handler must
+  // still invalidate the render branch that reads connected/client.
+  harness.emitConnected(false);
+  await page.updateComplete;
+  expect(page.querySelector(".profile-hero")).toBeNull();
+
+  harness.emitConnected(true);
+  await page.updateComplete;
+  expect(page.querySelector(".profile-hero")).not.toBeNull();
+});
+
 it("retries the identity bootstrap when users.self returns no profile", async () => {
   const profile: UserProfile = {
     id: "profile-1",

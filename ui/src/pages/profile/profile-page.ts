@@ -89,6 +89,10 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.client = snapshot.client;
     this.connected = snapshot.phase === "connected";
     this.selfUser = nextSelfUser;
+    // connected/client are plain fields; an unidentified (token-auth) connect or
+    // disconnect changes no @state, so the render branch must be invalidated
+    // explicitly or the page sticks on the stale offline/connected view.
+    this.requestUpdate();
     if (clientChanged || selfProfileChanged) {
       this.identityRequestId += 1;
       this.ownProfile = null;
