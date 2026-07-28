@@ -272,7 +272,6 @@ export {
 export type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 export {
   ChatTranscriptController,
-  resetChatThreadPresentationState,
   resetChatThreadSessionPresentationState,
 } from "./components/chat-thread.ts";
 export { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
