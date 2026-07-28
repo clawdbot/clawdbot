@@ -14,6 +14,15 @@ import { icons } from "./icons.ts";
 
 const UPDATE_BANNER_DISMISS_KEY = "openclaw:control-ui:update-banner-dismissed:v1";
 
+function prereleaseLabel(update: UpdateAvailable): string {
+  const dash = update.latestVersion.indexOf("-");
+  if (dash < 0) {
+    return "";
+  }
+  const tag = update.latestVersion.slice(dash + 1).split(".")[0];
+  return ` (${tag})`;
+}
+
 type DismissedUpdate = {
   latestVersion: string;
   channel: string | null;
@@ -120,7 +129,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
           }}
         >
           <span class="sidebar-update-card__icon" aria-hidden="true">${icons.download}</span>
-          <span class="sidebar-update-card__text">${title} · v${update.latestVersion}</span>
+          <span class="sidebar-update-card__text">${title} · v${update.latestVersion}${prereleaseLabel(update)}</span>
         </button>
         <button
           class="sidebar-update-card__dismiss"
