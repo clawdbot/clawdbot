@@ -291,7 +291,11 @@ async function runMainOrRootHelp(argv: string[]): Promise<void> {
         "run-main-import",
         () => import("./cli/run-main.js"),
       );
-      await runCli(argv, { additionalStartupTrace: gatewayEntryStartupTrace });
+      await runCli(argv, {
+        additionalStartupTrace: gatewayEntryStartupTrace,
+        // Finalizers and process-exit hooks can still emit diagnostics after runCli settles.
+        retainConsoleRoutingUntilProcessExit: true,
+      });
     },
     onError: async (error) => {
       const { loadCliDotEnvForEarlyDiagnostic } = await import("./cli/dotenv.js");
