@@ -215,6 +215,75 @@ describe("cron controller", () => {
     expect(normalized.deliveryMode).toBe("announce");
   });
 
+  it.each([
+    ["cron.add", null],
+    ["cron.update", "no-timeout-job"],
+  ] as const)("preserves an explicit zero timeout in %s payloads", async (method, editingJobId) => {
+    const request = vi.fn(async (requestedMethod: string) => {
+      if (requestedMethod === method) {
+        return { id: editingJobId ?? "no-timeout-job" };
+      }
+      if (requestedMethod === "cron.list") {
+        return { jobs: [] };
+      }
+      if (requestedMethod === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronEditingJobId: editingJobId,
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "No timeout",
+        payloadText: "Run until complete",
+        timeoutSeconds: "0",
+      },
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "no-timeout-job" });
+
+    const call = findRequestCall(request.mock.calls, method);
+    const job = method === "cron.update" ? requestPatch(call) : requestPayload(call);
+    expectNestedRecordFields(job, "payload", {
+      kind: "agentTurn",
+      message: "Run until complete",
+      timeoutSeconds: 0,
+    });
+  });
+
+  it.each(["", "   "])("omits an inherited timeout from cron.add: %j", async (timeoutSeconds) => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "inherited-timeout-job" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 0, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "Inherited timeout",
+        payloadText: "Use the default timeout",
+        timeoutSeconds,
+      },
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: true, jobId: "inherited-timeout-job" });
+    const payload = requireRecord(
+      requestPayload(findRequestCall(request.mock.calls, "cron.add")).payload,
+      "cron.add agent payload",
+    );
+    expect(payload).not.toHaveProperty("timeoutSeconds");
+  });
+
   it("forwards webhook delivery in cron.add payload", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -832,6 +901,26 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryChannel).toBe("telegram");
     expect(state.cronForm.deliveryTo).toBe("123");
     expect(state.cronForm.deliveryAccountId).toBe("bot-2");
+  });
+
+  it("preserves an explicit zero timeout when opening an existing job", () => {
+    const state = createState();
+    const job: CronJob = {
+      id: "no-timeout-job",
+      name: "No timeout",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "Run until complete", timeoutSeconds: 0 },
+      state: {},
+    };
+
+    startCronEdit(state, job);
+
+    expect(state.cronForm.timeoutSeconds).toBe("0");
   });
 
   it("preserves command payloads when editing Control UI metadata", async () => {
@@ -1676,7 +1765,7 @@ describe("cron controller", () => {
       cronExpr: "",
       payloadKind: "agentTurn",
       payloadText: "",
-      timeoutSeconds: "0",
+      timeoutSeconds: "-1",
       deliveryMode: "webhook",
       deliveryTo: "ftp://bad",
     });
@@ -1686,6 +1775,34 @@ describe("cron controller", () => {
     expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
   });
+
+  it.each(["0", " 0 ", "0.25", "", "   "])(
+    "accepts non-negative and inherited agent-turn timeouts: %j",
+    (timeoutSeconds) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "Valid timeout",
+        payloadText: "Run until complete",
+        timeoutSeconds,
+      });
+
+      expect(errors.timeoutSeconds).toBeUndefined();
+    },
+  );
+
+  it.each(["-1", "-0.25", "NaN", "Infinity", "not-a-number"])(
+    "rejects invalid agent-turn timeouts: %j",
+    (timeoutSeconds) => {
+      const errors = validateCronForm({
+        ...DEFAULT_CRON_FORM,
+        name: "Invalid timeout",
+        payloadText: "Run until complete",
+        timeoutSeconds,
+      });
+
+      expect(errors.timeoutSeconds).toBe("cron.errors.timeoutInvalid");
+    },
+  );
 
   it.each(["0x10", "1e3", "+1", String(Number.MAX_SAFE_INTEGER), "0.000001"])(
     "rejects invalid recurring amounts before submit: %s",

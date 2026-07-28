@@ -624,6 +624,82 @@ suite.define(() => {
     }
   });
 
+  it("flips a sidebar short route before any list refresh and refreshes only for an outbox", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const firstKey = "agent:main:thread:aaaaaaaa-1111-4111-8111-111111111111";
+    const secondKey = "agent:main:thread:bbbbbbbb-2222-4222-8222-222222222222";
+    const sessions = chatSessionListResponse([
+      { key: firstKey, kind: "direct", label: "Instant A", updatedAt: 2 },
+      { key: secondKey, kind: "direct", label: "Instant B", updatedAt: 1 },
+    ]);
+    const gateway = await installMockGateway(page, {
+      methodResponses: { "sessions.list": sessions },
+      sessionKey: firstKey,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.locator(`.sidebar-recent-session[data-session-key="${secondKey}"]`).waitFor();
+      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await page.waitForTimeout(500);
+      const initialListCount = (await gateway.getRequests("sessions.list")).length;
+      const initialMetadataCount = (await gateway.getRequests("chat.metadata")).length;
+      await gateway.deferNext("sessions.list");
+
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${secondKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
+      await page.locator(".chat-pane__session-title").getByText("Instant B").waitFor();
+      const emptyOutboxListRequests = (await gateway.getRequests("sessions.list")).slice(
+        initialListCount,
+      );
+      expect(emptyOutboxListRequests).toHaveLength(0);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(initialMetadataCount);
+      const emptyOutboxListCount = initialListCount + emptyOutboxListRequests.length;
+
+      await page.locator("openclaw-chat-pane").evaluate((pane, targetKey) => {
+        const state = (
+          pane as HTMLElement & {
+            state: {
+              chatQueueByScope: Record<string, unknown[]>;
+            };
+          }
+        ).state;
+        state.chatQueueByScope[`${targetKey}\u0000agent:main`] = [
+          {
+            id: "queued-before-switch",
+            text: "flush after idle reconciliation",
+            createdAt: Date.now(),
+            sendState: "waiting-idle",
+            sessionKey: targetKey,
+            agentId: "main",
+          },
+        ];
+      }, firstKey);
+      await page
+        .locator(
+          `.sidebar-recent-session[data-session-key="${firstKey}"] a.sidebar-recent-session__link`,
+        )
+        .click();
+      await page.locator(".chat-pane__session-title").getByText("Instant A").waitFor();
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBe(emptyOutboxListCount + 1);
+      if (emptyOutboxListRequests.length === 0) {
+        await gateway.resolveDeferred("sessions.list", sessions);
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it("keeps derived sidebar titles and accessible state after session patch refreshes", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -810,7 +886,7 @@ suite.define(() => {
     }
   });
 
-  it("renders the visible authenticated assistant avatar after switching sessions", async () => {
+  it("keeps the authenticated assistant avatar stable across same-agent switches", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -821,17 +897,15 @@ suite.define(() => {
       "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nPcAAAAASUVORK5CYII=",
       "base64",
     );
-    let avatarRequestCount = 0;
     await page.route(/\/avatar\/main\?meta=1$/, (route) =>
       route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ avatarUrl: "/avatar/main", avatarStatus: "local" }),
       }),
     );
-    await page.route(/\/avatar\/main$/, (route) => {
-      avatarRequestCount += 1;
-      return route.fulfill({ contentType: "image/png", body: avatarBody });
-    });
+    await page.route(/\/avatar\/main$/, (route) =>
+      route.fulfill({ contentType: "image/png", body: avatarBody }),
+    );
     await installMockGateway(page, {
       methodResponses: { "sessions.list": chatSessionListResponse() },
       sessionKey: "agent:main:session-a",
@@ -849,8 +923,6 @@ suite.define(() => {
       const avatar = page.locator("img.agent-chat__welcome-avatar");
       await avatar.waitFor({ state: "visible" });
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
-      const initialAvatarSrc = await avatar.getAttribute("src");
-      const initialRequestCount = avatarRequestCount;
 
       const sessionRow = (sessionKey: string) =>
         page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
@@ -859,12 +931,8 @@ suite.define(() => {
       await expect
         .poll(() => sessionB.getAttribute("class"))
         .toContain("sidebar-recent-session--active");
-      await expect.poll(() => avatarRequestCount).toBeGreaterThan(initialRequestCount);
-      await expect.poll(() => avatar.getAttribute("src")).not.toBe(initialAvatarSrc);
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
       await expect.poll(() => avatar.isVisible()).toBe(true);
-      const sessionBAvatarSrc = await avatar.getAttribute("src");
-      const sessionBRequestCount = avatarRequestCount;
 
       const sessionA = sessionRow("agent:main:session-a");
       await sessionA.locator("a.sidebar-recent-session__link").click();
@@ -872,8 +940,6 @@ suite.define(() => {
         .poll(() => sessionA.getAttribute("class"))
         .toContain("sidebar-recent-session--active");
 
-      await expect.poll(() => avatarRequestCount).toBeGreaterThan(sessionBRequestCount);
-      await expect.poll(() => avatar.getAttribute("src")).not.toBe(sessionBAvatarSrc);
       await expect.poll(() => avatar.getAttribute("src")).toMatch(/^blob:/);
       await expect.poll(() => avatar.isVisible()).toBe(true);
       expect(

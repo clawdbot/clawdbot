@@ -11,6 +11,8 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
+import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
+import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -73,5 +75,21 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
       sessionKey,
       agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
     });
+  }
+
+  prepareSessionNavigation(sessionKey: string, pathname: string): void {
+    if (this.context) {
+      prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
+    }
+  }
+
+  protected bindLiteralSession(
+    sessionKey: string,
+    fallbackAgentId: string,
+    options: ApplicationNavigationOptions,
+  ): void {
+    if (!new URLSearchParams(options.search ?? "").has(SESSION_NAVIGATION_KEY_PARAM)) {
+      this.setApplicationSession(sessionKey, fallbackAgentId);
+    }
   }
 }

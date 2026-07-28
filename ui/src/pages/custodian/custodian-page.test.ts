@@ -8,6 +8,7 @@ import { createContext, mountPage } from "./custodian-page.test-harness.ts";
 describe("custodian page", () => {
   beforeEach(() => {
     vi.spyOn(crypto, "randomUUID").mockReturnValue("00000000-0000-4000-8000-000000000001");
+    window.history.replaceState({}, "", "/");
   });
 
   afterEach(() => {
@@ -73,6 +74,42 @@ describe("custodian page", () => {
     expect(userGroup.textContent).toContain("Connect WhatsApp");
     expect(connectOption.disabled).toBe(true);
   });
+
+  it.each([
+    { pathname: "/settings/channels", expectedPage: "channels" },
+    { pathname: "/not-an-openclaw-route", expectedPage: undefined },
+  ])(
+    "adds resolved page context only to user turns at $pathname",
+    async ({ pathname, expectedPage }) => {
+      window.history.replaceState({}, "", pathname);
+      const request = vi.fn().mockResolvedValue({
+        sessionId: "control-ui-caretaker-00000000-0000-4000-8000-000000000001",
+        reply: "All good.",
+        action: "none",
+      });
+      const { context } = createContext(request);
+      const { page } = await mountPage(context, { onboarding: false });
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+
+      expect(request.mock.calls[0]?.[1]).not.toHaveProperty("context");
+      const composer = page.querySelector<HTMLTextAreaElement>("textarea")!;
+      composer.value = "What about this page?";
+      composer.dispatchEvent(new Event("input"));
+      await page.updateComplete;
+      page.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+
+      if (expectedPage) {
+        expect(request.mock.calls[1]?.[1]).toMatchObject({
+          message: "What about this page?",
+          context: { page: expectedPage },
+        });
+      } else {
+        expect(request.mock.calls[1]?.[1]).toMatchObject({ message: "What about this page?" });
+        expect(request.mock.calls[1]?.[1]).not.toHaveProperty("context");
+      }
+    },
+  );
 
   it("renders advertised durable history before the live welcome with a divider", async () => {
     const request = vi.fn(async (method: string, _params?: unknown) => {

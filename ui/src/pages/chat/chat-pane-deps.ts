@@ -39,6 +39,7 @@ export type {
   SessionVisibility,
 } from "../../api/types.ts";
 export { findInlineApproval } from "../../app/approval-presentation.ts";
+export { invalidateAssistantIdentityCache } from "../../app/assistant-identity.ts";
 export {
   applicationContext,
   type ApplicationContext,
@@ -158,7 +159,7 @@ export {
   type WorkboardCardChipProps,
 } from "./board-session-surface.ts";
 export { catalogMessageId } from "./catalog-message-id.ts";
-export { refreshChatAvatar } from "./chat-avatar.ts";
+export { invalidateChatAvatarCache, refreshChatAvatar } from "./chat-avatar.ts";
 export { replaceChatAttachmentsFromEditor } from "./attachment-payload-store.ts";
 export type { ChatHistoryPagination } from "./chat-history-pagination.ts";
 export {
@@ -201,6 +202,7 @@ export { handlePageGatewayEvent } from "./chat-state-events.ts";
 export type { ChatPageHost } from "./chat-state-host.ts";
 export { createPageState } from "./chat-state-page.ts";
 export {
+  invalidateChatMetadataCache,
   refreshChatCommands,
   refreshChatMetadata,
   refreshChatModelAuthStatus,

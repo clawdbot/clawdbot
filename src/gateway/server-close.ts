@@ -883,12 +883,12 @@ export function createGatewayCloseHandler(
       await measureCloseStep("gmail-watcher", () =>
         shutdownStep("gmail-watcher", () => stopGmailWatcherOnDemand(), warnings),
       );
-      if (params.cron.stopAndDrain) {
-        await params.cron.stopAndDrain();
-      } else {
-        params.cron.stop();
-      }
-      params.heartbeatRunner.stop();
+      await shutdownStep(
+        "cron",
+        () => (params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop()),
+        warnings,
+      );
+      await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop(), warnings);
       await shutdownStep(
         "task-registry-maintenance",
         () => params.stopTaskRegistryMaintenance?.(),

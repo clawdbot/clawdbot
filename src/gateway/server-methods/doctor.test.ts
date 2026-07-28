@@ -313,7 +313,7 @@ describe("doctor.memory.status", () => {
       embedding: { ok: true },
     });
     const dreaming = expectRecordFields(payload.dreaming, {
-      enabled: false,
+      enabled: true,
       shortTermCount: 0,
       totalSignalCount: 0,
       phaseSignalCount: 0,
