@@ -997,6 +997,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         checkName: "checks-node-agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000" },
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "agentic-agents-embedded",

@@ -1183,6 +1183,9 @@ const SPLIT_NODE_SHARDS = new Map([
       {
         shardName: "agentic-agents-embedded",
         configs: ["test/vitest/vitest.agents-embedded-agent.config.ts"],
+        // Cold imports on 4-vCPU fork runners can stay silent past the global 5-minute
+        // watchdog, so this shard needs the normal full-suite window to finish real work.
+        env: { OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "900000" },
         requiresDist: false,
       },
       {
