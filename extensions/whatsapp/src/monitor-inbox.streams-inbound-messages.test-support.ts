@@ -371,7 +371,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("keeps the first delivery's prepared entry when a duplicate arrives", async () => {
+  it("keeps the first durable delivery when a duplicate arrives", async () => {
     const onMessage = vi.fn(async () => undefined);
     const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
     const messageId = nextMessageId("dup-prepared");
@@ -384,8 +384,7 @@ describe("web monitor inbox", () => {
     });
 
     sock.ev.emit("messages.upsert", upsert);
-    // Duplicate delivery of the same message id: its pending verdict must not
-    // delete the first delivery's kept preparation.
+    // Duplicate delivery of the same message id stays pending behind the first claim.
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
     await settleInboundWork();

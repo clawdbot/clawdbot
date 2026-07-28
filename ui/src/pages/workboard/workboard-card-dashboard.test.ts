@@ -81,6 +81,38 @@ describe("Workboard card dashboard", () => {
     expect(element.querySelector("openclaw-board-view")).not.toBeNull();
   });
 
+  it("disables widget ticket refresh while the dashboard is collapsed", async () => {
+    const { client } = createClient([
+      {
+        name: "status",
+        tabId: "main",
+        title: "Status",
+        contentKind: "html",
+        sizeW: 12,
+        sizeH: 2,
+        position: 0,
+        grantState: "none",
+        revision: 1,
+        viewTicket: "ticket",
+        viewTicketTtlMs: 1_200_000,
+      },
+    ]);
+    const element = await mountDashboard("agent:main:workboard-collapse", client);
+    await vi.waitFor(() => expect(element.querySelector("openclaw-board-view")).not.toBeNull());
+    const board = element.querySelector("openclaw-board-view")!;
+    expect(board.ticketRefreshEnabled).toBe(true);
+
+    element.querySelector<HTMLButtonElement>(".workboard-card-dashboard__toggle")?.click();
+    await element.updateComplete;
+    await board.updateComplete;
+    expect(board.ticketRefreshEnabled).toBe(false);
+
+    element.querySelector<HTMLButtonElement>(".workboard-card-dashboard__toggle")?.click();
+    await element.updateComplete;
+    await board.updateComplete;
+    expect(board.ticketRefreshEnabled).toBe(true);
+  });
+
   it("keeps an empty dashboard compact until the operator expands its hint", async () => {
     const { client, request } = createClient();
     const element = await mountDashboard("agent:main:workboard-empty", client);

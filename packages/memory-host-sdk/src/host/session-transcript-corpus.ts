@@ -16,6 +16,7 @@ import {
   readTranscriptContentRevisionSync,
   resolveSessionAgentId,
   resolveSessionFilePath,
+  resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
   type SessionEntry,
 } from "./openclaw-runtime-session.js";
@@ -30,6 +31,7 @@ export type SessionTranscriptCorpusEntry = {
   contentRevision?: string;
   artifactKind: SessionTranscriptCorpusArtifactKind;
   sessionKey?: string;
+  storePath?: string;
   /** Present when an active transcript is addressed by SQLite identity, not a JSONL path. */
   transcriptSource?: "sqlite";
   /** Session entry activity timestamp used when the source has no filesystem stat. */
@@ -114,6 +116,7 @@ type ResolvedSessionStoreCorpusSource = {
 
 function resolveSessionStoreTranscriptCorpusSource(
   agentId: string,
+  sessionKey: string,
   sessionsDir: string,
   storePath: string,
   entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
@@ -134,10 +137,14 @@ function resolveSessionStoreTranscriptCorpusSource(
   if (!sessionId) {
     return null;
   }
+  if (!sessionFile) {
+    return {
+      sessionFile: sessionKey,
+      sessionId,
+      transcriptSource: "sqlite",
+    };
+  }
   if (sqliteMarker) {
-    if (!sessionFile) {
-      return null;
-    }
     if (
       sqliteMarker.sessionId !== sessionId ||
       normalizeAgentId(sqliteMarker.agentId) !== normalizeAgentId(agentId) ||
@@ -274,6 +281,7 @@ function toSessionStoreCorpusEntry(
 ): SessionTranscriptCorpusEntry | null {
   const source = resolveSessionStoreTranscriptCorpusSource(
     agentId,
+    summary.sessionKey,
     sessionsDir,
     storePath,
     summary.entry,
@@ -309,6 +317,7 @@ function toSessionStoreCorpusEntry(
     sessionId: source.sessionId,
     ...(contentRevision ? { contentRevision } : {}),
     ...(source.transcriptSource === "sqlite" ? { transcriptSource: "sqlite" as const } : {}),
+    ...(source.transcriptSource === "sqlite" ? { storePath } : {}),
     ...(source.transcriptSource === "sqlite" && Number.isFinite(summary.entry.updatedAt)
       ? { updatedAtMs: summary.entry.updatedAt }
       : {}),
@@ -415,6 +424,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
   const activeEntryOwnersByPath = new Map<string, string>();
   const artifactDirsByPath = new Map<string, string>();
   rememberArtifactDir(artifactDirsByPath, sessionsDir);
+  rememberArtifactDir(artifactDirsByPath, resolveSessionTranscriptsDirForAgent(normalizedAgentId));
   const sessionEntries = listSessionEntries({
     agentId: normalizedAgentId,
     hydrateSkillPromptRefs: false,
@@ -479,11 +489,11 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       const primarySessionId = parseUsageCountedSessionIdFromFileName(path.basename(artifactPath));
       const primaryOwner =
         primarySessionId && isSessionArchiveArtifactName(path.basename(artifactPath))
-          ? activeEntryOwnersByPath.get(
+          ? (activeEntryOwnersByPath.get(
               normalizeRealComparablePath(
                 path.join(path.dirname(artifactPath), `${primarySessionId}.jsonl`),
               ),
-            )
+            ) ?? activeEntriesBySessionId.get(primarySessionId)?.agentId)
           : undefined;
       if (primaryOwner && primaryOwner !== normalizedAgentId) {
         continue;

@@ -23,6 +23,7 @@ import {
   isSessionLifecycleMutationActive,
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
+  SESSION_ARCHIVE_ACTIVE_RUN_ERROR,
 } from "../../sessions/session-lifecycle-admission.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
@@ -45,6 +46,7 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import {
   isAgentMainSessionKey,
   loadSessionsRuntimeModule,
+  rejectPluginRuntimeSessionOwnershipMismatch,
   requireSessionKey,
   resolveGatewaySessionTargetFromKey,
   resolveSessionWorkerPlacementPatchError,
@@ -76,6 +78,17 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     });
     const canonicalKey = target.canonicalKey ?? key;
     const lifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+    if (
+      rejectPluginRuntimeSessionOwnershipMismatch({
+        action: "patch",
+        client,
+        key: canonicalKey,
+        entry: lifecycleEntry,
+        respond,
+      })
+    ) {
+      return;
+    }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
       canonicalKey,
       lifecycleEntry,
@@ -103,13 +116,13 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+        errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
       );
       return;
     }
     let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
     const loadPatchModelCatalog = async () => {
-      const catalog = await context.loadGatewayModelCatalog();
+      const catalog = await context.loadGatewayModelCatalog({ agentId: target.agentId });
       patchModelCatalog = catalog;
       return catalog;
     };
@@ -126,6 +139,26 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     };
     const applyPatch = async () => {
       const currentLifecycleEntry = loadSessionEntry(key, { agentId: requestedAgentId }).entry;
+      // Recheck inside the lifecycle lock so a replaced row cannot switch
+      // plugin ownership between authorization and the committed patch.
+      if (
+        rejectPluginRuntimeSessionOwnershipMismatch({
+          action: "patch",
+          client,
+          key: canonicalKey,
+          entry: currentLifecycleEntry,
+          respond,
+        })
+      ) {
+        return null;
+      }
+      // applyPatch runs under runExclusiveSessionLifecycleMutation for every
+      // patch, so expected identities also guard non-archive metadata writes.
+      const expectedSessionChanged =
+        (p.expectedSessionId !== undefined &&
+          currentLifecycleEntry?.sessionId !== p.expectedSessionId) ||
+        (p.expectedLifecycleRevision !== undefined &&
+          currentLifecycleEntry?.lifecycleRevision !== p.expectedLifecycleRevision);
       // A reset queued ahead of archive can rotate the row before this mutation starts.
       // Never apply stale destructive intent to the replacement session identity.
       const lifecycleEntryRemoved =
@@ -137,7 +170,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           : currentLifecycleEntry !== undefined &&
             (currentLifecycleEntry.sessionId !== lifecycleEntry.sessionId ||
               currentLifecycleEntry.lifecycleRevision !== lifecycleEntry.lifecycleRevision));
-      if (lifecycleEntryRemoved || archiveTargetChanged) {
+      if (expectedSessionChanged || lifecycleEntryRemoved || archiveTargetChanged) {
         respond(
           false,
           undefined,
@@ -171,7 +204,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           respond(
             false,
             undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+            errorShape(ErrorCodes.INVALID_REQUEST, SESSION_ARCHIVE_ACTIVE_RUN_ERROR),
           );
           return null;
         }
@@ -233,7 +266,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         try {
           await appendSessionAudit({
             cfg,
-            target: { agentId: target.agentId, entry: result.entry, storePath },
+            target: {
+              agentId: target.agentId,
+              entry: result.entry,
+              sessionKey: target.canonicalKey ?? key,
+              storePath,
+            },
             text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
             now: Date.now(),
           });
@@ -450,6 +488,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       reason,
       commandSource: "gateway:sessions.reset",
       creation: resolveOperatorSessionCreation(client),
+      authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       assertAuthorizedInstance: sessionMutationAuthorization?.assertCurrent,
     });
     if (!result.ok) {

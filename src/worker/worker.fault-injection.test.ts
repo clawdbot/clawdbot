@@ -203,7 +203,7 @@ class ComposedGatewayHarness {
   readonly stateDir: string;
   readonly sessionsDir: string;
   readonly storePath: string;
-  readonly sessionFile: string;
+  readonly sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   readonly socketPath: string;
   readonly cfg: OpenClawConfig;
   readonly database: OpenClawStateDatabase;
@@ -239,28 +239,26 @@ class ComposedGatewayHarness {
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       { sessionId: SESSION_ID, updatedAt: 1 },
     );
-    const sessionFile = (
-      await resolveSessionTranscriptRuntimeTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        storePath,
-      })
-    ).sessionFile;
-    return new ComposedGatewayHarness({ root, sessionsDir, storePath, sessionFile });
+    const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
+    return new ComposedGatewayHarness({ root, sessionsDir, storePath, sessionTarget });
   }
 
   private constructor(params: {
     root: string;
     sessionsDir: string;
     storePath: string;
-    sessionFile: string;
+    sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>;
   }) {
     this.root = params.root;
     this.stateDir = path.join(params.root, "state");
     this.sessionsDir = params.sessionsDir;
     this.storePath = params.storePath;
-    this.sessionFile = params.sessionFile;
+    this.sessionTarget = params.sessionTarget;
     this.socketPath = path.join(params.root, "gateway.sock");
     this.cfg = {
       agents: { list: [{ id: "main", default: true }] },
@@ -772,10 +770,10 @@ describe("cloud worker milestone 2 fault injection", () => {
         .requestParams("worker.live-event")
         .map((request) => (request as WorkerLiveEventParams).seq),
     ).toEqual([1, 1, 2, 3]);
-    const transcript = SessionManager.open(harness.sessionFile).getEntries();
+    const transcript = SessionManager.open(harness.sessionTarget).getEntries();
     expect(transcript).toHaveLength(2);
     expect(new Set(transcript.map((entry) => entry.id)).size).toBe(2);
-    expect(SessionManager.open(harness.sessionFile).getLeafId()).toBe(committed.newLeafId);
+    expect(SessionManager.open(harness.sessionTarget).getLeafId()).toBe(committed.newLeafId);
   });
 
   it("recovers durable state across gateway restart and renumbers a lost live window", async () => {
@@ -839,7 +837,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     // resync replay renumbered from the fresh ack state.
     expect(liveRequests.length).toBeGreaterThanOrEqual(4);
     expect(liveRequests.slice(2)).toContainEqual([1, 0]);
-    expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
     providerRelease.resolve(doneOutcome("late stale provider result"));
   });
 
@@ -886,7 +884,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     ).resolves.toEqual(doneOutcome("new owner reply"));
     await fresh.transcript.commit([transcriptMessage("new owner")]);
 
-    const messages = SessionManager.open(harness.sessionFile)
+    const messages = SessionManager.open(harness.sessionTarget)
       .getEntries()
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
     expect(messages).toHaveLength(2);
@@ -914,7 +912,7 @@ describe("cloud worker milestone 2 fault injection", () => {
     const commit = current.transcript.commit([transcriptMessage("stale paid output")]);
     await entered.promise;
     harness.partition();
-    const local = SessionManager.open(harness.sessionFile);
+    const local = SessionManager.open(harness.sessionTarget);
     local.appendMessage(transcriptMessage("competing local entry"));
     release.resolve();
 
@@ -926,7 +924,7 @@ describe("cloud worker milestone 2 fault injection", () => {
       current.transcript.commit([transcriptMessage("must not retry after stale")]),
     ).rejects.toMatchObject({ name: "WorkerTranscriptCommitError" });
     expect(harness.requestParams("worker.transcript.commit")).toHaveLength(2);
-    expect(SessionManager.open(harness.sessionFile).getEntries()).toHaveLength(1);
+    expect(SessionManager.open(harness.sessionTarget).getEntries()).toHaveLength(1);
   });
 
   it("advances a worker live stream whose run context is dispatch-owned and visible", async () => {

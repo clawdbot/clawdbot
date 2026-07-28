@@ -13,9 +13,7 @@
   },
   "exports": {
     "./runtime-core": "./src/runtime-core.ts",
-    "./runtime-cli": "./src/runtime-cli.ts",
     "./runtime-files": "./src/runtime-files.ts",
-    "./engine": "./src/engine.ts",
     "./engine-foundation": "./src/engine-foundation.ts",
     "./engine-storage": "./src/engine-storage.ts",
     "./engine-embeddings": "./src/engine-embeddings.ts",

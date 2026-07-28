@@ -5,12 +5,19 @@ export type ControlUiSessionPathTarget =
       kind: "short";
       agentId: string;
       shortId: string;
+      /**
+       * Display-name slug that preceded the id, when the reference carried one. The id
+       * stays authoritative; this only breaks a tie between sessions whose ids share the
+       * given prefix, so a short link keeps resolving to one session.
+       */
+      slugHint?: string;
     }
   | {
       namespace: "chat" | "dashboard";
       kind: "literal";
       agentId: string;
       sessionKey: string;
+      slugCandidate?: string;
     };
 
 const SHORT_SESSION_REF_RE = /^(?:.*-)?([0-9a-f]{8,32})$/iu;
@@ -125,9 +132,13 @@ export function parseControlUiSessionPath(
       return { namespace, kind: "literal", agentId, sessionKey };
     }
     const shortId = segment.match(SHORT_SESSION_REF_RE)?.[1]?.toLowerCase();
-    return shortId
-      ? { namespace, kind: "short", agentId, shortId }
-      : { namespace, kind: "literal", agentId, sessionKey };
+    if (!shortId) {
+      return { namespace, kind: "literal", agentId, sessionKey, slugCandidate: segment };
+    }
+    const slugHint = segment.slice(0, segment.length - shortId.length).replace(/-+$/u, "");
+    return slugHint
+      ? { namespace, kind: "short", agentId, shortId, slugHint }
+      : { namespace, kind: "short", agentId, shortId };
   }
   return null;
 }

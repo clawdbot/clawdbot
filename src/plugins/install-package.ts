@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import {
   scanAndLinkInstalledPackage,
@@ -194,10 +193,11 @@ async function installPluginFromSourceDir(
     sourceDir: string;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
-  const nativePackageDetected = await detectNativePackageInstallSource(params.sourceDir);
-  if (nativePackageDetected) {
+  const nativePackageManifest = await detectNativePackageInstallSource(params.sourceDir);
+  if (nativePackageManifest) {
     return await installPluginFromPackageDir({
       packageDir: params.sourceDir,
+      packageManifest: nativePackageManifest,
       ...pickPackageInstallCommonParams(params),
     });
   }
@@ -214,24 +214,19 @@ async function installPluginFromSourceDir(
   });
 }
 
-async function detectNativePackageInstallSource(packageDir: string): Promise<boolean> {
+async function detectNativePackageInstallSource(
+  packageDir: string,
+): Promise<PackageManifest | undefined> {
   const runtime = await loadPluginInstallRuntime();
-  const manifestPath = path.join(packageDir, "package.json");
-  if (!(await runtime.fileExists(manifestPath))) {
-    return false;
-  }
-
-  try {
-    const manifest = await runtime.readJsonFile<PackageManifest>(manifestPath);
-    return ensureOpenClawExtensions({ manifest }).ok;
-  } catch {
-    return false;
-  }
+  const result = await readOptionalPackageManifest({ runtime, packageDir });
+  const manifest = result.ok ? result.manifest : undefined;
+  return manifest && ensureOpenClawExtensions({ manifest }).ok ? manifest : undefined;
 }
 
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;
+    packageManifest?: PackageManifest;
   } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -260,6 +255,7 @@ async function installPluginFromPackageDir(
   const validated = await validatePackagePluginInstallSource({
     runtime,
     packageDir: params.packageDir,
+    manifest: params.packageManifest,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,

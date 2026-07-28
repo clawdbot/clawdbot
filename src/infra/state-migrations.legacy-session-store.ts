@@ -297,7 +297,7 @@ function normalizeLegacySessionStore(store: Record<string, SessionEntry>): void 
   applySessionStoreMigrations(store);
   for (const [key, entry] of Object.entries(store)) {
     const modelSelectionLocked = isRecord(entry) && entry.modelSelectionLocked === true;
-    const shaped = normalizePersistedSessionEntryShape(entry);
+    const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey: key });
     if (!shaped) {
       if (modelSelectionLocked) {
         throw new Error(`Invalid model-selection-locked session entry: ${key}`);

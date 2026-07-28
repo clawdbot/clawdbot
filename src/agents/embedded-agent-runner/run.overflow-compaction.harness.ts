@@ -419,7 +419,6 @@ export const overflowBaseRunParams = {
   agentId: "main",
   sessionId: "test-session",
   sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
   workspaceDir: "/tmp/workspace",
   prompt: "hello",
   timeoutMs: 30000,

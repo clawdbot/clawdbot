@@ -14,6 +14,7 @@ import {
   type SidebarLifecycleState,
   successfulSessionPatch,
   type TestSessionMenu,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
@@ -58,7 +59,11 @@ describe("AppSidebar session indicators", () => {
         rateLimited: false,
       }),
     );
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const gatewayHarness = createGatewayHarness({
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
         features: { methods: ["controlUi.sessionPullRequests"] },
@@ -395,6 +400,27 @@ describe("AppSidebar session accessibility", () => {
     // The identity card is the main-session entry; the list stays empty.
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
     expect(sidebar.querySelector("openclaw-sidebar-agent-card")).not.toBeNull();
+  });
+});
+
+describe("AppSidebar session navigation", () => {
+  it("selects the session's agent before changing the active session", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:research:work"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const calls: string[] = [];
+    context.agentSelection.set = vi.fn((agentId) => calls.push(`agent:${agentId}`));
+    gateway.setSessionKey = vi.fn((sessionKey) => calls.push(`session:${sessionKey}`));
+
+    (sidebar as unknown as { selectSession: (sessionKey: string) => void }).selectSession(
+      "agent:research:work",
+    );
+
+    expect(calls).toEqual(["agent:research", "session:agent:research:work"]);
   });
 });
 

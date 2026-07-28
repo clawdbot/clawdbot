@@ -1397,6 +1397,38 @@ jobs:
             pnpm --dir ui test --maxWorkers 3
           fi
 
+  checks-ui-e2e:
+    permissions:
+      contents: read
+    name: checks-ui-e2e
+    needs: [preflight]
+    # Compatibility targets pin a frozen Control UI whose e2e expectations track
+    # that release, not current main.
+    if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # The suite runs one file at a time (fileParallelism: false) because each
+    # file owns a Chromium context and a mocked Gateway; ~21 min measured, so
+    # this cannot share checks-ui's 20-minute budget.
+    timeout-minutes: 45
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          # Fork PRs must never read or write repository-global sticky snapshots.
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+
+      - name: Install Playwright Chromium
+        run: node scripts/ensure-playwright-chromium.mjs
+
+      # main gated only new-session-page while the rest of the suite was red.
+      # The whole suite is green now, so gate on all of it.
+      - name: Test Control UI end-to-end
+        run: pnpm test:ui:e2e
+
   control-ui-i18n:
     permissions:
       contents: read
@@ -1736,7 +1768,6 @@ jobs:
             const compatibilityScenarioIds = new Set([
               "control-ui-chat-flow-playwright",
               "system-agent-ring-zero-setup",
-              "dreaming-shadow-trial-report",
               "gateway-smoke",
               "group-visible-reply-tool",
               "long-running-release-audit",
@@ -3233,6 +3264,53 @@ jobs:
       - name: Build iOS app
         run: pnpm ios:build
 
+      # App compilation and screenshots do not execute approval or notification
+      # lifecycles. Exercise both owners on the already provisioned simulator.
+      - name: Run focused iOS lifecycle simulator tests
+        id: ios_lifecycle_tests
+        if: env.HISTORICAL_TARGET != 'true'
+        run: |
+          set -euo pipefail
+          simulator_id="$(
+            xcrun simctl list devices available --json | node --input-type=module -e '
+              const chunks = [];
+              for await (const chunk of process.stdin) chunks.push(chunk);
+              const runtimes = JSON.parse(Buffer.concat(chunks).toString("utf8")).devices;
+              const simulator = Object.values(runtimes)
+                .flat()
+                .find((device) => device.isAvailable && device.name.startsWith("iPhone"));
+              if (!simulator) {
+                console.error("No available iPhone simulator for iOS lifecycle tests");
+                process.exit(1);
+              }
+              process.stdout.write(simulator.udid);
+            '
+          )"
+          result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
+          mkdir -p "apps/ios/build/LifecycleTestResults"
+          xcodebuild \
+            -project apps/ios/OpenClaw.xcodeproj \
+            -scheme OpenClaw \
+            -configuration Debug \
+            -destination "platform=iOS Simulator,id=${simulator_id}" \
+            -resultBundlePath "$result_bundle" \
+            -parallel-testing-enabled NO \
+            -only-testing:OpenClawTests/DelayedActionGateTests \
+            -only-testing:OpenClawTests/NodeAppModelInvokeTests \
+            -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
+            test
+
+      - name: Upload iOS lifecycle simulator evidence
+        if: ${{ always() && steps.ios_lifecycle_tests.outcome != '' && steps.ios_lifecycle_tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
+          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
       - name: Capture iOS release screenshots
         if: ${{ (github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request') && env.HISTORICAL_TARGET != 'true' }}
         run: pnpm ios:screenshots
@@ -3447,6 +3525,7 @@ jobs:
       - build-artifacts
       - native-i18n
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - qa-smoke-ci-profile
@@ -3478,6 +3557,7 @@ jobs:
             build-artifacts=${{ needs.build-artifacts.result }}
             native-i18n=${{ needs.native-i18n.result }}
             checks-ui=${{ needs.checks-ui.result }}
+            checks-ui-e2e=${{ needs.checks-ui-e2e.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}
@@ -3536,6 +3616,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard

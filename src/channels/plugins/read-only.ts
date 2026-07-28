@@ -643,8 +643,14 @@ function rebindChannelPluginConfig(
     isConfigured: config.isConfigured
       ? (account, cfg) => config.isConfigured?.(account, rebind(cfg)) ?? false
       : undefined,
+    isLinked: config.isLinked
+      ? (account, cfg) => config.isLinked?.(account, rebind(cfg)) ?? "unknown"
+      : undefined,
     unconfiguredReason: config.unconfiguredReason
       ? (account, cfg) => config.unconfiguredReason?.(account, rebind(cfg)) ?? ""
+      : undefined,
+    unlinkedReason: config.unlinkedReason
+      ? (account, cfg) => config.unlinkedReason?.(account, rebind(cfg)) ?? ""
       : undefined,
     describeAccount: config.describeAccount
       ? (account, cfg) => config.describeAccount!(account, rebind(cfg))

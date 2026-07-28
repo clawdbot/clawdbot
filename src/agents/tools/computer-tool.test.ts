@@ -1,7 +1,7 @@
 /**
  * computer tool tests.
  *
- * Cover the computer.act wire mapping, frame binding, and arming behavior.
+ * Cover the computer.act wire mapping, frame binding, and enablement behavior.
  * Node selection lives in computer-tool.node-resolution.test.ts.
  */
 import { createHash } from "node:crypto";
@@ -432,12 +432,18 @@ describe("createComputerTool execution", () => {
     expect(actKeys[0]).not.toBe(actKeys[1]);
   });
 
-  it("surfaces the arming hint when computer.act is not allowlisted", async () => {
+  it("surfaces the node enablement hint when computer.act is not allowlisted", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
-        throw new Error(
-          'node command not allowed: "computer.act" requires explicit gateway.nodes.commands.allow opt-in',
+        throw Object.assign(
+          new Error(
+            'node command not allowed: "computer.act" is not in the allowlist for platform "macos"',
+          ),
+          {
+            name: "GatewayClientRequestError",
+            details: { reason: "command not allowlisted", command: "computer.act" },
+          },
         );
       }
       // screen.snapshot succeeds so a frame is established before the click.
@@ -451,10 +457,10 @@ describe("createComputerTool execution", () => {
         coordinate: [10, 10],
         frameId: readFrameId(screenshot),
       }),
-    ).rejects.toThrow(/\/phone arm computer/);
+    ).rejects.toThrow(/enable Computer Control.*approve the pairing update/i);
   });
 
-  it("surfaces the arming hint for the fresh-setup denylist rejection", async () => {
+  it("surfaces the persistent deny remediation", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
@@ -472,7 +478,7 @@ describe("createComputerTool execution", () => {
         coordinate: [10, 10],
         frameId: readFrameId(screenshot),
       }),
-    ).rejects.toThrow(/\/phone arm computer/);
+    ).rejects.toThrow(/remove computer\.act from gateway\.nodes\.commands\.deny/);
   });
 
   it("fails closed when a coordinate action has no observed screenshot frame", async () => {
@@ -773,12 +779,10 @@ describe("createComputerTool execution", () => {
     ]);
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
-        throw Object.assign(
-          new Error(
-            'node command not allowed: "computer.act" requires explicit gateway.nodes.commands.allow opt-in',
-          ),
-          { name: "GatewayClientRequestError" },
-        );
+        throw Object.assign(new Error("node command rejected before dispatch"), {
+          name: "GatewayClientRequestError",
+          details: { reason: "command not allowlisted", command: "computer.act" },
+        });
       }
       return screenshotPayload();
     });
@@ -791,7 +795,7 @@ describe("createComputerTool execution", () => {
         coordinate: [1, 2],
         frameId: readFrameId(screenshot),
       }),
-    ).rejects.toThrow(/computer control is disarmed/);
+    ).rejects.toThrow(/enable Computer Control.*approve the pairing update/i);
     await expect(
       tool.execute("retarget", { action: "screenshot", node: "mac-b" }),
     ).resolves.toMatchObject({ details: { node: "mac-b" } });

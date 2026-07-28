@@ -1,6 +1,7 @@
 // Openai provider module implements model/runtime integration.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   isProviderAuthProfileConfigured,
   resolveProviderAuthProfileApiKey,
@@ -489,8 +490,16 @@ function readRealtimeErrorEventId(error: unknown): string | undefined {
   return typeof eventId === "string" ? eventId : undefined;
 }
 
+class OpenAIRealtimeMalformedAudioError extends Error {}
+
 function base64ToBuffer(b64: string): Buffer {
-  return Buffer.from(b64, "base64");
+  const canonicalAudio = canonicalizeBase64(b64);
+  if (!canonicalAudio) {
+    throw new OpenAIRealtimeMalformedAudioError(
+      "OpenAI realtime stream returned malformed base64 audio data",
+    );
+  }
+  return Buffer.from(canonicalAudio, "base64");
 }
 
 class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
@@ -527,6 +536,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private reconnectReason: string | undefined;
   private activeConnectionReason: string | undefined;
   private reconnectAbortController = new AbortController();
+  private terminalError: Error | undefined;
+  private terminalCloseNotified = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
   constructor(private readonly config: OpenAIRealtimeVoiceBridgeConfig) {
@@ -534,6 +545,9 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   async connect(): Promise<void> {
+    if (this.terminalError) {
+      throw this.terminalError;
+    }
     this.intentionallyClosed = false;
     if (this.reconnectAbortController.signal.aborted) {
       this.reconnectAbortController = new AbortController();
@@ -725,6 +739,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
               settleResolve();
             }
           } catch (error) {
+            if (error instanceof OpenAIRealtimeMalformedAudioError) {
+              settleReject(error);
+              this.failConnection(error, ws);
+              return;
+            }
             console.error("[openai] realtime event parse failed:", error);
           }
         });
@@ -766,6 +785,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
           const wasSessionConfigured = this.sessionConfigured;
           this.connected = false;
           this.sessionConfigured = false;
+          if (this.terminalError) {
+            if (this.ws === ws) {
+              this.ws = null;
+            }
+            this.notifyTerminalClose();
+            return;
+          }
           if (this.intentionallyClosed) {
             settleResolve();
             this.config.onClose?.("completed");
@@ -1419,6 +1445,35 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
     this.deliveredToolCallKeys.clear();
+  }
+
+  private failConnection(error: OpenAIRealtimeMalformedAudioError, ws: WebSocket): void {
+    if (this.terminalError) {
+      return;
+    }
+    this.terminalError = error;
+    this.intentionallyClosed = true;
+    this.reconnectAbortController.abort();
+    this.connected = false;
+    this.sessionConfigured = false;
+    this.resetRealtimeSessionState();
+    try {
+      this.config.onError?.(error);
+    } finally {
+      if (ws.readyState !== WebSocket.CLOSED) {
+        ws.close(1002, "Malformed audio payload");
+      } else {
+        this.notifyTerminalClose();
+      }
+    }
+  }
+
+  private notifyTerminalClose(): void {
+    if (this.terminalCloseNotified) {
+      return;
+    }
+    this.terminalCloseNotified = true;
+    this.config.onClose?.("error");
   }
 
   private sendMark(): void {

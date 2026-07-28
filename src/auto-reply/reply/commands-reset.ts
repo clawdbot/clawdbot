@@ -106,6 +106,7 @@ export async function maybeHandleResetCommand(
 
     await emitResetCommandHooks({
       action: "reset",
+      agentId: params.agentId,
       ctx: params.ctx,
       cfg: params.cfg,
       command: params.command,
@@ -180,6 +181,7 @@ export async function maybeHandleResetCommand(
 
   const hookResult = await emitResetCommandHooks({
     action: commandAction,
+    agentId: params.agentId,
     ctx: params.ctx,
     cfg: params.cfg,
     command: params.command,

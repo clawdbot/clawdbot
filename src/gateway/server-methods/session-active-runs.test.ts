@@ -8,11 +8,67 @@ import {
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-events.js";
 import {
+  buildProjectedAgentRunIndex,
+  clearAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
+import {
+  collectTrackedActiveSessionRuns,
   hasVisibleActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+
+it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
+  const context = {
+    chatAbortControllers: new Map([
+      ["run-main", { sessionKey: "agent:main:main", sessionId: "session-main" }],
+      ["run-global", { sessionKey: "global", agentId: "work" }],
+      ["run-hidden", { sessionKey: "agent:main:hidden", projectSessionActive: false }],
+    ]),
+  } as never;
+  registerAgentRunContext("projected-key", {
+    projectSessionActive: true,
+    sessionKey: "agent:main:projected",
+  });
+  registerAgentRunContext("projected-id", {
+    projectSessionActive: true,
+    sessionId: "session-projected",
+  });
+  try {
+    const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
+    const projectedAgentRunIndex = buildProjectedAgentRunIndex();
+    const cases = [
+      { requestedKey: "agent:main:main", canonicalKey: "agent:main:main" },
+      { requestedKey: "agent:main:projected", canonicalKey: "agent:main:projected" },
+      {
+        requestedKey: "agent:main:by-id",
+        canonicalKey: "agent:main:by-id",
+        sessionId: "session-projected",
+      },
+      {
+        requestedKey: "global",
+        canonicalKey: "global",
+        agentId: "work",
+        defaultAgentId: "main",
+      },
+      { requestedKey: "agent:main:missing", canonicalKey: "agent:main:missing" },
+    ];
+    for (const activeCase of cases) {
+      expect(
+        resolveVisibleActiveSessionRunState({
+          context,
+          ...activeCase,
+          trackedActiveRuns,
+          projectedAgentRunIndex,
+        }),
+      ).toEqual(resolveVisibleActiveSessionRunState({ context, ...activeCase }));
+    }
+  } finally {
+    clearAgentRunContext("projected-key");
+    clearAgentRunContext("projected-id");
+  }
+});
 
 it("matches session-id-only gateway runs during archive admission", () => {
   const context = {

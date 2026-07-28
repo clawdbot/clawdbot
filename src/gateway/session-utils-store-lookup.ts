@@ -3,7 +3,6 @@ import { listAgentIds } from "../agents/agent-scope.js";
 import {
   isConfiguredSessionStoreAgentId,
   resolveAgentMainSessionKey,
-  resolveAllAgentSessionStoreTargetsSync,
   resolveExistingAgentSessionStoreTargetsSync,
   resolveStorePath,
   type SessionEntry,
@@ -85,16 +84,23 @@ function buildGatewaySessionStoreScanTargets(params: {
 function resolveGatewaySessionStoreCandidates(
   cfg: OpenClawConfig,
   agentId: string,
+  cache?: GatewaySessionStoreDiscoveryCache,
 ): { existing: SessionStoreTarget[]; fallback: SessionStoreTarget } {
+  const cached = cache?.get(agentId);
+  if (cached) {
+    return cached;
+  }
   const storeConfig = cfg.session?.store;
   const fallback = {
     agentId,
     storePath: resolveStorePath(storeConfig, { agentId }),
   };
-  return {
+  const discovery = {
     existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId),
     fallback,
   };
+  cache?.set(agentId, discovery);
+  return discovery;
 }
 
 /**
@@ -108,6 +114,15 @@ function resolveGatewaySessionStoreCandidates(
  * process-global, so it cannot serve a later request stale rows.
  */
 export type GatewaySessionStoreCache = Map<string, Record<string, SessionEntry>>;
+
+/**
+ * Sharing resolves every returned row, but store targets are stable within one request.
+ * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
+ */
+export type GatewaySessionStoreDiscoveryCache = Map<
+  string,
+  { existing: SessionStoreTarget[]; fallback: SessionStoreTarget }
+>;
 
 function loadGatewaySessionLookupStore(
   storePath: string,
@@ -167,13 +182,18 @@ function resolveGatewaySessionStoreLookup(params: {
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): {
   storePath: string;
   store: Record<string, SessionEntry>;
   match: { entry: SessionEntry; key: string } | undefined;
 } {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
-  const { existing, fallback } = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const { existing, fallback } = resolveGatewaySessionStoreCandidates(
+    params.cfg,
+    params.agentId,
+    params.targetDiscoveryCache,
+  );
   const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
   const candidates = configured
     ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
@@ -241,6 +261,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   projection?: SessionEntryListScope["projection"];
   readOnly?: boolean;
   storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): GatewaySessionStoreTargetWithStore | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
@@ -271,7 +292,12 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
         match: { entry: SessionEntry; key: string };
       }
     | undefined;
-  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg)) {
+  const { existing } = resolveGatewaySessionStoreCandidates(
+    params.cfg,
+    legacyAgentId,
+    params.targetDiscoveryCache,
+  );
+  for (const target of existing) {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
@@ -318,6 +344,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   readOnly?: boolean;
   store?: Record<string, SessionEntry>;
   storeCache?: GatewaySessionStoreCache;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): GatewaySessionStoreTargetWithStore {
   const key = normalizeOptionalString(params.key) ?? "";
   const explicitDeletedMainTarget = resolveExplicitDeletedLegacyMainStoreTarget({
@@ -327,6 +354,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     readOnly: params.readOnly,
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
+    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   if (explicitDeletedMainTarget) {
     return explicitDeletedMainTarget;
@@ -370,6 +398,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     initialStore: params.store,
     ...(params.projection ? { projection: params.projection } : {}),
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
+    ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
   if (canonicalKey === "global" || canonicalKey === "unknown") {
     const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];

@@ -176,7 +176,7 @@ internal class WearViewModel(
 ) : AndroidViewModel(application) {
   private val app = application as WearApplication
   private val repository = app.gatewayRepository
-  private val realtimeTalkClient = app.realtimeTalkClient
+  private val realtimeTalkClient = WearRealtimeTalkClient(app, repository)
   private val mutableState = MutableStateFlow(WearUiState())
   private val eventSequenceTracker = WearEventSequenceTracker()
   private val eventSourceTracker = WearEventSourceTracker()

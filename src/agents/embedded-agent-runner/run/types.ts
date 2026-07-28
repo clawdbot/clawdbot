@@ -304,6 +304,20 @@ export type EmbeddedRunAttemptResult = {
   clientToolCalls?: Array<{ name: string; params: Record<string, unknown> }>;
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
+  /**
+   * True when code mode owned this attempt's model tool surface. Absent means
+   * the harness did not report engagement (treated as not engaged), which is
+   * how config-enabled code mode stays visible as a no-op on harness routes.
+   */
+  codeModeEngaged?: boolean;
+  /** Completed assistant round trips observed during this attempt. */
+  assistantTurns?: number;
+  /** Inner bridge call counts from this attempt's tool-search/code-mode catalog. */
+  bridgeCalls?: {
+    search: number;
+    describe: number;
+    call: number;
+  };
   replayMetadata: EmbeddedRunReplayMetadata;
   /**
    * Replay metadata for this attempt before prior session state is accumulated.

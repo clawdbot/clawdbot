@@ -6,7 +6,10 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  normalizeOpenAICompatibleReasoningReplay,
+  streamWithPayloadPatch,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isKimiK3ModelId } from "./provider-policy-api.js";
 
@@ -92,39 +95,6 @@ function ensureKimiAnthropicMaxTokens(
   );
   const current = normalizeKimiAnthropicMaxTokens(payloadObj.max_tokens);
   payloadObj.max_tokens = current === undefined ? required : Math.max(current, required);
-}
-
-function messageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
-  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
-}
-
-function ensureKimiOpenAIReasoningContent(payloadObj: Record<string, unknown>): void {
-  if (!Array.isArray(payloadObj.messages)) {
-    return;
-  }
-  for (const message of payloadObj.messages) {
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const record = message as Record<string, unknown>;
-    if (record.role !== "assistant" || !messageHasOpenAIToolCalls(record)) {
-      continue;
-    }
-    if (!("reasoning_content" in record)) {
-      record.reasoning_content = "";
-    }
-  }
-}
-
-function stripKimiOpenAIReasoningContent(payloadObj: Record<string, unknown>): void {
-  if (!Array.isArray(payloadObj.messages)) {
-    return;
-  }
-  for (const message of payloadObj.messages) {
-    if (message && typeof message === "object") {
-      delete (message as Record<string, unknown>).reasoning_content;
-    }
-  }
 }
 
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
@@ -447,10 +417,12 @@ function createKimiThinkingWrapper(
         model.api === "anthropic-messages" ? { ...normalized } : { type: normalized.type };
       if (model.api === "anthropic-messages") {
         ensureKimiAnthropicMaxTokens(payloadObj, normalized);
-      } else if (normalized.type === "enabled") {
-        ensureKimiOpenAIReasoningContent(payloadObj);
       } else {
-        stripKimiOpenAIReasoningContent(payloadObj);
+        normalizeOpenAICompatibleReasoningReplay(payloadObj, {
+          thinkingEnabled: normalized.type === "enabled",
+          shouldBackfillAssistantMessage: (message) =>
+            Array.isArray(message.tool_calls) && message.tool_calls.length > 0,
+        });
       }
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;

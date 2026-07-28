@@ -6,6 +6,7 @@ import type {
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { buildWidgetThemeMessage, postWidgetTheme } from "./widget-theme.ts";
 
 type SessionDiscussionInfoLoader = (sessionKey: string) => Promise<SessionDiscussionInfo>;
 type SessionDiscussionOpener = (sessionKey: string) => Promise<SessionDiscussionInfo>;
@@ -45,7 +46,30 @@ function resolveDiscussionEmbedUrl(value: string | undefined): string | null {
   if (!resolved) {
     return null;
   }
-  return new URL(resolved).origin === window.location.origin ? null : resolved;
+  const url = new URL(resolved);
+  if (url.origin === window.location.origin) {
+    return null;
+  }
+  if (
+    url.searchParams.get("openclawHostTheme") !== "1" ||
+    !/^\/embed\/(?:channel|thread)\/[^/]+\/[^/]+\/?$/u.test(url.pathname)
+  ) {
+    // Provider-issued and signed discussion URLs are opaque. Only ClickClack's
+    // documented embed routes support the first-paint theme query contract.
+    return url.href;
+  }
+  // The initial URL protects the first paint; hostOrigin binds subsequent
+  // full-palette messages to this exact Control UI parent.
+  url.searchParams.set(
+    "theme",
+    document.documentElement.dataset.themeMode === "light" ? "light" : "dark",
+  );
+  url.searchParams.set("hostOrigin", window.location.origin);
+  const themeTokens = buildWidgetThemeMessage().tokens;
+  if (Object.keys(themeTokens).length > 0) {
+    url.searchParams.set("themeTokens", JSON.stringify(themeTokens));
+  }
+  return url.href;
 }
 
 class SessionDiscussionPanel extends OpenClawLightDomElement {
@@ -62,6 +86,41 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
   @state() private error: string | null = null;
 
   private requestVersion = 0;
+  private themeObserver: MutationObserver | null = null;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    if (typeof MutationObserver === "undefined") {
+      return;
+    }
+    this.themeObserver = new MutationObserver(() => this.postDiscussionTheme());
+    this.themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-theme", "data-theme-mode", "style"],
+    });
+  }
+
+  override disconnectedCallback(): void {
+    this.themeObserver?.disconnect();
+    this.themeObserver = null;
+    super.disconnectedCallback();
+  }
+
+  private readonly handleDiscussionFrameLoad = (event: Event): void => {
+    const frame = event.currentTarget;
+    if (frame instanceof HTMLIFrameElement) {
+      this.postDiscussionTheme(frame);
+    }
+  };
+
+  private postDiscussionTheme(
+    frame = this.querySelector<HTMLIFrameElement>(".session-discussion__frame"),
+  ): void {
+    if (!frame?.isConnected) {
+      return;
+    }
+    postWidgetTheme(frame, new URL(frame.src).origin);
+  }
 
   private isCurrentRequest(sessionKey: string, version: number): boolean {
     return version === this.requestVersion && sessionKey === this.sessionKey.trim();
@@ -161,6 +220,7 @@ class SessionDiscussionPanel extends OpenClawLightDomElement {
                 src=${embedUrl}
                 title=${t("chat.sessionDiscussion.frameTitle")}
                 sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
+                @load=${this.handleDiscussionFrameLoad}
               ></iframe>
             `
           : html`<div class="session-discussion__empty">

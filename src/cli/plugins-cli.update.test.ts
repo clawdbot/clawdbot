@@ -538,6 +538,69 @@ describe("plugins cli update", () => {
     expectRestartNoticeLogged();
   });
 
+  it("commits a moved managed npm load path with its replacement record", async () => {
+    const previousInstallPath = "/tmp/openclaw/npm/projects/brave-v1/node_modules/brave";
+    const nextInstallPath = "/tmp/openclaw/npm/projects/brave-v2/node_modules/brave";
+    const customPath = "/tmp/custom-plugin";
+    const cfg = {
+      plugins: {
+        load: { paths: [previousInstallPath, customPath] },
+      },
+    } as OpenClawConfig;
+    const previousRecords = {
+      brave: {
+        source: "npm" as const,
+        spec: "@openclaw/brave-plugin@1.0.0",
+        installPath: previousInstallPath,
+      },
+    };
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2.0.0",
+        installPath: nextInstallPath,
+      },
+    };
+    const nextConfig = {
+      plugins: {
+        load: { paths: [nextInstallPath, customPath] },
+        installs: nextRecords,
+      },
+    } as OpenClawConfig;
+    primeUpdateConfigSnapshot({ config: cfg });
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: nextConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await runPluginsCommand(["plugins", "update", "brave"]);
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords);
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      nextConfig: {
+        plugins: {
+          load: { paths: [nextInstallPath, customPath] },
+        },
+      },
+      baseHash: "update-config",
+      writeOptions: expect.objectContaining({
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
+      }),
+    });
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          load: { paths: [nextInstallPath, customPath] },
+        },
+      },
+      installRecords: nextRecords,
+      reason: "source-changed",
+    });
+    expect(notifyGatewayPluginMetadataChanged).not.toHaveBeenCalled();
+  });
+
   it("rolls back persisted install records when source config changes during a records-only update", async () => {
     const cfg = {
       gateway: {
@@ -809,6 +872,30 @@ describe("plugins cli update", () => {
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expect(updateNpmInstalledHookPacks).not.toHaveBeenCalled();
     expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("blocks managed npm load-path reconciliation before updater side effects", async () => {
+    const installPath = "/tmp/openclaw/npm/projects/demo-v1/node_modules/demo";
+    const cfg = {
+      plugins: {
+        load: { paths: [installPath] },
+      },
+    } as OpenClawConfig;
+    primeBlockedUpdateConfig("plugins", cfg);
+    setInstalledPluginIndexInstallRecords({
+      demo: {
+        source: "npm",
+        spec: "@acme/demo@1.0.0",
+        installPath,
+      },
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "demo"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain(
+      "Config plugins are stored in an external or unresolved top-level $include",
+    );
+    expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
 
   it.each([

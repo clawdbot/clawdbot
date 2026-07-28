@@ -24,10 +24,12 @@ type OpenAICompatibleChatCompletionChunk = Omit<
   choices?: OpenAICompatibleChoice[];
   usage?: DeepPartial<ChatCompletionChunk["usage"]> & { cost?: unknown };
 };
-type FirstEventSimpleStreamOptions = SimpleStreamOptions & {
+type FirstEventOptions = {
   firstEventTimeoutMs?: number;
   onFirstEventTimeout?: (reason: Error) => void;
 };
+type FirstEventOpenAIStreamOptions = OpenAICompletionsOptions & FirstEventOptions;
+type FirstEventSimpleStreamOptions = SimpleStreamOptions & FirstEventOptions;
 
 const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
@@ -76,7 +78,11 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
+import {
+  streamOpenAICompletions,
+  streamSimpleOpenAICompletions,
+  type OpenAICompletionsOptions,
+} from "./openai-completions.js";
 
 beforeEach(() => {
   mockChunksRef.chunks = [];
@@ -204,6 +210,32 @@ function createNeverYieldingStream(): AsyncIterable<OpenAICompatibleChatCompleti
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it.each([
+    { thinkingFormat: "zai", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "qwen", expected: { enable_thinking: false } },
+    { thinkingFormat: "deepseek", expected: { thinking: { type: "disabled" } } },
+    { thinkingFormat: "together", expected: { reasoning: { enabled: false } } },
+  ] as const)(
+    "treats reasoningEffort none as disabled for $thinkingFormat payloads",
+    async ({ thinkingFormat, expected }) => {
+      mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+      const compatibleModel = {
+        ...reasoningModel,
+        provider: "custom-openai-compatible",
+        baseUrl: "https://third-party.test/v1",
+        compat: { thinkingFormat, supportsReasoningEffort: true },
+      } satisfies Model<"openai-completions">;
+
+      await streamOpenAICompletions(compatibleModel, context, {
+        apiKey: "sk-test",
+        reasoningEffort: "none",
+      }).result();
+
+      expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject(expected);
+      expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("reasoning_effort");
+    },
+  );
+
   it("omits reasoning_effort when deepseek-format compatibility disables it", async () => {
     mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
     const compatibleModel = {
@@ -406,7 +438,7 @@ describe("OpenAI-compatible completions params", () => {
         apiKey: "sk-test",
         firstEventTimeoutMs: 5,
         onFirstEventTimeout,
-      } as FirstEventSimpleStreamOptions);
+      } as FirstEventOpenAIStreamOptions);
       const resultPromise = stream.result();
 
       await vi.advanceTimersByTimeAsync(5);

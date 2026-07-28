@@ -42,11 +42,30 @@ import {
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
+type SingleProviderPluginManifestAuthChoice = Pick<
+  PluginManifestProviderAuthChoice,
+  | "provider"
+  | "method"
+  | "choiceId"
+  | "choiceLabel"
+  | "choiceHint"
+  | "groupId"
+  | "groupLabel"
+  | "groupHint"
+  | "optionKey"
+  | "cliFlag"
+  | "assistantPriority"
+  | "onboardingFeatured"
+> & {
+  assistantVisibility?: string;
+  onboardingScopes?: readonly string[];
+};
+
 type SingleProviderPluginManifest = {
   setup?: {
     providers?: readonly Pick<PluginManifestSetupProvider, "id" | "envVars">[];
   };
-  providerAuthChoices?: readonly PluginManifestProviderAuthChoice[];
+  providerAuthChoices?: readonly SingleProviderPluginManifestAuthChoice[];
   modelCatalog?: {
     providers?: Readonly<Record<string, unknown>>;
     discovery?: Readonly<Record<string, unknown>>;
@@ -126,6 +145,48 @@ export type SingleProviderPluginCatalogOptions =
 /**
  * Defines one provider plugin plus optional extra registration hooks.
  */
+type SingleProviderPluginDefinition = {
+  /**
+   * Provider id override when the runtime provider id differs from the plugin id.
+   */
+  id?: string;
+  /**
+   * Human-readable provider label.
+   */
+  label: string;
+  /**
+   * Documentation route used by provider setup and diagnostics.
+   */
+  docsPath: string;
+  /**
+   * Alternate provider ids accepted by routing and configuration lookups.
+   */
+  aliases?: string[];
+  /**
+   * Explicit environment variables advertised for credentials.
+   */
+  envVars?: string[];
+  /**
+   * API-key auth methods converted through the shared provider auth helper.
+   */
+  auth?: SingleProviderPluginApiKeyAuthOptions[];
+  /**
+   * Provider-owned behavior layered over manifest-derived API-key auth.
+   */
+  manifestAuth?: ManifestProviderAuthOptions;
+  /**
+   * Non-API-key or provider-owned auth methods appended after generated methods.
+   */
+  extraAuth?: ProviderAuthMethod[];
+  /**
+   * Live/static catalog implementation for this provider.
+   */
+  catalog: SingleProviderPluginCatalogOptions;
+} & Omit<
+  ProviderPlugin,
+  "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog" | "staticCatalog"
+>;
+
 export type SingleProviderPluginOptions = {
   /**
    * Plugin id and default provider id when `provider.id` is omitted.
@@ -158,47 +219,9 @@ export type SingleProviderPluginOptions = {
    * Primary provider registration. Extra provider fields are forwarded after
    * the helper-owned id/auth/catalog fields are normalized.
    */
-  provider?: {
-    /**
-     * Provider id override when the runtime provider id differs from the plugin id.
-     */
-    id?: string;
-    /**
-     * Human-readable provider label.
-     */
-    label: string;
-    /**
-     * Documentation route used by provider setup and diagnostics.
-     */
-    docsPath: string;
-    /**
-     * Alternate provider ids accepted by routing and configuration lookups.
-     */
-    aliases?: string[];
-    /**
-     * Explicit environment variables advertised for credentials.
-     */
-    envVars?: string[];
-    /**
-     * API-key auth methods converted through the shared provider auth helper.
-     */
-    auth?: SingleProviderPluginApiKeyAuthOptions[];
-    /**
-     * Provider-owned behavior layered over manifest-derived API-key auth.
-     */
-    manifestAuth?: ManifestProviderAuthOptions;
-    /**
-     * Non-API-key auth methods appended after generated API-key methods.
-     */
-    extraAuth?: ProviderAuthMethod[];
-    /**
-     * Live/static catalog implementation for this provider.
-     */
-    catalog: SingleProviderPluginCatalogOptions;
-  } & Omit<
-    ProviderPlugin,
-    "id" | "label" | "docsPath" | "aliases" | "envVars" | "auth" | "catalog" | "staticCatalog"
-  >;
+  provider?:
+    | SingleProviderPluginDefinition
+    | ((api: OpenClawPluginApi) => SingleProviderPluginDefinition);
   /**
    * Optional hook for registering companion capabilities with the same plugin entry.
    */
@@ -223,6 +246,14 @@ function resolveManifestProviderAuth(params: {
     throw new Error(`Incomplete manifest API-key auth for provider "${params.providerId}"`);
   }
   const defaultModel = readManifestProviderDefaultModelRef(params.manifest, params.providerId);
+  const assistantVisibility =
+    choice.assistantVisibility === "visible" || choice.assistantVisibility === "manual-only"
+      ? choice.assistantVisibility
+      : undefined;
+  const onboardingScopes = choice.onboardingScopes?.filter(
+    (scope): scope is NonNullable<ProviderPluginWizardSetup["onboardingScopes"]>[number] =>
+      scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
+  );
   return [
     {
       methodId: choice.method,
@@ -235,16 +266,28 @@ function resolveManifestProviderAuth(params: {
       envVar,
       promptMessage: `Enter ${choice.choiceLabel}`,
       ...(defaultModel ? { defaultModel } : {}),
-      wizard: {
-        choiceId: choice.choiceId,
-        choiceLabel: choice.choiceLabel,
-        groupId: choice.groupId ?? params.providerId,
-        groupLabel: choice.groupLabel ?? params.providerLabel,
-        ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
-        ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
-        methodId: choice.method,
-      },
       ...params.overrides,
+      wizard:
+        params.overrides?.wizard === false
+          ? false
+          : {
+              choiceId: choice.choiceId,
+              choiceLabel: choice.choiceLabel,
+              groupId: choice.groupId ?? params.providerId,
+              groupLabel: choice.groupLabel ?? params.providerLabel,
+              ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+              ...(choice.groupHint ? { groupHint: choice.groupHint } : {}),
+              ...(choice.assistantPriority !== undefined
+                ? { assistantPriority: choice.assistantPriority }
+                : {}),
+              ...(assistantVisibility ? { assistantVisibility } : {}),
+              ...(choice.onboardingFeatured !== undefined
+                ? { onboardingFeatured: choice.onboardingFeatured }
+                : {}),
+              ...(onboardingScopes?.length ? { onboardingScopes } : {}),
+              methodId: choice.method,
+              ...params.overrides?.wizard,
+            },
     },
   ];
 }
@@ -263,6 +306,13 @@ function resolveWizardSetup(params: {
     choiceId: wizard.choiceId ?? `${params.providerId}-${methodId}`,
     choiceLabel: wizard.choiceLabel ?? params.auth.label,
     ...(wizard.choiceHint ? { choiceHint: wizard.choiceHint } : {}),
+    ...(wizard.assistantPriority !== undefined
+      ? { assistantPriority: wizard.assistantPriority }
+      : {}),
+    ...(wizard.assistantVisibility ? { assistantVisibility: wizard.assistantVisibility } : {}),
+    ...(wizard.onboardingFeatured !== undefined
+      ? { onboardingFeatured: wizard.onboardingFeatured }
+      : {}),
     groupId: wizard.groupId ?? params.providerId,
     groupLabel: wizard.groupLabel ?? params.providerLabel,
     ...((wizard.groupHint ?? params.auth.hint)
@@ -271,6 +321,7 @@ function resolveWizardSetup(params: {
     methodId,
     ...(wizard.onboardingScopes ? { onboardingScopes: wizard.onboardingScopes } : {}),
     ...(wizard.modelAllowlist ? { modelAllowlist: wizard.modelAllowlist } : {}),
+    ...(wizard.modelSelection ? { modelSelection: wizard.modelSelection } : {}),
   };
 }
 
@@ -320,7 +371,9 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
     ...(options.kind ? { kind: options.kind } : {}),
     ...(options.configSchema ? { configSchema: options.configSchema } : {}),
     register(api) {
-      const provider = options.provider;
+      // Factories keep caches and other provider state owned by each plugin registration.
+      const provider =
+        typeof options.provider === "function" ? options.provider(api) : options.provider;
       if (provider) {
         const providerId = provider.id ?? options.id;
         if (

@@ -12,6 +12,7 @@ import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON,
   GATEWAY_CRASH_LOOP_RECOVERED_REASON,
   completeGatewayBootLifecycle,
+  formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreaker,
   recordGatewayBootStart,
 } from "./gateway-boot-lifecycle.js";
@@ -218,5 +219,27 @@ describe("gateway crash-loop breaker", () => {
     expect(rows).toHaveLength(2);
     expect(rows).toContain("kept");
     expect(rows).not.toContain("old");
+  });
+});
+
+describe("formatGatewayCrashLoopManualChannelStartHint", () => {
+  it("uses a placeholder when no channel is known", () => {
+    expect(formatGatewayCrashLoopManualChannelStartHint()).toContain(
+      `--params '{"channel":"<id>"}'`,
+    );
+  });
+
+  it("names the channel being suppressed", () => {
+    expect(formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram" })).toContain(
+      `--params '{"channel":"telegram"}'`,
+    );
+  });
+
+  // Suppression is reported per account; omitting accountId would tell operators to run a command
+  // that starts the channel's default account instead of the one the warning named.
+  it("carries the account when suppression is account-scoped", () => {
+    expect(
+      formatGatewayCrashLoopManualChannelStartHint({ channelId: "telegram", accountId: "work" }),
+    ).toContain(`--params '{"channel":"telegram","accountId":"work"}'`);
   });
 });

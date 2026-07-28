@@ -731,6 +731,7 @@ function pathTargetsScopedChannelAccount(params: {
 export function getScopedChannelsCommandSecretTargets(params: {
   config: OpenClawConfig;
   channel?: string | null;
+  channels?: readonly string[];
   accountId?: string | null;
   defaultAccountWhenMissing?: boolean;
 }): {
@@ -738,7 +739,19 @@ export function getScopedChannelsCommandSecretTargets(params: {
   allowedPaths?: Set<string>;
 } {
   const channel = normalizeOptionalString(params.channel);
-  const targetIds = selectChannelTargetIds(channel);
+  const channels =
+    params.channels === undefined
+      ? undefined
+      : sortUniqueStrings(
+          params.channels.flatMap((candidate) => {
+            const normalized = normalizeOptionalString(candidate);
+            return normalized ? [normalized] : [];
+          }),
+        );
+  const targetIds =
+    channels === undefined
+      ? selectChannelTargetIds(channel)
+      : new Set(channels.flatMap((candidate) => [...selectChannelTargetIds(candidate)]));
   const explicitAccountId = normalizeOptionalAccountId(params.accountId);
   const channelPlugin =
     channel && !explicitAccountId && params.defaultAccountWhenMissing
@@ -753,18 +766,21 @@ export function getScopedChannelsCommandSecretTargets(params: {
           resolveChannelDefaultAccountId({ plugin: channelPlugin, cfg: params.config }),
         )
       : undefined);
-  if (!channel || !normalizedAccountId) {
+  const scopedChannels = channels ?? (channel ? [channel] : []);
+  if (scopedChannels.length === 0 || !normalizedAccountId) {
     return { targetIds };
   }
 
   const allowedPaths = new Set<string>();
   for (const target of discoverConfigSecretTargetsByIds(params.config, targetIds)) {
     if (
-      pathTargetsScopedChannelAccount({
-        pathSegments: target.pathSegments,
-        channel,
-        accountId: normalizedAccountId,
-      })
+      scopedChannels.some((scopedChannel) =>
+        pathTargetsScopedChannelAccount({
+          pathSegments: target.pathSegments,
+          channel: scopedChannel,
+          accountId: normalizedAccountId,
+        }),
+      )
     ) {
       allowedPaths.add(target.path);
     }

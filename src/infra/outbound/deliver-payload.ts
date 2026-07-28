@@ -23,6 +23,7 @@ import type {
   NormalizedPayloadForChannelDelivery,
 } from "./deliver-contracts.js";
 import type { OutboundDeliveryResult, OutboundPayloadDeliveryKind } from "./deliver-types.js";
+import { flattenMarkdownDetails } from "./markdown-details.js";
 import type { DeliveryMirror } from "./mirror.js";
 import {
   summarizeOutboundPayloadForTransport,
@@ -125,6 +126,12 @@ export function normalizePayloadsForChannelDelivery(
   const normalizedPayloads: NormalizedPayloadForChannelDelivery[] = [];
   for (const entry of plan) {
     let sanitizedPayload = stripInternalRuntimeScaffoldingFromPayload(entry.payload);
+    if (!handler.preserveMarkdownDetails && sanitizedPayload.text) {
+      sanitizedPayload = {
+        ...sanitizedPayload,
+        text: flattenMarkdownDetails(sanitizedPayload.text),
+      };
+    }
     if (handler.sanitizeText && sanitizedPayload.text) {
       if (!handler.shouldSkipPlainTextSanitization?.(sanitizedPayload)) {
         sanitizedPayload = {

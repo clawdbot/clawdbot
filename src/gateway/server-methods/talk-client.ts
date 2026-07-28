@@ -7,7 +7,6 @@ import {
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   validateTalkClientCloseParams,
   validateTalkClientCreateParams,
   validateTalkClientSteerParams,
@@ -65,6 +64,7 @@ import {
   resolveTalkRealtimeProviderInstructions,
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const LEGACY_VOICE_BINDING_TTL_MS = 6 * 60 * 60_000;
 const REALTIME_VOICE_CONTEXT_MAX_ITEMS = 16;
@@ -127,15 +127,7 @@ function resolveTalkClientAgentId(
  */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": async ({ params, respond, context, client }) => {
-    if (!validateTalkClientCreateParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.create params: ${formatValidationErrors(validateTalkClientCreateParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkClientCreateParams, "talk.client.create", respond)) {
       return;
     }
     const typedParams = params as {
@@ -406,15 +398,9 @@ export const talkClientHandlers: GatewayRequestHandlers = {
   },
   "talk.client.toolCall": async (request) => {
     const { params, respond } = request;
-    if (!validateTalkClientToolCallParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.toolCall params: ${formatValidationErrors(validateTalkClientToolCallParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(params, validateTalkClientToolCallParams, "talk.client.toolCall", respond)
+    ) {
       return;
     }
     if (params.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
@@ -540,15 +526,14 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     );
   },
   "talk.client.transcript": async ({ params, respond, context }) => {
-    if (!validateTalkClientTranscriptParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.transcript params: ${formatValidationErrors(validateTalkClientTranscriptParams.errors)}`,
-        ),
-      );
+    if (
+      !assertValidParams(
+        params,
+        validateTalkClientTranscriptParams,
+        "talk.client.transcript",
+        respond,
+      )
+    ) {
       return;
     }
     try {
@@ -569,15 +554,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
   },
   "talk.client.close": async ({ params, respond, context, client }) => {
-    if (!validateTalkClientCloseParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.close params: ${formatValidationErrors(validateTalkClientCloseParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkClientCloseParams, "talk.client.close", respond)) {
       return;
     }
     try {
@@ -610,15 +587,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
     }
   },
   "talk.client.steer": async ({ params, respond, client, context }) => {
-    if (!validateTalkClientSteerParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid talk.client.steer params: ${formatValidationErrors(validateTalkClientSteerParams.errors)}`,
-        ),
-      );
+    if (!assertValidParams(params, validateTalkClientSteerParams, "talk.client.steer", respond)) {
       return;
     }
     if (

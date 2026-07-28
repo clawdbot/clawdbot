@@ -1,3 +1,4 @@
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
   buildCatalogSessionKey,
@@ -158,11 +159,11 @@ export abstract class ChatPaneSession extends ChatPaneSuggestions {
     }
     const nextSessionKey = state.sessionKey;
     saveRouteSessionSettings(state, nextSessionKey);
-    this.context.gateway.setSessionKey(nextSessionKey);
-    const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
-    if (agentId) {
-      this.context.agentSelection.set(agentId);
-    }
+    selectApplicationSession({
+      selection: this.context.agentSelection,
+      gateway: this.context.gateway,
+      sessionKey: nextSessionKey,
+    });
   }
 
   protected switchPaneSession(nextSessionKey: string) {

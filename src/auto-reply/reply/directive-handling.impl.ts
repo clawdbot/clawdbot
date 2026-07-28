@@ -119,7 +119,12 @@ export async function handleDirectiveOnly(
     commandAuthorized: params.commandAuthorized,
     senderIsOwner: params.senderIsOwner,
   });
-
+  const thinkingCatalog =
+    params.thinkingCatalog && params.thinkingCatalog.length > 0
+      ? params.thinkingCatalog
+      : allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : undefined;
   const modelInfo = await maybeHandleModelDirectiveInfo({
     directives,
     cfg: params.cfg,
@@ -133,6 +138,9 @@ export async function handleDirectiveOnly(
     policyAliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
+    currentThinkLevel: currentThinkLevel ?? "off",
+    thinkingCatalog,
+    runtimePolicySessionKey,
     resetModelOverride,
     workspaceDir: params.workspaceDir,
     surface: params.surface,
@@ -186,12 +194,6 @@ export async function handleDirectiveOnly(
     sessionKey: runtimePolicySessionKey,
     sessionEntry: prospectiveSessionEntry,
   });
-  const thinkingCatalog =
-    params.thinkingCatalog && params.thinkingCatalog.length > 0
-      ? params.thinkingCatalog
-      : allowedModelCatalog.length > 0
-        ? allowedModelCatalog
-        : undefined;
   const fastModeState = resolveFastModeState({
     cfg: params.cfg,
     provider: resolvedProvider,
@@ -759,15 +761,6 @@ export async function handleDirectiveOnly(
   if (directives.hasExecDirective && directives.hasExecOptions && !allowInternalExecPersistence) {
     parts.push(formatDirectiveAck(formatInternalExecPersistenceDeniedText()));
   }
-  if (
-    !directives.hasThinkDirective &&
-    shouldRemapUnsupportedThinkLevel &&
-    remappedUnsupportedThinkLevel
-  ) {
-    parts.push(
-      `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
-    );
-  }
   if (modelSelection && modelSelectionApplied) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias ? `${modelSelection.alias} (${label})` : label;
@@ -786,6 +779,17 @@ export async function handleDirectiveOnly(
     }
   } else if (modelSelection) {
     parts.push("Model change was not applied because the session changed. Retry.");
+  }
+  // Report the model change before the thinking remap it triggered: the remap is a
+  // consequence of the model switch, so the cause should be announced first.
+  if (
+    !directives.hasThinkDirective &&
+    shouldRemapUnsupportedThinkLevel &&
+    remappedUnsupportedThinkLevel
+  ) {
+    parts.push(
+      `Thinking level set to ${remappedUnsupportedThinkLevel} (${nextThinkLevel} not supported for ${resolvedProvider}/${resolvedModel}).`,
+    );
   }
   if (directives.hasQueueDirective && directives.queueMode) {
     parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));

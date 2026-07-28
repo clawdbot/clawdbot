@@ -119,7 +119,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           sessionKey: compactTarget.primaryKey,
           agentId: target.agentId,
         },
-        { maxLines, sessionFile: entry.sessionFile },
+        { maxLines },
       );
       if (!trimPreflight.compacted) {
         respond(
@@ -296,7 +296,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 sessionKey: compactTarget.primaryKey,
                 agentId: target.agentId,
               },
-              { maxLines, sessionFile: latestEntry.sessionFile },
+              { maxLines },
             );
             respond(
               true,

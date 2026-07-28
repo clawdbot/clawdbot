@@ -7,7 +7,7 @@
 - Default happy path: the same Codex agent is mentioned in a Discord group/channel while Telegram can remain the user's primary direct interface.
 - Group-visible output must be explicit through the message tool; the model is also told to mostly lurk unless directly addressed or clearly useful.
 - This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.
-- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
+- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.
 
 ## Scenario Metadata
 
@@ -22,7 +22,6 @@
   "runtime": "codex_app_server",
   "simulatedHeartbeatWorkspaceFile": "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
   "simulatedWorkspaceBootstrapFiles": ["/tmp/openclaw-happy-path/workspace/MEMORY.md"],
-  "simulatedWorkspaceDeveloperInstructionFiles": ["/tmp/openclaw-happy-path/workspace/TOOLS.md"],
   "simulatedWorkspaceTurnScopedDeveloperInstructionFiles": [
     "/tmp/openclaw-happy-path/workspace/IDENTITY.md",
     "/tmp/openclaw-happy-path/workspace/SOUL.md",
@@ -65,6 +64,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "code_mode.direct_only_tool_namespaces": ["openclaw_direct"],
     "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false,
@@ -78,7 +78,6 @@
     "message",
     "agents_list",
     "sessions_spawn",
-    "sessions_yield",
     "nodes",
     "cron",
     "tts",
@@ -90,7 +89,8 @@
     "subagents",
     "session_status",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "sessions_yield"
   ],
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
@@ -221,24 +221,24 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 59624,
-    "roughTokens": 14906
+    "chars": 61383,
+    "roughTokens": 15346
   },
   "openClawDeveloperInstructions": {
-    "chars": 3715,
-    "roughTokens": 929
+    "chars": 3471,
+    "roughTokens": 868
   },
   "totalTextOnly": {
-    "chars": 28162,
-    "roughTokens": 7041
+    "chars": 27854,
+    "roughTokens": 6964
   },
   "totalWithDynamicToolsJson": {
-    "chars": 87788,
-    "roughTokens": 21947
+    "chars": 89239,
+    "roughTokens": 22310
   },
   "userInputText": {
-    "chars": 1364,
-    "roughTokens": 341
+    "chars": 1300,
+    "roughTokens": 325
   }
 }
 ```
@@ -448,14 +448,6 @@ When explicitly_mentioned_bot is true, the incoming message mentions your channe
 You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to this group chat. Be extremely selective: reply only when directly addressed or clearly helpful.
 
 Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
-
-## OpenClaw Workspace Instructions
-
-OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.
-
-### /tmp/openclaw-happy-path/workspace/TOOLS.md
-
-<TOOLS.md contents will be here>
 ````
 
 ### Developer: Codex Collaboration Mode Instructions
@@ -498,7 +490,7 @@ Treat this OpenClaw-provided context as supporting project/user reference for th
 
 ## OpenClaw Workspace Context
 
-OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
+OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.
 
 # Project Context
 
@@ -532,7 +524,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "message",
   "agents_list",
   "sessions_spawn",
-  "sessions_yield",
   "nodes",
   "cron",
   "tts",
@@ -544,7 +535,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
   "subagents",
   "session_status",
   "web_search",
-  "web_fetch"
+  "web_fetch",
+  "sessions_yield"
 ]
 ```
 
