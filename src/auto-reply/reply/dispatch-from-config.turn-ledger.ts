@@ -54,8 +54,10 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
         return { queued: false };
       }
       queuedAdmissions += 1;
-      // Contentless payloads (metadata-only, TTS bookkeeping) never prove the
-      // user saw anything, even when the transport accepts them.
+      // Core dispatchers drop contentless payloads at normalization using this
+      // same predicate, so the check matters for untracked dispatchers that
+      // admit without normalizing; hooks suppress visibility via the cancel
+      // path (beforeDeliver -> null), never by emptying an admitted payload.
       const contentful = hasOutboundReplyContent(payload, { trimText: true });
       if (!capture.isTracked()) {
         // Non-core dispatchers expose no settlement; admission stays their
@@ -83,24 +85,31 @@ export function createReplyTurnLedger(dispatcher: ReplyDispatcher): ReplyTurnLed
       // Outcome promises resolve when the dispatcher send chain settles each
       // payload; the wait is bounded by the per-stage beforeDeliver deadlines and
       // the transport sends the turn's completion barrier already waits for.
-      const settled = Promise.all(pendingOutcomes).then(() => undefined);
-      if (!abortSignal) {
-        await settled;
-        return;
-      }
-      if (abortSignal.aborted) {
-        return;
-      }
-      let removeAbortListener: (() => void) | undefined;
-      const aborted = new Promise<void>((resolve) => {
-        const onAbort = () => resolve();
-        abortSignal.addEventListener("abort", onAbort, { once: true });
-        removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-      });
-      try {
-        await Promise.race([settled, aborted]);
-      } finally {
-        removeAbortListener?.();
+      // Late progress stragglers can admit payloads while earlier deliveries
+      // settle, so drain until no new outcomes appeared mid-wait.
+      let settledCount = 0;
+      while (settledCount < pendingOutcomes.length) {
+        if (abortSignal?.aborted) {
+          return;
+        }
+        const batch = pendingOutcomes.slice(settledCount);
+        settledCount = pendingOutcomes.length;
+        const settled = Promise.all(batch).then(() => undefined);
+        if (!abortSignal) {
+          await settled;
+          continue;
+        }
+        let removeAbortListener: (() => void) | undefined;
+        const aborted = new Promise<void>((resolve) => {
+          const onAbort = () => resolve();
+          abortSignal.addEventListener("abort", onAbort, { once: true });
+          removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+        });
+        try {
+          await Promise.race([settled, aborted]);
+        } finally {
+          removeAbortListener?.();
+        }
       }
     },
     hasVisibleDelivery: () => visibleDeliveries > 0,

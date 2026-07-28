@@ -324,17 +324,21 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         throwIfDispatchOperationAborted();
         markInboundDedupeReplayUnsafe();
         const fallbackSend = turnLedger.sendQueued("final", fallbackPayload);
-        // Settlement decides the flag: a beforeDeliver hook can still cancel the
-        // admitted fallback, and a cancelled fallback must keep the eligibility
-        // flag alive for channel-level recovery. Dispatchers without settlement
-        // tracking keep admission as their strongest fact.
-        const fallbackOutcome = fallbackSend.outcome ? await fallbackSend.outcome : "delivered";
-        if (fallbackSend.queued && fallbackOutcome === "delivered") {
-          queuedFinal = true;
-          noVisibleReplyFallbackDelivered = true;
-          // Re-snapshot so the delivered fallback is reflected in reported counts,
-          // matching the TTS-only path which enqueues before the snapshot.
-          counts = dispatcher.getQueuedCounts();
+        if (fallbackSend.queued) {
+          // Settlement decides the flag: a beforeDeliver hook can still cancel
+          // the admitted fallback, and a cancelled fallback must keep the
+          // eligibility flag alive for channel-level recovery. The abort-aware
+          // ledger wait keeps a wedged transport from blocking finalization;
+          // untracked dispatchers keep admission as their strongest fact.
+          await turnLedger.settleQueued(getDispatchAbortSignal());
+          throwIfDispatchOperationAborted();
+          if (turnLedger.hasVisibleDelivery()) {
+            queuedFinal = true;
+            noVisibleReplyFallbackDelivered = true;
+            // Re-snapshot so the delivered fallback is reflected in reported counts,
+            // matching the TTS-only path which enqueues before the snapshot.
+            counts = dispatcher.getQueuedCounts();
+          }
         }
       }
     } catch (err) {
