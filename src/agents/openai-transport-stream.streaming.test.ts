@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAICompletionsTransportStreamFn,
@@ -121,6 +122,15 @@ describe("openai transport stream", () => {
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
     });
+    const transportHost = getAiTransportHost();
+    configureAiTransportHost({
+      ...transportHost,
+      plugin: {
+        ...transportHost.plugin,
+        // Request-option coverage must not spend its deadline cold-loading provider plugins.
+        resolveTransportTurnState: () => undefined,
+      },
+    });
     try {
       const address = server.address();
       if (!address || typeof address === "string") {
@@ -159,6 +169,7 @@ describe("openai transport stream", () => {
       // The SDK advertises request timeouts in whole seconds on the wire.
       expect(capturedTimeouts).toEqual(["1"]);
     } finally {
+      configureAiTransportHost(transportHost);
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
