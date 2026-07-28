@@ -20,7 +20,7 @@ const MAX_OWNER_MANIFEST_BYTES = 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SAFE_ID_PATTERN = /^[a-z0-9][a-z0-9._/-]{0,254}$/u;
 
-const stateOwnerInventorySchema = z
+export const recoveryPointOwnerInventorySchema = z
   .object({
     version: z.literal(RECOVERY_POINT_INVENTORY_VERSION),
     owner: z.literal("openclaw-state"),
@@ -121,7 +121,7 @@ type RecoveryPointObligation = z.infer<typeof obligationSchema>;
 type RecoveryPointComponent = z.infer<typeof recoveryPointComponentSchema>;
 export type RecoveryPointManifest = z.infer<typeof recoveryPointManifestSchema>;
 export type RecoveryPointAcceptance = z.infer<typeof recoveryPointAcceptanceSchema>;
-export type RecoveryPointOwnerInventory = z.input<typeof stateOwnerInventorySchema>;
+export type RecoveryPointOwnerInventory = z.input<typeof recoveryPointOwnerInventorySchema>;
 
 export type RecoveryPointSqliteSnapshot = {
   readonly provider: SqliteSnapshotProvider;
@@ -361,7 +361,7 @@ function normalizeRequiredComponentIds(expectedAgentIds: readonly string[]): str
 }
 
 function normalizeOwnerInventory(value: RecoveryPointOwnerInventory) {
-  const inventory = stateOwnerInventorySchema.parse(value);
+  const inventory = recoveryPointOwnerInventorySchema.parse(value);
   return {
     version: inventory.version,
     owner: inventory.owner,
