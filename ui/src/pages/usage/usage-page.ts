@@ -128,6 +128,9 @@ class UsagePage extends OpenClawLightDomElement {
 
   private dateDebounceTimer: number | null = null;
   private queryDebounceTimer: number | null = null;
+  // Invalidation runs the Task with a null client to supersede stale completions.
+  // Track real gateway work separately so that no-op runs cannot block reconnect retries.
+  private usageTaskActiveClient: GatewayBrowserClient | null = null;
   private routeDataInitialized = false;
   private routeDataEnabled = true;
   private observedAgentScopeId: string | null | undefined;
@@ -137,6 +140,7 @@ class UsagePage extends OpenClawLightDomElement {
     isRouteDataInitialized: () => this.routeDataInitialized,
     ensureAgents: () => void this.context.agents.ensureList(),
     invalidateRequests: () => {
+      this.usageTaskActiveClient = null;
       void this.usageTask.run(this.usageTaskArgs(null));
       void this.usageTimeSeriesTask.run([null, ""]);
       void this.usageSessionLogsTask.run([null, ""]);
@@ -190,6 +194,7 @@ class UsagePage extends OpenClawLightDomElement {
       return { result, costSummary, providerUsageSummary } satisfies UsageTaskValue;
     },
     onComplete: (value) => {
+      this.usageTaskActiveClient = null;
       this.usageResult = value.result;
       this.usageCostSummary = value.costSummary;
       this.providerUsageSummary = value.providerUsageSummary;
@@ -198,6 +203,7 @@ class UsagePage extends OpenClawLightDomElement {
       this.refreshRuntime.flushPending();
     },
     onError: (error) => {
+      this.usageTaskActiveClient = null;
       if (isMissingOperatorReadScopeError(error)) {
         this.usageResult = null;
         this.usageCostSummary = null;
@@ -296,6 +302,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.subscriptions.clear();
     this.clearDateDebounce();
     this.clearQueryDebounce();
+    this.usageTaskActiveClient = null;
     void this.usageTask.run(this.usageTaskArgs(null));
     void this.usageTimeSeriesTask.run([null, ""]);
     void this.usageSessionLogsTask.run([null, ""]);
@@ -355,6 +362,7 @@ class UsagePage extends OpenClawLightDomElement {
 
   private resetForClientChange() {
     this.clearDateDebounce();
+    this.usageTaskActiveClient = null;
     void this.usageTask.run(this.usageTaskArgs(null));
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
@@ -369,10 +377,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private get usageLoading(): boolean {
-    return (
-      !this.routeDataInitialized ||
-      (!this.routeDataEnabled && this.usageTask.status === TaskStatus.PENDING)
-    );
+    return !this.routeDataInitialized || this.usageTaskActiveClient !== null;
   }
 
   private get usageTimeSeries() {
@@ -396,6 +401,7 @@ class UsagePage extends OpenClawLightDomElement {
     this.usageLoadStartDate = this.usageStartDate;
     this.usageLoadEndDate = this.usageEndDate;
     this.usageError = null;
+    this.usageTaskActiveClient = client;
     return this.usageTask.run();
   }
 
