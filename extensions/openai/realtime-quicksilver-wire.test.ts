@@ -138,6 +138,7 @@ describe("GPT-Live call creation", () => {
 
   it.each([
     { location: null, callId: "rtc_header_fallback" },
+    { location: null, callId: "019eb97d-8e9a-7ff3-94b0-ea019babd5d7" },
     { location: "http://[invalid", callId: "rtc_malformed_location_fallback" },
     { location: "/v1/live/not-a-call", callId: "rtc_invalid_path_fallback" },
   ])("falls back to openai-session-id for Location $location", async ({ location, callId }) => {
@@ -161,6 +162,24 @@ describe("GPT-Live call creation", () => {
         fetchImpl: fetchImpl as unknown as typeof fetch,
       }),
     ).resolves.toMatchObject({ callId });
+  });
+
+  it("accepts a UUID call id from Location", async () => {
+    const callId = "019eb97d-8e9a-7ff3-94b0-ea019babd5d7";
+    const fetchImpl = vi.fn(async () => createCallResponse("v=answer\r\n", callId));
+
+    await expect(
+      createOpenAIQuicksilverCall({
+        auth: { type: "oauth", token: "oauth-token", accountId: "acct-1" },
+        requestIds: createRequestIds("uuid-location"),
+        sdp: "v=offer\r\n",
+        session: buildOpenAIQuicksilverSession({ model: "gpt-live-1-codex" }),
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+    ).resolves.toMatchObject({
+      callId,
+      sidebandUrl: `wss://api.openai.com/v1/live/${callId}`,
+    });
   });
 
   it("rejects an empty SDP answer", async () => {

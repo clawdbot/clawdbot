@@ -252,7 +252,10 @@ function buildOpenAIQuicksilverMultipartBody(params: {
 }
 
 function isOpenAIQuicksilverCallId(value: string): boolean {
-  return /^rtc_[\w-]+$/.test(value);
+  return (
+    /^rtc_[\w-]+$/.test(value) ||
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)
+  );
 }
 
 function decodeOpenAIQuicksilverCallId(params: {
@@ -286,7 +289,7 @@ function decodeOpenAIQuicksilverCallId(params: {
       return sessionId;
     }
     throw new OpenAIQuicksilverCallError(
-      "GPT-Live call response Location has no valid rtc_ call id",
+      "GPT-Live call response Location has no valid call id",
     );
   }
   return callId;
