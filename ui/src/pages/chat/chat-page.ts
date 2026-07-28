@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import type { RouteLocation } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -46,6 +47,41 @@ import {
 } from "./split-layout.ts";
 
 const NARROW_SPLIT_QUERY = "(max-width: 1099px)";
+
+function currentRouteLocation(): RouteLocation {
+  return {
+    pathname: window.location.pathname,
+    search: window.location.search,
+    hash: window.location.hash,
+  };
+}
+
+function routeLocationsMatch(left: RouteLocation, right: RouteLocation): boolean {
+  return (
+    left.pathname === right.pathname && left.search === right.search && left.hash === right.hash
+  );
+}
+
+function stillOwnsCanonicalLocation(
+  source: RouteLocation | undefined,
+  consumedSourceDraft: boolean,
+): boolean {
+  if (!source) {
+    return false;
+  }
+  const current = currentRouteLocation();
+  if (routeLocationsMatch(current, source)) {
+    return true;
+  }
+  const sourceHasDraft = new URLSearchParams(source.search).has("draft");
+  const currentHasDraft = new URLSearchParams(current.search).has("draft");
+  return (
+    consumedSourceDraft &&
+    sourceHasDraft &&
+    !currentHasDraft &&
+    routeLocationsMatch(locationWithoutDraft(current), locationWithoutDraft(source))
+  );
+}
 
 type DropIndicator = { paneId: string; zone: SplitDropZone; rect: SplitDropRect };
 type ChatPaneElement = HTMLElement & { paneId?: string; sessionKey?: string };
@@ -123,14 +159,30 @@ export class ChatPage extends OpenClawLightDomElement {
       this.consumedDraftData !== data &&
       (!this.layout || activePane?.sessionKey === data.sessionKey);
     if (changedProperties.has("data")) {
-      if (data?.canonicalLocation) {
+      if (
+        data?.canonicalLocation &&
+        stillOwnsCanonicalLocation(
+          data.canonicalLocationSource,
+          this.consumedDraftData === data,
+        )
+      ) {
         // data.face is the loader's resolved face, which may differ from the namespace
         // this route was matched under; replacing under it moves the URL to that board.
         this.context.replace(data.face ?? "chat", data.canonicalLocation);
         return;
       }
       void data?.canonicalLocationReady?.then((location) => {
-        if (location && this.isConnected && this.data === data) {
+        if (
+          location &&
+          this.isConnected &&
+          this.data === data &&
+          stillOwnsCanonicalLocation(
+            data.canonicalLocationSource,
+            this.consumedDraftData === data,
+          )
+        ) {
+          // A lazy chat canonicalization can resolve while the old page remains
+          // mounted under a cold navigation. Never replace that newer route.
           this.context.replace(
             data.face ?? "chat",
             this.consumedDraftData === data ? locationWithoutDraft(location) : location,
