@@ -1176,9 +1176,9 @@ extension ApplicationRelocator {
     }
 
     private static func shouldContinueReplacementRecovery(afterFailedTarget failedTargetHash: Data) async -> Bool {
-        guard self.bundleReplacementCheckPending,
-              let snapshot = self.bundleReplacementSnapshot
-        else { return false }
+        guard let snapshot = self.bundleReplacementSnapshot else { return false }
+        // The coalescing bit can be cleared after an event arrives during the
+        // earlier async evaluation. Terminal actions always revalidate the disk.
         self.bundleReplacementCheckPending = false
         let evaluation = await Task.detached(priority: .utility) {
             self.replacementEvaluationOnDisk(for: snapshot)
