@@ -168,6 +168,36 @@ describe("preflightClawPackage plugin setup requirements", () => {
     ).resolves.not.toHaveProperty("requirements");
   });
 
+  it("reports setup for an auth-method-only provider", async () => {
+    probePluginSetup.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "evidence",
+      setup: {
+        providers: [{ id: "oauth-only", authMethods: ["oauth"] }],
+      },
+      clawhub: { integrity },
+    });
+
+    await expect(
+      preflightClawPackage(pluginPackage, "/tmp/workspace", {
+        env: {},
+        deps: { preflightPlugin, probePlugin: probePluginSetup },
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        requirements: [
+          {
+            kind: "plugin-setup",
+            plugin: "evidence",
+            provider: "oauth-only",
+            envVars: [],
+            authMethods: ["oauth"],
+          },
+        ],
+      }),
+    );
+  });
+
   it("accepts declared local auth evidence", async () => {
     const credentialsDir = await mkdtemp(join(tmpdir(), "claw-auth-evidence-"));
     const credentialsPath = join(credentialsDir, "credentials.json");

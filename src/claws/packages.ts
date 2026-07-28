@@ -150,8 +150,9 @@ function resolveClawPluginSetupRequirements(params: {
   return (params.setup?.providers ?? []).flatMap((provider) => {
     const envVars = provider.envVars ?? [];
     const authEvidence = provider.authEvidence ?? [];
+    const authMethods = provider.authMethods ?? [];
     if (
-      (envVars.length === 0 && authEvidence.length === 0) ||
+      (envVars.length === 0 && authEvidence.length === 0 && authMethods.length === 0) ||
       envVars.some((name) => Boolean(params.env[name]?.trim())) ||
       resolveLocalProviderAuthEvidence(authEvidence, params.env)
     ) {
