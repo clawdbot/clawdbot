@@ -18,6 +18,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -55,11 +56,13 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -81,6 +84,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import androidx.compose.ui.semantics.onClick as semanticsOnClick
 
 internal enum class WearHomePage {
   Chat,
@@ -634,10 +638,10 @@ private fun VoiceHomeMode(
             .height(layout.contentHeight),
       ) {
         VoiceGestureLabel(
-          title = stringResource(R.string.tap),
+          title = stringResource(R.string.double_tap),
           detail = stringResource(R.string.thread),
           accent = colors.voiceAccent,
-          onClick = onOpenThread,
+          onDoubleClick = onOpenThread,
           onClickLabel = stringResource(R.string.open_thread),
           verticalPadding = 0.dp,
           modifier =
@@ -715,25 +719,37 @@ private fun VoiceGestureLabel(
   accent: Color,
   modifier: Modifier = Modifier,
   onClick: (() -> Unit)? = null,
+  onDoubleClick: (() -> Unit)? = null,
   onClickLabel: String? = null,
   verticalPadding: androidx.compose.ui.unit.Dp = 10.dp,
 ) {
   val interactionModifier =
-    if (onClick != null) {
-      Modifier.clickable(
-        role = Role.Button,
-        onClickLabel = onClickLabel,
-        onClick = onClick,
-      )
-    } else {
-      Modifier
+    when {
+      onDoubleClick != null ->
+        Modifier
+          .pointerInput(onDoubleClick) {
+            detectTapGestures(onDoubleTap = { onDoubleClick() })
+          }.semantics(mergeDescendants = true) {
+            role = Role.Button
+            semanticsOnClick(label = onClickLabel) {
+              onDoubleClick()
+              true
+            }
+          }
+      onClick != null ->
+        Modifier.clickable(
+          role = Role.Button,
+          onClickLabel = onClickLabel,
+          onClick = onClick,
+        )
+      else -> Modifier
     }
   Column(
     modifier =
       modifier
         .then(interactionModifier)
         .then(
-          if (onClick != null) {
+          if (onClick != null || onDoubleClick != null) {
             Modifier.minimumInteractiveComponentSize()
           } else {
             Modifier
