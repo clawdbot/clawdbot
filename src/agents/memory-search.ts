@@ -97,7 +97,6 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
-    primaryTimeoutMs: number;
     hybrid: {
       enabled: boolean;
       vectorWeight: number;
@@ -128,11 +127,6 @@ const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
-const DEFAULT_PRIMARY_QUERY_TIMEOUT_MS = 10_000;
-const MIN_PRIMARY_QUERY_TIMEOUT_MS = 100;
-// Leave at least one second of the fixed 15-second memory_search tool budget
-// for model-independent SQLite FTS fallback and result decoration.
-const MAX_PRIMARY_QUERY_TIMEOUT_MS = 14_000;
 const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
@@ -330,10 +324,6 @@ function mergeConfig(
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
-    primaryTimeoutMs:
-      overrides?.query?.primaryTimeoutMs ??
-      defaults?.query?.primaryTimeoutMs ??
-      DEFAULT_PRIMARY_QUERY_TIMEOUT_MS,
   };
   const hybrid = {
     enabled: DEFAULT_HYBRID_ENABLED,
@@ -356,11 +346,6 @@ function mergeConfig(
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
-  const primaryTimeoutMs = clampInt(
-    query.primaryTimeoutMs,
-    MIN_PRIMARY_QUERY_TIMEOUT_MS,
-    MAX_PRIMARY_QUERY_TIMEOUT_MS,
-  );
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
   const textWeight = clampNumber(hybrid.textWeight, 0, 1);
   const sum = vectorWeight + textWeight;
@@ -410,7 +395,6 @@ function mergeConfig(
     query: {
       ...query,
       minScore,
-      primaryTimeoutMs,
       hybrid: {
         enabled: hybrid.enabled,
         vectorWeight: normalizedVectorWeight,

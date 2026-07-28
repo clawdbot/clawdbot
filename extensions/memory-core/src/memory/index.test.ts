@@ -28,6 +28,7 @@ import {
   closeMemoryIndexManagersForAgent,
   MemoryIndexManager as RuntimeMemoryIndexManager,
 } from "./manager.js";
+import { runMemorySearchWithDeadline } from "./search-deadline.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -397,7 +398,6 @@ describe("memory index", () => {
     vectorEnabled?: boolean;
     cacheEnabled?: boolean;
     minScore?: number;
-    primaryTimeoutMs?: number;
     onSearch?: boolean;
     hybrid?: {
       enabled: boolean;
@@ -423,7 +423,6 @@ describe("memory index", () => {
             : undefined,
           query: {
             minScore: params.minScore ?? 0,
-            primaryTimeoutMs: params.primaryTimeoutMs,
           },
           cache: params.cacheEnabled ? { enabled: true } : undefined,
           extraPaths: params.extraPaths,
@@ -2080,11 +2079,10 @@ describe("memory index", () => {
     );
   });
 
-  it("returns same-call FTS results when a cold primary exceeds its budget, then keeps the warm primary", async () => {
+  it("reserves same-call FTS time after keyword work, then keeps the warm primary", async () => {
     const cfg = createCfg({
       provider: "ollama",
       fallback: "local",
-      primaryTimeoutMs: 100,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
@@ -2115,23 +2113,47 @@ describe("memory index", () => {
         );
       });
 
+    const keywordOwner = manager as unknown as {
+      searchKeywordWithFallback: (...args: unknown[]) => Promise<unknown>;
+    };
+    const searchKeywordWithFallback = keywordOwner.searchKeywordWithFallback.bind(manager);
+    let consumedKeywordTime = false;
+    keywordOwner.searchKeywordWithFallback = async (...args) => {
+      const results = await searchKeywordWithFallback(...args);
+      if (!consumedKeywordTime) {
+        consumedKeywordTime = true;
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 100);
+        });
+      }
+      return results;
+    };
+
     const coldDebug: Array<{
       effectiveMode?: string;
       fallback?: string;
     }> = [];
     const providerCreationsBeforeSearch = providerCalls.length;
     const startedAt = Date.now();
-    const coldResults = await manager.search("alpha", {
-      onDebug: (debug) => coldDebug.push(debug),
+    const coldSearch = runMemorySearchWithDeadline({
+      timeoutMs: 1_200,
+      run: async (signal) =>
+        await manager.search("alpha", {
+          signal,
+          onDebug: (debug) => coldDebug.push(debug),
+        }),
     });
+    const coldResults = await coldSearch;
     const elapsedMs = Date.now() - startedAt;
 
-    expect(elapsedMs).toBeLessThan(1_000);
+    expect(elapsedMs).toBeLessThan(1_200);
     expect(coldResults.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
     expect(coldDebug.at(-1)).toMatchObject({
       effectiveMode: "fts-only",
-      fallback: "primary-timeout:100ms",
     });
+    const timeoutMatch = /^primary-timeout:(\d+)ms$/u.exec(coldDebug.at(-1)?.fallback ?? "");
+    expect(Number(timeoutMatch?.[1])).toBeGreaterThan(0);
+    expect(Number(timeoutMatch?.[1])).toBeLessThan(200);
     expect(providerCalls).toHaveLength(providerCreationsBeforeSearch);
     expect(manager.status().fallback).toBeUndefined();
 
@@ -2157,7 +2179,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "ollama",
       fallback: "local",
-      primaryTimeoutMs: 1_000,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);

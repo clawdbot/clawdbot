@@ -86,7 +86,11 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
-import { isMemorySearchTimeoutError, runMemorySearchWithDeadline } from "./search-deadline.js";
+import {
+  isMemorySearchTimeoutError,
+  resolveMemorySearchRemainingMs,
+  runMemorySearchWithDeadline,
+} from "./search-deadline.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
@@ -110,6 +114,8 @@ const MEMORY_INDEX_MANAGER_GLOBAL_LIFECYCLE_KEY = Symbol.for(
   "openclaw.memoryIndexManagerGlobalLifecycle.v3",
 );
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
+const PRIMARY_QUERY_TIMEOUT_MS = 10_000;
+const FTS_FALLBACK_RESERVE_MS = 1_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
 const log = createSubsystemLogger("memory");
@@ -119,6 +125,14 @@ type MemoryEmbeddingProviderRequirement = {
   provider: string;
   configuredProvider?: string;
 };
+
+function resolvePrimaryQueryTimeoutMs(signal?: AbortSignal): number {
+  const remainingMs = resolveMemorySearchRemainingMs(signal);
+  if (remainingMs === undefined) {
+    return PRIMARY_QUERY_TIMEOUT_MS;
+  }
+  return Math.max(0, Math.min(PRIMARY_QUERY_TIMEOUT_MS, remainingMs - FTS_FALLBACK_RESERVE_MS));
+}
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
@@ -1127,30 +1141,45 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             minScore,
           });
         }
+        const canFallbackToFts = this.fts.enabled && this.fts.available;
+        // Budget from the live outer deadline after keyword work so a cold
+        // provider cannot consume the window needed to return lexical results.
+        const primaryTimeoutMs = canFallbackToFts
+          ? resolvePrimaryQueryTimeoutMs(opts?.signal)
+          : undefined;
         try {
-          queryVec = await runMemorySearchWithDeadline({
-            timeoutMs: this.settings.query.primaryTimeoutMs,
-            parentSignal: opts?.signal,
-            run: async (signal) =>
-              await this.embedQueryWithRetry(
-                cleaned,
-                signal,
-                semanticProvider,
-                false,
-                semanticProviderRuntime,
-              ),
-          });
+          queryVec =
+            primaryTimeoutMs === undefined
+              ? await this.embedQueryWithRetry(
+                  cleaned,
+                  opts?.signal,
+                  semanticProvider,
+                  false,
+                  semanticProviderRuntime,
+                )
+              : await runMemorySearchWithDeadline({
+                  timeoutMs: primaryTimeoutMs,
+                  parentSignal: opts?.signal,
+                  run: async (signal) =>
+                    await this.embedQueryWithRetry(
+                      cleaned,
+                      signal,
+                      semanticProvider,
+                      false,
+                      semanticProviderRuntime,
+                    ),
+                });
         } catch (err) {
           if (
-            isMemorySearchTimeoutError(err, this.settings.query.primaryTimeoutMs) &&
+            primaryTimeoutMs !== undefined &&
+            isMemorySearchTimeoutError(err, primaryTimeoutMs) &&
             !opts?.signal?.aborted &&
-            this.fts.enabled &&
-            this.fts.available
+            canFallbackToFts
           ) {
             if (!hybrid.enabled) {
               keywordResults = await loadKeywordResults(true);
             }
-            const timeoutFallback = `primary-timeout:${this.settings.query.primaryTimeoutMs}ms`;
+            const timeoutFallback = `primary-timeout:${primaryTimeoutMs}ms`;
             opts?.onDebug?.({
               backend: "builtin",
               configuredMode: configuredSearchMode,
@@ -1158,7 +1187,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               fallback: timeoutFallback,
             });
             log.warn(
-              `memory search: primary query embedding exceeded ${this.settings.query.primaryTimeoutMs}ms; ` +
+              `memory search: primary query embedding exceeded ${primaryTimeoutMs}ms; ` +
                 "using keyword-only FTS results",
             );
             return await this.finalizeKeywordOnlyResults({

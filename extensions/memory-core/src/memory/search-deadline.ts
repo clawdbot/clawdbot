@@ -22,6 +22,12 @@ type MemorySearchTimeoutError = Error & {
   timeoutMs: number;
 };
 
+const remainingMsBySignal = new WeakMap<AbortSignal, () => number>();
+
+export function resolveMemorySearchRemainingMs(signal?: AbortSignal): number | undefined {
+  return signal ? remainingMsBySignal.get(signal)?.() : undefined;
+}
+
 function createMemorySearchTimeoutError(timeoutMs: number): MemorySearchTimeoutError {
   const error = new Error(
     `memory_search timed out after ${Math.round(timeoutMs / 1000)}s`,
@@ -56,6 +62,9 @@ export async function runMemorySearchWithDeadline<T>(params: {
   if (params.parentSignal?.aborted) {
     throw resolveMemorySearchAbortError(params.parentSignal);
   }
+  if (params.timeoutMs <= 0) {
+    throw createMemorySearchTimeoutError(0);
+  }
 
   const controller = new AbortController();
   const timeoutError = createMemorySearchTimeoutError(params.timeoutMs);
@@ -77,6 +86,12 @@ export async function runMemorySearchWithDeadline<T>(params: {
     resolveTimeout(timeoutOutcome);
     controller.abort(timeoutError);
   };
+  const resolveRemainingMs = () => {
+    if (!acceptDeadlineUpdates) {
+      return 0;
+    }
+    return timer ? Math.max(0, remainingMs - (Date.now() - deadlineStartedAt)) : remainingMs;
+  };
   const scheduleDefaultDeadline = () => {
     deadlineStartedAt = Date.now();
     timer = setTimeout(() => {
@@ -90,9 +105,10 @@ export async function runMemorySearchWithDeadline<T>(params: {
       return;
     }
     if (timer) {
+      const activeRemainingMs = resolveRemainingMs();
       clearTimeout(timer);
       timer = undefined;
-      remainingMs = Math.max(0, remainingMs - (Date.now() - deadlineStartedAt));
+      remainingMs = activeRemainingMs;
     }
     if (remainingMs === 0) {
       reachDefaultDeadline();
@@ -104,6 +120,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
       scheduleDefaultDeadline();
     }
   };
+  remainingMsBySignal.set(controller.signal, resolveRemainingMs);
   scheduleDefaultDeadline();
   const parentSignal = params.parentSignal;
   const parentAbortPromise = parentSignal
@@ -144,6 +161,7 @@ export async function runMemorySearchWithDeadline<T>(params: {
     return result as T;
   } finally {
     acceptDeadlineUpdates = false;
+    remainingMsBySignal.delete(controller.signal);
     if (timer) {
       clearTimeout(timer);
     }

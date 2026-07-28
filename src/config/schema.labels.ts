@@ -457,7 +457,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.search.store.vector.extensionPath": "Memory Search Vector Extension Path",
   "memory.search.query.maxResults": "Memory Search Max Results",
   "memory.search.query.minScore": "Memory Search Min Score",
-  "memory.search.query.primaryTimeoutMs": "Memory Search Primary Query Timeout",
   "memory.search.cache.enabled": "Memory Search Embedding Cache",
   memory: "Memory",
   "memory.backend": "Memory Backend",
