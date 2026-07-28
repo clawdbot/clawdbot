@@ -850,9 +850,10 @@ describe("SystemAgentChatEngine", () => {
         valid: true,
         hash: "memory-base-hash",
         config: baseConfig,
-        sourceConfig: baseConfig,
+        sourceConfig: {},
       });
       mocks.runSetupMemoryImportStep.mockImplementation(async (params: MemoryImportStepParams) => {
+        expect(params.config).toEqual(baseConfig);
         expect(params.beforeApply).toBeTypeOf("function");
         await params.prompter.note("Codex: 2 memories", "Memories found");
         await params.beforeApply?.();

@@ -396,7 +396,7 @@ async function defaultMemoryImportWizardRunner(
     );
   }
   const baseHash = snapshot.hash;
-  const config = snapshot.sourceConfig ?? snapshot.config;
+  const config = snapshot.config;
   const agentId = resolveDefaultAgentId(config);
   const workspace = resolveAgentWorkspaceDir(config, agentId);
   try {
