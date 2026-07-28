@@ -18,6 +18,7 @@ import {
 } from "./recovery-journal.js";
 import {
   createRecoveryPointManifest,
+  recoveryPointOwnerInventorySchema,
   verifyRecoveryPoint,
   type RecoveryPointAcceptance,
   type RecoveryPointManifest,
@@ -40,7 +41,7 @@ const finalRecoveryPointRequestSchema = z
     sourceGeneration: z.string().regex(SAFE_ID_PATTERN),
     capturedAt: z.string(),
     repositoryPath: z.string().min(1),
-    expectedAgentIds: z.array(z.string().min(1).max(64)).min(1),
+    ownerInventory: recoveryPointOwnerInventorySchema,
     closure: z
       .object({
         gateway: z.literal("cleanly-stopped"),
@@ -140,7 +141,14 @@ export function parseFinalRecoveryPointRequest(raw: string): FinalRecoveryPointR
     );
   }
   assertCanonicalTimestamp(request.capturedAt);
-  assertAgentInventory(request.expectedAgentIds);
+  assertAgentInventory(request.ownerInventory.agentIds);
+  if (request.ownerInventory.sourceRuntimeGeneration !== request.sourceGeneration) {
+    throw new FinalRecoveryPointError(
+      "final-capture.request-invalid",
+      "quarantine",
+      "Final recovery-point owner inventory must match sourceGeneration.",
+    );
+  }
   return request;
 }
 
@@ -206,13 +214,13 @@ export async function captureFinalRecoveryPoint(
   try {
     manifest = await createRecoveryPointManifest({
       snapshots,
-      expectedAgentIds: request.expectedAgentIds,
+      ownerInventory: request.ownerInventory,
       now: () => new Date(request.capturedAt),
     });
     ({ acceptance } = await verifyRecoveryPoint({
       manifest,
       snapshots,
-      expectedAgentIds: request.expectedAgentIds,
+      ownerInventory: request.ownerInventory,
     }));
   } catch (error) {
     throw new FinalRecoveryPointError(
@@ -254,7 +262,7 @@ async function captureSqliteInventory(
       identity: { role: "global" as const },
     },
     ...(await Promise.all(
-      request.expectedAgentIds.map(async (agentId) => ({
+      request.ownerInventory.agentIds.map(async (agentId) => ({
         repositoryPath: path.join(componentsRoot, "agents", agentId),
         databasePath: await fs.realpath(resolveOpenClawAgentSqlitePath({ agentId })),
         identity: { role: "agent" as const, agentId },
@@ -294,11 +302,11 @@ async function verifyCommittedResult(
   let verified: Awaited<ReturnType<typeof verifyRecoveryPoint>>;
   try {
     manifest = (await readJson(recoveryPointPath, "manifest.json")) as RecoveryPointManifest;
-    snapshots = await resolveCommittedSnapshots(recoveryPointPath, request.expectedAgentIds);
+    snapshots = await resolveCommittedSnapshots(recoveryPointPath, request.ownerInventory.agentIds);
     verified = await verifyRecoveryPoint({
       manifest,
       snapshots,
-      expectedAgentIds: request.expectedAgentIds,
+      ownerInventory: request.ownerInventory,
     });
   } catch (error) {
     throw new FinalRecoveryPointError(
@@ -324,14 +332,14 @@ async function verifyCommittedResult(
 
 async function resolveCommittedSnapshots(
   recoveryPointPath: string,
-  expectedAgentIds: readonly string[],
+  agentIds: readonly string[],
 ): Promise<RecoveryPointSqliteSnapshot[]> {
   const repositories = [
     {
       repositoryPath: path.join(recoveryPointPath, "components", "global"),
       role: "global" as const,
     },
-    ...expectedAgentIds.map((agentId) => ({
+    ...agentIds.map((agentId) => ({
       repositoryPath: path.join(recoveryPointPath, "components", "agents", agentId),
       role: "agent" as const,
     })),
@@ -475,7 +483,7 @@ function assertAgentInventory(agentIds: readonly string[]): void {
     throw new FinalRecoveryPointError(
       "final-capture.request-invalid",
       "quarantine",
-      "Final recovery-point expectedAgentIds must be unique, normalized, and sorted.",
+      "Final recovery-point owner inventory agentIds must be unique, normalized, and sorted.",
     );
   }
 }

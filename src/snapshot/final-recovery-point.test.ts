@@ -127,7 +127,13 @@ describe("final recovery-point capture", () => {
       sourceGeneration: "generation-7",
       capturedAt: "2026-07-22T18:00:00.000Z",
       repositoryPath: path.resolve("final-recovery-points"),
-      expectedAgentIds: ["research", "main"],
+      ownerInventory: {
+        version: "openclaw-runtime-sqlite-inventory/v1",
+        owner: "openclaw-state",
+        sourceRuntimeGeneration: "generation-7",
+        revision: "selected-agents-7",
+        agentIds: ["research", "main"],
+      },
       closure: {
         gateway: "cleanly-stopped",
         authoritativeWriters: "stopped",
@@ -139,9 +145,25 @@ describe("final recovery-point capture", () => {
     );
     expect(() =>
       parseFinalRecoveryPointRequest(
-        JSON.stringify({ ...base, expectedAgentIds: ["main"], closure: undefined }),
+        JSON.stringify({
+          ...base,
+          ownerInventory: { ...base.ownerInventory, agentIds: ["main"] },
+          closure: undefined,
+        }),
       ),
     ).toThrow("request is invalid");
+    expect(() =>
+      parseFinalRecoveryPointRequest(
+        JSON.stringify({
+          ...base,
+          ownerInventory: {
+            ...base.ownerInventory,
+            sourceRuntimeGeneration: "generation-8",
+            agentIds: ["main"],
+          },
+        }),
+      ),
+    ).toThrow("must match sourceGeneration");
   });
 });
 
@@ -163,7 +185,13 @@ async function createFixture(): Promise<{ request: FinalRecoveryPointRequest }> 
       sourceGeneration: "generation-7",
       capturedAt: "2026-07-22T18:00:00.000Z",
       repositoryPath: path.join(tempDir, "recovery-points"),
-      expectedAgentIds: ["main"],
+      ownerInventory: {
+        version: "openclaw-runtime-sqlite-inventory/v1",
+        owner: "openclaw-state",
+        sourceRuntimeGeneration: "generation-7",
+        revision: "selected-agents-7",
+        agentIds: ["main"],
+      },
       closure: {
         gateway: "cleanly-stopped",
         authoritativeWriters: "stopped",
