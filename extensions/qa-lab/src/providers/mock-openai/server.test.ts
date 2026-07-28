@@ -5132,8 +5132,10 @@ describe("qa mock openai server", () => {
     }
     expect(toolUse).toMatchObject({ type: "tool_use", name: "exec" });
     expect(JSON.stringify(toolUse.input)).toContain("image_generate");
-    const toolUseId = String(toolUse.id ?? "");
-    expect(toolUseId).not.toBe("");
+    if (typeof toolUse.id !== "string" || !toolUse.id) {
+      throw new Error("expected Anthropic image plan tool_use id");
+    }
+    const toolUseId = toolUse.id;
 
     const completionCarrier = [
       "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
@@ -5457,7 +5459,9 @@ describe("qa mock openai server", () => {
     );
     expect(unchangedBody.stop_reason).toBe("end_turn");
     expect(
-      unchangedBody.content.some((block) => String(block.text ?? "").includes("Status: complete")),
+      unchangedBody.content.some(
+        (block) => typeof block.text === "string" && block.text.includes("Status: complete"),
+      ),
     ).toBe(true);
 
     messages.push(

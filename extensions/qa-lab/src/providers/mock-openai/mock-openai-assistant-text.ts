@@ -123,7 +123,7 @@ export function buildAssistantText(
       : undefined) ??
     (completedImageEvent
       ? [...scenarioState.pendingImageGenerationCalls.entries()].find(
-          ([, prompt]) => prompt === completedImageEvent.taskLabel,
+          ([, pendingPrompt]) => pendingPrompt === completedImageEvent.taskLabel,
         )?.[0]
       : undefined);
   const hasPendingImageCall = Boolean(pendingImageCallId);
