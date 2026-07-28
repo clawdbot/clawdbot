@@ -232,6 +232,7 @@ export const en: TranslationMap = {
         "On your phone, open WhatsApp → Settings → Linked devices → Link a device, then scan this code.",
       whatsappQrLoading: "Generating QR code…",
       whatsappQrHint: "Click Show QR to generate a pairing code.",
+      whatsappQrAlt: "WhatsApp QR",
       whatsappLinked: "WhatsApp is linked and ready.",
       regenerateQr: "New QR code",
       linkLater: "Link later",
