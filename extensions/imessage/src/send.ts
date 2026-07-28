@@ -461,7 +461,15 @@ function resolveIMessageCliFailure(result: Record<string, unknown>): string | nu
 
 function isIMessageRpcSendTimeout(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return /imsg rpc timeout \(send\)/i.test(message);
+  return (
+    // Our own client-side deadline on the send request.
+    /imsg rpc timeout \(send\)/i.test(message) ||
+    // imsg reports a stalled IMCore bridge with its own wording
+    // ("Timed out waiting for response to 'send-message'", see imsg
+    // Sources/IMsgCore/IMsgBridgeProtocol.swift). Without this, a bridge
+    // stall is an unclassified error and skips every send recovery path.
+    /timed out waiting for response to '(?:send[-_]?message|send)'/i.test(message)
+  );
 }
 
 async function runIMessageCliJson(
@@ -885,6 +893,39 @@ export async function sendMessageIMessage(
           timeoutMs,
         });
         effectiveReplyToId = undefined;
+      } else if (resolvedReplyToId && !filePath && isIMessageRpcSendTimeout(error)) {
+        // A stalled bridge makes a threaded send time out rather than report
+        // that threading is unsupported, so the #99638 fallback above never
+        // fires. imsg rethrows for reply_to sends instead of falling through
+        // to its plain-send path, so the reply is dropped after the full send
+        // timeout. Confirm the reply did not land, then resend it unthreaded.
+        if (
+          !canCheckSentMessageAfterRpcTimeout({
+            dbPath: chatDbLookupPath,
+            resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+          })
+        ) {
+          // Without a way to check, a retry could duplicate a reply that did
+          // land while the bridge was stalled. Surface the timeout instead.
+          throw error;
+        }
+        const landedGuid = await resolveFallbackSentMessageGuid({
+          dbPath: chatDbLookupPath,
+          target,
+          text: message,
+          sentAfterMs: sendStartedAtMs,
+          resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+        });
+        if (landedGuid) {
+          result = { guid: landedGuid, status: "sent" };
+        } else {
+          const plainParams = { ...params };
+          delete plainParams.reply_to;
+          result = await client.request<Record<string, unknown>>("send", plainParams, {
+            timeoutMs,
+          });
+          effectiveReplyToId = undefined;
+        }
       } else if (filePath || !isIMessageRpcSendTimeout(error)) {
         throw error;
       } else if (

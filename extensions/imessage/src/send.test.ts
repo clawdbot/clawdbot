@@ -377,6 +377,63 @@ describe("sendMessageIMessage receipts", () => {
     expect(result.receipt.parts[0]?.replyToId).toBeUndefined();
   });
 
+  it("resends unthreaded when a threaded send times out and the reply did not land", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        if (params.reply_to) {
+          // A stalled bridge reports a timeout, not "threading unsupported",
+          // so the #99638 matcher does not catch it.
+          throw new Error("Timed out waiting for response to 'send-message'");
+        }
+        return { guid: "p:0/imsg-timeout-fallback" };
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      conversationReadOrigin: "direct-operator",
+      replyToId: "reply-1",
+      // Nothing landed while the bridge was stalled.
+      resolveSentMessageGuidImpl: async () => undefined,
+    });
+
+    expect(sendParams).toHaveLength(2);
+    expect(sendParams[0]).toHaveProperty("reply_to", "reply-1");
+    expect(sendParams[1]).not.toHaveProperty("reply_to");
+    expect(result.messageId).toBe("p:0/imsg-timeout-fallback");
+    expect(result.sentText).toBe("hello");
+    expect(result.receipt.replyToId).toBeUndefined();
+  });
+
+  it("does not resend when a threaded send times out but the reply did land", async () => {
+    const sendParams: Array<Record<string, unknown>> = [];
+    const client = {
+      request: vi.fn(async (_method: string, params: Record<string, unknown>) => {
+        sendParams.push(params);
+        throw new Error("Timed out waiting for response to 'send-message'");
+      }),
+      stop: vi.fn(async () => {}),
+    } as unknown as IMessageRpcClient;
+
+    const result = await sendMessageIMessage("chat_id:42", "hello", {
+      config: IMESSAGE_TEST_CFG,
+      client,
+      conversationReadOrigin: "direct-operator",
+      replyToId: "reply-1",
+      // The bridge stalled on the response but the message was delivered.
+      resolveSentMessageGuidImpl: async () => "p:0/imsg-already-landed",
+    });
+
+    // Exactly one attempt: retrying here would duplicate the delivered reply.
+    expect(sendParams).toHaveLength(1);
+    expect(sendParams[0]).toHaveProperty("reply_to", "reply-1");
+    expect(result.messageId).toBe("p:0/imsg-already-landed");
+  });
+
   it("resends a media reply unthreaded when threaded replies are unsupported (#99638)", async () => {
     const sendParams: Array<Record<string, unknown>> = [];
     const client = {
