@@ -840,6 +840,18 @@ suite.define(() => {
       await expect
         .poll(() => emptyGroups.locator(".sidebar-session-empty-placeholder").allTextContents())
         .toEqual(["No sessions found for this agent", "No sessions found for this agent"]);
+      const firstEmptyGroup = emptyGroups.first();
+      const textLeft = (selector: string) =>
+        firstEmptyGroup.locator(selector).evaluate((element) => {
+          const range = document.createRange();
+          range.selectNodeContents(element);
+          return range.getBoundingClientRect().x;
+        });
+      const [titleLeft, placeholderLeft] = await Promise.all([
+        textLeft(".sidebar-recent-sessions__label-text"),
+        textLeft(".sidebar-session-empty-placeholder"),
+      ]);
+      expect(placeholderLeft).toBeCloseTo(titleLeft, 0);
     } finally {
       await context.close();
     }
