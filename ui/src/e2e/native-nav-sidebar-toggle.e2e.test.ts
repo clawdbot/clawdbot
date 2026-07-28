@@ -9,7 +9,9 @@ import {
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
   type ControlUiE2eServer,
+  type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -39,7 +41,12 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
     context = undefined;
   });
 
-  async function openPage(options: { nativeNav?: boolean; webChrome?: boolean; width?: number }) {
+  async function openPage(options: {
+    nativeNav?: boolean;
+    scenario?: ControlUiMockGatewayScenario;
+    webChrome?: boolean;
+    width?: number;
+  }) {
     context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -99,12 +106,15 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
         }
       });
     }
-    await installMockGateway(page);
+    const gateway = await installMockGateway(page, options.scenario);
     const response = await page.goto(server.baseUrl);
     expect(response?.status()).toBe(200);
     // The brand row only becomes visible on desktop widths; drawer widths keep
     // the sidebar hidden, so wait for DOM attachment instead of visibility.
     await page.locator(".sidebar-brand").waitFor({ state: "attached" });
+    if (options.scenario) {
+      await gateway.waitForRequest("sessions.list");
+    }
     return page;
   }
 
@@ -304,7 +314,13 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
   });
 
   it("keeps the mobile drawer modal, keyboard-contained, and focus-restoring", async () => {
-    const page = await openPage({ nativeNav: false, width: 900 });
+    const page = await openPage({
+      nativeNav: false,
+      scenario: {
+        methodResponses: { "sessions.list": chatSessionListResponse() },
+      },
+      width: 900,
+    });
     const navigation = page.locator(".shell-nav");
     const drawer = navigation.locator("openclaw-modal-dialog.nav-drawer");
     const dialog = page.getByRole("dialog", { name: "Navigation" });

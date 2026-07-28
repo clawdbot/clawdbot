@@ -1097,15 +1097,15 @@ class OpenClawShell extends OpenClawLightDomElement {
       this.dismissSidebarTransientMenus();
     }
     const trigger = options.restoreFocus ? this.navDrawerTrigger : null;
-    if (options.restoreFocus) {
-      const returnFocusTarget =
-        trigger?.isConnected && trigger.checkVisibility()
-          ? trigger
-          : this.querySelector<HTMLElement>(".content");
-      this.querySelector<OpenClawModalDialog>(
-        "openclaw-modal-dialog.nav-drawer",
-      )?.setReturnFocusTarget(returnFocusTarget ?? null);
-    }
+    const returnFocusTarget =
+      options.restoreFocus && trigger?.isConnected && trigger.checkVisibility()
+        ? trigger
+        : options.restoreFocus
+          ? this.querySelector<HTMLElement>(".content")
+          : null;
+    this.querySelector<OpenClawModalDialog>(
+      "openclaw-modal-dialog.nav-drawer",
+    )?.setReturnFocusTarget(returnFocusTarget ?? null);
     this.navDrawerOpen = false;
     this.navDrawerTrigger = null;
     if (!options.restoreFocus) {

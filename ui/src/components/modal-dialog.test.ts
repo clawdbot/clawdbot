@@ -159,6 +159,42 @@ describe("openclaw-modal-dialog", () => {
     returnTarget.remove();
   });
 
+  it("suppresses Web Awesome's original-trigger restoration when the owner closes without focus", async () => {
+    const originalTrigger = document.createElement("button");
+    document.body.append(originalTrigger);
+    originalTrigger.focus();
+    const { modal, webAwesomeDialog } = await renderModal();
+
+    (
+      modal as HTMLElement & { setReturnFocusTarget(target: HTMLElement | null): void }
+    ).setReturnFocusTarget(null);
+    setTimeout(() => originalTrigger.focus(), 0);
+    webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(document.activeElement).not.toBe(originalTrigger);
+    originalTrigger.remove();
+  });
+
+  it("does not restore the original trigger when a suppressed modal is removed", async () => {
+    const originalTrigger = document.createElement("button");
+    document.body.append(originalTrigger);
+    originalTrigger.focus();
+    const { modal } = await renderModal();
+
+    (
+      modal as HTMLElement & { setReturnFocusTarget(target: HTMLElement | null): void }
+    ).setReturnFocusTarget(null);
+    container.querySelector<HTMLElement>("#first-action")?.focus();
+    render(nothing, container);
+    await nextFrame();
+
+    expect(document.activeElement).not.toBe(originalTrigger);
+    originalTrigger.remove();
+  });
+
   it("reopens the same dialog element after reconnect", async () => {
     const focus = vi.spyOn(HTMLDialogElement.prototype, "focus");
     const { modal, dialog } = await renderModal();

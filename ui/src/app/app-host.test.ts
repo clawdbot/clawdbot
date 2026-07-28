@@ -180,6 +180,12 @@ type ShellChromeEventState = {
   disconnectedCallback: () => void;
 };
 
+type ShellNavDrawerCloseState = HTMLElement & {
+  navDrawerOpen: boolean;
+  navDrawerTrigger: HTMLElement | null;
+  closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
+};
+
 function createDragEvent(type: "dragover" | "drop", types: string[]) {
   const event = new Event(type, { bubbles: true, cancelable: true }) as DragEvent;
   const dataTransfer = { dropEffect: "copy", types };
@@ -741,6 +747,25 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       acceptedDropTarget.remove();
       nativeFileInput.remove();
     }
+  });
+
+  it("suppresses modal focus restoration when the navigation drawer closes without restoring focus", () => {
+    const shell = document.createElement(
+      "openclaw-app-shell",
+    ) as unknown as ShellNavDrawerCloseState;
+    const modal = document.createElement("openclaw-modal-dialog");
+    const setReturnFocusTarget = vi.fn();
+    modal.className = "drawer nav-drawer";
+    Object.defineProperty(modal, "setReturnFocusTarget", { value: setReturnFocusTarget });
+    shell.append(modal);
+    shell.navDrawerOpen = true;
+    shell.navDrawerTrigger = document.createElement("button");
+
+    shell.closeNavDrawer();
+
+    expect(setReturnFocusTarget).toHaveBeenCalledExactlyOnceWith(null);
+    expect(shell.navDrawerOpen).toBe(false);
+    expect(shell.navDrawerTrigger).toBeNull();
   });
 
   it("handles merged header drawer and palette requests", () => {
