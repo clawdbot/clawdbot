@@ -1,23 +1,23 @@
 import type { SessionsListResult } from "../api/types.ts";
+import type { RouteId } from "../app-route-paths.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
   SIDEBAR_AGENT_SESSION_LIST_LIMIT,
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
 
-type SidebarSessionPaginationOwner = Pick<
-  SessionDataController,
-  | "context"
-  | "expandedAgentId"
-  | "requestSessionDataUpdate"
-  | "sessionCreatedOrder"
-  | "sessionMutationError"
-  | "sessionRowsByAgent"
-  | "sessionsAgentId"
-  | "sessionsLoading"
-  | "sessionsResult"
->;
+type SidebarSessionPaginationOwner = {
+  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly sessionCreatedOrder: Map<string, number>;
+  sessionMutationError: string | null;
+  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
+  sessionsAgentId: string | null;
+  sessionsLoading: boolean;
+  sessionsResult: SessionsListResult | null;
+  expandedAgentId(): string;
+  requestSessionDataUpdate(): void;
+};
 
 type SidebarSessionPaginationState = {
   listRequestToken: symbol | null;

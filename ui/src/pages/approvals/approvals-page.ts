@@ -26,6 +26,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
+const APPROVAL_HISTORY_REQUIRED_SCOPE = "operator.approvals";
 
 function formatResolvedAt(timestampMs: number): string {
   return new Intl.DateTimeFormat(i18n.getLocale(), {
@@ -335,7 +336,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
         ${this.connected && !this.approvalsAccess
           ? html`
               <div class="callout warn" role="status">
-                ${t("common.disabled")} · <code>operator.approvals</code>
+                ${t("common.disabled")} · <code>${APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
               </div>
             `
           : nothing}

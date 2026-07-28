@@ -8,6 +8,8 @@ import {
 } from "./browser-panel-controller.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
+const BROWSER_PANEL_TEST_PAGE_TITLE = "Page";
+
 export type BrowserRequestEnvelope = {
   method: string;
   path: string;
@@ -53,7 +55,7 @@ export function createBrowserPanelTestTab(id: string, url: string, title: string
   };
 }
 
-export function createBrowserPanelTestMetrics(url: string, title = "Page") {
+export function createBrowserPanelTestMetrics(url: string, title = BROWSER_PANEL_TEST_PAGE_TITLE) {
   return { result: { cssWidth: 100, cssHeight: 100, title, url } };
 }
 
@@ -107,7 +109,7 @@ export function createView(targetId: string, url = "https://example.test/page"):
     dataUrl: "data:image/png;base64,c2NyZWVuc2hvdA==",
     image: { naturalWidth: 100, naturalHeight: 100 } as HTMLImageElement,
     url,
-    metrics: { cssWidth: 100, cssHeight: 100, title: "Page", url },
+    metrics: { cssWidth: 100, cssHeight: 100, title: BROWSER_PANEL_TEST_PAGE_TITLE, url },
   };
 }
 

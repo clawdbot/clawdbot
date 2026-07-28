@@ -19,6 +19,65 @@ import { BrowserPanelController } from "./browser-panel-controller.ts";
 setupBrowserPanelTestCleanup();
 
 describe("BrowserPanelController tab and lifecycle ownership", () => {
+  it.each(["reject", "resolve"] as const)(
+    "preserves pending new-tab ownership when the previous capture %ss",
+    async (completion) => {
+      stubScreenshotMedia();
+      const previousCapture = createDeferred<unknown>();
+      const openedTab = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
+      const activeUrl = "https://example.test/active";
+      const newUrl = "https://example.test/new";
+      const tabs = [createBrowserPanelTestTab("active-tab", activeUrl, "Active")];
+      const { client } = createBrowserClient(async (envelope) => {
+        if (envelope.path === "/tabs") {
+          return { running: true, tabs: [...tabs] };
+        }
+        if (envelope.path === "/tabs/open") {
+          const tab = await openedTab.promise;
+          tabs.push(tab);
+          return tab;
+        }
+        if (envelope.path === "/screenshot") {
+          if (envelope.body?.targetId === "active-tab") {
+            return await previousCapture.promise;
+          }
+          return { path: "/fresh.png", targetId: "raw-new", url: newUrl };
+        }
+        if (envelope.path === "/act") {
+          return createBrowserPanelTestMetrics(newUrl, "New");
+        }
+        throw new Error(`Unexpected browser route: ${envelope.path}`);
+      });
+      const controller = createBrowserPanelTestController(client, "active-tab", activeUrl);
+      const previousView = controller.view;
+
+      const capture = controller.refreshAll();
+      await flushBrowserResponses();
+      const opening = controller.openUrl(newUrl, { newTab: true });
+      expect(controller.loading).toBe(true);
+      expect(controller.view).toBe(previousView);
+
+      if (completion === "reject") {
+        previousCapture.reject(new Error("Superseded capture failed"));
+      } else {
+        previousCapture.resolve({ path: "/old.png", targetId: "raw-active", url: activeUrl });
+      }
+      await capture;
+
+      expect(controller.loading).toBe(true);
+      expect(controller.errorText).toBeNull();
+      expect(controller.view).toBe(previousView);
+
+      openedTab.resolve(createBrowserPanelTestTab("new-tab", newUrl, "New"));
+      await opening;
+
+      expect(controller.activeTargetId).toBe("new-tab");
+      expect(controller.view?.url).toBe(newUrl);
+      expect(controller.loading).toBe(false);
+      expect(controller.errorText).toBeNull();
+    },
+  );
+
   it("preserves the current screenshot when same-tab navigation is rejected", async () => {
     const previousCapture = createDeferred<unknown>();
     const navigation = createDeferred<unknown>();
@@ -113,12 +172,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     const latestOpen = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
     const latestUrl = "https://example.test/latest";
     const visibleTabs = [
-      {
-        tabId: "initial-tab",
-        targetId: "raw-initial",
-        title: "Initial",
-        url: "https://example.test/initial",
-      },
+      createBrowserPanelTestTab("initial-tab", "https://example.test/initial", "Initial"),
     ];
     let screenshotCount = 0;
     const { client } = createBrowserClient(async (envelope) => {
@@ -145,20 +199,12 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       newTab: true,
     });
     const latestNavigation = controller.openUrl(latestUrl, { newTab: true });
-    latestOpen.resolve({
-      tabId: "latest-tab",
-      targetId: "raw-latest",
-      title: "Latest",
-      url: latestUrl,
-    });
+    latestOpen.resolve(createBrowserPanelTestTab("latest-tab", latestUrl, "Latest"));
     await latestNavigation;
     const latestView = controller.view;
-    previousOpen.resolve({
-      tabId: "previous-tab",
-      targetId: "raw-previous",
-      title: "Previous",
-      url: "https://example.test/previous",
-    });
+    previousOpen.resolve(
+      createBrowserPanelTestTab("previous-tab", "https://example.test/previous", "Previous"),
+    );
     await previousNavigation;
 
     expect(controller.tabs.map((tab) => tab.id)).toEqual([
@@ -183,12 +229,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     let screenshotUrl = latestUrl;
     const { client } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs/open") {
-        return {
-          tabId: "opened-tab",
-          targetId: "raw-opened",
-          title: "Opened",
-          url: latestUrl,
-        };
+        return createBrowserPanelTestTab("opened-tab", latestUrl, "Opened");
       }
       if (envelope.path === "/tabs") {
         snapshotCount += 1;
@@ -227,12 +268,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       running: true,
       tabs: [
         { tabId: "opened-tab", targetId: "raw-opened", title: "Previous", url: previousUrl },
-        {
-          tabId: "previous-tab",
-          targetId: "raw-previous",
-          title: "Previous tab",
-          url: previousUrl,
-        },
+        createBrowserPanelTestTab("previous-tab", previousUrl, "Previous tab"),
       ],
     });
     await previousNavigation;
@@ -292,12 +328,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       running: true,
       tabs: [
         { tabId: "stable-tab", targetId: "raw-stable", title: "Previous", url: previousUrl },
-        {
-          tabId: "previous-tab",
-          targetId: "raw-previous",
-          title: "Previous tab",
-          url: previousUrl,
-        },
+        createBrowserPanelTestTab("previous-tab", previousUrl, "Previous tab"),
       ],
     });
     await previousRefresh;
@@ -316,12 +347,11 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     const latestOpen = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
     const latestUrl = "https://example.test/latest";
     let snapshotCount = 0;
-    let visibleTab = {
-      tabId: "initial-tab",
-      targetId: "raw-initial",
-      title: "Initial",
-      url: "https://example.test/initial",
-    };
+    let visibleTab = createBrowserPanelTestTab(
+      "initial-tab",
+      "https://example.test/initial",
+      "Initial",
+    );
     const { client } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs") {
         snapshotCount += 1;
@@ -354,22 +384,12 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     previousSnapshot.resolve({
       running: true,
       tabs: [
-        {
-          tabId: "previous-tab",
-          targetId: "raw-previous",
-          title: "Previous",
-          url: "https://example.test/previous",
-        },
+        createBrowserPanelTestTab("previous-tab", "https://example.test/previous", "Previous"),
       ],
     });
     await previousRefresh;
     expect(controller.loading).toBe(true);
-    latestOpen.resolve({
-      tabId: "latest-tab",
-      targetId: "raw-latest",
-      title: "Latest",
-      url: latestUrl,
-    });
+    latestOpen.resolve(createBrowserPanelTestTab("latest-tab", latestUrl, "Latest"));
     await latestNavigation;
 
     expect(controller.activeTargetId).toBe("latest-tab");
@@ -384,12 +404,11 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     const previousOpen = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
     const latestOpen = createDeferred<ReturnType<typeof createBrowserPanelTestTab>>();
     const latestUrl = "https://example.test/latest";
-    let visibleTab = {
-      tabId: "initial-tab",
-      targetId: "raw-initial",
-      title: "Initial",
-      url: "https://example.test/initial",
-    };
+    let visibleTab = createBrowserPanelTestTab(
+      "initial-tab",
+      "https://example.test/initial",
+      "Initial",
+    );
     const { client, request } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/tabs/open") {
         visibleTab = await (envelope.body?.url === latestUrl ? latestOpen : previousOpen).promise;
@@ -416,20 +435,12 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       newTab: true,
     });
     const latestNavigation = controller.openUrl(latestUrl, { newTab: true });
-    previousOpen.resolve({
-      tabId: "previous-tab",
-      targetId: "raw-previous",
-      title: "Previous",
-      url: "https://example.test/previous",
-    });
+    previousOpen.resolve(
+      createBrowserPanelTestTab("previous-tab", "https://example.test/previous", "Previous"),
+    );
     await previousNavigation;
     expect(controller.loading).toBe(true);
-    latestOpen.resolve({
-      tabId: "latest-tab",
-      targetId: "raw-latest",
-      title: "Latest",
-      url: latestUrl,
-    });
+    latestOpen.resolve(createBrowserPanelTestTab("latest-tab", latestUrl, "Latest"));
     await latestNavigation;
 
     expect(controller.activeTargetId).toBe("latest-tab");

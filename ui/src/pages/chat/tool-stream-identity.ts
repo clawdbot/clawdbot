@@ -7,12 +7,12 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 
-export type ToolMessageRef = {
+type ToolMessageRef = {
   id: string;
   runId?: string;
 };
 
-export type LiveToolStreamRef = ToolMessageRef & {
+type LiveToolStreamRef = ToolMessageRef & {
   identity: string;
 };
 

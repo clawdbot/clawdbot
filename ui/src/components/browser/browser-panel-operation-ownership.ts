@@ -17,7 +17,7 @@ export interface BrowserPanelControllerHost extends ReactiveControllerHost {
   browserPanelIsOpen(): boolean;
 }
 
-export type BrowserPanelInvocation = {
+type BrowserPanelInvocation = {
   epoch: number;
   readonly id: number;
   isCurrent(): boolean;
@@ -73,6 +73,10 @@ export class BrowserPanelOperationOwnership {
   }
 
   beginMutation(client: GatewayBrowserClient): BrowserPanelInvocation {
+    // A mutation owns loading before its remote tab or new document exists.
+    // Invalidate the previous capture without discarding its visible screenshot.
+    this.requestedCapture += 1;
+    this.capturePending = false;
     const invocation: BrowserPanelInvocation = {
       epoch: this.lifecycleEpoch,
       id: ++this.requestedMutation,
