@@ -160,6 +160,7 @@ async function seedDreamingSessionTranscript(params: {
   }>;
   sessionId: string;
   sessionKey?: string;
+  updatedAt?: number;
 }): Promise<void> {
   const agentId = params.agentId ?? "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
@@ -172,7 +173,7 @@ async function seedDreamingSessionTranscript(params: {
     .filter((timestamp) => Number.isFinite(timestamp));
   // Accessor writes run normal maintenance; keep fixture entries fresh while
   // retaining per-message timestamps as the dreaming corpus clock.
-  const updatedAt = Math.max(Date.now(), ...timestamps);
+  const updatedAt = params.updatedAt ?? Math.max(Date.now(), ...timestamps);
   await fs.mkdir(sessionsDir, { recursive: true });
   const sessionFile = formatSqliteSessionFileMarker({
     agentId,
@@ -2219,6 +2220,118 @@ describe("memory-core dreaming phases", () => {
     expect(persistedLines).toHaveLength(160);
     expect(corpus).toContain("bulk-line-0");
     expect(corpus).toContain("bulk-line-159");
+  });
+
+  it("prioritizes current sessions and preserves capped-out checkpoints", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    setDreamingTestEnv(path.join(workspaceDir, ".state"));
+    const oldUpdatedAt = Date.now();
+    const directSessionId = "00000000-0000-4000-8000-000000000001";
+    const directSessionKey = "agent:main:discord:channel:1506288692048953495";
+    const directSessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const directStorePath = path.join(directSessionsDir, "sessions.json");
+    await seedDreamingSessionTranscript({
+      sessionId: directSessionId,
+      sessionKey: directSessionKey,
+      updatedAt: oldUpdatedAt - 1,
+      messages: [
+        {
+          role: "user",
+          timestamp: "2026-04-05T17:30:00.000Z",
+          content: [{ type: "text", text: "Previously seen checkpoint survives a capped sweep." }],
+        },
+      ],
+    });
+
+    const { beforeAgentReply } = createHarness(LIGHT_DREAMING_TEST_CONFIG, workspaceDir);
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 4);
+    });
+    const initialState = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    const preservedKey = Object.keys(initialState.files).find((key) =>
+      key.includes(directSessionId),
+    );
+    expect(preservedKey).toBeDefined();
+
+    await seedDreamingSessionTranscript({
+      sessionId: directSessionId,
+      sessionKey: directSessionKey,
+      updatedAt: oldUpdatedAt - 1,
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-06T01:02:00.000Z",
+          content: [
+            { type: "text", text: "Capped direct-session message drains on the next sweep." },
+          ],
+        },
+      ],
+    });
+
+    for (let sessionIndex = 0; sessionIndex < 24; sessionIndex += 1) {
+      await seedDreamingSessionTranscript({
+        sessionId: `aaa-old-${sessionIndex.toString().padStart(2, "0")}`,
+        updatedAt: oldUpdatedAt + sessionIndex,
+        messages: Array.from({ length: 12 }, (_, messageIndex) => ({
+          role: messageIndex % 2 === 0 ? ("user" as const) : ("assistant" as const),
+          timestamp: "2026-04-05T18:00:00.000Z",
+          content: [{ type: "text", text: `old-${sessionIndex}-line-${messageIndex}` }],
+        })),
+      });
+    }
+    await seedDreamingSessionTranscript({
+      sessionId: "zzz-current-direct",
+      updatedAt: oldUpdatedAt + 60_000,
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-05T18:30:00.000Z",
+          content: [{ type: "text", text: "Current direct-session shipment must not starve." }],
+        },
+      ],
+    });
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const corpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+      "utf-8",
+    );
+    expect(corpus).toContain("Current direct-session shipment must not starve.");
+
+    const cappedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(cappedState.files[preservedKey!]).toEqual(initialState.files[preservedKey!]);
+    expect(corpus).not.toContain("Capped direct-session message drains on the next sweep.");
+
+    await upsertSessionEntry({
+      agentId: "main",
+      sessionKey: directSessionKey,
+      storePath: directStorePath,
+      entry: {
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: directSessionId,
+          storePath: directStorePath,
+        }),
+        sessionId: directSessionId,
+        updatedAt: oldUpdatedAt + 120_000,
+      },
+    });
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 910);
+    });
+    const drainedCorpus = await fs.readFile(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-06.txt"),
+      "utf-8",
+    );
+    expect(drainedCorpus).toContain("Capped direct-session message drains on the next sweep.");
+    const drainedState = await dreamingTestState.readSessionIngestionState(workspaceDir);
+    expect(drainedState.files[preservedKey!]?.lastContentLine).toBeGreaterThan(
+      cappedState.files[preservedKey!]?.lastContentLine ?? 0,
+    );
   });
 
   it("ingests appended SQLite session transcript rows after prior checkpoint", async () => {

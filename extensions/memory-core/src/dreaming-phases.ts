@@ -729,12 +729,22 @@ async function collectSessionIngestionBatches(params: {
     }
   }
 
+  // A busy agent can have more transcript files than the sweep-wide cap can
+  // visit. Prefer the most recently active sessions so current conversations
+  // are not starved behind an old lexicographic prefix.
   const sortedFiles = sessionFiles.toSorted((a, b) => {
+    const recencyDelta = (b.updatedAtMs ?? 0) - (a.updatedAtMs ?? 0);
+    if (recencyDelta !== 0) {
+      return recencyDelta;
+    }
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
     return a.sessionPath.localeCompare(b.sessionPath);
   });
+  const discoveredStateKeys = new Set(
+    sortedFiles.map((file) => buildSessionStateKey(file.agentId, file.sessionPath)),
+  );
 
   const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
   let remaining = totalCap;
@@ -941,6 +951,15 @@ async function collectSessionIngestionBatches(params: {
       previous.lastContentLine !== cursor
     ) {
       changed = true;
+    }
+  }
+
+  // Reaching the sweep cap means "not visited yet", not "file disappeared".
+  // Preserve checkpoints for discovered-but-unvisited transcripts so the next
+  // sweep resumes safely instead of forgetting their cursors and dedupe state.
+  for (const [key, state] of Object.entries(params.state.files)) {
+    if (discoveredStateKeys.has(key) && !Object.hasOwn(nextFiles, key)) {
+      nextFiles[key] = state;
     }
   }
 
