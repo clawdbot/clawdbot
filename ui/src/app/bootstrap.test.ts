@@ -1,9 +1,12 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
+import { routeIdFromPath, type RouteId } from "../app-routes.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
-import { startModelSetupFirstRunRedirectAfterLocation } from "../pages/model-setup/first-run.ts";
+import {
+  isDefaultChatLanding,
+  startModelSetupFirstRunRedirectAfterLocation,
+} from "../pages/model-setup/first-run.ts";
 import {
   normalizeInitialApplicationLocation,
   resolveInitialApplicationLocation,
@@ -11,6 +14,11 @@ import {
 import { bootstrapApplication } from "./bootstrap.ts";
 import type { ApplicationContext } from "./context.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
+
+// Startup progress (dynamic imports, gateway subscribe, router start) is not a
+// performance assertion, so these waits must not inherit vi.waitFor's 1s default:
+// under a loaded CI runner that budget expires before startup reaches the step.
+const STARTUP_STEP_WAIT = { timeout: 15_000 };
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -363,8 +371,58 @@ describe("normalizeInitialApplicationLocation", () => {
         features: { methods: ["openclaw.setup.detect"] },
       },
     } as Parameters<GatewayListener>[0]);
-    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(replaceRoute).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
     expect(replaceRoute).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+  });
+
+  it("does not replace a user route with the deferred default chat location", async () => {
+    const currentLocation = { pathname: "/new", search: "", hash: "" };
+    const installLocation = vi.fn();
+
+    await startModelSetupFirstRunRedirectAfterLocation({
+      context: {} as ApplicationContext<RouteId>,
+      enabled: false,
+      history: { location: () => currentLocation, replace: vi.fn() },
+      initialLocationReady: Promise.resolve({ pathname: "/chat/main", search: "", hash: "" }),
+      installLocation,
+      shouldInstallLocation: () => isDefaultChatLanding(currentLocation, "", routeIdFromPath),
+    });
+
+    expect(installLocation).not.toHaveBeenCalled();
+  });
+
+  it("keeps the latest navigation requested before router start", async () => {
+    const previousSettings = loadSettings();
+    const previousUrl = window.location.href;
+    saveSettings({
+      ...previousSettings,
+      sessionKey: "agent:main:main",
+      lastActiveSessionKey: "agent:main:main",
+    });
+    window.history.replaceState({}, "", "/chat");
+    const sessionPathBuilder = deferred<void>();
+    const runtime = bootstrapApplication({ sessionPathBuilderReady: sessionPathBuilder.promise });
+    const pushState = vi.spyOn(window.history, "pushState");
+
+    try {
+      const start = runtime.start();
+      runtime.context.replace("about");
+      runtime.context.navigate("new-session");
+      expect(window.location.pathname).toBe("/chat");
+
+      sessionPathBuilder.resolve();
+      await start;
+
+      expect(runtime.router.getState().matches[0]?.routeId).toBe("new-session");
+      expect(runtime.router.getState().resolvedLocation?.pathname).toBe("/new");
+      expect(window.location.pathname).toBe("/new");
+      expect(pushState).toHaveBeenCalledWith({}, "", "/new");
+    } finally {
+      pushState.mockRestore();
+      runtime.stop();
+      saveSettings(previousSettings);
+      window.history.replaceState({}, "", previousUrl);
+    }
   });
 
   it("does not restart routing after stop wins the session-path loader race", async () => {
@@ -462,7 +520,7 @@ describe("normalizeInitialApplicationLocation", () => {
 
     try {
       const start = runtime.start();
-      await vi.waitFor(() => expect(activeSubscriptions.size).toBe(1));
+      await vi.waitFor(() => expect(activeSubscriptions.size).toBe(1), STARTUP_STEP_WAIT);
       runtime.stop();
       await start;
 
@@ -492,7 +550,7 @@ describe("normalizeInitialApplicationLocation", () => {
 
     try {
       const start = runtime.start();
-      await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(routerStart).toHaveBeenCalledOnce(), STARTUP_STEP_WAIT);
       runtime.stop();
       expect(routerStop).toHaveBeenCalledOnce();
 

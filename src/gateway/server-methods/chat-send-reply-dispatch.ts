@@ -218,7 +218,6 @@ export function createChatSendReplyDispatch(params: {
       ...(persistedContentForAppend.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
-      sessionFile: latestEntry?.sessionFile,
       agentId,
       createIfMissing: true,
       idempotencyKey: `${clientRunId}:assistant-media`,

@@ -57,7 +57,6 @@ export {
   requestSessionUsage,
   requestSessionUsageLogs,
   requestSessionUsageTimeSeries,
-  requestSessionsUsage,
 } from "./usage.ts";
 
 type SessionState = {
@@ -213,6 +212,10 @@ export type SessionCapability = {
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
+  /** Applies optimistic row fields to the published snapshot so mid-flight
+   * publishes (e.g. a refresh's loading flip) cannot revert them before the
+   * post-mutation canonical list lands. */
+  patchRowLocal: (key: string, patch: Partial<GatewaySessionRow>) => void;
   /** True while a just-created work session is waiting for its canonical placement row. */
   isPreparedWorkSession: (key: string) => boolean;
   pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
@@ -961,6 +964,31 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       modelOverrides[normalizedKey] = normalizedValue;
     }
     publish({ ...state, modelOverrides });
+  };
+
+  // Optimistic session-settings patches (thinking level, speed) must live in
+  // the published capability snapshot, not only in consumer copies: every
+  // publish replaces consumer state wholesale, so a copy-only patch reverts on
+  // the next loading flip until the post-patch canonical list arrives. The
+  // revert window loses keyboard commits on the reasoning slider (flaky UI).
+  const patchRowLocal = (key: string, patch: Partial<GatewaySessionRow>) => {
+    const result = state.result;
+    const normalizedKey = key.trim();
+    if (!result || !normalizedKey) {
+      return;
+    }
+    let changed = false;
+    const sessions = result.sessions.map((row) => {
+      if (row.key !== normalizedKey) {
+        return row;
+      }
+      changed = true;
+      return { ...row, ...patch };
+    });
+    if (!changed) {
+      return;
+    }
+    publish({ ...state, result: { ...result, sessions } });
   };
 
   const rollbackPendingModelPatches = () => {
@@ -1894,9 +1922,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
           }
         }
       })();
-      return;
     }
-    void refresh();
+    // Gateway snapshots also change for recovery scope, presence, and canvas metadata.
+    // Only a connection transition owns list hydration; refreshing here duplicates startup work.
   });
   const stopEvents = gateway.subscribeEvents((event) => {
     if (isSessionStateEvent(event)) {
@@ -1962,6 +1990,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
+    patchRowLocal,
     isPreparedWorkSession(key) {
       return preparedWorkSessionKeys.has(key.trim());
     },

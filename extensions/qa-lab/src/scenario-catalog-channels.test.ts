@@ -50,6 +50,19 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("marks live transport modules as live-driver-only", () => {
+    for (const scenarioId of [
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-mxid-prefixed-command-block",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+    ]) {
+      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
+        "live",
+      );
+    }
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));

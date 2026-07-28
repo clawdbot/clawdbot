@@ -30,7 +30,11 @@ type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").re
 const mocks = vi.hoisted(() => ({
   deliverOutboundPayloads: vi.fn(),
   appendAssistantMessageToSessionTranscript: vi.fn<() => Promise<SessionTranscriptAppendResult>>(
-    async () => ({ ok: true, sessionFile: "x", messageId: "message-x" }),
+    async () => ({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "message-x",
+    }),
   ),
   beginRestartRecoveryTerminalDelivery: vi.fn<
     () => Promise<"started" | "blocked" | "stale" | "not-applicable">
@@ -3402,7 +3406,11 @@ describe("gateway send mirroring", () => {
     });
     expect(respond).not.toHaveBeenCalled();
 
-    mirrorDeferred.resolve({ ok: true, sessionFile: "x", messageId: "message-async" });
+    mirrorDeferred.resolve({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "message-async",
+    });
     await request;
 
     expect(firstRespondCall(respond)[0]).toBe(true);
@@ -3419,7 +3427,11 @@ describe("gateway send mirroring", () => {
     );
     mocks.appendAssistantMessageToSessionTranscript
       .mockReturnValueOnce(firstMirrorDeferred.promise)
-      .mockResolvedValueOnce({ ok: true, sessionFile: "x", messageId: "message-second" });
+      .mockResolvedValueOnce({
+        ok: true,
+        target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+        messageId: "message-second",
+      });
 
     const firstRespond = vi.fn();
     const secondRespond = vi.fn();
@@ -3484,7 +3496,11 @@ describe("gateway send mirroring", () => {
       expect.objectContaining({ text: "first visible reply" }),
     );
 
-    firstMirrorDeferred.resolve({ ok: true, sessionFile: "x", messageId: "message-first" });
+    firstMirrorDeferred.resolve({
+      ok: true,
+      target: { sessionId: "x", sessionKey: "x", storePath: "/tmp/sessions.json" },
+      messageId: "message-first",
+    });
     await first;
     await second;
 

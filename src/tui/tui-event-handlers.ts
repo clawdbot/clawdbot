@@ -7,7 +7,11 @@ import {
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
-import { matchesSelectedTuiSession } from "./tui-session-events.js";
+import {
+  matchesSelectedTuiSession,
+  readTuiSessionUserMessage,
+  readTuiTranscriptMessageSequence,
+} from "./tui-session-events.js";
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -25,7 +29,11 @@ import type {
 } from "./tui-types.js";
 
 type EventHandlerChatLog = {
-  startTool: (toolCallId: string, toolName: string, args: unknown) => void;
+  addLiveUser: (
+    text: string,
+    options: { messageId: string; messageSeq?: number; runId?: string },
+  ) => void;
+  startTool: (toolCallId: string, toolName: string, args: unknown, runId?: string) => void;
   updateToolResult: (
     toolCallId: string,
     result: unknown,
@@ -488,6 +496,23 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
 
+    const liveUserMessage = readTuiSessionUserMessage(evt);
+    if (liveUserMessage) {
+      const envelopeSequence = evt.messageSeq;
+      const messageSeq =
+        typeof envelopeSequence === "number" &&
+        Number.isSafeInteger(envelopeSequence) &&
+        envelopeSequence > 0
+          ? envelopeSequence
+          : readTuiTranscriptMessageSequence(evt.message);
+      chatLog.addLiveUser(liveUserMessage.text, {
+        messageId: liveUserMessage.messageId,
+        ...(messageSeq !== undefined ? { messageSeq } : {}),
+        ...(liveUserMessage.runId ? { runId: liveUserMessage.runId } : {}),
+      });
+      tui.requestRender();
+    }
+
     const currentUpdatedAt = state.sessionInfo.updatedAt;
     const isOlderSnapshot =
       typeof evt.updatedAt === "number" &&
@@ -578,7 +603,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       if (phase === "start") {
-        chatLog.startTool(toolCallId, toolName, data.args);
+        chatLog.startTool(toolCallId, toolName, data.args, evt.runId);
       } else if (phase === "update") {
         if (!allowToolOutput) {
           return;
@@ -706,6 +731,17 @@ export function createEventHandlers(context: EventHandlerContext) {
   // registered so it does not re-arm a draft the abort path would then drop.
   const isRunObserved = (runId: string) => sessionRuns.has(runId);
 
+  const reconcileHistoryAfterGap = () => {
+    const { runIds, displayedRunIds } = collectTrackedSessionRunIds();
+    if (runIds.size === 0) {
+      runCoordinator.queueHistoryReload();
+      return;
+    }
+    // A dropped final cannot distinguish a finished run from a still-streaming
+    // one; authoritative history must either finalize it or restore it.
+    runCoordinator.queueGapHistoryReload(runIds, displayedRunIds);
+  };
+
   return {
     handleChatEvent,
     handleAgentEvent,
@@ -716,6 +752,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose,
   };

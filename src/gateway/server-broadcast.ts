@@ -61,6 +61,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // Hash-only change notice after a persisted config write; content stays
   // behind the operator-scoped config.get.
   "config.changed": [READ_SCOPE],
+  "skills.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
@@ -274,13 +275,13 @@ export function createGatewayBroadcaster(params: {
           SESSION_SUBSCRIPTION_EVENTS.has(event));
       if (
         requiresSessionSubscription &&
-        (!opts?.sessionKeys?.length ||
-          !opts.sessionKeys.some((sessionKey) =>
+        (!sessionKeys.length ||
+          !sessionKeys.some((sessionKey) =>
             params.sessionMessageSubscribers?.get(sessionKey).has(c.connId),
           ))
       ) {
-        // Scoped clients opt out of legacy broadcast fanout. The server-side
-        // subscription registry is the authority, so client filtering cannot leak a sibling tab.
+        // Scoped clients opt out of cross-session fanout, including critical observer announces.
+        // The registry is authoritative; for cap-gated events, unscoped Control UI clients keep full fanout.
         continue;
       }
       const nextSeq = (clientSeq.get(c) ?? 0) + 1;

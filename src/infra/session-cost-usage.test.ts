@@ -11,6 +11,7 @@ import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
@@ -103,6 +104,165 @@ describe("session cost usage", () => {
 
   beforeAll(async () => {
     await suiteRootTracker.setup();
+  });
+
+  it("prefers a legacy entry marker over a stale JSONL usage artifact", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost-empty");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionId = "empty-sqlite-cost-session";
+    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
+    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+    await withStateDir(root, async () => {
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
+          },
+        }),
+        "utf-8",
+      );
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 } as SessionEntry & {
+            sessionFile: string;
+          },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
+
+      const entryPreferredMarker = `sqlite:main:${sessionId}:${path.join(root, "entry-store.json")}`;
+      const conflictingExplicitMarker = `sqlite:main:${sessionId}:${path.join(root, "explicit-store.json")}`;
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: entryPreferredMarker,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionFile: conflictingExplicitMarker,
+          sessionId,
+        }),
+      ).toBe(entryPreferredMarker);
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionFile: `sqlite:other:${sessionId}:${storePath}`,
+          sessionId,
+        }),
+      ).toBeUndefined();
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionFile: `sqlite:main:stale-session:${storePath}`,
+          sessionId,
+        }),
+      ).toBeUndefined();
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: `sqlite:main:stale-session:${storePath}`,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionFile: sqliteMarker,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: `sqlite:main:stale-session:${storePath}`,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(legacyJsonl);
+
+      const sessionTarget = {
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:empty-sqlite-cost",
+        storePath,
+      };
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId,
+          sessionTarget: {
+            ...sessionTarget,
+            sessionKey: "agent:other:empty-sqlite-cost",
+          },
+        }),
+      ).toBeUndefined();
+      const mismatchedTarget = {
+        ...sessionTarget,
+        sessionKey: "agent:main:mapped-other-cost",
+      };
+      await upsertSessionEntry(
+        {
+          agentId: "main",
+          sessionKey: mismatchedTarget.sessionKey,
+          storePath,
+        },
+        { sessionId: "mapped-other-session", updatedAt: 1 },
+      );
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId,
+          sessionTarget: mismatchedTarget,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId: "other-session",
+          sessionTarget,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: {
+            sessionFile: `sqlite:main:stale-session:${storePath}`,
+            sessionId,
+            updatedAt: 1,
+          } as SessionEntry & { sessionFile: string },
+          sessionId,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "other",
+          sessionId,
+          sessionTarget,
+        }),
+      ).toBeUndefined();
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionId: "   ",
+          sessionTarget,
+        }),
+      ).toContain("sqlite:main:");
+    });
   });
 
   afterAll(async () => {
@@ -289,48 +449,6 @@ describe("session cost usage", () => {
     });
   });
 
-  it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
-    const root = await makeSessionCostRoot("sqlite-cost-empty");
-    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-    const sessionKey = "agent:main:empty-sqlite-cost";
-    const sessionId = "empty-sqlite-cost-session";
-    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
-    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
-
-    await withStateDir(root, async () => {
-      await upsertSessionEntry(
-        { sessionKey, storePath },
-        {
-          sessionFile: sqliteMarker,
-          sessionId,
-          updatedAt: Date.UTC(2026, 5, 25, 12, 0, 0),
-        },
-      );
-      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
-      await fs.writeFile(
-        legacyJsonl,
-        transcriptText(sessionId, {
-          type: "message",
-          timestamp: "2026-06-25T12:00:00.000Z",
-          message: {
-            role: "assistant",
-            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
-          },
-        }),
-        "utf-8",
-      );
-
-      expect(
-        resolveExistingUsageSessionFile({
-          agentId: "main",
-          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 },
-          sessionFile: legacyJsonl,
-          sessionId,
-        }),
-      ).toBe(sqliteMarker);
-    });
-  });
-
   it("includes SQLite-only sessions in cached usage summaries", async () => {
     const root = await makeSessionCostRoot("sqlite-cost");
     const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
@@ -340,10 +458,7 @@ describe("session cost usage", () => {
     const sessionFile = `sqlite:main:${sessionId}:${storePath}`;
 
     await withStateDir(root, async () => {
-      await upsertSessionEntry(
-        { sessionKey, storePath },
-        { sessionFile, sessionId, updatedAt: now },
-      );
+      await upsertSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: now });
       await persistSessionTranscriptTurn(
         { agentId: "main", sessionId, sessionKey, storePath },
         {
@@ -419,15 +534,6 @@ describe("session cost usage", () => {
         },
         { interval: 10, timeout: 2_000 },
       );
-
-      const sessionEntry = { sessionFile, sessionId, updatedAt: now };
-      const summaryFromStalePath = await loadSessionCostSummary({
-        agentId: "main",
-        sessionEntry,
-        sessionFile: legacyJsonl,
-        sessionId,
-      });
-      expect(summaryFromStalePath?.totalTokens).toBe(18);
 
       await expect(loadSessionUsageTimeSeries({ agentId: "main", sessionFile })).resolves.toEqual({
         sessionId: undefined,

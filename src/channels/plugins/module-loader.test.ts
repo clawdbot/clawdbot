@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
-import { resolveExistingPluginModulePath } from "./module-loader.js";
+import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 const tempDirs: string[] = [];
 const testRequire = createRequire(import.meta.url);
@@ -49,6 +49,34 @@ describe("channel plugin module loader helpers", () => {
     expect(isJavaScriptModulePath("/tmp/entry.js")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.MJS")).toBe(true);
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
+  });
+
+  it("reports a missing plugin module as not found instead of a boundary escape", () => {
+    const rootDir = createTempDir();
+    const modulePath = path.join(rootDir, "dist", "extensions", "demo", "auth-presence.js");
+
+    let thrown: unknown;
+    try {
+      loadChannelPluginModule({ modulePath, rootDir });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(`plugin module path not found: ${modulePath}`);
+    expect((thrown as Error).message).not.toContain("escapes");
+    expect(((thrown as Error).cause as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
+  });
+
+  it("still reports a module outside the plugin root as a boundary escape", () => {
+    const rootDir = createTempDir();
+    const outsideDir = createTempDir();
+    const modulePath = path.join(outsideDir, "evil.cjs");
+    fs.writeFileSync(modulePath, "module.exports = { ok: true };\n", "utf8");
+
+    expect(() => loadChannelPluginModule({ modulePath, rootDir })).toThrow(
+      `plugin module path escapes plugin root or fails alias checks: ${modulePath}`,
+    );
   });
 
   it("uses native require for eligible JavaScript modules without creating Jiti", async () => {

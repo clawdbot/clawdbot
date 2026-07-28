@@ -51,6 +51,7 @@ import {
   extractTranscriptAttachments,
   schedulePairingQrExpiryRefresh,
   type AttachmentItem,
+  type ArtifactDownloadResolver,
   type PairingQrExpiryNotice,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
@@ -117,9 +118,9 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
     <div class="chat-reply-pill">
       <span class="chat-reply-pill__icon">${icons.messageSquare}</span>
       <span class="chat-reply-pill__label">
-        ${replyTarget.kind === "current"
-          ? "Replying to current message"
-          : `Replying to ${replyTarget.id}`}
+        ${t("chat.messages.replyingTo", {
+          name: replyTarget.kind === "current" ? t("chat.messages.currentMessage") : replyTarget.id,
+        })}
       </span>
     </div>
   `;
@@ -176,6 +177,7 @@ export function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    resolveArtifactDownload?: ArtifactDownloadResolver;
     onAssistantAttachmentLoaded?: () => void;
     onRequestOpenImage?: () => number;
     onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
@@ -209,6 +211,7 @@ export function renderGroupedMessage(
     onRequestUpdate: opts.onRequestUpdate,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
+    resolveArtifactDownload: opts.resolveArtifactDownload,
   };
   schedulePairingQrExpiryRefresh(messageKey, message, opts.onRequestUpdate);
   const images = resolveRenderableMessageImages(extractImages(message), imageRenderOptions);

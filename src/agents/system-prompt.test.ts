@@ -841,6 +841,20 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Several: most specific");
   });
 
+  it("switches skills access guidance under code mode", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      codeModeActive: true,
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain(
+      'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.',
+    );
+    expect(prompt).not.toContain("read exact <location> with `read`");
+  });
+
   it("instructs models to use skill_workshop only when the tool is available", () => {
     const section = buildSkillWorkshopPromptSection();
     expect(section).toEqual([
@@ -949,11 +963,22 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+      "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
     );
     expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
     expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
       prompt.indexOf("NEVER use [[tts:...]]"),
+    );
+  });
+
+  it("adds USER guidance when a user-model file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [{ path: "USER.md", content: "- Prefer concise answers." }],
+    });
+
+    expect(prompt).toContain(
+      "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
     );
   });
 

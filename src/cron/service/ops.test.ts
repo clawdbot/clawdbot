@@ -8,10 +8,12 @@ import { findTaskByRunId, listTaskRecordsUnsorted } from "../../tasks/task-regis
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createCronExecutionId } from "../run-id.js";
 import * as cronSchedule from "../schedule.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
 import { add, remove, update } from "./ops-mutations.js";
@@ -489,97 +491,114 @@ describe("cron service ops seam coverage", () => {
     stop(state);
   });
 
-  it("preserves a finalized canonical task run when startup finds its stale marker", async () => {
-    const { storePath } = await makeStorePath();
-    const now = Date.parse("2026-03-23T12:00:00.000Z");
-    const reservedAt = now - 30 * 60_000;
-    const startedAt = reservedAt + 250;
-    const endedAt = startedAt + 4_000;
+  it.each([
+    { identity: "canonical", reservationOffsetMs: undefined },
+    { identity: "shipped reservation-keyed", reservationOffsetMs: 250 },
+  ])(
+    "preserves a finalized $identity task run when startup finds its stale marker",
+    async ({ reservationOffsetMs }) => {
+      const { storePath } = await makeStorePath();
+      const now = Date.parse("2026-03-23T12:00:00.000Z");
+      const startedAt = now - 30 * 60_000 + 250;
+      const endedAt = startedAt + 4_000;
 
-    await withStateDirForStorePath(storePath, async () => {
-      const job = createInterruptedMainJob(now);
-      job.trigger = { script: "json({ fire: true })", once: true };
-      job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
-      job.state.triggerState = { cursor: "old" };
-      await writeCronStoreSnapshot({ storePath, jobs: [job] });
-      const events: CronEvent[] = [];
-      const state = createCronServiceState({
-        storePath,
-        cronEnabled: true,
-        log: logger,
-        nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-        onEvent: (event) => events.push(structuredClone(event)),
-      });
-      const taskRunId = tryCreateCronTaskRun({
-        state,
-        job,
-        startedAt,
-        runIdStartedAt: reservedAt,
-      });
-      if (!taskRunId) {
-        throw new Error("expected reserved cron task run");
-      }
+      await withStateDirForStorePath(storePath, async () => {
+        const job = createInterruptedMainJob(now);
+        job.state.runningAtMs = startedAt;
+        job.trigger = { script: "json({ fire: true })", once: true };
+        job.payload = { kind: "script", script: "return { state: { cursor: 'payload' } }" };
+        job.state.triggerState = { cursor: "old" };
+        await writeCronStoreSnapshot({ storePath, jobs: [job] });
+        const events: CronEvent[] = [];
+        const state = createCronServiceState({
+          storePath,
+          cronEnabled: true,
+          log: logger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+          onEvent: (event) => events.push(structuredClone(event)),
+        });
+        const taskRunId =
+          reservationOffsetMs === undefined
+            ? tryCreateCronTaskRun({ state, job, startedAt })
+            : taskExecutor.createRunningTaskRun({
+                runtime: "cron",
+                sourceId: job.id,
+                ownerKey: "",
+                scopeKind: "system",
+                runId: `${createCronExecutionId(job.id, startedAt - reservationOffsetMs)}:legacy-upgrade`,
+                agentId: "main",
+                task: job.name,
+                deliveryStatus: "not_applicable",
+                notifyPolicy: "silent",
+                startedAt,
+                lastEventAt: startedAt,
+                detail: { storeKey: cronStoreKey(storePath) },
+              })?.runId;
+        if (!taskRunId) {
+          throw new Error("expected reserved cron task run");
+        }
 
-      tryFinishCronTaskRun(state, {
-        taskRunId,
-        job,
-        triggerEval: { fired: true, stateChanged: true, state: { cursor: "new" } },
-        scriptResult: { scriptStateChanged: true, scriptState: { cursor: "payload" } },
-        event: {
-          jobId: job.id,
-          action: "finished",
+        tryFinishCronTaskRun(state, {
+          taskRunId,
           job,
-          status: "ok",
-          summary: "completed before crash",
-          delivered: true,
-          deliveryStatus: "delivered",
-          failureNotificationDelivery: { status: "not-requested" },
-          runAtMs: startedAt,
-          durationMs: endedAt - startedAt,
-          triggerFired: true,
-        },
-      });
+          triggerEval: { fired: true, stateChanged: true, state: { cursor: "new" } },
+          scriptResult: { scriptStateChanged: true, scriptState: { cursor: "payload" } },
+          event: {
+            jobId: job.id,
+            action: "finished",
+            job,
+            status: "ok",
+            summary: "completed before crash",
+            delivered: true,
+            deliveryStatus: "delivered",
+            failureNotificationDelivery: { status: "not-requested" },
+            runAtMs: startedAt,
+            durationMs: endedAt - startedAt,
+            triggerFired: true,
+          },
+        });
 
-      await start(state);
+        await start(state);
 
-      expect(findTaskByRunId(taskRunId)).toMatchObject({
-        status: "succeeded",
-        startedAt,
-        terminalSummary: "completed before crash",
-        endedAt,
-        detail: {
-          kind: "cron-run",
-          status: "ok",
-          triggerFired: true,
-          scriptStateChanged: true,
-          scriptState: { cursor: "payload" },
-        },
+        expect(findTaskByRunId(taskRunId)).toMatchObject({
+          status: "succeeded",
+          startedAt,
+          terminalSummary: "completed before crash",
+          endedAt,
+          detail: {
+            kind: "cron-run",
+            status: "ok",
+            triggerFired: true,
+            scriptStateChanged: true,
+            scriptState: { cursor: "payload" },
+          },
+        });
+        const persisted = await loadCronStore(storePath);
+        expect(persisted.jobs[0]).toMatchObject({
+          enabled: false,
+          state: {
+            lastRunAtMs: startedAt,
+            lastRunStatus: "ok",
+            lastStatus: "ok",
+            lastDurationMs: endedAt - startedAt,
+            lastDelivered: true,
+            lastDeliveryStatus: "delivered",
+            lastTriggerEvalAtMs: endedAt,
+            lastTriggerFireAtMs: endedAt,
+            triggerState: { cursor: "payload" },
+          },
+        });
+        expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
+        expect(persisted.jobs[0]?.state.lastError).toBeUndefined();
+        expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+        expect(events.filter((event) => event.action === "finished")).toEqual([]);
+        stop(state);
       });
-      const persisted = await loadCronStore(storePath);
-      expect(persisted.jobs[0]).toMatchObject({
-        enabled: false,
-        state: {
-          lastRunAtMs: startedAt,
-          lastRunStatus: "ok",
-          lastStatus: "ok",
-          lastDurationMs: endedAt - startedAt,
-          lastDelivered: true,
-          lastDeliveryStatus: "delivered",
-          lastTriggerEvalAtMs: endedAt,
-          lastTriggerFireAtMs: endedAt,
-          triggerState: { cursor: "payload" },
-        },
-      });
-      expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
-      expect(persisted.jobs[0]?.state.lastError).toBeUndefined();
-      expect(persisted.jobs[0]?.state.nextRunAtMs).toBeUndefined();
-      expect(events.filter((event) => event.action === "finished")).toEqual([]);
-      stop(state);
-    });
-  });
+    },
+  );
 
   it("keeps a finalized one-shot disabled when startup restores its stale marker", async () => {
     const { storePath } = await makeStorePath();

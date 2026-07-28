@@ -124,7 +124,10 @@ type SystemAgentHistoryTurn = {
 
 type GatewaySystemAgentSession = {
   engine: {
-    handle: (message: string) => Promise<{
+    handle: (
+      message: string,
+      options?: { uiContext?: { page: string } },
+    ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;

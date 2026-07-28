@@ -517,6 +517,30 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it.each([
+    ["ws://localhost:4242", "local-loopback"],
+    ["ws://127.0.0.1:4242", "local-loopback"],
+    ["ws://127.0.0.2:4242", "local-loopback"],
+    ["ws://127.255.255.254:4242", "local-loopback"],
+    ["ws://[::1]:4242", "local-loopback"],
+    ["ws://[::ffff:127.0.0.2]:4242", "local-loopback"],
+    ["wss://128.0.0.1:4242", "remote"],
+    ["wss://10.0.0.1:4242", "remote"],
+    ["wss://127.0.0.1.evil.com:4242", "remote"],
+  ] as const)("classifies app-server URL %s as %s", (url, connectionClass) => {
+    const runtime = resolveRuntimeForTest({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url,
+          ...(connectionClass === "remote" ? { authToken: "capability-token" } : {}),
+        },
+      },
+    });
+
+    expectFields(runtime, "runtime", { connectionClass });
+  });
+
   it("rejects remote websocket app-servers without identity-bearing auth", () => {
     expect(() =>
       resolveRuntimeForTest({

@@ -204,11 +204,12 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     });
 
     expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalled();
+    // createHookCtx's "private" chat type is undirected, so no fallback
+    // eligibility surfaces for this turn.
     expect(result).toEqual({
       queuedFinal: false,
       counts: { tool: 0, block: 0, final: 0 },
       sendPolicyDenied: true,
-      noVisibleReplyFallbackEligible: true,
     });
   });
 
@@ -385,6 +386,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
       expect(result.queuedFinal).toBe(true);
       expect(deliver).not.toHaveBeenCalled();
+      // createHookCtx's "private" chat type is undirected, so no fallback
+      // attempt follows the timed-out final.
       expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
       expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
       expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBe(true);
@@ -712,6 +715,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         }),
     });
 
+    // A started-then-failed transport send may have shown partial content, so
+    // the ledger stays conservative and no fallback rides the same transport.
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(sessionStoreMocks.updateSessionEntry).toHaveBeenCalledOnce();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();
@@ -748,6 +753,8 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
     expect(result.queuedFinal).toBe(true);
     expect(deliver).not.toHaveBeenCalled();
+    // createHookCtx's "private" chat type is undirected, so the cancelled final
+    // does not trigger a fallback attempt.
     expect(dispatcher.getCancelledCounts?.()).toEqual({ tool: 0, block: 0, final: 1 });
     expect(dispatcher.getFailedCounts?.()).toEqual({ tool: 0, block: 0, final: 0 });
     expect(sessionStoreMocks.currentEntry?.pendingFinalDelivery).toBeUndefined();

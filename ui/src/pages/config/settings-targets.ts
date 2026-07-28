@@ -1,6 +1,9 @@
-export const GENERAL_SETTINGS_TARGET_IDS = {
-  model: "settings-general-model",
-  system: "settings-general-system",
+export const MODEL_SETTINGS_TARGET_IDS = {
+  behavior: "settings-model-behavior",
+} as const;
+
+export const CONNECTION_SETTINGS_TARGET_IDS = {
+  host: "settings-connection-host",
 } as const;
 
 export const APPEARANCE_SETTINGS_TARGET_IDS = {

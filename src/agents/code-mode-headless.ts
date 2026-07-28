@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { clampNumber } from "../utils.js";
-import { runBridgeRequest } from "./code-mode-bridge.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   createCodeModeNamespaceRuntime,
@@ -28,6 +27,14 @@ import {
   type CodeModeHeadlessResult,
   type CodeModeWorkerResult,
 } from "./code-mode-runtime.js";
+import {
+  cancelPendingBridgeStates,
+  createPendingBridgeStates,
+  pendingBridgeStatesForSettlement,
+  settledBridgeRequestsInCompletionOrder,
+  waitForPendingBridgeSettlement,
+  type PendingBridgeState,
+} from "./code-mode-state.js";
 import {
   CodeModeHeadlessAbortError,
   CodeModeHeadlessTimeoutError,
@@ -235,6 +242,7 @@ export async function runCodeModeScriptHeadless(params: {
   const deadline = Date.now() + wallClockMs;
   const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
   const output: unknown[] = [];
+  let pending: PendingBridgeState[] = [];
   let toolCallCount = 0;
   try {
     // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
@@ -288,10 +296,15 @@ export async function runCodeModeScriptHeadless(params: {
       }
 
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config, output });
-      const requestedToolCalls = result.pendingRequests.filter(
+      const pendingIds = new Set(pending.map((entry) => entry.id));
+      const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
+      // Node discovery invokes the generic nodes tool for live status too;
+      // excluding list/get would bypass the same headless tool-call budget.
+      const requestedToolCalls = newRequests.filter(
         (request) =>
           request.method === "call" ||
           request.method === "callValue" ||
+          request.method === "nodes" ||
           request.method === "namespace",
       ).length;
       toolCallCount += requestedToolCalls;
@@ -304,29 +317,40 @@ export async function runCodeModeScriptHeadless(params: {
         });
       }
 
-      const settledRequests = await awaitHeadlessDeadline({
-        promise: Promise.all(
-          result.pendingRequests.map((request) =>
-            runBridgeRequest({
-              runtime,
-              namespaceRuntime,
-              parentToolCallId,
-              codeModeRunId,
-              ctx: params.ctx,
-              request,
-              signal: abortScope.signal,
-            }),
-          ),
-        ),
+      pending.push(
+        ...createPendingBridgeStates({
+          pendingRequests: newRequests,
+          runtime,
+          namespaceRuntime,
+          parentToolCallId,
+          codeModeRunId,
+          ctx: params.ctx,
+          signal: abortScope.signal,
+        }),
+      );
+      const frontierPending = pendingBridgeStatesForSettlement(pending, result.settlementMode);
+      if (frontierPending.length === 0) {
+        return headlessFailure({
+          code: "internal_error",
+          error: "code mode is waiting without pending bridge requests",
+          output,
+          toolCallCount,
+        });
+      }
+      await awaitHeadlessDeadline({
+        promise: waitForPendingBridgeSettlement(pending, result.settlementMode),
         deadline,
         signal: abortScope.signal,
       });
+      const settledRequests = settledBridgeRequestsInCompletionOrder(pending);
+      pending = pending.filter((entry) => !entry.settled);
       result = normalizeCodeModeWorkerResult(
         await runHeadlessWorkerLeg({
           input: {
             kind: "resume",
             snapshotBytes: result.snapshotBytes,
             settledRequests,
+            pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
           },
           config,
           deadline,
@@ -344,6 +368,7 @@ export async function runCodeModeScriptHeadless(params: {
       toolCallCount,
     });
   } finally {
+    cancelPendingBridgeStates(pending);
     abortScope.cleanup();
   }
 }

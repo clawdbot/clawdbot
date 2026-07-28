@@ -28,7 +28,6 @@ import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js"
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleContextCachePrewarm } from "./server-startup-context-cache-prewarm.js";
-import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
   createGatewayStartupOutcomeRecorder,
@@ -1231,10 +1230,7 @@ export async function startGatewayPostAttachRuntime(
           reportPluginServices(result.pluginServices);
         }
         const postReadySidecars = [...result.postReadySidecars];
-        const gatewayLifetimeSidecars = [
-          scheduleContextCachePrewarm(params),
-          scheduleGatewayHandlerPrewarm(params),
-        ];
+        const gatewayLifetimeSidecars = [scheduleContextCachePrewarm(params)];
         if (workerEnvironmentSidecar) {
           gatewayLifetimeSidecars.push(workerEnvironmentSidecar);
         }

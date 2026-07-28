@@ -329,7 +329,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(enqueueSystemEvent).mockReset();
     vi.mocked(appendAssistantMessageToSessionTranscript).mockResolvedValue({
       ok: true,
-      sessionFile: "session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "test-session-id",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/sessions.json",
+      },
       messageId: "mirror-message",
     });
     loadCronSessionEntryLatestMock.mockReturnValue({

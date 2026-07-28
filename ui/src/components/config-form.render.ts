@@ -24,6 +24,8 @@ type ConfigFormProps = {
   /** Required: the collapsed-advanced ghost row's only action. Optional would
    *  permit an inert "Show advanced" control that strands hidden settings. */
   onShowAdvanced: () => void;
+  /** Paired expanded-state action. Omit when search or a forced route owns the reveal. */
+  onHideAdvanced?: () => void;
   /** Inline actions rendered next to the active section heading (e.g. env peek). */
   sectionActions?: TemplateResult;
   /** Composite pages render custom rows above the form; an empty schema
@@ -58,8 +60,8 @@ export function renderConfigTierGroups(params: {
   hints: ConfigUiHints;
   revealAdvanced: boolean;
   onShowAdvanced: () => void;
-  /** Surfaces without a toolbar toggle pass this so the divider can collapse
-   *  the tier again; the config page omits it and uses its toolbar button. */
+  /** Surfaces with collapsible advanced fields pass this so the expanded
+   *  divider remains the single inverse of the collapsed ghost action. */
   onHideAdvanced?: () => void;
   renderTier: (node: JsonSchema) => TemplateResult | typeof nothing;
 }) {
@@ -71,34 +73,38 @@ export function renderConfigTierGroups(params: {
   // An advanced-only schema needs no separator, but a surface whose only
   // collapse control lives on the divider would otherwise strand the tier open.
   const showDivider = Boolean(split.common) || Boolean(params.onHideAdvanced);
+  // The wrapper owns tier spacing so embedders without a settings-section
+  // parent (the channel forms) do not render the tiers flush against each other.
   return html`
-    ${split.common
-      ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
-      : nothing}
-    ${split.advanced && split.advancedLeafCount > 0
-      ? params.revealAdvanced
-        ? html`
-            ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
-            <div class="settings-group">${params.renderTier(split.advanced)}</div>
-          `
-        : html`
-            <button
-              type="button"
-              class="config-advanced-ghost"
-              @click=${() => params.onShowAdvanced()}
-            >
-              <span class="config-advanced-ghost__count">
-                ${t(
-                  split.advancedLeafCount === 1
-                    ? "configForm.advancedHidden"
-                    : "configForm.advancedHiddenPlural",
-                  { count: String(split.advancedLeafCount) },
-                )}
-              </span>
-              <span class="config-advanced-ghost__action">${t("configForm.showAdvanced")}</span>
-            </button>
-          `
-      : nothing}
+    <div class="config-tier-groups">
+      ${split.common
+        ? html`<div class="settings-group">${params.renderTier(split.common)}</div>`
+        : nothing}
+      ${split.advanced && split.advancedLeafCount > 0
+        ? params.revealAdvanced
+          ? html`
+              ${showDivider ? renderAdvancedDivider(params.onHideAdvanced) : nothing}
+              <div class="settings-group">${params.renderTier(split.advanced)}</div>
+            `
+          : html`
+              <button
+                type="button"
+                class="config-advanced-ghost"
+                @click=${() => params.onShowAdvanced()}
+              >
+                <span class="config-advanced-ghost__count">
+                  ${t(
+                    split.advancedLeafCount === 1
+                      ? "configForm.advancedHidden"
+                      : "configForm.advancedHiddenPlural",
+                    { count: String(split.advancedLeafCount) },
+                  )}
+                </span>
+                <span class="config-advanced-ghost__action">${t("configForm.showAdvanced")}</span>
+              </button>
+            `
+        : nothing}
+    </div>
   `;
 }
 
@@ -241,6 +247,12 @@ export function renderConfigForm(props: ConfigFormProps) {
           hints: props.uiHints,
           revealAdvanced,
           onShowAdvanced: props.onShowAdvanced,
+          onHideAdvanced:
+            props.showAdvanced === true &&
+            props.forceAdvancedSection !== params.path[0] &&
+            !searchQuery
+              ? props.onHideAdvanced
+              : undefined,
           renderTier,
         })}
       </section>

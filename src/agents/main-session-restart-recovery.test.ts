@@ -786,28 +786,12 @@ describe("main-session-restart-recovery", () => {
 
   it.each([
     {
-      name: "marks a running main session whose cleaned transcript lock is topic-suffixed",
-      sessionKey: "agent:main:discord:channel:123:thread:1234567890",
-      sessionId: "main-session",
-      sessionFile: "main-session-topic-1234567890.jsonl",
-      lockKind: "session-file",
-      marked: 1,
-    },
-    {
       name: "does not mark a session for an unrelated topic lock that only shares its id prefix",
       sessionKey: "agent:main:main",
       sessionId: "main-session",
       sessionFile: "main-session.jsonl",
       lockKind: "unrelated",
       marked: 0,
-    },
-    {
-      name: "normalizes relative cleaned lock paths against the current working directory",
-      sessionKey: "agent:main:discord:channel:123:thread:1234567890",
-      sessionId: "main-session",
-      sessionFile: "main-session-topic-1234567890.jsonl",
-      lockKind: "relative-session-file",
-      marked: 1,
     },
     {
       name: "falls back to the session id transcript lock when persisted sessionFile is outside the sessions dir",
@@ -833,16 +817,12 @@ describe("main-session-restart-recovery", () => {
     const lockFile =
       lockKind === "unrelated"
         ? "main-session-topic-unrelated.jsonl.lock"
-        : lockKind === "session-id"
-          ? `${sessionId}.jsonl.lock`
-          : `${sessionFile}.lock`;
+        : `${sessionId}.jsonl.lock`;
     const lockPath = path.join(sessionsDir, lockFile);
-    const normalizedLockPath =
-      lockKind === "relative-session-file" ? path.relative(process.cwd(), lockPath) : lockPath;
 
     const result = await markRestartAbortedMainSessionsFromLocks({
       sessionsDir,
-      cleanedLocks: [cleanedLockForPath(normalizedLockPath)],
+      cleanedLocks: [cleanedLockForPath(lockPath)],
     });
 
     const store = readStore(path.join(sessionsDir, "sessions.json"));

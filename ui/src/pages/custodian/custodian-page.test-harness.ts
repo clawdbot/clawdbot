@@ -13,10 +13,12 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
+  store: CustodianSessionStore;
   updateComplete: Promise<boolean>;
 };
 
@@ -109,6 +111,7 @@ export async function mountPage(
 }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.store = new CustodianSessionStore();
   page.onboarding = options.onboarding ?? true;
   provider.append(page);
   document.body.append(provider);

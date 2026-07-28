@@ -239,13 +239,21 @@ function buildProjectContextSection(params: {
     const hasMemoryFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "memory.md",
     );
+    const hasUserFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "user.md",
+    );
     lines.push("Loaded project context:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
     }
     if (hasMemoryFile) {
       lines.push(
-        "MEMORY.md: durable preferences/behavior; follow all session unless higher priority overrides.",
+        "MEMORY.md: durable non-profile facts and decisions; use when relevant unless higher-priority instructions override.",
+      );
+    }
+    if (hasUserFile) {
+      lines.push(
+        "USER.md: durable user preferences and profile directives; follow unless higher-priority instructions override.",
       );
     }
     lines.push("");
@@ -285,14 +293,20 @@ function buildExecApprovalPromptGuidance(params: {
   return 'exec approval-pending: send exact /approve from "Reply with:"; never ask for another code.';
 }
 
-function buildSkillsSection(params: { skillsPrompt?: string; readToolName: string }) {
+function buildSkillsSection(params: {
+  skillsPrompt?: string;
+  readToolName: string;
+  codeModeActive?: boolean;
+}) {
   const trimmed = params.skillsPrompt?.trim();
   if (!trimmed) {
     return [];
   }
   return [
     "## Skills",
-    `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
+    params.codeModeActive
+      ? 'Scan <available_skills>. Clear match: use `skills.read("<name>")` inside `exec`; obey.'
+      : `Scan <available_skills>. Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
     "Changed <version>: re-read. Several: most specific. None: read none.",
     "Up-front max one. Never invent paths.",
     "External writes: batch safely; no tight loops; honor 429/Retry-After.",
@@ -742,6 +756,7 @@ export function buildAgentSystemPrompt(params: {
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
@@ -1031,6 +1046,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsSection = buildSkillsSection({
     skillsPrompt,
     readToolName,
+    codeModeActive: params.codeModeActive,
   });
   const skillWorkshopSection = availableTools.has(SKILL_WORKSHOP_TOOL_NAME)
     ? buildSkillWorkshopPromptSection()
@@ -1101,6 +1117,7 @@ export function buildAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     skillsPrompt,
+    codeModeActive: params.codeModeActive,
     modelAliasLines: params.modelAliasLines,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,

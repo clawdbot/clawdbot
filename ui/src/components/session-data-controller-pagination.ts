@@ -1,0 +1,230 @@
+import type { SessionsListResult } from "../api/types.ts";
+import type { RouteId } from "../app-route-paths.ts";
+import type { ApplicationContext } from "../app/context.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import {
+  SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+  type SidebarSessionStatusFilter,
+} from "./app-sidebar-session-types.ts";
+
+type SidebarSessionPaginationOwner = {
+  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly sessionCreatedOrder: Map<string, number>;
+  sessionMutationError: string | null;
+  sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
+  sessionsAgentId: string | null;
+  sessionsLoading: boolean;
+  sessionsResult: SessionsListResult | null;
+  expandedAgentId(): string;
+  requestSessionDataUpdate(): void;
+};
+
+type SidebarSessionPaginationState = {
+  listRequestToken: symbol | null;
+  pageRequestToken: symbol | null;
+};
+
+const sidebarSessionPaginationStates = new WeakMap<
+  SidebarSessionPaginationOwner,
+  SidebarSessionPaginationState
+>();
+
+function sidebarSessionPaginationState(owner: SidebarSessionPaginationOwner) {
+  let state = sidebarSessionPaginationStates.get(owner);
+  if (!state) {
+    state = { listRequestToken: null, pageRequestToken: null };
+    sidebarSessionPaginationStates.set(owner, state);
+  }
+  return state;
+}
+
+function publishSidebarSessionResult(
+  owner: SidebarSessionPaginationOwner,
+  agentId: string,
+  result: SessionsListResult | null,
+) {
+  owner.sessionsResult = result;
+  owner.sessionsAgentId = agentId;
+  if (result) {
+    owner.sessionRowsByAgent[normalizeAgentId(agentId)] = result.sessions;
+    for (const row of result.sessions) {
+      if (row.key && !owner.sessionCreatedOrder.has(row.key)) {
+        owner.sessionCreatedOrder.set(row.key, owner.sessionCreatedOrder.size);
+      }
+    }
+  }
+  owner.requestSessionDataUpdate();
+}
+
+function appendSidebarSessionResults(
+  previous: SessionsListResult,
+  page: SessionsListResult,
+): SessionsListResult {
+  const seen = new Set<string>();
+  const sessions = [...previous.sessions, ...page.sessions].filter((row) => {
+    if (!row.key || seen.has(row.key)) {
+      return false;
+    }
+    seen.add(row.key);
+    return true;
+  });
+  const totalCount = page.totalCount ?? previous.totalCount;
+  const hasMore =
+    page.hasMore ??
+    (typeof totalCount === "number" && Number.isFinite(totalCount)
+      ? sessions.length < totalCount
+      : false);
+  return {
+    ...page,
+    count: sessions.length,
+    totalCount,
+    hasMore,
+    nextOffset: page.nextOffset ?? (hasMore ? sessions.length : null),
+    sessions,
+  };
+}
+
+export function invalidateSidebarSessionPagination(owner: SidebarSessionPaginationOwner): void {
+  const state = sidebarSessionPaginationState(owner);
+  state.listRequestToken = null;
+  state.pageRequestToken = null;
+}
+
+export async function refreshSidebarSessions(
+  owner: SidebarSessionPaginationOwner,
+  agentId: string,
+  statusFilter: () => SidebarSessionStatusFilter,
+): Promise<void> {
+  const context = owner.context;
+  if (!context) {
+    return;
+  }
+  const state = sidebarSessionPaginationState(owner);
+  state.pageRequestToken = null;
+  const archivedFilter = statusFilter();
+  const options = {
+    agentId,
+    archivedFilter,
+    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+    includeDerivedTitles: true,
+  } as const;
+  if (archivedFilter === "active") {
+    // Retire archived/all completions before the active capability owns the list.
+    state.listRequestToken = null;
+    await context.sessions.refresh({ ...options, force: true });
+    return;
+  }
+
+  const token = Symbol(agentId);
+  state.listRequestToken = token;
+  owner.sessionsLoading = true;
+  owner.requestSessionDataUpdate();
+  const isCurrent = () =>
+    state.listRequestToken === token &&
+    owner.context === context &&
+    owner.context.sessions === context.sessions &&
+    archivedFilter === statusFilter();
+  try {
+    const result = await context.sessions.list(options);
+    if (isCurrent()) {
+      publishSidebarSessionResult(owner, agentId, result);
+    }
+  } catch (error) {
+    if (isCurrent()) {
+      owner.sessionMutationError = String(error);
+      owner.requestSessionDataUpdate();
+    }
+  } finally {
+    if (state.listRequestToken === token) {
+      owner.sessionsLoading = false;
+      owner.requestSessionDataUpdate();
+    }
+  }
+}
+
+export async function loadMoreSidebarSessions(
+  owner: SidebarSessionPaginationOwner,
+  statusFilter: () => SidebarSessionStatusFilter,
+): Promise<void> {
+  const context = owner.context;
+  const previous = owner.sessionsResult;
+  const agentId = owner.sessionsAgentId;
+  // Gateway cursors are optional; accumulated rows provide the same next page.
+  const offset =
+    previous?.nextOffset === undefined ? previous?.sessions.length : previous.nextOffset;
+  const state = sidebarSessionPaginationState(owner);
+  // A pending first-page refresh owns the list; its old offset cannot safely
+  // start a page that would append to a superseded session snapshot.
+  if (
+    !context ||
+    owner.sessionsLoading ||
+    !previous?.hasMore ||
+    typeof offset !== "number" ||
+    !agentId ||
+    normalizeAgentId(agentId) !== normalizeAgentId(owner.expandedAgentId()) ||
+    state.pageRequestToken !== null
+  ) {
+    return;
+  }
+
+  const gateway = context.gateway;
+  const client = gateway.snapshot.client;
+  const archivedFilter = statusFilter();
+  const listRequestToken = state.listRequestToken;
+  const token = Symbol(agentId);
+  state.pageRequestToken = token;
+  const isCurrent = () =>
+    state.pageRequestToken === token &&
+    owner.context === context &&
+    owner.context.sessions === context.sessions &&
+    owner.context.gateway === gateway &&
+    gateway.snapshot.client === client &&
+    archivedFilter === statusFilter() &&
+    normalizeAgentId(agentId) === normalizeAgentId(owner.expandedAgentId()) &&
+    (archivedFilter === "active" ||
+      (state.listRequestToken === listRequestToken && owner.sessionsResult === previous));
+  const options = {
+    agentId,
+    archivedFilter,
+    limit: SIDEBAR_AGENT_SESSION_LIST_LIMIT,
+    offset,
+    includeGlobal: true,
+    includeUnknown: true,
+    configuredAgentsOnly: true,
+    includeDerivedTitles: true,
+  } as const;
+
+  if (archivedFilter !== "active") {
+    owner.sessionsLoading = true;
+    owner.requestSessionDataUpdate();
+  }
+
+  try {
+    if (archivedFilter === "active") {
+      // Canonical active pages publish to all consumers; archived/all stay sidebar-local.
+      await context.sessions.refresh({ ...options, append: true, force: true });
+      return;
+    }
+
+    const page = await context.sessions.list(options);
+    if (page && isCurrent()) {
+      publishSidebarSessionResult(owner, agentId, appendSidebarSessionResults(previous, page));
+    }
+  } catch (error) {
+    if (isCurrent()) {
+      owner.sessionMutationError = String(error);
+      owner.requestSessionDataUpdate();
+    }
+  } finally {
+    if (state.pageRequestToken === token) {
+      state.pageRequestToken = null;
+      if (archivedFilter !== "active") {
+        owner.sessionsLoading = false;
+        owner.requestSessionDataUpdate();
+      }
+    }
+  }
+}

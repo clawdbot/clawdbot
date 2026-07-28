@@ -1,18 +1,25 @@
-// Control UI view renders the Model Providers settings page content.
+// Control UI view renders the Models settings page content.
 import { html, nothing } from "lit";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
+import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import {
   renderSettingsEmpty,
   renderSettingsGroup,
   renderSettingsPage,
+  renderSettingsRow,
   renderSettingsSection,
+  renderSettingsSegmented,
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { BASE_THINKING_LEVELS } from "../../lib/chat/thinking.ts";
+import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { formatCost, formatTimeMs, formatTokens } from "../../lib/format.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
+import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "../config/view.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type {
@@ -39,6 +46,17 @@ type ModelProvidersViewProps = {
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
   defaultModelsDirty: boolean;
+  thinkingLevel: string;
+  fastMode: FastMode | undefined;
+  configBusy: boolean;
+  configConnected: boolean;
+  configLoading: boolean;
+  configSaving: boolean;
+  configApplying: boolean;
+  configUpdating: boolean;
+  configNeedsApply: boolean;
+  configRawDraftPending: boolean;
+  configAutoSaveStatus: ConfigAutoSaveStatus;
   unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
@@ -72,7 +90,84 @@ type ModelProvidersViewProps = {
   onUtilityChange: (model: string | null) => void;
   onDefaultModelsSave: () => void;
   onDefaultModelsReset: () => void;
+  onThinkingChange: (level: string) => void;
+  onFastModeChange: (mode: FastMode) => void;
+  onApplyConfig: () => void;
+  onRetrySaveConfig: () => void;
+  onDiscardConfig: () => void;
 };
+
+// The global default intentionally omits "minimal"; the full list stays
+// available on session-level pickers.
+const THINKING_LEVELS = BASE_THINKING_LEVELS.filter((level) => level !== "minimal");
+
+function fastModeOptionValue(value: "auto" | "on" | "off"): FastMode {
+  return value === "auto" ? "auto" : value === "on";
+}
+
+function renderModelConfigWorkflow(props: ModelProvidersViewProps) {
+  const status = renderConfigAutoSaveStatus({
+    status: props.configAutoSaveStatus,
+    onRetry: props.onRetrySaveConfig,
+    onReload: props.onDiscardConfig,
+  });
+  return html`
+    ${status === nothing
+      ? nothing
+      : html`<div class="config-toolbar__status" role="status" aria-live="polite">${status}</div>`}
+    ${renderConfigApplyBanner({
+      needsApply: props.configNeedsApply,
+      applying: props.configApplying,
+      busy:
+        props.configSaving ||
+        props.configLoading ||
+        props.configUpdating ||
+        props.configAutoSaveStatus === "saving" ||
+        props.configRawDraftPending,
+      connected: props.configConnected,
+      onApply: props.onApplyConfig,
+    })}
+  `;
+}
+
+function renderModelBehavior(props: ModelProvidersViewProps) {
+  const fastMode = formatFastModeValue(props.fastMode);
+  return html`
+    <div id=${MODEL_SETTINGS_TARGET_IDS.behavior}>
+      ${renderSettingsSection({ title: t("quickSettings.model.title") }, [
+        renderSettingsRow({
+          title: t("quickSettings.model.thinking"),
+          control: renderSettingsSegmented({
+            value: props.thinkingLevel,
+            options: THINKING_LEVELS.map((level) => ({
+              value: level,
+              label: t(`quickSettings.model.thinkingLevels.${level}`),
+            })),
+            disabled: props.configBusy,
+            onChange: props.onThinkingChange,
+          }),
+        }),
+        renderSettingsRow({
+          title: t("quickSettings.model.fastMode"),
+          control: renderSettingsSegmented<"auto" | "on" | "off">({
+            value: fastMode,
+            options: [
+              { value: "auto", label: t("quickSettings.model.fastModes.auto") },
+              { value: "on", label: t("quickSettings.model.fastModes.fast") },
+              { value: "off", label: t("quickSettings.model.fastModes.standard") },
+            ],
+            disabled: props.configBusy,
+            onChange: (value) => {
+              if (value !== fastMode) {
+                props.onFastModeChange(fastModeOptionValue(value));
+              }
+            },
+          }),
+        }),
+      ])}
+    </div>
+  `;
+}
 
 const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   ok: "modelProviders.status.ok",
@@ -471,11 +566,10 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
     );
   }
   if (props.loading) {
-    return renderSettingsPage(
-      html`<div aria-busy="true">
-        ${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}
-      </div>`,
-    );
+    return renderSettingsPage(html`
+      ${renderModelConfigWorkflow(props)} ${renderModelBehavior(props)}
+      <div aria-busy="true">${renderSettingsGroup(renderSettingsEmpty(t("common.loading")))}</div>
+    `);
   }
   const providerRows = html`
     ${props.error
@@ -511,6 +605,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       onSave: props.onDefaultModelsSave,
       onReset: props.onDefaultModelsReset,
     })}
+    ${renderModelConfigWorkflow(props)} ${renderModelBehavior(props)}
     ${renderSettingsSection(
       {
         title: t("modelProviders.title"),

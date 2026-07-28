@@ -1,7 +1,11 @@
 // @vitest-environment node
 // Control UI tests cover history merge behavior.
 import { describe, expect, it } from "vitest";
-import { preserveOptimisticTailMessages } from "./history-merge.ts";
+import {
+  preserveLiveAuthoritativeUserMessages,
+  preserveOptimisticTailMessages,
+  rememberLiveAuthoritativeUserMessage,
+} from "./history-merge.ts";
 
 function createHistoryMessage(
   role: "assistant" | "user",
@@ -16,6 +20,75 @@ function createHistoryMessage(
     ...(metadata === undefined ? {} : { __openclaw: metadata }),
   };
 }
+
+describe("preserveLiveAuthoritativeUserMessages", () => {
+  it("keeps a gateway-projected user ahead of a later stale-history reply", () => {
+    const liveUser = createHistoryMessage("user", "shared prompt", {
+      id: "shared-user",
+      seq: 1,
+    });
+    const reply = createHistoryMessage("assistant", "shared reply", {
+      id: "shared-reply",
+      seq: 2,
+    });
+    rememberLiveAuthoritativeUserMessage(liveUser);
+
+    expect(preserveLiveAuthoritativeUserMessages([reply], [liveUser, reply])).toEqual([
+      liveUser,
+      reply,
+    ]);
+  });
+
+  it("adopts the history projection without duplicating an authoritative user identity", () => {
+    const liveUser = createHistoryMessage("user", "live prompt", {
+      id: "shared-user",
+      seq: 1,
+    });
+    const persistedUser = createHistoryMessage("user", "persisted prompt", {
+      id: "shared-user",
+      seq: 1,
+    });
+    rememberLiveAuthoritativeUserMessage(liveUser);
+
+    expect(preserveLiveAuthoritativeUserMessages([persistedUser], [liveUser])).toEqual([
+      persistedUser,
+    ]);
+  });
+
+  it("does not revive an ordinary historical user absent from a new snapshot", () => {
+    const previousUser = createHistoryMessage("user", "removed prompt", {
+      id: "removed-user",
+      seq: 1,
+    });
+    const reply = createHistoryMessage("assistant", "remaining reply", {
+      id: "remaining-reply",
+      seq: 2,
+    });
+
+    expect(preserveLiveAuthoritativeUserMessages([reply], [previousUser, reply])).toEqual([reply]);
+  });
+
+  it("uses the next authoritative row to place an id-only live prompt", () => {
+    const liveUser = createHistoryMessage("user", "shared prompt", { id: "shared-user" });
+    const reply = createHistoryMessage("assistant", "shared reply", { id: "shared-reply" });
+    rememberLiveAuthoritativeUserMessage(liveUser);
+
+    expect(preserveLiveAuthoritativeUserMessages([reply], [liveUser, reply])).toEqual([
+      liveUser,
+      reply,
+    ]);
+  });
+
+  it("does not restore a gateway message hidden from the selected transcript", () => {
+    const liveUser = createHistoryMessage("user", "hidden prompt", {
+      id: "hidden-user",
+      seq: 1,
+    });
+    rememberLiveAuthoritativeUserMessage(liveUser);
+
+    expect(preserveLiveAuthoritativeUserMessages([], [liveUser], () => true)).toEqual([]);
+  });
+});
 
 describe("preserveOptimisticTailMessages", () => {
   it("keeps optimistic tail messages while history is stale", () => {

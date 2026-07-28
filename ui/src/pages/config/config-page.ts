@@ -5,8 +5,8 @@ import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import {
@@ -28,7 +28,6 @@ import { startThemeTransition } from "../../app/theme-transition.ts";
 import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, isSupportedLocale, t, type Locale } from "../../i18n/index.ts";
-import { resolveModelPrimary } from "../../lib/agents/display.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
@@ -42,6 +41,7 @@ import {
   type RealtimeTalkInputDevice,
 } from "../chat/realtime-talk-input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/realtime-talk.ts";
+import { isUnknownSystemInfoMethodError, supportsSystemInfo } from "../connection/system-info.ts";
 import {
   configSectionKeysForPage,
   SCOPED_CONFIG_SECTION_KEYS,
@@ -83,25 +83,26 @@ type ConfigPageSetting =
 // Sections relocated by the settings restructure, keyed by "<oldPage>:<section>".
 // Kept so pre-restructure bookmarks and generated links still land somewhere
 // sensible instead of silently opening the old page's default section.
-const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
-  "communications:__notifications__": { routeId: "notifications", keepSection: false },
-  "automation:approvals": { routeId: "security", keepSection: true },
-  "ai-agents:memory": { routeId: "memory", keepSection: true },
+// Scroll targets relocated by the settings restructure, keyed by
+// "<oldPage>:<targetId>". Same rationale as MOVED_SECTION_ROUTES: generated
+// settings-search links predating the move must land on the new home.
+const MOVED_TARGET_ROUTES: Record<string, { routeId: RouteId; hash: string }> = {
+  "config:settings-general-model": {
+    routeId: "model-providers",
+    hash: "#settings-model-behavior",
+  },
 };
 
-const SYSTEM_INFO_POLL_INTERVAL_MS = 10_000;
+const MOVED_SECTION_ROUTES: Record<string, { routeId: RouteId; keepSection: boolean }> = {
+  "communications:__notifications__": { routeId: "notifications", keepSection: false },
+  "communications:channels": { routeId: "channels", keepSection: false },
+  "communications:broadcast": { routeId: "advanced", keepSection: true },
+  "automation:approvals": { routeId: "security", keepSection: true },
+  "ai-agents:memory": { routeId: "memory", keepSection: true },
+  "ai-agents:models": { routeId: "model-providers", keepSection: false },
+};
 
-function isUnknownSystemInfoMethodError(error: unknown): boolean {
-  return (
-    error instanceof GatewayRequestError &&
-    error.gatewayCode === "INVALID_REQUEST" &&
-    error.message.includes("unknown method: system.info")
-  );
-}
-
-export function supportsSystemInfo(hello: ApplicationGatewaySnapshot["hello"]): boolean {
-  return hello?.features?.methods?.includes("system.info") === true;
-}
+const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
 
 function defaultConfigSelection(pageId: ConfigPageId): ConfigSelection {
   switch (pageId) {
@@ -289,7 +290,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private readonly sessionObserverModelFailures = new WeakSet<GatewayBrowserClient>();
   private readonly systemInfoPolling = new PollController(
     this,
-    SYSTEM_INFO_POLL_INTERVAL_MS,
+    SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS,
     () => {
       void this.loadSystemInfo();
     },
@@ -445,6 +446,15 @@ export class ConfigPage extends OpenClawLightDomElement {
         return;
       }
     }
+    const rawTargetId =
+      this.routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    if (rawTargetId) {
+      const movedTarget = MOVED_TARGET_ROUTES[`${this.pageId}:${rawTargetId}`];
+      if (movedTarget) {
+        this.context?.navigate(movedTarget.routeId, { search: "", hash: movedTarget.hash });
+        return;
+      }
+    }
     const selection = this.routeData
       ? normalizeConfigSelection(this.pageId, this.routeData.section, null)
       : configSelectionFromSearch(this.pageId, globalThis.location?.search ?? "");
@@ -479,7 +489,9 @@ export class ConfigPage extends OpenClawLightDomElement {
   }
 
   private isSystemInfoVisible(): boolean {
-    return this.pageId === "config" || this.pageId === "appearance";
+    // Appearance still uses system.info to show the Session Observer's server-resolved utility
+    // model. Gateway host polling itself belongs exclusively to the Connection page.
+    return this.pageId === "appearance";
   }
 
   private synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -973,6 +985,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       lobsterPetSounds: this.settings.lobsterPetSounds === true,
       setLobsterPetSounds: (enabled) =>
         this.applySettings({ ...this.settings, lobsterPetSounds: enabled }),
+      lobsterdexHref: pathForRoute("lobsterdex", this.context.basePath),
+      onOpenLobsterdex: () => this.context.navigate("lobsterdex"),
       chatSendShortcut: normalizeChatSendShortcut(this.settings.chatSendShortcut),
       setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
       chatFollowUpMode: this.settings.chatFollowUpMode,
@@ -1081,33 +1095,13 @@ export class ConfigPage extends OpenClawLightDomElement {
     return renderConfig(props);
   }
 
-  private renderQuickConfig(configObject: Record<string, unknown>) {
+  private renderQuickConfig() {
     const runtimeConfig = this.context.runtimeConfig;
-    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const model = resolveModelPrimary(agentsDefaults?.model) ?? "default";
-    const thinkingLevel =
-      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
-    const fastMode = agentsDefaults?.fastModeDefault;
-    const appConfig = this.context.config.current;
     return renderQuickSettings({
       locale: isSupportedLocale(this.settings.locale) ? this.settings.locale : i18n.getLocale(),
       onLocaleChange: (locale) => this.setLocale(locale),
-      currentModel: model,
-      thinkingLevel,
-      fastMode: fastMode === "auto" || typeof fastMode === "boolean" ? fastMode : false,
-      systemInfo: this.systemInfo,
-      systemInfoUnavailable: this.systemInfoUnavailable,
-      onModelChange: () => {
-        this.selections = {
-          ...this.selections,
-          "ai-agents": { activeSection: "models", activeSubsection: null },
-        };
-        this.navigate("ai-agents");
-      },
+      onModelsClick: () => this.navigate("model-providers"),
       connected: runtimeConfig.state.connected,
-      assistantName: appConfig.assistantIdentity.name,
-      version:
-        appConfig.serverVersion ?? this.context.gateway.snapshot.hello?.server?.version ?? "",
       configLoading: runtimeConfig.state.configLoading,
       configSaving: runtimeConfig.state.configSaving,
       configApplying: runtimeConfig.state.configApplying,
@@ -1119,10 +1113,6 @@ export class ConfigPage extends OpenClawLightDomElement {
       onApplyConfig: () => void runtimeConfig.apply(),
       onRetrySaveConfig: () => void runtimeConfig.save(),
       onDiscardConfig: () => void runtimeConfig.discardDraft(),
-      onThinkingChange: (level) =>
-        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
-      onFastModeChange: (mode: FastMode) =>
-        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
     });
   }
 
@@ -1131,9 +1121,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     const configObject =
       asConfigRecord(configState.configForm ?? configState.configSnapshot?.config) ?? {};
     const body =
-      this.pageId === "config"
-        ? this.renderQuickConfig(configObject)
-        : this.renderAdvancedConfig(configObject);
+      this.pageId === "config" ? this.renderQuickConfig() : this.renderAdvancedConfig(configObject);
     return html`
       <section class="content-header">
         <div>

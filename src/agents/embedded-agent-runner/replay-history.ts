@@ -427,9 +427,8 @@ function isReplayDroppableTrailingAssistant(message: AgentMessage | undefined): 
     const stopReason = (message as { stopReason?: unknown }).stopReason;
     return stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message);
   }
-  // Sentinel-text content is the post-rewrite shape produced by either
-  // session-file-repair.rewriteAssistantEntryWithEmptyContent (always
-  // stopReason="error") or the in-memory rewrite earlier in this same
+  // Sentinel-text content is the post-rewrite shape produced by either a
+  // doctor-imported legacy repair (always stopReason="error") or the in-memory rewrite earlier in this same
   // normalizeAssistantReplayContent loop (preserves the original
   // stopReason — "error" or zero-usage "stop"). Drop only when the trailing
   // turn carries that synthetic provenance: without this guard, a real
@@ -811,7 +810,7 @@ export async function sanitizeSessionHistory(params: {
   // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
   // bound to the original prefix; after compaction the prefix changes and Anthropic
   // rejects them. Timestamp comparison with the latest compaction summary identifies
-  // the affected messages regardless of path (standard or truncateAfterCompaction).
+  // the affected messages regardless of which compaction path produced them.
   const compactionStaleStripped =
     signedThinkingProvider || policy.preserveSignatures
       ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)

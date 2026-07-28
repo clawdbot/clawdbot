@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   CombinedAutocompleteProvider,
@@ -17,7 +18,6 @@ import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js"
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
@@ -48,7 +48,7 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatModelFooter,
-  sanitizeRenderableText,
+  formatTuiErrorMessage,
   formatTokens,
 } from "./tui-formatters.js";
 import {
@@ -102,6 +102,8 @@ const DIST_ENTRY_MJS_PATH = fileURLToPath(new URL("../../dist/entry.mjs", import
 
 const OPENAI_CODEX_PROVIDER = "openai";
 const CODEX_CLI_LOOKUP_TIMEOUT_MS = 5_000;
+const SESSION_SUBSCRIPTION_MAX_ATTEMPTS = 5;
+const SESSION_SUBSCRIPTION_RETRY_DELAY_MS = 25;
 
 type RunTuiOptions = TuiOptions & {
   backend?: TuiBackend;
@@ -1404,6 +1406,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     reconnectStreamingWatchdog,
     consumeCompletedRunForPendingSend,
     isRunObserved,
+    reconcileHistoryAfterGap,
     flushPendingHistoryRefreshIfIdle,
     dispose: disposeEventHandlers,
   } = createEventHandlers({
@@ -1458,7 +1461,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       onError: (err) => {
         if (!isTuiTerminalLossError(err)) {
           try {
-            process.stderr.write(`openclaw tui shutdown failed: ${String(err)}\n`);
+            process.stderr.write(`openclaw tui shutdown failed: ${formatTuiErrorMessage(err)}\n`);
           } catch {
             // Best effort only; exit must still complete.
           }
@@ -1528,7 +1531,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   const notifySubmitError = (action: TuiSubmitAction, error: unknown) => {
-    const message = sanitizeRenderableText(formatErrorMessage(error));
+    const message = formatTuiErrorMessage(error);
     chatLog.addSystem(`${action} submit failed: ${message}`);
     tui.requestRender();
   };
@@ -1674,13 +1677,30 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       setActivityStatus("starting up");
     }
     void (async () => {
-      try {
-        await client.subscribeSessionEvents?.();
-      } catch (err) {
-        if (!ownsConnection()) {
-          return;
+      for (let attempt = 0; attempt < SESSION_SUBSCRIPTION_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await client.subscribeSessionEvents?.();
+          break;
+        } catch (err) {
+          if (!ownsConnection()) {
+            return;
+          }
+          if (attempt + 1 === SESSION_SUBSCRIPTION_MAX_ATTEMPTS) {
+            chatLog.addSystem(`session event subscribe failed: ${formatTuiErrorMessage(err)}`);
+            if (activityStatus === "starting up") {
+              setActivityStatus("idle");
+            }
+            setConnectionStatus("session event subscription failed");
+            tui.requestRender();
+            return;
+          }
+          // A connected but unsubscribed TUI misses every peer's message. Wait
+          // between idempotent retries and abandon this generation on reconnect.
+          await delay(SESSION_SUBSCRIPTION_RETRY_DELAY_MS * (attempt + 1));
+          if (!ownsConnection()) {
+            return;
+          }
         }
-        chatLog.addSystem(`session event subscribe failed: ${String(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1701,7 +1721,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         if (!ownsConnection()) {
           return;
         }
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1712,7 +1732,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
         if (!ownsConnection()) {
           return;
         }
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       if (!ownsConnection()) {
         return;
@@ -1744,7 +1764,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       if (!ownsConnection()) {
         return;
       }
-      chatLog.addSystem(`startup failed: ${String(err)}`);
+      chatLog.addSystem(`startup failed: ${formatTuiErrorMessage(err)}`);
       if (activityStatus === "starting up") {
         setActivityStatus("idle");
       }
@@ -1791,16 +1811,17 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    reconcileHistoryAfterGap();
     void (async () => {
       try {
         await pluginApprovals?.refresh();
       } catch (err) {
-        chatLog.addSystem(`plugin approval refresh failed: ${String(err)}`);
+        chatLog.addSystem(`plugin approval refresh failed: ${formatTuiErrorMessage(err)}`);
       }
       try {
         await taskSuggestions?.refresh();
       } catch (err) {
-        chatLog.addSystem(`task suggestion refresh failed: ${String(err)}`);
+        chatLog.addSystem(`task suggestion refresh failed: ${formatTuiErrorMessage(err)}`);
       }
     })();
     tui.requestRender();

@@ -303,6 +303,53 @@ describeControlUiE2e("Control UI native-nav sidebar toggle E2E", () => {
       .toBe(true);
   });
 
+  it("keeps the mobile drawer inert while closed and announces its expanded state", async () => {
+    const page = await openPage({ nativeNav: false, width: 900 });
+    const navigation = page.locator(".shell-nav");
+    const backdrop = page.locator(".shell-nav-backdrop");
+    const trigger = page.locator(".chat-pane__nav-toggle").first();
+
+    await expect.poll(() => navigation.getAttribute("inert")).toBe("");
+    await expect.poll(() => backdrop.getAttribute("inert")).toBe("");
+    await page.locator(".shell-skip-link").focus();
+    await page.keyboard.press("Tab");
+    await expect
+      .poll(() =>
+        page.evaluate(() => ({
+          backdrop: document.activeElement?.matches(".shell-nav-backdrop") ?? false,
+          navigation: document.activeElement?.closest(".shell-nav") !== null,
+        })),
+      )
+      .toEqual({ backdrop: false, navigation: false });
+
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await trigger.focus();
+    await page.keyboard.press("Enter");
+
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .toContain("shell--nav-drawer-open");
+    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await expect.poll(() => backdrop.getAttribute("inert")).toBeNull();
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Collapse sidebar");
+
+    await page.keyboard.press("Escape");
+    await expect
+      .poll(() => page.locator(".shell").getAttribute("class"))
+      .not.toContain("shell--nav-drawer-open");
+    await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
+    await expect.poll(() => trigger.getAttribute("aria-label")).toBe("Expand sidebar");
+    await expect
+      .poll(() => trigger.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await expect.poll(() => navigation.getAttribute("inert")).toBeNull();
+    await expect.poll(() => backdrop.getAttribute("inert")).toBe("");
+  });
+
   it("keeps the sidebar rail beside a half-width native link browser", async () => {
     const page = await openPage({ webChrome: true, width: 620 });
     await expect.poll(() => page.locator(".macos-titlebar-controls").isVisible()).toBe(true);

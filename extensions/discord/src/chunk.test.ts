@@ -235,6 +235,56 @@ describe("chunkDiscordText", () => {
     for (const chunk of chunks) {
       const underscoreCount = (chunk.match(/_/g) || []).length;
       expect(underscoreCount % 2).toBe(0);
+      expect(chunk.length).toBeLessThanOrEqual(80);
+    }
+  });
+
+  it("reserves the Discord transport limit for reasoning italic markers", () => {
+    const maxChars = 2000;
+    const text = `Reasoning:\n_${"a".repeat(maxChars * 2)}_`;
+
+    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(maxChars);
+      expect((chunk.match(/_/g) || []).length % 2).toBe(0);
+    }
+  });
+
+  it("keeps newline-mode reasoning chunks within the Discord transport limit", () => {
+    const maxChars = 2000;
+    const text = `Reasoning:\n_${"a".repeat(maxChars * 2)}_`;
+
+    const chunks = chunkDiscordTextWithMode(text, {
+      chunkMode: "newline",
+      maxChars,
+      maxLines: 50,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
+  });
+
+  it.each([1, 2, 3, 4, 20])("never exceeds a %i-character reasoning chunk limit", (maxChars) => {
+    const text = `Reasoning:\n_${"abcdef".repeat(8)}_`;
+
+    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
+  });
+
+  it("does not split surrogate pairs when reserving reasoning italic markers", () => {
+    const text = `Reasoning:\n_${"😀".repeat(24)}_`;
+    const maxChars = 4;
+
+    const chunks = chunkDiscordText(text, { maxChars, maxLines: 50 });
+
+    expect(chunks.every((chunk) => chunk.length <= maxChars)).toBe(true);
+    for (const chunk of chunks) {
+      expect(chunk).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+      expect(chunk).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u);
     }
   });
 

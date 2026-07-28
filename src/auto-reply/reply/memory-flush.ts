@@ -25,11 +25,9 @@ export function resolveMemoryFlushContextWindowTokens(params: {
 }
 
 export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | undefined {
-  const compaction = cfg?.agents?.defaults?.compaction;
-  if (compaction?.truncateAfterCompaction !== true) {
-    return undefined;
-  }
-  const parsed = parseNonNegativeByteSize(compaction.maxActiveTranscriptBytes);
+  const parsed = parseNonNegativeByteSize(
+    cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
+  );
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
 }
 

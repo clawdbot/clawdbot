@@ -936,7 +936,10 @@ describe("EmbeddedTuiBackend", () => {
       sessionId: "session-work-global",
       messages: [],
     });
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("global", {
+      agentId: "work",
+      includeStoreChildEntries: true,
+    });
   });
 
   it("uses reset-archive fallback for embedded TUI history reads", async () => {
@@ -1007,7 +1010,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       messages: [],
-      runtimePluginsPrewarm: { status: "failed", error: "Error: runtime unavailable" },
+      runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
     });
   });
 

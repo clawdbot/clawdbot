@@ -5,10 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   persistSessionTranscriptTurn,
+  replaceTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -21,9 +21,10 @@ import {
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
-  readSessionTitleFieldsFromTranscript,
+  readLatestSessionUsageFromTranscriptAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
+import { readSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
 
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
@@ -55,38 +56,35 @@ describe("session transcript reader facade", () => {
     envSnapshot.restore();
   });
 
-  function writeTranscript(sessionId: string, events: unknown[]): SessionTranscriptReadScope {
-    const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(
-      transcriptPath,
-      `${events.map((event) => JSON.stringify(event)).join("\n")}\n`,
-      "utf-8",
-    );
-    return { sessionFile: transcriptPath, sessionId, sessionKey: `agent:main:${sessionId}` };
-  }
-
-  function sqliteScope(sessionId: string): SessionTranscriptReadScope {
-    return {
+  async function writeTranscript(
+    sessionId: string,
+    events: unknown[],
+  ): Promise<SessionTranscriptReadScope> {
+    const scope = {
       agentId: "main",
-      sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
       storePath,
     };
+    await replaceTranscriptEvents(scope, events);
+    return scope;
   }
 
   async function writeSqliteMessages(
     sessionId: string,
     messages: Array<{ content: unknown; provenance?: unknown; role: string }>,
   ): Promise<SessionTranscriptReadScope> {
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
-      {
-        messages: messages.map((message) => ({ message })),
-        touchSessionEntry: false,
-      },
-    );
-    return sqliteScope(sessionId);
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: messages.map((message) => ({ message })),
+      touchSessionEntry: false,
+    });
+    return scope;
   }
 
   function extractReferenceText(message: unknown): string | null {
@@ -141,7 +139,7 @@ describe("session transcript reader facade", () => {
   }
 
   test("reads active-branch messages and message ids through a scope", async () => {
-    const scope = writeTranscript("reader-active-branch", [
+    const scope = await writeTranscript("reader-active-branch", [
       { type: "session", version: 3, id: "reader-active-branch" },
       {
         type: "message",
@@ -188,7 +186,7 @@ describe("session transcript reader facade", () => {
 
   test("finds an anchored reset-archive message by historical session id", async () => {
     const sessionId = "reader-file-archive-anchor";
-    const scope = writeTranscript(sessionId, [
+    const scope = await writeTranscript(sessionId, [
       { type: "session", version: 3, id: sessionId },
       {
         type: "message",
@@ -217,92 +215,6 @@ describe("session transcript reader facade", () => {
     ).resolves.toMatchObject({
       found: true,
       messages: [{ content: "archived prompt" }],
-    });
-  });
-
-  test("does not reuse the current session file for a historical anchor", async () => {
-    const currentSessionId = "reader-current-collision";
-    const historicalSessionId = "reader-historical-collision";
-    const currentSessionFile = path.join(tempDir, `${currentSessionId}.jsonl`);
-    fs.writeFileSync(
-      currentSessionFile,
-      `${JSON.stringify({ type: "session", version: 3, id: currentSessionId })}\n${JSON.stringify({
-        type: "message",
-        id: "shared-message",
-        parentId: null,
-        message: { role: "user", content: "current collision" },
-      })}\n`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(tempDir, `${historicalSessionId}.jsonl.reset.2026-07-12T17-00-00.000Z`),
-      `${JSON.stringify({ type: "session", version: 3, id: historicalSessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "shared-message",
-          parentId: null,
-          message: { role: "user", content: "historical collision" },
-        },
-      )}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(
-        {
-          agentId: "main",
-          sessionId: historicalSessionId,
-          sessionKey: "agent:main:main",
-          storePath,
-          sessionEntry: { sessionId: currentSessionId, sessionFile: currentSessionFile },
-        },
-        {
-          messageId: "shared-message",
-          maxMessages: 1,
-          allowResetArchiveFallback: true,
-        },
-      ),
-    ).resolves.toMatchObject({
-      found: true,
-      messages: [{ content: "historical collision" }],
-    });
-  });
-
-  test("keeps an explicit historical session file over a mismatched current entry", async () => {
-    const historicalSessionId = "reader-explicit-historical";
-    const historicalSessionFile = path.join(tempDir, "explicit-historical.jsonl");
-    fs.writeFileSync(
-      historicalSessionFile,
-      `${JSON.stringify({ type: "session", version: 3, id: historicalSessionId })}\n${JSON.stringify(
-        {
-          type: "message",
-          id: "historical-message",
-          parentId: null,
-          message: { role: "user", content: "explicit historical" },
-        },
-      )}\n`,
-      "utf-8",
-    );
-
-    await expect(
-      readSessionMessagesAroundIdWithStatsAsync(
-        {
-          sessionFile: historicalSessionFile,
-          sessionId: historicalSessionId,
-          sessionEntry: {
-            sessionId: "reader-current-entry",
-            sessionFile: path.join(tempDir, "reader-current-entry.jsonl"),
-          },
-        },
-        {
-          messageId: "historical-message",
-          maxMessages: 1,
-          allowResetArchiveFallback: true,
-        },
-      ),
-    ).resolves.toMatchObject({
-      found: true,
-      messages: [{ content: "explicit historical" }],
     });
   });
 
@@ -373,66 +285,92 @@ describe("session transcript reader facade", () => {
     await expect(readSessionMessageCountAsync(scope)).resolves.toBe(3);
   });
 
-  test("keeps bounded title fields at full-scan parity across common transcript shapes", async () => {
-    const longMessages = (build: (index: number) => { content: unknown; role: string }) =>
-      Array.from({ length: 105 }, (_, index) => build(index));
-    const cases = [
-      {
-        expected: { firstUserMessage: "first prompt", lastMessagePreview: "reply 104" },
-        messages: longMessages((index) =>
-          index === 0
-            ? { role: "user", content: "first prompt" }
-            : { role: "assistant", content: `reply ${index}` },
-        ),
-        name: "user message first",
-      },
-      {
-        expected: { firstUserMessage: "late prompt", lastMessagePreview: "reply 104" },
-        messages: longMessages((index) =>
-          index === 60
-            ? { role: "user", content: "late prompt" }
-            : { role: "assistant", content: `reply ${index}` },
-        ),
-        name: "user message late",
-      },
-      {
-        expected: { firstUserMessage: null, lastMessagePreview: "reply 104" },
-        messages: longMessages((index) => ({ role: "assistant", content: `reply ${index}` })),
-        name: "no user messages",
-      },
-      {
-        expected: { firstUserMessage: null, lastMessagePreview: null },
-        messages: [],
-        name: "empty transcript",
-      },
-      {
-        expected: { firstUserMessage: "first prompt", lastMessagePreview: "last visible" },
-        messages: longMessages((index) => {
-          if (index === 0) {
-            return { role: "user", content: "first prompt" };
-          }
-          if (index === 102) {
-            return { role: "assistant", content: "last visible" };
-          }
-          return { role: "assistant", content: index > 102 ? " " : `reply ${index}` };
-        }),
-        name: "last message empty then text",
-      },
-    ];
+  test("uses an explicit JSONL artifact when the store path is a placeholder", async () => {
+    const sessionId = "reader-artifact-placeholder-store";
+    const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({ type: "session", version: 1, id: sessionId })}\n${JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          usage: { input: 12, output: 3, cost: { total: 0.001 } },
+        },
+      })}\n`,
+      "utf-8",
+    );
 
-    for (const [index, parityCase] of cases.entries()) {
-      const sessionId = `reader-title-parity-${String(index)}`;
-      const scope =
-        parityCase.messages.length > 0
-          ? await writeSqliteMessages(sessionId, parityCase.messages)
-          : sqliteScope(sessionId);
-      const reference = await readFullScanTitleFields(scope);
-      expect(reference, `${parityCase.name} reference`).toEqual(parityCase.expected);
-      vi.clearAllMocks();
+    await expect(
+      readLatestSessionUsageFromTranscriptAsync({
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:${sessionId}`,
+        sessionFile: transcriptPath,
+        storePath: "(multiple)",
+      }),
+    ).resolves.toMatchObject({
+      inputTokens: 12,
+      outputTokens: 3,
+    });
+  });
 
-      expect(readSessionTitleFieldsFromTranscript(scope), parityCase.name).toEqual(reference);
-      expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
-    }
+  test("keeps a canonical session key on SQLite when the store path is a placeholder", async () => {
+    const sessionId = "reader-placeholder-sqlite-key";
+    const sessionKey = `agent:main:${sessionId}`;
+    const defaultStorePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey, storePath: defaultStorePath },
+      {
+        messages: [
+          {
+            message: {
+              role: "assistant",
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              usage: { input: 15, output: 4, cost: { total: 0.001 } },
+            },
+          },
+        ],
+        updateMode: "file-only",
+      },
+    );
+
+    await expect(
+      readLatestSessionUsageFromTranscriptAsync({
+        sessionId,
+        sessionKey,
+        sessionFile: sessionKey,
+        storePath: "(multiple)",
+      }),
+    ).resolves.toMatchObject({
+      inputTokens: 15,
+      outputTokens: 4,
+    });
+  });
+
+  test("keeps bounded title fields at full-scan parity", async () => {
+    const scope = await writeSqliteMessages(
+      "reader-title-parity",
+      Array.from({ length: 105 }, (_, index) => {
+        if (index === 60) {
+          return { role: "user", content: "late prompt" };
+        }
+        if (index === 102) {
+          return { role: "assistant", content: "last visible" };
+        }
+        return { role: "assistant", content: index > 102 ? " " : `reply ${String(index)}` };
+      }),
+    );
+    const reference = await readFullScanTitleFields(scope);
+    expect(reference).toEqual({
+      firstUserMessage: "late prompt",
+      lastMessagePreview: "last visible",
+    });
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual(reference);
+    expect(sessionAccessor.readSessionTranscriptMessageEvents).not.toHaveBeenCalled();
   });
 
   test("bounds title probe reads independently of transcript length", async () => {
@@ -458,6 +396,66 @@ describe("session transcript reader facade", () => {
 
     await expect(probeReadCount("reader-title-bounded-101", 101)).resolves.toBe(200);
     await expect(probeReadCount("reader-title-bounded-201", 201)).resolves.toBe(200);
+  });
+
+  test("reuses cached SQLite title fields while the transcript watermark is unchanged", async () => {
+    const scope = await writeSqliteMessages("reader-title-cache-warm", [
+      { role: "user", content: "cached prompt" },
+      { role: "assistant", content: "cached reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "cached prompt",
+      lastMessagePreview: "cached reply",
+    });
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "cached prompt",
+      lastMessagePreview: "cached reply",
+    });
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).not.toHaveBeenCalled();
+  });
+
+  test("invalidates cached SQLite title fields after an append advances max seq", async () => {
+    const sessionId = "reader-title-cache-append";
+    const scope = await writeSqliteMessages(sessionId, [
+      { role: "user", content: "append prompt" },
+      { role: "assistant", content: "first reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("first reply");
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath },
+      {
+        messages: [{ message: { role: "assistant", content: "appended reply" } }],
+        touchSessionEntry: false,
+      },
+    );
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope).lastMessagePreview).toBe("appended reply");
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
+  });
+
+  test("invalidates cached SQLite title fields after the rewrite generation changes", async () => {
+    const sessionId = "reader-title-cache-generation";
+    const scope = await writeSqliteMessages(sessionId, [
+      { role: "user", content: "generation prompt" },
+      { role: "assistant", content: "generation reply" },
+    ]);
+    expect(readSessionTitleFieldsFromTranscript(scope).firstUserMessage).toBe("generation prompt");
+    openOpenClawAgentDatabase({
+      agentId: "main",
+      path: path.join(tempDir, "openclaw-agent.sqlite"),
+    })
+      .db.prepare("UPDATE transcript_rewrite_watermarks SET generation = ? WHERE session_id = ?")
+      .run("f".repeat(32), sessionId);
+    vi.clearAllMocks();
+
+    expect(readSessionTitleFieldsFromTranscript(scope)).toEqual({
+      firstUserMessage: "generation prompt",
+      lastMessagePreview: "generation reply",
+    });
+    expect(sessionAccessor.readSessionTranscriptMessageEventPage).toHaveBeenCalled();
   });
 
   test("returns missing title fields when the bounded head and tail caps miss", async () => {
@@ -518,7 +516,7 @@ describe("session transcript reader facade", () => {
     ]);
   });
 
-  test("uses SQLite marker identity when only sessionFile is provided", async () => {
+  test("uses structured SQLite identity", async () => {
     const sessionId = "reader-marker-only";
     const markerStorePath = path.join(
       tempDir,
@@ -542,21 +540,13 @@ describe("session transcript reader facade", () => {
       ],
       touchSessionEntry: false,
     });
-    const marker = formatSqliteSessionFileMarker({
-      agentId: "marker-agent",
-      sessionId,
-      storePath: markerStorePath,
-    });
-
     await expect(
-      readSessionMessagesAsync(
-        { sessionFile: marker, sessionId },
-        { mode: "full", reason: "sqlite marker-only read test" },
-      ),
+      readSessionMessagesAsync(writeScope, { mode: "full", reason: "sqlite identity read test" }),
     ).resolves.toMatchObject([{ content: "marker scoped prompt" }]);
-    await expect(
-      readSessionMessageByIdAsync({ sessionFile: marker, sessionId }, "marker-message"),
-    ).resolves.toMatchObject({ found: true, seq: 1 });
+    await expect(readSessionMessageByIdAsync(writeScope, "marker-message")).resolves.toMatchObject({
+      found: true,
+      seq: 1,
+    });
   });
 
   test("waits for an in-flight SQLite projection before counting messages", async () => {
@@ -700,30 +690,5 @@ describe("session transcript reader facade", () => {
     await expect(
       readSessionMessagesAsync(scope, { mode: "full", reason: "facade agent scope test" }),
     ).resolves.toMatchObject([{ content: "agent scoped prompt" }]);
-  });
-
-  test("reads explicit transcript files without session store identity", async () => {
-    const sessionId = "reader-explicit-file";
-    const transcriptPath = path.join(tempDir, "explicit-file.jsonl");
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({
-        type: "message",
-        id: "explicit-message",
-        parentId: null,
-        message: { role: "user", content: "explicit prompt" },
-      })}\n`,
-      "utf-8",
-    );
-    const scope = { sessionFile: transcriptPath, sessionId };
-
-    await expect(readSessionMessageCountAsync(scope)).resolves.toBe(1);
-    await expect(readSessionMessageByIdAsync(scope, "explicit-message")).resolves.toMatchObject({
-      found: true,
-      seq: 1,
-    });
-    await expect(
-      readSessionMessagesAsync(scope, { mode: "full", reason: "explicit file test" }),
-    ).resolves.toMatchObject([{ content: "explicit prompt" }]);
   });
 });

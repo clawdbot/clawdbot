@@ -2,6 +2,8 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
+import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
 import { sleep, type PtyRun } from "./tui-pty-test-support.js";
 
 export async function writeTuiPtyFixtureScript(dir: string) {
@@ -32,6 +34,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
+      let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
       const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
       const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
@@ -79,6 +82,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           contextTokens: 128,
           fastMode,
           ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
+          ...(verboseLevel ? { verboseLevel } : {}),
           thinkingLevels: [],
         };
       }
@@ -109,11 +113,12 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         };
       }
 
+      ${TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT}
+
       class FixtureBackend implements TuiBackend {
         connection = { url: "pty-fixture://local" };
         onEvent?: TuiBackend["onEvent"];
         onConnected?: TuiBackend["onConnected"];
-        onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
 
         start() {
@@ -124,6 +129,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("stop");
         }
 
+        ${TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT}
+
         async sendChat(opts: Parameters<TuiBackend["sendChat"]>[0]) {
           record("sendChat", {
             sessionKey: opts.sessionKey,
@@ -132,6 +139,37 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
+          if (opts.message === "tui error redaction proof") {
+            const escape = String.fromCharCode(27);
+            throw new Error("gateway down", {
+              cause: new Error(escape + "[31mAuthorization: Bearer sk-abcdefghijklmnopqrstuv" + escape + "[0m"),
+            });
+          }
+          if (opts.message === "tool chronology proof") {
+            setTimeout(() => {
+              const emitAssistant = (state, text) => {
+                const message = {
+                  role: "assistant",
+                  content: [{ type: "text", text }],
+                  timestamp: Date.now(),
+                };
+                this.onEvent?.({ event: "chat", payload: { runId, sessionKey: opts.sessionKey, state, message } });
+              };
+              emitAssistant("delta", "PTY_BEFORE_TOOL");
+              const data = {
+                phase: "start",
+                toolCallId: "pty-chronology-tool",
+                name: "read_file",
+                args: { path: "chronology-proof.txt" },
+              };
+              this.onEvent?.({ event: "agent", payload: { runId, sessionKey: opts.sessionKey, stream: "tool", data } });
+              const completeText = "PTY_BEFORE_TOOL\\n\\nPTY_AFTER_TOOL";
+              emitAssistant("delta", completeText);
+              emitAssistant("final", completeText);
+              record("toolChronologyComplete", { runId });
+            }, 0);
+            return { runId };
+          }
           if (opts.message === "/btw picker focus proof") {
             queueMicrotask(() => {
               record("pickerSideResult", { runId, sessionKey: opts.sessionKey });
@@ -220,6 +258,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             }, 0);
             return { runId };
           }
+          if (opts.message === "history gap proof") { return beginGapHistoryRecovery(this, runId, opts.sessionKey); }
           if (opts.message === "skill approval proof" || opts.message === "skill approval gap proof") {
             pendingPluginApproval = {
               id: "plugin:skill-pty",
@@ -354,6 +393,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         async loadHistory(opts: Parameters<TuiBackend["loadHistory"]>[0]) {
           const sessionKey = opts?.sessionKey ?? "main";
           record("loadHistory", { sessionKey });
+          const gapHistory = loadGapHistory(sessionKey);
+          if (gapHistory) { return gapHistory; }
           const rapidSwitchMarker = sessionKey.endsWith("switch-a")
             ? "A"
             : sessionKey.endsWith("switch-b")
@@ -432,6 +473,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           }
           if (typeof opts.fastMode === "boolean") {
             fastMode = opts.fastMode;
+          }
+          if (typeof opts.verboseLevel === "string") {
+            verboseLevel = opts.verboseLevel;
           }
           return {
             ok: true,

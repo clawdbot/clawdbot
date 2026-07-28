@@ -1450,6 +1450,9 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Verify Control UI i18n source
+        run: pnpm ui:i18n:verify
+
       - name: Check Control UI locale parity
         # Source-only drift stays advisory because the post-merge bot owns
         # repair. Generated locale changes and full release CI remain strict.
@@ -2051,10 +2054,11 @@ jobs:
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
           # Frozen targets can carry integration hooks whose cold setup exceeds
-          # the current 120-second default on shared release runners.
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=300000"]' || '[]' }}
+          # the current defaults on shared release runners. Keep the no-output
+          # watchdog above Vitest so it cannot preempt hook diagnostics.
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=600000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
-          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+          OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: ${{ needs.preflight.outputs.compatibility_target == 'true' && '660000' || '300000' }}
           OPENCLAW_VITEST_NO_OUTPUT_RETRY: "1"
           OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: ${{ matrix.plan_concurrency }}
         shell: bash
@@ -3295,8 +3299,11 @@ jobs:
             -destination "platform=iOS Simulator,id=${simulator_id}" \
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
+            -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
 
       - name: Upload iOS lifecycle simulator evidence
