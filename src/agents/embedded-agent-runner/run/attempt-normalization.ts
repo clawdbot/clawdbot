@@ -7,7 +7,10 @@ import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
-import { mergeUsageIntoAccumulator } from "../usage-accumulator.js";
+import {
+  mergeAttemptRunStatsIntoAccumulator,
+  mergeUsageIntoAccumulator,
+} from "../usage-accumulator.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
 import type { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
@@ -165,6 +168,7 @@ export async function normalizeEmbeddedRunAttempt(input: {
   });
   const attemptUsage = attempt.attemptUsage ?? callUsage.currentAttempt;
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
+  mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
   const lastRunPromptUsage = callUsage.latest;
   const lastTurnTotal = callUsage.latest?.total;
   const breakerStep = stepIdleTimeoutBreaker(input.idleTimeoutBreakerState, {

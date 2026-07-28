@@ -134,7 +134,6 @@ describe("Google invalid API key errors (#114784)", () => {
     expect(isAuthErrorMessage("API key invalidation policy updated")).toBe(false);
   });
 });
-
 describe("Chinese provider overload messages", () => {
   const ZHIPU_OVERLOAD = "[1305][该模型当前访问量过大，请您稍后再试]";
 

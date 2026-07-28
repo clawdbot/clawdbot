@@ -120,12 +120,12 @@ command list:
 | ordinary node commands                                                                                               | `operator.pairing` + `operator.write` |
 | `system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `fs.listDir`, or `system.execApprovals.get/set` | `operator.pairing` + `operator.admin` |
 
-Approving a node declaration does not enable commands that have a separate
-runtime allowlist gate. For example, approving a node that declares
-`computer.act` requires pairing plus write scope, but only records the surface.
-An administrator or owner must still arm `computer.act`. While it remains
-armed, invoking it through `node.invoke` requires write scope, but not admin
-scope for each action.
+Approving a node declaration records its command surface. For `computer.act`,
+the node advertises that surface only after Computer Control is enabled locally;
+once the pairing update is approved, invoking it through `node.invoke` requires
+write scope but not admin scope for each action. Commands classified as
+dangerous or privacy-heavy still require a persistent
+`gateway.nodes.commands.allow` entry in addition to pairing.
 
 Node pairing establishes identity and trust; it does not replace a node's own
 `system.run` exec approval policy.

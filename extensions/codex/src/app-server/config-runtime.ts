@@ -8,6 +8,7 @@ import type {
   CodexAppServerStartOptions,
   CodexManagedCommandOrder,
   CodexComputerUseConfig,
+  CodexPluginConfig,
   OpenClawExecMode,
   OpenClawExecPolicyForCodexAppServer,
   ProviderAuthAliasConfig,
@@ -60,6 +61,27 @@ import {
 } from "./config-utils.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
+/**
+ * Sole owner of the app-server home-scope decision. Ordinary harness connections
+ * default to the isolated agent home; the supervision connection owns the operator's
+ * native Codex home on local transports. Auth handoffs must read the scope from here
+ * (or from resolved start options) because a prepared login on a native home rewrites
+ * the account Codex CLI and Desktop share.
+ */
+export function resolveCodexAppServerHomeScope(params: {
+  appServer: CodexPluginConfig["appServer"];
+  connectionScope?: "harness" | "supervision";
+}): CodexAppServerHomeScope {
+  const configured = params.appServer?.homeScope;
+  if (configured) {
+    return configured;
+  }
+  return params.connectionScope === "supervision" &&
+    resolveTransport(params.appServer?.transport) !== "websocket"
+    ? "user"
+    : "agent";
+}
+
 export function resolveCodexAppServerRuntimeOptions(
   params: {
     pluginConfig?: unknown;
@@ -84,7 +106,7 @@ export function resolveCodexAppServerRuntimeOptions(
   const pluginConfig = readCodexPluginConfig(params.pluginConfig);
   const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const homeScope: CodexAppServerHomeScope = config.homeScope ?? "agent";
+  const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -543,8 +565,10 @@ export function resolveCodexSupervisionAppServerRuntimeOptions(
 ): CodexAppServerRuntimeOptions {
   const pluginConfig = readCodexPluginConfig(params.pluginConfig);
   const appServer = pluginConfig.appServer ?? {};
-  const transport = resolveTransport(appServer.transport);
-  const homeScope = appServer.homeScope ?? (transport === "websocket" ? "agent" : "user");
+  const homeScope = resolveCodexAppServerHomeScope({
+    appServer,
+    connectionScope: "supervision",
+  });
   return resolveCodexAppServerRuntimeOptions({
     ...params,
     pluginConfig: {

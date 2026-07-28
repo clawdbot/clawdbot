@@ -455,6 +455,55 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "renders redacted, cause-aware send failures in the real terminal loop",
+    async () => {
+      await fixture.run.write("tui error redaction proof\r");
+      await fixture.run.waitForOutput("send failed: gateway down");
+      await fixture.run.waitForOutput("Authorization: Bearer");
+
+      expect(fixture.run.visibleOutput()).not.toContain("sk-abcdefghijklmnopqrstuv");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "tui error redaction proof"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders cumulative streamed text below the intervening tool in a real terminal",
+    async () => {
+      const chronologyFixture = await startTuiFixture({
+        env: {
+          OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
+          OPENCLAW_TUI_PTY_VERBOSE_LEVEL: "on",
+        },
+      });
+
+      try {
+        await chronologyFixture.run.waitForOutput("local ready", STARTUP_TIMEOUT_MS);
+        await chronologyFixture.run.write("tool chronology proof\r");
+        await chronologyFixture.waitForLogEntry(
+          (entry) => entry.method === "toolChronologyComplete",
+        );
+        await chronologyFixture.run.waitForOutput("PTY_AFTER_TOOL");
+
+        const rendered = chronologyFixture.run.visibleOutput();
+        expect(rendered.lastIndexOf("PTY_BEFORE_TOOL")).toBeLessThan(
+          rendered.lastIndexOf("Read File"),
+        );
+        expect(rendered.lastIndexOf("Read File")).toBeLessThan(
+          rendered.lastIndexOf("PTY_AFTER_TOOL"),
+        );
+      } finally {
+        await chronologyFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
     "blocks overlapping normal messages while a run is busy",
     async () => {
       await fixture.run.write("slow prompt\r");

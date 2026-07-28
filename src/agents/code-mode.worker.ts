@@ -188,12 +188,40 @@ const CONTROLLER_SOURCE = String.raw`
     return true;
   }
 
+  function nodeHandle(descriptor) {
+    const handle = Object.create(null);
+    Object.defineProperties(handle, {
+      id: { value: descriptor.id, enumerable: true },
+      name: { value: descriptor.name, enumerable: true },
+      invoke: {
+        value: (command, params) => request("nodes", ["invoke", descriptor.id, command, params]),
+        enumerable: true,
+      },
+    });
+    if (typeof descriptor.listDirCommand === "string") {
+      Object.defineProperty(handle, "listDir", {
+        value: (path) => request("nodes", ["invoke", descriptor.id, descriptor.listDirCommand, { path }]),
+        enumerable: true,
+      });
+    }
+    return Object.freeze(handle);
+  }
+
+  const nodes = Object.freeze({
+    list: () => request("nodes", ["list"]),
+    get: async (idOrName) => nodeHandle(await request("nodes", ["get", idOrName])),
+  });
+
   const baseTools = Object.create(null);
   Object.defineProperties(baseTools, {
     search: { value: (query, options) => request("search", [query, options]), enumerable: true },
     describe: { value: (id) => request("describe", [id]), enumerable: true },
     call: { value: (id, input) => request("call", [id, input]), enumerable: true },
     callValue: { value: (id, input) => request("callValue", [id, input]), enumerable: true },
+  });
+  const skills = Object.freeze({
+    list: () => request("skillsList", []),
+    read: (name) => request("skillsRead", [name]),
   });
 
   if (globalThis.__openclawSwarmEnabled === true) {
@@ -264,7 +292,7 @@ const CONTROLLER_SOURCE = String.raw`
       continue;
     }
     Object.defineProperty(baseTools, name, {
-      value: (input) => request("call", [id, input]),
+      value: (input) => request("callValue", [id, input]),
       enumerable: true,
     });
   }
@@ -291,7 +319,9 @@ const CONTROLLER_SOURCE = String.raw`
   Object.defineProperties(globalThis, {
     ALL_TOOLS: { value: Object.freeze(catalog.slice()), enumerable: true },
     API: { value: api, enumerable: true },
+    nodes: { value: nodes, enumerable: true },
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
+    skills: { value: skills, enumerable: true },
     tools: { value: Object.freeze(baseTools), enumerable: true },
     text: { value: (value) => output.push({ type: "text", text: asText(value) }), enumerable: true },
     json: { value: (value) => output.push({ type: "json", value: safe(value) }), enumerable: true },
@@ -326,10 +356,13 @@ function createHostRequestHandler(params: {
       method !== "describe" &&
       method !== "call" &&
       method !== "callValue" &&
+      method !== "nodes" &&
       method !== "yield" &&
       method !== "namespace" &&
       method !== "agentSpawn" &&
       method !== "agentWait" &&
+      method !== "skillsList" &&
+      method !== "skillsRead" &&
       method !== "swarmNote"
     ) {
       throw new Error("unsupported code mode bridge method");
@@ -519,6 +552,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
 function waitingResult(params: {
   vm: QuickJS;
   pendingRequests: PendingBridgeRequest[];
+  settlementMode: Extract<CodeModeWorkerResult, { status: "waiting" }>["settlementMode"];
   output: unknown[];
   config: CodeModeConfig;
 }): CodeModeWorkerResult {
@@ -530,6 +564,7 @@ function waitingResult(params: {
     status: "waiting",
     snapshotBytes,
     pendingRequests: params.pendingRequests,
+    settlementMode: params.settlementMode,
     output: params.output,
   };
 }
@@ -548,18 +583,23 @@ async function runVmExecution(params: {
     output = takeOutput(params.vm);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
-      if (params.pendingRequests.length > 0) {
-        // Pending host work suspends the VM instead of blocking in-worker; the
-        // host resumes with settled bridge results via runResume.
+      const promisePending = resultHandle.isPromise && resultHandle.promiseState === 0;
+      if (promisePending && params.pendingRequests.length === 0) {
+        throw new Error("code mode promise is pending without host work");
+      }
+      const requiredPendingRequestIds = params.pendingRequests.map((request) => request.id);
+      if (promisePending || requiredPendingRequestIds.length > 0) {
+        // Native await does not expose Promise ownership. Every dispatched
+        // call remains required, including detached calls and race branches.
         return waitingResult({
           vm: params.vm,
           pendingRequests: params.pendingRequests,
+          settlementMode: promisePending
+            ? { kind: "awaiting" }
+            : { kind: "draining", requiredRequestIds: requiredPendingRequestIds },
           output,
           config: params.config,
         });
-      }
-      if (resultHandle.isPromise && resultHandle.promiseState === 0) {
-        throw new Error("code mode promise is pending without host work");
       }
       return {
         status: "completed",
@@ -607,7 +647,9 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
 }
 
 async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>) {
-  const pendingRequests: PendingBridgeRequest[] = [];
+  // Restored promises keep their original bridge ids; do not redispatch calls
+  // that are still running when a faster sibling resumes this snapshot.
+  const pendingRequests: PendingBridgeRequest[] = [...(input.pendingRequests ?? [])];
   const { vm, didTimeout } = await restoreVm({
     snapshotBytes: input.snapshotBytes,
     config: input.config,
@@ -672,6 +714,9 @@ async function main(): Promise<CodeModeWorkerResult> {
         config: input.config as CodeModeConfig,
         settledRequests: Array.isArray(input.settledRequests)
           ? (input.settledRequests as SettledBridgeRequest[])
+          : [],
+        pendingRequests: Array.isArray(input.pendingRequests)
+          ? (input.pendingRequests as PendingBridgeRequest[])
           : [],
       });
     }

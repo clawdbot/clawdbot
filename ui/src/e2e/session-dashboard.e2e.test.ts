@@ -466,13 +466,13 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       status: "ready",
       priority: "high",
       labels: ["dashboard"],
-      position: 1,
+      position: 1_000,
       createdAt: 1,
       updatedAt: 2,
       agentId: "main",
       metadata: { automation: { boardId: "platform" } },
     };
-    const runningCard = { ...readyCard, status: "running", updatedAt: 3 };
+    const runningCard = { ...readyCard, status: "running", position: 2_000, updatedAt: 3 };
     const gateway = await installMockGateway(page, {
       sessionKey,
       controlUiWidgetKinds: [
@@ -496,7 +496,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
               id: "card-widget-running",
               title: "Already running",
               status: "running",
-              position: 2,
+              position: 1_000,
             },
           ],
           statuses: ["ready", "running", "done"],
@@ -528,7 +528,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       expect(moveRequest.params).toEqual({
         id: "card-widget-ready",
         status: "running",
-        position: 3,
+        position: 2_000,
       });
       await expect.poll(() => cardWidget.textContent()).toContain("Running");
       await gateway.setMethodResponse("workboard.cards.list", {
@@ -539,7 +539,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
             id: "card-widget-running",
             title: "Already running",
             status: "running",
-            position: 2,
+            position: 1_000,
           },
         ],
         statuses: ["ready", "running", "done"],

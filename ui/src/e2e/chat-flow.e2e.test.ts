@@ -2270,7 +2270,9 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
+      // chat.startup owns the initial metadata load; the old parallel
+      // chat.metadata request was only a synchronization point for this test.
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
@@ -2316,24 +2318,45 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         },
         messages: [],
         metadata: {
-          models: [],
+          commands: [
+            {
+              acceptsArgs: false,
+              description: "Loaded after startup completes",
+              name: "startup-ready",
+              scope: "text",
+              source: "native",
+            },
+          ],
+          models: [
+            {
+              available: true,
+              id: "startup-model",
+              name: "Startup Model",
+              provider: "openai",
+            },
+          ],
         },
         sessionId: "control-ui-e2e-session",
         thinkingLevel: null,
       });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
       await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
-      await gateway.waitForRequest("chat.metadata");
-      expect(await gateway.getRequests("chat.metadata")).toHaveLength(1);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
-      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
+      await expect
+        .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
+        .toBe(1);
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page
         .locator(".chat-thread-inner")
         .getByText("History race stayed visible.")
         .waitFor({ timeout: 10_000 });
       await page.locator(".agent-chat__composer-combobox textarea").fill("/");
-      expect(await gateway.getRequests("commands.list")).toHaveLength(0);
+      await page.getByRole("option", { name: /\/startup-ready/ }).waitFor({ timeout: 10_000 });
+      // Check after both controls render so no late fallback RPC supplied either catalog.
+      expect({
+        commands: (await gateway.getRequests("commands.list")).length,
+        metadata: (await gateway.getRequests("chat.metadata")).length,
+        models: (await gateway.getRequests("models.list")).length,
+      }).toEqual({ commands: 0, metadata: 0, models: 0 });
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
     } finally {
       await closeBrowserContext(context);

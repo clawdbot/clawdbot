@@ -200,7 +200,6 @@ extensions/openai/realtime-voice-provider.ts
 extensions/openrouter/index.test.ts
 extensions/openshell/src/backend.ts
 extensions/openshell/src/openshell-core.test.ts
-extensions/phone-control/index.test.ts
 extensions/policy/src/cli.test.ts
 extensions/policy/src/doctor/register.base.test-utils.ts
 extensions/policy/src/doctor/register.gateway-data-and-approvals.test-utils.ts

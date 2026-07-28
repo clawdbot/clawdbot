@@ -430,9 +430,75 @@ describe("buildGatewayCronService", () => {
       state.cron.stop();
       expect(cancelRun).toHaveBeenCalledWith("manual-cancel");
       expect(cancelScope).toHaveBeenCalledWith(`cron-exit:${job.id}`, "manual-cancel");
+
+      await state.reconcileExitWatchers?.();
+      expect(spawn).toHaveBeenCalledTimes(1);
     } finally {
       state.cron.stop();
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("restarts on-exit watchers only after their scheduler successfully restarts", async () => {
+    const spawn = vi.fn(async () => {
+      const runDone = createDeferred<{
+        reason: "manual-cancel";
+        exitCode: null;
+        exitSignal: null;
+        durationMs: number;
+        stdout: string;
+        stderr: string;
+        timedOut: false;
+        noOutputTimedOut: false;
+      }>();
+      return {
+        runId: `run-on-exit-restart-${spawn.mock.calls.length}`,
+        startedAtMs: Date.now(),
+        cancel: vi.fn(() =>
+          runDone.resolve({
+            reason: "manual-cancel",
+            exitCode: null,
+            exitSignal: null,
+            durationMs: 1,
+            stdout: "",
+            stderr: "",
+            timedOut: false,
+            noOutputTimedOut: false,
+          }),
+        ),
+        wait: () => runDone.promise,
+      };
+    });
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-restart-exit-watchers");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "restart watched build",
+        enabled: true,
+        schedule: { kind: "on-exit", command: "sleep 60" },
+        payload: { kind: "systemEvent", text: "done" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      await state.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+      state.cron.stop();
+      await state.reconcileExitWatchers?.();
+      expect(spawn).toHaveBeenCalledOnce();
+
+      await state.cron.start();
+      await state.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
+    } finally {
+      state.cron.stop();
     }
   });
 

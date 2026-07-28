@@ -32,6 +32,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
+      let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
       const launchThinkingLevel = process.env.OPENCLAW_TUI_PTY_LAUNCH_THINKING;
       const initialMessage = process.env.OPENCLAW_TUI_PTY_INITIAL_MESSAGE;
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
@@ -79,6 +80,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           contextTokens: 128,
           fastMode,
           ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
+          ...(verboseLevel ? { verboseLevel } : {}),
           thinkingLevels: [],
         };
       }
@@ -132,6 +134,37 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
+          if (opts.message === "tui error redaction proof") {
+            const escape = String.fromCharCode(27);
+            throw new Error("gateway down", {
+              cause: new Error(escape + "[31mAuthorization: Bearer sk-abcdefghijklmnopqrstuv" + escape + "[0m"),
+            });
+          }
+          if (opts.message === "tool chronology proof") {
+            setTimeout(() => {
+              const emitAssistant = (state, text) => {
+                const message = {
+                  role: "assistant",
+                  content: [{ type: "text", text }],
+                  timestamp: Date.now(),
+                };
+                this.onEvent?.({ event: "chat", payload: { runId, sessionKey: opts.sessionKey, state, message } });
+              };
+              emitAssistant("delta", "PTY_BEFORE_TOOL");
+              const data = {
+                phase: "start",
+                toolCallId: "pty-chronology-tool",
+                name: "read_file",
+                args: { path: "chronology-proof.txt" },
+              };
+              this.onEvent?.({ event: "agent", payload: { runId, sessionKey: opts.sessionKey, stream: "tool", data } });
+              const completeText = "PTY_BEFORE_TOOL\\n\\nPTY_AFTER_TOOL";
+              emitAssistant("delta", completeText);
+              emitAssistant("final", completeText);
+              record("toolChronologyComplete", { runId });
+            }, 0);
+            return { runId };
+          }
           if (opts.message === "/btw picker focus proof") {
             queueMicrotask(() => {
               record("pickerSideResult", { runId, sessionKey: opts.sessionKey });
@@ -432,6 +465,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           }
           if (typeof opts.fastMode === "boolean") {
             fastMode = opts.fastMode;
+          }
+          if (typeof opts.verboseLevel === "string") {
+            verboseLevel = opts.verboseLevel;
           }
           return {
             ok: true,

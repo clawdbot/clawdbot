@@ -269,6 +269,8 @@ async function buildChatStartupModelCatalogProjection(params: {
   return { getProjector, modelCatalogByAgentId, sessionCatalogProjector, sessionModelCatalog };
 }
 
+// The UI fills metadata gaps as soon as chat.startup returns, so history never waits
+// beyond this budget for a catalog snapshot that requires slower discovery.
 const CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS = 25;
 function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
