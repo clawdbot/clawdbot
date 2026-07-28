@@ -34,7 +34,7 @@ const ENV_KEYS = [
   "OPENCLAW_BUNDLED_PLUGINS_DIR",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_TEST_MINIMAL_GATEWAY",
-] as const;
+];
 
 function resetGatewayTestState(): void {
   resetConfigOverrides();
