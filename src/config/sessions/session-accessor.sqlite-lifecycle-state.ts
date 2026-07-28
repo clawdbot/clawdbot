@@ -363,7 +363,6 @@ export async function projectSqliteSessionEntryLifecycleMutation(
       upsert.resetBoundaryReason && expectedEntry?.sessionId
         ? await buildSessionResetBoundaryPlan({
             events: loadSqliteTranscriptEventsFromDatabase(database, expectedEntry.sessionId),
-            legacySessionFile: expectedEntry.sessionFile,
             reason: upsert.resetBoundaryReason,
           })
         : undefined;

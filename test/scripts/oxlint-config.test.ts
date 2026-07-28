@@ -183,7 +183,6 @@ describe("oxlint config", () => {
           "packages/terminal-core/**/*.ts",
           "packages/normalization-core/**/*.ts",
           "packages/model-catalog-core/**/*.ts",
-          "packages/web-content-core/**/*.ts",
           "packages/agent-core/**/*.ts",
           "packages/acp-core/**/*.ts",
           "packages/ai/**/*.ts",

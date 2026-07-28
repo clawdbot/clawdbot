@@ -176,6 +176,26 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     }
   });
 
+  it.each([
+    { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
+    { name: "forced message delivery", forceMessageTool: true },
+  ])("keeps $name directly visible in Code Mode", (delivery) => {
+    const runtime = createAgentHarnessToolSurfaceRuntime({
+      config: { tools: { codeMode: true } },
+      executeTool: async () => ({ content: [], details: {} }),
+      ...delivery,
+      modelToolsEnabled: true,
+    });
+
+    try {
+      expect(
+        runtime.compactTools(tools(["web_search", "message"])).tools.map((tool) => tool.name),
+      ).toEqual(["exec", "wait", "message"]);
+    } finally {
+      runtime.cleanup();
+    }
+  });
+
   it("keeps policy-required message delivery directly visible in directory mode", () => {
     const runtime = createAgentHarnessToolSurfaceRuntime({
       config: { tools: { toolSearch: { enabled: true, mode: "directory" } } },

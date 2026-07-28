@@ -565,9 +565,6 @@ const configs = [
       neverBundle: shouldExternalizeTerminalCoreDependency,
     },
   }),
-  nodeWorkspacePackageBuildConfig("web-content-core", {
-    outDir: "packages/web-content-core/dist",
-  }),
   nodeWorkspacePackageBuildConfig("speech-core", {
     entry: buildSpeechCoreDistEntries(),
     deps: {

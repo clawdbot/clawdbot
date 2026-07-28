@@ -37,6 +37,7 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import {
@@ -44,10 +45,6 @@ import {
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
-import {
-  formatSqliteSessionFileMarker,
-  sqliteSessionFileMarkerMatchesTarget,
-} from "../config/sessions/sqlite-marker.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -822,7 +819,7 @@ export async function cleanupSessionBeforeMutation(params: {
       agentId: normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg)),
       sessionId: params.entry.sessionId,
       sessionKey: params.target.canonicalKey ?? params.key,
-      sessionFile: params.entry.sessionFile,
+      sessionFile: params.target.canonicalKey ?? params.key,
       reason: params.reason === "session-reset" ? "reset" : "deleted",
     } satisfies Parameters<typeof resetRegisteredAgentHarnessSessions>[0];
     await resetRegisteredAgentHarnessSessions(resetParams);
@@ -847,8 +844,10 @@ export async function emitGatewayBeforeResetPluginHook(params: {
 
   const sessionKey = params.target.canonicalKey ?? params.key;
   const sessionId = params.entry?.sessionId;
-  const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
+  const sessionFile = sessionId
+    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
+    : undefined;
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   const messages =
     params.messages ??
@@ -1218,7 +1217,7 @@ export async function performGatewaySessionReset(params: {
           agentId,
           sessionId: entry.sessionId,
           sessionKey: target.canonicalKey ?? params.key,
-          sessionFile: entry.sessionFile,
+          sessionFile: target.canonicalKey ?? params.key,
           reason: "reset",
         });
       }
@@ -1280,7 +1279,7 @@ export async function performGatewaySessionReset(params: {
           sessionKey: target.canonicalKey,
           sessionId: entry.sessionId,
           storePath,
-          sessionFile: entry.sessionFile,
+          sessionFile: target.canonicalKey,
           agentId: target.agentId,
           reason: params.reason,
           archivedTranscripts: [],
@@ -1308,20 +1307,6 @@ export async function performGatewaySessionReset(params: {
         params.assertCurrent?.();
         throw new Error(`Session ${params.key} changed before reset boundary append.`);
       }
-      const resetSessionFile = boundaryEntry?.sessionId
-        ? ((sqliteSessionFileMarkerMatchesTarget(boundaryEntry.sessionFile, {
-            agentId,
-            sessionId: boundaryEntry.sessionId,
-            storePath,
-          })
-            ? boundaryEntry.sessionFile
-            : undefined) ??
-          formatSqliteSessionFileMarker({
-            agentId,
-            sessionId: boundaryEntry.sessionId,
-            storePath,
-          }))
-        : undefined;
       let resetBoundaryAppended = false;
       let resetSkipped = false;
       const lifecyclePromise = resetSessionEntryLifecycle({
@@ -1361,22 +1346,11 @@ export async function performGatewaySessionReset(params: {
             return currentEntry;
           }
           resetBoundaryAppended = currentEntry !== undefined;
-          const parsed = parseAgentSessionKey(primaryKey);
-          const sessionAgentId = normalizeAgentId(
-            parsed?.agentId ?? target.agentId ?? requestedAgentId ?? resolveDefaultAgentId(cfg),
-          );
           const resetPreservedSelection = resolveResetPreservedSelection({
             entry: currentEntry,
           });
           const now = Date.now();
           const nextSessionId = currentEntry?.sessionId ?? randomUUID();
-          const sessionFile =
-            (currentEntry ? resetSessionFile : undefined) ??
-            formatSqliteSessionFileMarker({
-              agentId: sessionAgentId,
-              sessionId: nextSessionId,
-              storePath,
-            });
           const creationStamp = currentEntry
             ? {
                 createdVia: currentEntry.createdVia,
@@ -1388,7 +1362,6 @@ export async function performGatewaySessionReset(params: {
               : {};
           const nextEntry: SessionEntry = {
             sessionId: nextSessionId,
-            sessionFile,
             lifecycleRevision: randomUUID(),
             updatedAt: now,
             sessionStartedAt: now,
@@ -1593,7 +1566,7 @@ export async function performGatewaySessionReset(params: {
           sessionId: next.sessionId,
           resumedFrom: oldSessionId,
           storePath,
-          sessionFile: next.sessionFile,
+          sessionFile: target.canonicalKey ?? params.key,
           agentId: target.agentId,
         });
       }

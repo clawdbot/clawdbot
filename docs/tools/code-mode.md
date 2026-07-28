@@ -565,6 +565,23 @@ type ToolCatalog = {
 };
 ```
 
+Paired Gateway nodes are available through the `nodes` global:
+
+```typescript
+const available = await nodes.list();
+const node = await nodes.get(available[0].id);
+const status = await node.invoke("device.status");
+```
+
+`nodes.list()` returns paired node ids, names, platforms, connection state, and
+advertised commands. `nodes.get(idOrName)` resolves an exact id before a display
+name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
+Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
+approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
+`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`exec`: the generic nodes surface reserves `system.run` for the normal shell
+`exec` tool with a node host.
+
 Convenience tool functions are installed only for unambiguous safe names:
 
 ```typescript
@@ -953,6 +970,24 @@ Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
 counts for the run's catalog, and the model-visible tool names (`exec`,
 `wait`, and retained direct-only tools).
+
+The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
+`agent exec --json` envelope) adds per-run stats:
+
+- `codeModeEngaged`: `true` only when code mode actually owned the model tool
+  surface. This is the reliable engagement signal — do not infer engagement
+  from config or tool names: the shell tool is also named `exec`, the
+  `"auto"` tier engages per model capability, and a model routed through a
+  native harness surface (for example OpenAI-family models on their harness)
+  reports `codeModeEngaged: false` even with `tools.codeMode.enabled=true`,
+  making the silent no-op observable.
+- `assistantTurns`: completed assistant/provider round trips across the run.
+- `bridgeCalls`: the run's cumulative inner bridge counts
+  (`{ search, describe, call }`). These calls never reach the provider;
+  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+- `costUsd`: estimated USD cost from the run's accumulated usage and the
+  model's cost config (cache read/write tiers included); omitted when the
+  model has no cost data.
 
 Telemetry must not include secrets, raw environment values, or unredacted
 tool inputs beyond existing OpenClaw trajectory policy.

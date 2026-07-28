@@ -115,7 +115,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "agent-media-payload": 3,
   // +2: deprecated media projection type and builder.
   "reply-payload": 2,
-  "text-runtime": 191,
+  // +1: flushLogger projected through the deprecated text-runtime barrel.
+  "text-runtime": 192,
   "agent-runtime": 2,
   "channel-secret-runtime": 23,
   "agent-harness-runtime": 4,
@@ -185,7 +186,10 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +3: channel prompt-context entry/compat types and channel metadata builder.
       // +4: focused CLI root-option constants and parsers.
       // +6: model-picker action/capability and authoritative session-apply contracts.
-      4737,
+      // +1: logger file-transport flush for graceful shutdown drains.
+      // +1: process-local sessions.changed plugin notification payload.
+      // +1: loopback-only host classifier for plugin local-machine boundaries.
+      4740,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -213,7 +217,9 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: channel metadata builder.
       // +3: focused CLI root-option parsers.
       // +1: authoritative model-picker session-apply operation.
-      2867,
+      // +1: logger file-transport flush for graceful shutdown drains.
+      // +1: loopback-only host classifier for plugin local-machine boundaries.
+      2869,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -222,7 +228,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shipped Slack and Discord setup compatibility helpers.
       // +10: named media legacy projection deprecations across public compatibility barrels.
       // +2: channel prompt-context type and metadata builder compatibility aliases.
-      1700,
+      // +1: flushLogger projected through the deprecated text-runtime barrel.
+      1701,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

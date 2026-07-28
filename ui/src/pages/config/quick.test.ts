@@ -299,6 +299,10 @@ describe("renderQuickSettings", () => {
     render(renderQuickSettings(createProps()), container);
     expect(container.querySelector(".config-toolbar__status")).toBeNull();
 
+    render(renderQuickSettings(createProps({ configAutoSaveStatus: "saved" })), container);
+    expect(container.querySelector(".config-toolbar__status")).toBeNull();
+    expect(container.textContent).not.toContain("Saved");
+
     render(renderQuickSettings(createProps({ configAutoSaveStatus: "saving" })), container);
     expect(container.querySelector(".config-toolbar__status")?.textContent?.trim()).toBe("Saving…");
 

@@ -856,6 +856,36 @@ two-party event loops that do not go through the shared inbound reply runner.
   </Accordion>
 </AccordionGroup>
 
+## Gateway service events
+
+Long-lived services registered with `api.registerService(...)` receive a process-local
+`ctx.gatewayEvents` facade when the process runs a Gateway broadcaster; in runtimes without one the
+field is absent, so feature-detect it and keep a fallback (for example a coarse poll). Use
+`onSessionsChanged(...)` to react after the Gateway broadcasts a `sessions.changed` notice:
+
+```typescript
+let unsubscribeSessionsChanged: (() => void) | undefined;
+
+api.registerService({
+  id: "session-index",
+  start(ctx) {
+    unsubscribeSessionsChanged = ctx.gatewayEvents?.onSessionsChanged((event) => {
+      // event: { sessionKey, agentId?, label?, displayName?, reason?, phase? }
+      refreshSession(event.sessionKey);
+    });
+  },
+  stop() {
+    unsubscribeSessionsChanged?.();
+    unsubscribeSessionsChanged = undefined;
+  },
+});
+```
+
+The handler runs in the Gateway process and does not add a Gateway protocol subscription. Keep the
+returned unsubscribe function and call it during service cleanup. The payload is a lightweight
+change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
+current session entry.
+
 ## Storing runtime references
 
 Use `createPluginRuntimeStore` to store the runtime reference for use outside the `register` callback:

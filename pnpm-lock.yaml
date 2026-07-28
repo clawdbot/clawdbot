@@ -1595,6 +1595,9 @@ importers:
       semver:
         specifier: 7.8.5
         version: 7.8.5
+      ws:
+        specifier: 8.21.1
+        version: 8.21.1
       yaml:
         specifier: 2.9.0
         version: 2.9.0
@@ -2307,8 +2310,6 @@ importers:
       '@openclaw/normalization-core':
         specifier: workspace:*
         version: link:../normalization-core
-
-  packages/web-content-core: {}
 
   packages/workboard-contract: {}
 

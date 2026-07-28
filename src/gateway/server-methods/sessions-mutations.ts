@@ -122,7 +122,7 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
     }
     let patchModelCatalog: Awaited<ReturnType<typeof context.loadGatewayModelCatalog>> | undefined;
     const loadPatchModelCatalog = async () => {
-      const catalog = await context.loadGatewayModelCatalog();
+      const catalog = await context.loadGatewayModelCatalog({ agentId: target.agentId });
       patchModelCatalog = catalog;
       return catalog;
     };
@@ -266,7 +266,12 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         try {
           await appendSessionAudit({
             cfg,
-            target: { agentId: target.agentId, entry: result.entry, storePath },
+            target: {
+              agentId: target.agentId,
+              entry: result.entry,
+              sessionKey: target.canonicalKey ?? key,
+              storePath,
+            },
             text: `${action} by ${archiveActor.label ?? archiveActor.id}`,
             now: Date.now(),
           });

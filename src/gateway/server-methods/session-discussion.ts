@@ -10,7 +10,7 @@ import {
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { hasExplicitSessionName, maybeGenerateSessionTitle } from "../dashboard-session-title.js";
-import { readSessionTitleFieldsFromTranscript } from "../session-transcript-readers.js";
+import { readSessionTitleFieldsFromTranscript } from "../session-transcript-title-reader.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";

@@ -439,7 +439,6 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toMatchObject({
-      ui: { prefs: { showAdvancedSettings: true } },
       skills: { load: { watch: true } },
       agents: {
         defaults: {
@@ -451,11 +450,15 @@ describe("retired runtime config migrations", () => {
       },
       messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
     });
+    expect(result.raw).not.toHaveProperty("ui");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.default.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
     expect(result.changes).toContain(
       "Collapsed conflicting WhatsApp debounce values into messages.inbound.byChannel.whatsapp using channels.whatsapp.accounts.work.debounceMs (4000 ms); account-specific debounce is no longer supported.",
+    );
+    expect(result.changes).toContain(
+      "Removed browser-local ui.prefs keys: ui.prefs.chatMessageMaxWidth, ui.prefs.textScale, ui.prefs.sidebarLiveActivity, ui.prefs.showAdvancedSettings.",
     );
   });
 

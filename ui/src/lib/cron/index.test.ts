@@ -1797,8 +1797,12 @@ describe("cron controller", () => {
     });
   });
 
-  it("canceling edit resets form to defaults and clears edit mode", () => {
-    const state = createState();
+  it.each([
+    { scenario: "all agents", cronAgentId: null, expectedAgentId: "" },
+    { scenario: "the default agent", cronAgentId: "main", expectedAgentId: "main" },
+    { scenario: "a selected agent", cronAgentId: "writer", expectedAgentId: "writer" },
+  ])("canceling edit resets form for $scenario and clears edit mode", (scenario) => {
+    const state = createState({ cronAgentId: scenario.cronAgentId });
     const job = {
       id: "job-cancel",
       name: "Editable",
@@ -1819,7 +1823,10 @@ describe("cron controller", () => {
     cancelCronEdit(state);
 
     expect(state.cronEditingJobId).toBeNull();
-    expect(state.cronForm).toEqual({ ...DEFAULT_CRON_FORM });
+    expect(state.cronForm).toEqual({
+      ...DEFAULT_CRON_FORM,
+      agentId: scenario.expectedAgentId,
+    });
     // Fresh forms start visually clean; validation re-arms on change/submit.
     expect(state.cronFieldErrors).toEqual({});
   });
@@ -1871,6 +1878,7 @@ describe("cron controller", () => {
     const sourceJob = {
       id: "job-1",
       name: "Daily ping",
+      agentId: "writer",
       enabled: true,
       createdAtMs: 0,
       updatedAtMs: 0,
@@ -1883,6 +1891,7 @@ describe("cron controller", () => {
     const state = createState({
       client: { request } as unknown as CronState["client"],
       cronJobs: [sourceJob],
+      cronAgentId: "main",
       cronEditingJobId: "job-1",
     });
 
@@ -1892,7 +1901,9 @@ describe("cron controller", () => {
     const addCall = findRequestCall(request.mock.calls, "cron.add");
     const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
     expect(updateCall).toBeUndefined();
-    expect((addCall[1] as { name?: string } | undefined)?.name).toBe("Daily ping copy");
+    expect(addCall[1]).toEqual(
+      expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
+    );
   });
 
   it("loads paged jobs with query/filter/sort params", async () => {
@@ -1903,6 +1914,7 @@ describe("cron controller", () => {
           offset: 0,
           query: "daily",
           enabled: "enabled",
+          includeDeliveryPreviews: false,
           scheduleKind: "cron",
           lastRunStatus: "error",
           sortBy: "updatedAtMs",
@@ -2622,6 +2634,7 @@ describe("loadCronFailingCount", () => {
 
     expect(request).toHaveBeenCalledWith("cron.list", {
       enabled: "enabled",
+      includeDeliveryPreviews: false,
       lastRunStatus: "error",
       limit: 1,
       offset: 0,

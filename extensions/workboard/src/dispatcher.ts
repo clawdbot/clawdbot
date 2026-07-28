@@ -439,8 +439,6 @@ async function runWorkboardDispatch(
         continue;
       }
     }
-    // Invalid workspace preflights must not spend the provider outage budget.
-    attemptedStarts += 1;
     try {
       const claimed = await params.store.claim(
         card.id,
@@ -457,6 +455,9 @@ async function runWorkboardDispatch(
         },
       );
       claimValue = claimed.token;
+      // Racing card changes never reached a worker and must not consume the
+      // provider-outage budget or starve a later healthy candidate.
+      attemptedStarts += 1;
       const context = await params.store.buildWorkerContext(card.id);
       const materialized = await materializeWorkspace({
         card: claimed.card,

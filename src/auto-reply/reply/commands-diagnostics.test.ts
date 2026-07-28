@@ -412,12 +412,12 @@ describe("diagnostics command", () => {
     expect(calls[0]?.args).toBe("diagnostics flaky tool call");
     expect(calls[0]?.diagnosticsPreviewOnly).toBe(true);
     expect(calls[0]?.senderIsOwner).toBe(true);
-    expect(calls[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(calls[0]?.sessionFile).toBe("agent:main:whatsapp:direct:user-1");
     const diagnosticsSessions = requireDiagnosticsSessions(calls[0]);
     expect(diagnosticsSessions).toHaveLength(1);
     expect(diagnosticsSessions[0]?.agentHarnessId).toBe("codex");
     expect(diagnosticsSessions[0]?.sessionId).toBe("session-1");
-    expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/session.jsonl");
+    expect(diagnosticsSessions[0]?.sessionFile).toBe("agent:main:whatsapp:direct:user-1");
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
     const { defaults } = requireExecCall(execCalls);
@@ -436,7 +436,7 @@ describe("diagnostics command", () => {
     expect(calls[1]?.diagnosticsUploadApproved).toBe(true);
   });
 
-  it("passes sidecar-bound session files to Codex diagnostics even when harness metadata is stale", async () => {
+  it("passes canonical session identities to Codex diagnostics when harness metadata is stale", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
@@ -471,11 +471,11 @@ describe("diagnostics command", () => {
     expect(diagnosticsSessions).toHaveLength(2);
     expect(diagnosticsSessions[0]?.sessionKey).toBe("agent:main:telegram:direct:user-1");
     expect(diagnosticsSessions[0]?.sessionId).toBe("telegram-session");
-    expect(diagnosticsSessions[0]?.sessionFile).toBe("/tmp/telegram.jsonl");
+    expect(diagnosticsSessions[0]?.sessionFile).toBe("agent:main:telegram:direct:user-1");
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[1]?.sessionKey).toBe("agent:main:discord:channel:123");
     expect(diagnosticsSessions[1]?.sessionId).toBe("discord-session");
-    expect(diagnosticsSessions[1]?.sessionFile).toBe("/tmp/discord.jsonl");
+    expect(diagnosticsSessions[1]?.sessionFile).toBe("agent:main:discord:channel:123");
     expect(diagnosticsSessions[1]?.channel).toBe("discord");
     expect(requireExecCall(execCalls).defaults.approvalWarningText).toContain(
       "OpenAI Codex harness:",

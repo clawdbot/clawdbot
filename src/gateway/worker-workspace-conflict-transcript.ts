@@ -41,8 +41,10 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
           sessionKey: target.canonicalKey,
           storePath: target.storePath,
         },
-        ({ sessionFile }) => {
-          for (const transcriptEntry of SessionManager.open(sessionFile).getBranch().toReversed()) {
+        (transcriptTarget) => {
+          for (const transcriptEntry of SessionManager.open(transcriptTarget)
+            .getBranch()
+            .toReversed()) {
             if (transcriptEntry.type !== "custom_message") {
               continue;
             }
@@ -107,8 +109,8 @@ export function createWorkerWorkspaceConflictTranscriptHandlers(
           sessionKey: target.canonicalKey,
           storePath: target.storePath,
         },
-        ({ sessionFile }) => {
-          const manager = SessionManager.open(sessionFile);
+        (transcriptTarget) => {
+          const manager = SessionManager.open(transcriptTarget);
           const latestConflictEntry = manager
             .getBranch()
             .toReversed()

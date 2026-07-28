@@ -2,14 +2,14 @@
 summary: "Capability-based desktop control through the computer tool and computer.act node command"
 read_when:
   - Letting the gateway agent see and control a paired desktop
-  - Arming, permissions, or safety for computer use
+  - Enablement, permissions, or safety for computer use
   - Extending the computer.act node command or its fulfillers
 title: "Computer use"
 ---
 
-Computer use lets the gateway agent see and control a capable paired desktop. Eligibility is capability-based: the connected node must advertise both `computer.act` and `screen.snapshot`, whose result must include a `displayFrameId`. The tool captures a screenshot as its reference frame, then drives the pointer and keyboard through the dangerous `computer.act` command. The action set follows the core Anthropic computer-use actions; optional `computer_20251124` zoom is not exposed. A vision-capable model drives it through the built-in `computer` agent tool.
+Computer use lets the gateway agent see and control a capable paired desktop. Eligibility is capability-based: the connected node must advertise both `computer.act` and `screen.snapshot`, whose result must include a `displayFrameId`. The tool captures a screenshot as its reference frame, then drives the pointer and keyboard through `computer.act`. The action set follows the core Anthropic computer-use actions; optional `computer_20251124` zoom is not exposed. A vision-capable model drives it through the built-in `computer` agent tool.
 
-The agent emits one uniform command, `computer.act`; it cannot tell how a node fulfills it. The bundled macOS app handles the command in-process with embedded Peekaboo services plus narrow CoreGraphics primitives (correct TCC permissions, no extra process). Windows and Linux can use the optional, experimental `cua-computer` plugin with a separately installed `cua-driver` binary. Both fulfillers use the same pairing and arming policy.
+The agent emits one uniform command, `computer.act`; it cannot tell how a node fulfills it. The bundled macOS app handles the command in-process with embedded Peekaboo services plus narrow CoreGraphics primitives (correct TCC permissions, no extra process). Windows and Linux can use the optional, experimental `cua-computer` plugin with a separately installed `cua-driver` binary. Both fulfillers use the same durable local enablement and pairing policy.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ The agent emits one uniform command, `computer.act`; it cannot tell how a node f
 - **macOS fulfiller:** app setting **Allow Computer Control** enabled (default: off).
 - **macOS fulfiller:** **Accessibility** permission granted to OpenClaw (for pointer/keyboard injection) and **Screen Recording** permission (for `screen.snapshot`).
 - **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled and a compatible `cua-driver` 0.10.x executable installed.
-- The `computer.act` command armed on the gateway (it is dangerous and disarmed by default).
+- The pairing update that includes `computer.act` approved on the gateway.
 - A vision-capable agent model.
 - Tool policy that exposes `computer`. The default `coding` profile does not. Add `computer` to `tools.alsoAllow`; sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`.
 
@@ -73,12 +73,12 @@ The `cua-computer` fulfiller surfaces typed error codes in the tool result and n
 
 `computer.act` is the single node command the tool routes input through (`node.invoke` with `command: "computer.act"`). It is:
 
-- **Dangerous by default**: listed in the built-in dangerous node commands and excluded from the runtime allowlist until explicitly armed. macOS, Windows, and Linux desktop nodes may still declare it at pairing so the surface is approved once.
+- **Locally enabled**: the node advertises it only while Computer Control is enabled. The gateway can approve that advertised surface once at pairing.
 - **Capability-based**: the tool requires a connected node to advertise both `computer.act` and `screen.snapshot`. The bundled macOS app and the opt-in experimental `cua-computer` plugin fulfill the same command pair.
 
 Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and screen nodes](/nodes/camera) for the shared capture command.
 
-## Enable and arm
+## Authorization
 
 1. Enable the platform fulfiller: on macOS, enable **Settings → Allow Computer Control**, then grant **Accessibility** and **Screen Recording** under **Settings → Permissions**; on Windows/Linux, follow the experimental `cua-computer` setup above.
 2. Approve the pairing update on the gateway (a new command forces re-pairing).
@@ -94,29 +94,13 @@ Reads reuse `screen.snapshot`; there is no second capture path. See [Camera and 
    }
    ```
 
-4. Arm `computer.act` for a bounded window. The `phone-control` plugin exposes a `computer` group:
+Once the node-local control is enabled and the pairing update is approved, `computer.act` is durably available while the node continues to advertise it. There is no lease, expiry, or arm/disarm command. Disabling Computer Control locally removes the advertised command and the node rechecks the toggle at invocation time.
 
-   ```text
-   /phone arm computer 30m
-   /phone status
-   /phone disarm
-   ```
-
-   Arming requires `operator.admin` (or the owner) and auto-expires. The legacy `/phone arm all` group intentionally excludes desktop control; use the explicit `computer` group. Arming only toggles what the gateway may invoke; the node app still enforces its platform-specific settings and OS permissions, including **Allow Computer Control**, Accessibility, and Screen Recording on macOS.
-
-For persistent authorization, add `computer.act` to `gateway.nodes.commands.allow` **and remove it from** `gateway.nodes.commands.deny`; the deny list wins. Persistent authorization does not auto-expire. Entries already present before `/phone arm` remain after `/phone disarm`; do not convert a temporary grant to persistent while it is armed.
-
-Authorization is deliberately split between enabling and use. Arming or
-persistently configuring `computer.act` requires administrative authority.
-Once armed, an authenticated operator with `operator.write` can invoke
-`computer.act` through `node.invoke` until the grant expires or is disarmed;
-there is no per-action admin check. Approving a node that declares
-`computer.act` only records the surface so it can be armed later and does not
-enable invocation by itself.
+`gateway.nodes.commands.deny` remains an explicit global revocation and always wins. `computer.act` does not need a `gateway.nodes.commands.allow` entry. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
 
-- Before authorization, every layer (tool policy, gateway command policy, node-app setting, and platform permissions) must agree. For the current macOS fulfiller, that includes **Allow Computer Control**, Accessibility, and Screen Recording. Once armed, actions execute without a per-action confirmation until expiry or `/phone disarm`.
+- Every layer (tool policy, gateway command policy, pairing, node-app setting, and platform permissions) must agree. For the current macOS fulfiller, that includes **Allow Computer Control**, Accessibility, and Screen Recording. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental cua-driver fulfiller cannot cancel a `type_text` call mid-typing.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.

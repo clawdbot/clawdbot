@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { setAgentRunnerSessionResetTestDeps } from "./agent-runner-session-reset.test-support.js";
 import { createTestFollowupRun, writeTestSessionStore } from "./agent-runner.test-fixtures.js";
@@ -180,13 +180,13 @@ describe("resetReplyRunSession", () => {
       key: "main",
       previousSessionId: "session",
       nextSessionId: activeSessionEntry?.sessionId,
-      nextSessionFile: activeSessionEntry?.sessionFile,
+      nextSessionFile: "main",
     });
     expect(resetRegisteredAgentHarnessSessionsMock).toHaveBeenCalledWith({
       agentId: followupRun.run.agentId,
       sessionId: "session",
       sessionKey: "main",
-      sessionFile: activeSessionEntry?.sessionFile,
+      sessionFile: "main",
       reason: "reset",
     });
     expect(errorMock).toHaveBeenCalledWith("reset session");
@@ -352,13 +352,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId: oldSessionId,
-        storePath,
-      }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     const replayed = await loadTranscriptEvents({
       agentId: "main",
       sessionId: oldSessionId,
@@ -409,9 +403,7 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId: "old-session", storePath }),
-    );
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
     await expect(
       loadTranscriptEvents({
         agentId: "main",
@@ -457,9 +449,6 @@ describe("resetReplyRunSession", () => {
       onNewSession: () => {},
     });
 
-    expect(activeSessionEntry?.sessionFile).toBe(
-      formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
-    );
-    expect(activeSessionEntry?.sessionFile).not.toBe(staleMarker);
+    expect(activeSessionEntry).not.toHaveProperty("sessionFile");
   });
 });

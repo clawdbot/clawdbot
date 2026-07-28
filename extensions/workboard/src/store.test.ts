@@ -1545,6 +1545,44 @@ describe("WorkboardStore", () => {
     );
   });
 
+  it("protects a running worker's expired claim throughout its heartbeat grace period", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const store = new WorkboardStore(createMemoryStore());
+      const card = await store.create({ title: "Grace-protected worker", status: "ready" });
+      const claimed = await store.claim(card.id, { ownerId: "original", ttlSeconds: 1 });
+      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+      if (expiresAt === undefined) {
+        throw new Error("expected a timed worker claim");
+      }
+
+      vi.setSystemTime(expiresAt + 1);
+      await expect(store.claim(card.id, { ownerId: "replacement" })).rejects.toThrow(
+        "card already claimed by original.",
+      );
+      const renewed = await store.heartbeat(card.id, {
+        ownerId: "original",
+        token: claimed.token,
+      });
+      const renewedExpiresAt = renewed.metadata?.claim?.expiresAt;
+      if (renewedExpiresAt === undefined) {
+        throw new Error("expected the worker heartbeat to renew its claim");
+      }
+
+      vi.setSystemTime(renewedExpiresAt + 5 * 60_000);
+      await expect(store.claim(card.id, { ownerId: "replacement" })).rejects.toThrow(
+        "card already claimed by original.",
+      );
+
+      vi.setSystemTime(renewedExpiresAt + 5 * 60_000 + 1);
+      const replacement = await store.claim(card.id, { ownerId: "replacement" });
+      expect(replacement.card.metadata?.claim?.ownerId).toBe("replacement");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves scheduled and retry-budget errors when a claim is active", async () => {
     vi.useFakeTimers();
     try {
@@ -3081,6 +3119,62 @@ describe("WorkboardStore", () => {
 
     const second = await store.notificationEvents({ subscriptionId: subscription.id });
     expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
+  });
+
+  it("does not skip unsequenced notifications after a sequenced same-millisecond event", async () => {
+    const store = new WorkboardStore(createMemoryStore(), {
+      subscriptions: createMemoryStore<PersistedWorkboardNotificationSubscription>(),
+    });
+    await store.create({
+      title: "Sequenced notification",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "z-event",
+            kind: "completed",
+            createdAt: 1234,
+            sequence: 1234000,
+            message: "First",
+          },
+        ],
+      },
+    });
+    await store.create({
+      title: "Unsequenced notification",
+      boardId: "ops",
+      metadata: {
+        notifications: [
+          {
+            id: "a-event",
+            kind: "completed",
+            createdAt: 1234,
+            message: "Second",
+          },
+        ],
+      },
+    });
+    const subscription = await store.subscribeNotifications({
+      boardId: "ops",
+      target: "session:operator",
+      eventKinds: ["completed"],
+    });
+
+    const first = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(first.events).toEqual([expect.objectContaining({ id: "z-event" })]);
+
+    const second = await store.advanceNotificationEvents({
+      subscriptionId: subscription.id,
+      limit: 1,
+    });
+    expect(second.events).toEqual([expect.objectContaining({ id: "a-event" })]);
+    await expect(store.notificationEvents({ subscriptionId: subscription.id })).resolves.toEqual({
+      subscription: expect.objectContaining({ id: subscription.id }),
+      events: [],
+    });
   });
 
   it("drains large same-millisecond notification batches without replaying delivered ids", async () => {

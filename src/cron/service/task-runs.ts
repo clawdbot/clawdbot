@@ -104,19 +104,14 @@ function resolveCronTaskChildSessionKey(params: {
   });
 }
 
-/** Creates a best-effort detached task ledger row for a cron run. */
+/** Creates a best-effort detached task row keyed to the persisted execution start. */
 export function tryCreateCronTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
-  runIdStartedAt?: number;
   publicRunId?: string;
 }): string | undefined {
-  const runId = createCronTaskRunId(
-    params.job.id,
-    params.runIdStartedAt ?? params.startedAt,
-    params.publicRunId,
-  );
+  const runId = createCronTaskRunId(params.job.id, params.startedAt, params.publicRunId);
   return tryCreateCronTaskRunRecord({
     state: params.state,
     job: params.job,
@@ -126,18 +121,18 @@ export function tryCreateCronTaskRun(params: {
   });
 }
 
-function createCronTaskRunId(jobId: string, reservationAt: number, publicRunId?: string): string {
+function createCronTaskRunId(jobId: string, startedAt: number, publicRunId?: string): string {
   const discriminator = publicRunId?.trim() || randomUUID();
-  return `${createCronExecutionId(jobId, reservationAt)}:${discriminator}`;
+  return `${createCronExecutionId(jobId, startedAt)}:${discriminator}`;
 }
 
 function findLatestCronTaskRunForRecovery(
   jobId: string,
-  reservationAt: number,
+  startedAt: number,
   storeKey: string,
 ): TaskRecord | undefined {
-  const reservationRunId = createCronExecutionId(jobId, reservationAt);
-  const prefix = `${reservationRunId}:`;
+  const executionRunId = createCronExecutionId(jobId, startedAt);
+  const prefix = `${executionRunId}:`;
   return listTaskRecordsUnsorted()
     .filter((task) => {
       if (task.runtime !== "cron" || task.sourceId !== jobId) {
@@ -146,11 +141,14 @@ function findLatestCronTaskRunForRecovery(
       const taskStoreKey = cronTaskRecordStoreKey(task);
       if (taskStoreKey === undefined) {
         // Exact match covers detail-less pre-discriminator rows from older releases.
-        return task.runId === reservationRunId;
+        return task.runId === executionRunId;
       }
       return (
         taskStoreKey === storeKey &&
-        (task.runId === reservationRunId || task.runId?.startsWith(prefix))
+        (task.runId === executionRunId ||
+          task.runId?.startsWith(prefix) ||
+          // Released reservation-keyed rows still record the authoritative execution start.
+          task.startedAt === startedAt)
       );
     })
     .toSorted(

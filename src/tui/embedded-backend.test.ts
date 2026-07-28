@@ -1007,7 +1007,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
       sessionKey: "agent:main:main",
       messages: [],
-      runtimePluginsPrewarm: { status: "failed", error: "Error: runtime unavailable" },
+      runtimePluginsPrewarm: { status: "failed", error: "runtime unavailable" },
     });
   });
 
@@ -2297,6 +2297,79 @@ describe("EmbeddedTuiBackend", () => {
     await sentDuringError;
     await flushMicrotasks();
     expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "replaces streamed drafts with the authoritative final answer",
+      finalPayloads: [{ text: "Authoritative final answer" }],
+      expectedText: "Authoritative final answer",
+    },
+    {
+      name: "keeps an authoritative final answer that extends the streamed draft",
+      finalPayloads: [{ text: "Draft answer with its complete authoritative tail" }],
+      expectedText: "Draft answer with its complete authoritative tail",
+    },
+    {
+      name: "preserves every authoritative final payload block",
+      finalPayloads: [{ text: "First final block" }, { text: "Second final block" }],
+      expectedText: "First final block\n\nSecond final block",
+    },
+    {
+      name: "preserves streamed text when the final payload contains no text",
+      finalPayloads: [],
+      expectedText: "Draft answer",
+    },
+  ])("$name", async ({ finalPayloads, expectedText }) => {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const pending = deferred<{
+      payloads: Array<{ text: string }>;
+      meta: Record<string, unknown>;
+    }>();
+    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+
+    const backend = new EmbeddedTuiBackend();
+    const events: Array<{ event: string; payload: unknown }> = [];
+    backend.onEvent = (event) => {
+      events.push({ event: event.event, payload: event.payload });
+    };
+
+    backend.start();
+    await backend.sendChat({
+      sessionKey: "agent:main:main",
+      message: "finish the draft",
+      runId: "run-local-authoritative-final",
+    });
+
+    registeredListener?.({
+      runId: "run-local-authoritative-final",
+      stream: "assistant",
+      data: { text: "Draft answer", delta: "Draft answer" },
+    });
+    registeredListener?.({
+      runId: "run-local-authoritative-final",
+      stream: "lifecycle",
+      data: { phase: "end", stopReason: "stop" },
+    });
+
+    pending.resolve({ payloads: finalPayloads, meta: {} });
+    await flushMicrotasks();
+
+    const chatPayloads = events
+      .filter((event) => event.event === "chat")
+      .map((event) => event.payload);
+
+    expect(chatPayloads.at(-1)).toStrictEqual({
+      runId: "run-local-authoritative-final",
+      sessionKey: "agent:main:main",
+      state: "final",
+      stopReason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: expectedText }],
+        timestamp: embeddedEventTimestamp,
+      },
+    });
   });
 
   it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {

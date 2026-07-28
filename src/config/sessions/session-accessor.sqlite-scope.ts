@@ -14,13 +14,13 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { formatSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import type {
   SessionAccessScope,
   SessionTranscriptReadScope,
   SessionTranscriptWriteScope,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
 
@@ -287,7 +287,12 @@ export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return structuredClone(entry);
 }
 
-export function formatSqliteSessionMarkerForScope(scope: ResolvedTranscriptScope): string {
+export function formatSqliteSessionReferenceForScope(scope: ResolvedTranscriptScope): string {
+  return scope.sessionKey;
+}
+
+/** Legacy identity string retained only for transcript artifact metadata and plugin contracts. */
+export function formatLegacySqliteSessionMarkerForScope(scope: ResolvedTranscriptScope): string {
   return formatSqliteSessionFileMarker({
     agentId: scope.agentId,
     sessionId: scope.sessionId,

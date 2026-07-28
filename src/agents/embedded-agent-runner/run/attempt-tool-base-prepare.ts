@@ -6,6 +6,7 @@ import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { createOpenClawCodingTools } from "../../agent-tools.js";
 import { getActiveAgentRingZeroTools } from "../../agent-tools.ring-zero-context.js";
 import { getChannelAgentToolMeta } from "../../channel-tools.js";
+import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { isCodeModeEngagedForModel, resolveCodeModeConfig } from "../../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
@@ -55,6 +56,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
   sessionAgentId: string;
   skillUsagePaths: SkillUsagePaths;
   skillsSnapshot: EmbeddedRunAttemptParams["skillsSnapshot"];
+  codeModeSkills: readonly CodeModeSkill[];
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
@@ -117,6 +119,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
       ? createToolSearchCatalogRef()
       : undefined;
   const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+  const codeModeSkills = attempt.toolsAllow?.length ? [] : params.codeModeSkills;
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const inheritedToolAllowlist: string[] = [];
   const spawnWorkspaceDir =
@@ -334,6 +337,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
 
   return {
     codeModeControlsEnabledForRun,
+    codeModeSkills,
     computerContextEpoch,
     cronCreatorToolAllowlist,
     effectiveToolsAllow,

@@ -1402,9 +1402,14 @@ jobs:
       contents: read
     name: checks-ui-e2e
     needs: [preflight]
+    # Compatibility targets pin a frozen Control UI whose e2e expectations track
+    # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 30
+    # The suite runs one file at a time (fileParallelism: false) because each
+    # file owns a Chromium context and a mocked Gateway; ~21 min measured, so
+    # this cannot share checks-ui's 20-minute budget.
+    timeout-minutes: 45
     steps:
       - *linux_node_checkout_step
       - name: Setup Node environment
@@ -1419,8 +1424,10 @@ jobs:
       - name: Install Playwright Chromium
         run: node scripts/ensure-playwright-chromium.mjs
 
-      - name: Test Control UI new-session E2E
-        run: pnpm test:ui:e2e ui/src/e2e/new-session-page.e2e.test.ts
+      # main gated only new-session-page while the rest of the suite was red.
+      # The whole suite is green now, so gate on all of it.
+      - name: Test Control UI end-to-end
+        run: pnpm test:ui:e2e
 
   control-ui-i18n:
     permissions:
@@ -3288,8 +3295,11 @@ jobs:
             -destination "platform=iOS Simulator,id=${simulator_id}" \
             -resultBundlePath "$result_bundle" \
             -parallel-testing-enabled NO \
+            -only-testing:OpenClawTests/DelayedActionGateTests \
             -only-testing:OpenClawTests/NodeAppModelInvokeTests \
             -only-testing:OpenClawTests/NotificationServingPreferenceTests \
+            -only-testing:OpenClawTests/RootTabsSourceGuardTests \
+            -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
 
       - name: Upload iOS lifecycle simulator evidence
@@ -3606,6 +3616,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - checks-ui
+      - checks-ui-e2e
       - control-ui-i18n
       - checks-fast-core
       - checks-fast-plugin-contracts-shard

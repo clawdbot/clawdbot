@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -11,7 +10,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
-} from "./session-transcript-readers.js";
+} from "./session-transcript-title-reader.js";
 import { deriveSessionTitle } from "./session-utils-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -38,8 +37,6 @@ describe("session titles with inbound Gateway metadata", () => {
   });
 
   test.each([
-    { backend: "file", content: "string" },
-    { backend: "file", content: "text blocks" },
     { backend: "sqlite", content: "string" },
     { backend: "sqlite", content: "text blocks" },
   ] as const)(
@@ -53,38 +50,17 @@ describe("session titles with inbound Gateway metadata", () => {
         { message: { role: "user" as const, content: userContent } },
         { message: { role: "assistant" as const, content: "Here is the deployment status." } },
       ];
-      const transcriptPath = path.join(tempDir, `${sessionId}.jsonl`);
       const scope = {
         agentId: "main",
         sessionId,
         sessionKey: `agent:main:${sessionId}`,
         storePath: path.join(tempDir, "sessions.json"),
-        ...(backend === "file" ? { sessionFile: transcriptPath } : {}),
       };
-
-      if (backend === "file") {
-        fs.writeFileSync(
-          transcriptPath,
-          `${[
-            { type: "session", version: 3, id: sessionId },
-            ...messages.map((message, index) => ({
-              type: "message",
-              id: `message-${index}`,
-              parentId: index === 0 ? null : "message-0",
-              ...message,
-            })),
-          ]
-            .map((event) => JSON.stringify(event))
-            .join("\n")}\n`,
-          "utf8",
-        );
-      } else {
-        await persistSessionTranscriptTurn(scope, {
-          cwd: tempDir,
-          messages,
-          touchSessionEntry: false,
-        });
-      }
+      await persistSessionTranscriptTurn(scope, {
+        cwd: tempDir,
+        messages,
+        touchSessionEntry: false,
+      });
 
       const entry: SessionEntry = { sessionId, updatedAt: 0 };
       const syncFields = readSessionTitleFieldsFromTranscript(scope);
