@@ -40,9 +40,14 @@ export function resolvePluginLoadDiscovery(params: {
   suppliedManifestRegistry?: PluginManifestRegistry;
 }): ResolvedPluginLoadDiscovery {
   const { options, context } = params;
-  const discovery = params.suppliedManifestRegistry
+  // The load context has already verified workspace, environment, config, and
+  // plugin scope against the current lifecycle-owned metadata generation.
+  const suppliedManifestRegistry =
+    params.suppliedManifestRegistry ??
+    (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
+  const discovery = suppliedManifestRegistry
     ? {
-        candidates: createPluginCandidatesFromManifestRegistry(params.suppliedManifestRegistry),
+        candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
         diagnostics: [] as PluginDiagnostic[],
       }
     : (options.discovery ??
@@ -53,7 +58,7 @@ export function resolvePluginLoadDiscovery(params: {
         installRecords: context.installRecords,
       }));
   const manifestRegistry =
-    params.suppliedManifestRegistry ??
+    suppliedManifestRegistry ??
     loadPluginManifestRegistry({
       config: context.cfg,
       workspaceDir: options.workspaceDir,

@@ -550,6 +550,29 @@ describe("models.list OpenAI routes", () => {
     });
   });
 
+  it("preserves provider-owned order in the public route-aware model list", async () => {
+    const routeResolverFactory = vi.fn(() => () => ({
+      kind: "indeterminate" as const,
+      defaultRuntimeId: "codex",
+    }));
+    const catalog: ModelCatalogEntry[] = [
+      { ...catalogEntry("gpt-5.4", "openai-responses"), providerOrder: 3 },
+      { ...catalogEntry("gpt-5.6-luna", "openai-responses"), providerOrder: 2 },
+      { ...catalogEntry("gpt-5.6-sol", "openai-responses"), providerOrder: 0 },
+      { ...catalogEntry("gpt-5.6-terra", "openai-responses"), providerOrder: 1 },
+    ];
+
+    const result = await listModels({ catalog, routeResolverFactory });
+
+    expect(result.models.map((entry) => entry.id)).toEqual([
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "gpt-5.6-luna",
+      "gpt-5.4",
+    ]);
+    expect(result.models.every((entry) => !("providerOrder" in entry))).toBe(true);
+  });
+
   it("keeps public metadata for a provider-canonical model-level Platform route", async () => {
     const cfg = {
       models: {

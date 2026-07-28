@@ -33,6 +33,7 @@ import {
 } from "./manager-provider-state.js";
 import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
+  MEMORY_INDEX_PROVENANCE_VERSION,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexIdentityState,
@@ -587,6 +588,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         ftsTokenizer: this.settings.store.fts.tokenizer,
+        provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
       };
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;

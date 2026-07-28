@@ -343,6 +343,7 @@ export async function gatherDispatchRequest(
     runWithDispatchLifecycleAdmission,
     throwIfDispatchOperationAborted,
     trackDispatchLifecycleWork,
+    turnLedger,
   } = replyOperationCoordinator;
   const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
     getReplyOperation: getDispatchReplyOperation,
@@ -470,6 +471,7 @@ export async function gatherDispatchRequest(
       runWithDispatchLifecycleAdmission,
       throwIfDispatchOperationAborted,
       trackDispatchLifecycleWork,
+      turnLedger,
       maybeApplyTtsWithFinalizationLease,
       hookRunner,
       timestamp,

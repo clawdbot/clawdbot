@@ -8,7 +8,6 @@ scenario:
     secondary:
       - channels.channel-native-approval-prompts
   execution:
-    profiles: { "slack:default": 7 }
     kind: flow
     channel: slack
     timeoutMs: 60000

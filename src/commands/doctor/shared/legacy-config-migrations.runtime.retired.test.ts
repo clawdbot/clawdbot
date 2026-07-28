@@ -44,6 +44,92 @@ function getPath(value: unknown, path: string): unknown {
 }
 
 describe("retired runtime config migrations", () => {
+  it("strips the retired compaction gate while keeping an enabled byte threshold", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      agents: {
+        defaults: {
+          compaction: { truncateAfterCompaction: true, maxActiveTranscriptBytes: "20mb" },
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.agents.defaults.compaction).toEqual({ maxActiveTranscriptBytes: "20mb" });
+    expect(changes).toEqual([
+      "Removed retired agents.defaults.compaction.truncateAfterCompaction.",
+    ]);
+    const retiredRule = migration?.legacyRules?.find(
+      (candidate) =>
+        candidate.path.join(".") === "agents.defaults.compaction.truncateAfterCompaction",
+    );
+    expect(retiredRule?.message).toBe(
+      'agents.defaults.compaction.truncateAfterCompaction is retired; byte-triggered compaction now opts in via maxActiveTranscriptBytes alone. Run "openclaw doctor --fix".',
+    );
+  });
+
+  it("preserves an explicit retired compaction opt-out", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      agents: {
+        defaults: {
+          compaction: { truncateAfterCompaction: false, maxActiveTranscriptBytes: "20mb" },
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.agents.defaults.compaction).toEqual({});
+    expect(changes).toEqual([
+      "Removed maxActiveTranscriptBytes to preserve truncateAfterCompaction: false.",
+      "Removed retired agents.defaults.compaction.truncateAfterCompaction.",
+    ]);
+  });
+
+  it("strips the retired compaction gate without adding a byte threshold", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.agents.defaults.compaction).toEqual({});
+    expect(changes).toEqual([
+      "Removed retired agents.defaults.compaction.truncateAfterCompaction.",
+    ]);
+  });
+
+  it("leaves compaction config without the retired gate untouched", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED.find(
+      (candidate) => candidate.id === "runtime.retired-config-keys",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      agents: { defaults: { compaction: { maxActiveTranscriptBytes: "20mb" } } },
+    };
+    const changes: string[] = [];
+
+    migration?.apply(raw, changes);
+
+    expect(raw.agents.defaults.compaction).toEqual({ maxActiveTranscriptBytes: "20mb" });
+    expect(changes).toEqual([]);
+  });
+
   it("uses a dedicated, actionable migration for the retired device-auth bypass", () => {
     const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
       (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
@@ -439,7 +525,6 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toMatchObject({
-      ui: { prefs: { showAdvancedSettings: true } },
       skills: { load: { watch: true } },
       agents: {
         defaults: {
@@ -451,11 +536,15 @@ describe("retired runtime config migrations", () => {
       },
       messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
     });
+    expect(result.raw).not.toHaveProperty("ui");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.default.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
     expect(result.changes).toContain(
       "Collapsed conflicting WhatsApp debounce values into messages.inbound.byChannel.whatsapp using channels.whatsapp.accounts.work.debounceMs (4000 ms); account-specific debounce is no longer supported.",
+    );
+    expect(result.changes).toContain(
+      "Removed browser-local ui.prefs keys: ui.prefs.chatMessageMaxWidth, ui.prefs.textScale, ui.prefs.sidebarLiveActivity, ui.prefs.showAdvancedSettings.",
     );
   });
 

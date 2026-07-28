@@ -2,6 +2,7 @@
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -368,11 +369,11 @@ describe("runReplyAgent runtime config", () => {
         isActive: false,
       });
       const sessionKey = "agent:main:telegram:default:direct:test";
-      const sessionEntry = {
+      const sessionEntry: SessionEntry = {
         sessionId: "session-1",
         updatedAt: 1,
         compactionCount: 4,
-        memoryFlushFailureCount: 2,
+        memoryFlush: { kind: "failed", failureCount: 2 },
       };
       const sessionStore = { [sessionKey]: sessionEntry };
       const storePath = join(tempDir, "sessions.json");
@@ -394,7 +395,7 @@ describe("runReplyAgent runtime config", () => {
       );
       runMemoryFlushIfNeededMock.mockImplementation(
         async (params: {
-          sessionEntry?: typeof sessionEntry;
+          sessionEntry?: SessionEntry;
           onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
         }) => {
           params.onVisibleErrorPayloads?.([
@@ -406,8 +407,7 @@ describe("runReplyAgent runtime config", () => {
           return {
             sessionEntry: {
               ...params.sessionEntry,
-              memoryFlushFailureCount: 3,
-              memoryFlushCompactionCount: 4,
+              memoryFlush: { kind: "failed", compactionCount: 4, failureCount: 3 },
             },
             outcome: "exhausted",
           };
@@ -415,10 +415,10 @@ describe("runReplyAgent runtime config", () => {
       );
       resetReplyRunSessionMock.mockImplementation(async (params: unknown) => {
         const resetParams = params as {
-          activeSessionEntry?: typeof sessionEntry;
-          activeSessionStore?: Record<string, typeof sessionEntry>;
+          activeSessionEntry?: SessionEntry;
+          activeSessionStore?: Record<string, SessionEntry>;
           followupRun: typeof followupRun;
-          onActiveSessionEntry: (entry: typeof sessionEntry) => void;
+          onActiveSessionEntry: (entry: SessionEntry) => void;
           onNewSession: (sessionId: string, sessionFile: string) => void;
         };
         const sessionFile = "/tmp/session-rotated.jsonl";
@@ -426,7 +426,6 @@ describe("runReplyAgent runtime config", () => {
           ...resetParams.activeSessionEntry,
           sessionId: "session-rotated",
           updatedAt: 1,
-          memoryFlushFailureCount: 0,
           compactionCount: 0,
         };
         if (resetParams.activeSessionStore) {

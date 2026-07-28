@@ -1,6 +1,6 @@
 // Msteams plugin module implements sdk behavior.
-import * as fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
@@ -285,7 +285,7 @@ async function createMSTeamsApp(
   };
 
   if (creds.type === "federated") {
-    return createFederatedApp(creds, App, appOptions);
+    return await createFederatedApp(creds, App, appOptions);
   }
   return new App({
     clientId: creds.appId,
@@ -295,11 +295,11 @@ async function createMSTeamsApp(
   } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
 }
 
-function createFederatedApp(
+async function createFederatedApp(
   creds: MSTeamsFederatedCredentials,
   App: typeof import("@microsoft/teams.apps").App,
   appOptions: Record<string, unknown>,
-): MSTeamsApp {
+): Promise<MSTeamsApp> {
   if (creds.useManagedIdentity) {
     // The SDK handles managed identity natively — pass managedIdentityClientId
     // and it selects the right credential flow (system MI, user MI, or FIC).
@@ -319,7 +319,7 @@ function createFederatedApp(
 
   let privateKey: string;
   try {
-    privateKey = fs.readFileSync(creds.certificatePath, "utf-8");
+    privateKey = await readSecretFile(creds.certificatePath, "Microsoft Teams certificate");
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {

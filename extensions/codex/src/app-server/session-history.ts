@@ -29,6 +29,25 @@ type CodexMirroredSessionHistoryTarget = {
   sessionKey?: string;
 };
 
+function selectPreferredSessionKey(
+  matches: Array<{ entry: { updatedAt?: number }; sessionKey: string }>,
+  sessionId: string,
+): string | undefined {
+  const structural = matches.filter(
+    ({ sessionKey }) => sessionKey === sessionId || sessionKey.endsWith(`:${sessionId}`),
+  );
+  const candidates = structural.length > 0 ? structural : matches;
+  if (candidates.length === 1) {
+    return candidates[0]?.sessionKey;
+  }
+  const sorted = candidates.toSorted(
+    (left, right) => (right.entry.updatedAt ?? 0) - (left.entry.updatedAt ?? 0),
+  );
+  return (sorted[0]?.entry.updatedAt ?? 0) > (sorted[1]?.entry.updatedAt ?? 0)
+    ? sorted[0]?.sessionKey
+    : undefined;
+}
+
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
 export async function readCodexMirroredSessionHistoryMessages(
   target: CodexMirroredSessionHistoryTarget,
@@ -104,21 +123,17 @@ function resolveSqliteMarkerSessionKey(
   marker: SqliteSessionFileMarker,
 ): string | undefined {
   const explicitSessionKey = target.sessionKey?.trim();
-  if (explicitSessionKey) {
-    return explicitSessionKey;
-  }
   const entries = listSessionEntries({
     agentId: marker.agentId,
     readOnly: true,
     storePath: marker.storePath,
   });
-  const exactEntry = entries.find(({ entry }) => {
-    return entry.sessionId === marker.sessionId && entry.sessionFile === target.sessionFile;
-  });
-  const sessionEntry =
-    exactEntry ??
-    entries.find(({ entry }) => {
-      return entry.sessionId === marker.sessionId;
-    });
-  return sessionEntry?.sessionKey;
+  if (explicitSessionKey) {
+    const explicitEntry = entries.find(({ sessionKey }) => sessionKey === explicitSessionKey);
+    if (explicitEntry) {
+      return explicitEntry.entry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
+    }
+  }
+  const matches = entries.filter(({ entry }) => entry.sessionId === marker.sessionId);
+  return selectPreferredSessionKey(matches, marker.sessionId);
 }

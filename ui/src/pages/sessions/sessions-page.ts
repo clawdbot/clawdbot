@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -44,6 +45,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { showToast } from "../../lib/toast.ts";
+import { isActiveWorkboardCard } from "../../lib/workboard/card-state.ts";
 import { captureSessionToWorkboard } from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -93,6 +95,7 @@ class SessionsPage extends OpenClawLightDomElement {
   @state() private statusFilter: SessionArchivedFilter = "active";
   @state() private searchQuery = "";
   @state() private transcriptSearchQuery = "";
+  @state() private submittedTranscriptSearchQuery = "";
   @state() private transcriptSearch: TranscriptSearchState = { status: "idle" };
   @state() private sortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
   @state() private sortDir: "asc" | "desc" = "desc";
@@ -107,13 +110,11 @@ class SessionsPage extends OpenClawLightDomElement {
   // narrows sessionListOptions so the linked session is guaranteed to load.
   private deepLinkSessionKey: string | null = null;
   @state() private checkpointItemsByKey: Record<string, SessionCompactionCheckpoint[]> = {};
-  @state() private checkpointLoadingKey: string | null = null;
+  @state() private checkpointTaskKey: string | null = null;
   @state() private checkpointBusyKey: string | null = null;
   @state() private checkpointErrorByKey: Record<string, string> = {};
 
   private sessionRequestId = 0;
-  private transcriptSearchRequestId = 0;
-  private checkpointRequestId = 0;
   // Async completions belong to one context/capability/connection epoch. Bump
   // before releasing locks so stale finally blocks cannot clear newer work.
   private pageEpoch = 0;
@@ -222,6 +223,73 @@ class SessionsPage extends OpenClawLightDomElement {
       (workboard, notify) => workboard.subscribe(notify),
     );
 
+  private transcriptSearchArgs() {
+    const context = this.context;
+    const snapshot = context?.gateway.snapshot;
+    return [
+      snapshot?.phase === "connected" ? (snapshot.client ?? null) : null,
+      this.submittedTranscriptSearchQuery,
+      context ?? null,
+      context?.agentSelection.state.scopeId ?? null,
+      snapshot ? isGatewayMethodAdvertised(snapshot, "sessions.search") === true : false,
+    ] as const;
+  }
+
+  private readonly transcriptSearchTask = new Task(this, {
+    args: () => this.transcriptSearchArgs(),
+    task: async ([client, query, context, _agentScope, advertised]) => {
+      if (!client || !query || !context || !advertised) {
+        return null;
+      }
+      const result = await searchVisibleSessionTranscripts({
+        client,
+        query,
+        result: this.result,
+        listSessions: context.sessions.list,
+        listOptions: this.sessionListOptions(),
+        resolveAgentId: (sessionKey) =>
+          parseAgentSessionKey(sessionKey)?.agentId ?? this.sessionAgentId(sessionKey, context),
+      });
+      return {
+        results: result.results,
+        indexing: result.indexing === true,
+        truncated: result.truncated === true,
+      };
+    },
+    onComplete: (result) => {
+      this.transcriptSearch = result ? { status: "results", ...result } : { status: "idle" };
+    },
+    onError: (error) => {
+      this.transcriptSearch = { status: "error", message: String(error) };
+    },
+  });
+
+  private readonly checkpointTask = new Task(this, {
+    autoRun: false,
+    args: () => [null, ""] as const,
+    task: async ([scope, sessionKey]: readonly [SessionsPageRequestScope | null, string]) => {
+      if (!scope || !sessionKey) {
+        return initialState;
+      }
+      const checkpoints = await scope.sessions.listCheckpoints(sessionKey, {
+        agentId: this.sessionAgentId(sessionKey, scope.context),
+      });
+      return { sessionKey, checkpoints };
+    },
+    onComplete: ({ sessionKey, checkpoints }) => {
+      this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: checkpoints };
+    },
+    onError: (error) => {
+      const sessionKey = this.checkpointTaskKey;
+      if (sessionKey) {
+        this.checkpointErrorByKey = {
+          ...this.checkpointErrorByKey,
+          [sessionKey]: String(error),
+        };
+      }
+    },
+  });
+
   override willUpdate(changed: PropertyValues) {
     if (changed.has("routeData") || changed.has("context")) {
       this.applyRouteData();
@@ -266,14 +334,12 @@ class SessionsPage extends OpenClawLightDomElement {
   private invalidatePageWork() {
     this.pageEpoch += 1;
     this.sessionRequestId += 1;
-    this.transcriptSearchRequestId += 1;
-    this.checkpointRequestId += 1;
+    this.submittedTranscriptSearchQuery = "";
+    this.transcriptSearch = { status: "idle" };
+    void this.transcriptSearchTask.run(this.transcriptSearchArgs());
+    this.resetCheckpointTask();
     this.sessionReloadQueued = false;
     this.loading = false;
-    if (this.transcriptSearch.status === "loading") {
-      this.transcriptSearch = { status: "idle" };
-    }
-    this.checkpointLoadingKey = null;
     this.checkpointBusyKey = null;
     this.sessionMutationPending = false;
     this.closeSessionMenu();
@@ -288,7 +354,7 @@ class SessionsPage extends OpenClawLightDomElement {
     this.expandedSessionKey = null;
     this.deepLinkSessionKey = null;
     this.checkpointItemsByKey = {};
-    this.checkpointLoadingKey = null;
+    this.checkpointTaskKey = null;
     this.checkpointBusyKey = null;
     this.checkpointErrorByKey = {};
   }
@@ -490,9 +556,10 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private resetTranscriptSearchState(query: string) {
-    this.transcriptSearchRequestId += 1;
     this.transcriptSearchQuery = query;
+    this.submittedTranscriptSearchQuery = "";
     this.transcriptSearch = { status: "idle" };
+    void this.transcriptSearchTask.run(this.transcriptSearchArgs());
   }
 
   private updateTranscriptSearchQuery(query: string) {
@@ -518,34 +585,10 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope || isGatewayMethodAdvertised(scope.gateway.snapshot, "sessions.search") !== true) {
       return;
     }
-    this.resetTranscriptSearchState(query);
-    const requestId = this.transcriptSearchRequestId;
+    this.transcriptSearchQuery = query;
+    this.submittedTranscriptSearchQuery = query;
     this.transcriptSearch = { status: "loading" };
-    try {
-      const result = await searchVisibleSessionTranscripts({
-        client: scope.client,
-        query,
-        result: this.result,
-        listSessions: scope.sessions.list,
-        listOptions: this.sessionListOptions(),
-        resolveAgentId: (sessionKey) =>
-          parseAgentSessionKey(sessionKey)?.agentId ??
-          this.sessionAgentId(sessionKey, scope.context),
-      });
-      if (requestId !== this.transcriptSearchRequestId || !this.isRequestScopeCurrent(scope)) {
-        return;
-      }
-      this.transcriptSearch = {
-        status: "results",
-        results: result.results,
-        indexing: result.indexing === true,
-        truncated: result.truncated === true,
-      };
-    } catch (error) {
-      if (requestId === this.transcriptSearchRequestId && this.isRequestScopeCurrent(scope)) {
-        this.transcriptSearch = { status: "error", message: String(error) };
-      }
-    }
+    await this.transcriptSearchTask.run(this.transcriptSearchArgs());
   }
 
   private ensureAgentIdentities(result: SessionsListResult | null) {
@@ -994,22 +1037,17 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!context) {
       return;
     }
-    // Any interactive toggle ends deep-link mode so reloads return the roster.
     this.deepLinkSessionKey = null;
     if (this.expandedSessionKey === sessionKey) {
-      this.checkpointRequestId += 1;
+      this.resetCheckpointTask();
       this.expandedSessionKey = null;
       return;
     }
     this.expandedSessionKey = sessionKey;
-    // Every row opens the details drawer; only fetch compaction history when
-    // the row reports checkpoints, so plain sessions skip the round-trip.
     const row = this.result?.sessions.find((session) => session.key === sessionKey);
     const hasCheckpoints =
       (row?.compactionCheckpointCount ?? 0) > 0 || Boolean(row?.latestCompactionCheckpoint);
     if (!hasCheckpoints) {
-      // Seed an empty cache entry so reconcileCheckpointCache sees this key
-      // and reloads the open drawer if the session compacts on a refresh.
       if (!this.checkpointItemsByKey[sessionKey]) {
         this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: [] };
       }
@@ -1026,34 +1064,18 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const requestId = ++this.checkpointRequestId;
-    this.checkpointLoadingKey = sessionKey;
+    this.checkpointTaskKey = sessionKey;
     this.checkpointErrorByKey = { ...this.checkpointErrorByKey, [sessionKey]: "" };
-    try {
-      const checkpoints = await scope.sessions.listCheckpoints(sessionKey, {
-        agentId: this.sessionAgentId(sessionKey, scope.context),
-      });
-      if (requestId !== this.checkpointRequestId || !this.isRequestScopeCurrent(scope)) {
-        return;
-      }
-      this.checkpointItemsByKey = { ...this.checkpointItemsByKey, [sessionKey]: checkpoints };
-    } catch (error) {
-      if (requestId !== this.checkpointRequestId || !this.isRequestScopeCurrent(scope)) {
-        return;
-      }
-      this.checkpointErrorByKey = {
-        ...this.checkpointErrorByKey,
-        [sessionKey]: String(error),
-      };
-    } finally {
-      if (
-        requestId === this.checkpointRequestId &&
-        this.isRequestScopeCurrent(scope) &&
-        this.checkpointLoadingKey === sessionKey
-      ) {
-        this.checkpointLoadingKey = null;
-      }
-    }
+    await this.checkpointTask.run([scope, sessionKey]);
+  }
+
+  private resetCheckpointTask() {
+    this.checkpointTaskKey = null;
+    void this.checkpointTask.run([null, ""]);
+  }
+
+  private get checkpointLoadingKey(): string | null {
+    return this.checkpointTask.status === TaskStatus.PENDING ? this.checkpointTaskKey : null;
   }
 
   private async branchCheckpoint(sessionKey: string, checkpointId: string) {
@@ -1183,6 +1205,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const workboardState = context.workboard.state;
     const capturedSessionKeys = new Set(
       workboardState.cards
+        .filter(isActiveWorkboardCard)
         .flatMap((card) => [card.sessionKey, card.execution?.sessionKey])
         .filter((key): key is string => typeof key === "string" && key.length > 0),
     );
@@ -1217,7 +1240,7 @@ class SessionsPage extends OpenClawLightDomElement {
         .workboard=${canCapture && row.kind !== "global"
           ? {
               captured: capturedSessionKeys.has(row.key),
-              busy: [...workboardState.capturingSessionKeys][0] === row.key,
+              busy: workboardState.capturingSessionKeys.has(row.key),
             }
           : null}
         .onClose=${() => this.closeSessionMenu()}
@@ -1322,7 +1345,10 @@ class SessionsPage extends OpenClawLightDomElement {
           transcriptSearchAvailable:
             isGatewayMethodAdvertised(context.gateway.snapshot, "sessions.search") === true,
           transcriptSearchQuery: this.transcriptSearchQuery,
-          transcriptSearch: this.transcriptSearch,
+          transcriptSearch:
+            this.transcriptSearchTask.status === TaskStatus.PENDING
+              ? { status: "loading" }
+              : this.transcriptSearch,
           agentIdentityById: sessionAgentIdentityById(
             this.result,
             (agentId) => context.agentIdentity.get(agentId) ?? undefined,

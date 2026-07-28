@@ -191,9 +191,7 @@ export function applyModelOverrideToSessionEntry(params: {
       // runtime model fields so live-switch resolution lands on the default.
       entry.liveModelSwitchPending = true;
     }
-    delete entry.fallbackNoticeSelectedModel;
-    delete entry.fallbackNoticeActiveModel;
-    delete entry.fallbackNoticeReason;
+    delete entry.fallbackNotice;
     entry.updatedAt = Date.now();
   }
 

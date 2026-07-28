@@ -554,6 +554,18 @@ extension MacNodeRuntime {
                     req,
                     code: .unavailable,
                     message: "ACCESSIBILITY_REQUIRED: grant Accessibility permission to OpenClaw")
+            case .accessibilityGrantMayBeStale:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "ACCESSIBILITY_REQUIRED: "
+                        + ComputerControlPermissionSnapshot.Diagnostic.staleAccessibilityRemediation)
+            case .postEventAccessDenied:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "POST_EVENT_REQUIRED: macOS denied Event Posting access; re-grant OpenClaw "
+                        + "under System Settings → Privacy & Security → Accessibility")
             case .noDisplays, .invalidScreenIndex, .missingDisplayFrameId, .displayFrameChanged,
                  .missingCoordinate, .coordinateOutOfBounds, .invalidReferenceWidth, .missingKeys,
                  .emptyText, .invalidScroll, .invalidModifier, .buttonAlreadyHeld, .buttonNotHeld:
@@ -939,7 +951,7 @@ extension MacNodeRuntime {
     }
 
     nonisolated static func computerControlEnabledDefault() -> Bool {
-        UserDefaults.standard.object(forKey: computerControlEnabledKey) as? Bool ?? false
+        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

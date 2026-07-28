@@ -8,6 +8,9 @@ import { formatAgentModelStartupDetails, logGatewayStartup } from "./server-star
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
+const modelSelectionMocks = vi.hoisted(() => ({
+  resolveConfiguredModelRef: vi.fn(),
+}));
 const modelMocks = vi.hoisted(() => ({
   resolveThinkingDefault: vi.fn(() => "medium" as const),
 }));
@@ -25,6 +28,11 @@ vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
 }));
 
+vi.mock("../agents/model-selection-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/model-selection-shared.js")>()),
+  resolveConfiguredModelRef: modelSelectionMocks.resolveConfiguredModelRef,
+}));
+
 // Provider thinking owns a dedicated suite. Startup logging only needs its
 // fixture-level default while proving precedence and banner composition.
 vi.mock("../agents/model-thinking-default.js", () => ({
@@ -38,6 +46,11 @@ describe("gateway startup log", () => {
     }
     modelMocks.resolveThinkingDefault.mockClear();
     modelMocks.resolveThinkingDefault.mockReturnValue("medium");
+    modelSelectionMocks.resolveConfiguredModelRef.mockReset();
+    modelSelectionMocks.resolveConfiguredModelRef.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [],

@@ -1,5 +1,5 @@
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { vi } from "vitest";
 import type { ClickClackClient } from "../http-client.js";
@@ -77,7 +77,11 @@ export function createHarness(
         archivedAt?: number;
       }
     | undefined,
-  options: { bindingGenerationFactory?: () => string } = {},
+  options: {
+    bindingGenerationFactory?: () => string;
+    gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
+    startTimer?: boolean;
+  } = {},
 ) {
   let sessionEntry = entry;
   const config = discussionConfig();
@@ -167,7 +171,8 @@ export function createHarness(
     clientFactory: () => client,
     installationId: TEST_INSTALLATION_ID,
     bindingGenerationFactory: options.bindingGenerationFactory ?? (() => TEST_BINDING_GENERATION),
-    startTimer: false,
+    startTimer: options.startTimer ?? false,
+    ...(options.gatewayEvents ? { gatewayEvents: options.gatewayEvents } : {}),
   });
   return {
     runtime,

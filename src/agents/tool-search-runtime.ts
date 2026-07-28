@@ -540,6 +540,7 @@ export class ToolSearchRuntime {
   namespaceEntries = () =>
     resolveCatalog(this.ctx).entries.map((entry) =>
       Object.assign(compactToolSearchCatalogEntry(entry), {
+        ...(entry.mcp ? { mcp: entry.mcp } : {}),
         parameters: entry.parameters ?? {},
       }),
     );

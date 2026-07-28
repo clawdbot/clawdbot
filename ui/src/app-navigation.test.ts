@@ -133,6 +133,7 @@ const ALL_ROUTES: RouteId[] = Array.from(
     "worktrees",
     "memory-import",
     "model-setup",
+    "lobsterdex",
     ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ]),
 );
@@ -147,6 +148,7 @@ const SETTINGS_ROUTE_PATHS = [
     alias: "/communications",
   },
   { routeId: "appearance", path: "/settings/appearance", alias: "/appearance" },
+  { routeId: "lobsterdex", path: "/settings/lobsterdex", alias: "/lobsterdex" },
   { routeId: "automation", path: "/settings/automation", alias: "/automation" },
   { routeId: "mcp", path: "/settings/mcp", alias: "/mcp" },
   {
@@ -204,9 +206,11 @@ describe("navigationIconForRoute", () => {
       profile: "circleUser",
       communications: "send",
       appearance: "palette",
+      lobsterdex: "bug",
       automation: "terminal",
       mcp: "wrench",
       memory: "book",
+      talk: "mic",
       infrastructure: "globe",
       labs: "flaskConical",
       about: "fileText",
@@ -234,6 +238,15 @@ describe("settingsSearchTextMatches", () => {
     expect(settingsSearchTextMatches("CPU usage", "cp")).toBe(true);
     expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
     expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
+  });
+
+  it.each([
+    ["Cámara", "Ca\u0301mara"],
+    ["Ca\u0301mara", "Cámara"],
+    ["Notificación", "Notificacio\u0301n"],
+    ["Notificacio\u0301n", "Notificación"],
+  ])("matches canonically equivalent setting text %j against %j", (value, query) => {
+    expect(settingsSearchTextMatches(value, query)).toBe(true);
   });
 });
 
@@ -300,7 +313,7 @@ describe("titleForRoute", () => {
       dashboards: "Dashboards",
       worktrees: "Worktrees",
       channels: "Channels",
-      connection: "Connection",
+      connection: "Gateway",
       sessions: "Threads",
       usage: "Usage",
       cron: "Automations",
@@ -314,15 +327,17 @@ describe("titleForRoute", () => {
       profile: "Profile",
       communications: "Communications",
       appearance: "Appearance",
+      lobsterdex: "Lobsterdex",
       automation: "Automation",
       mcp: "MCP",
       memory: "Memory",
+      talk: "Talk",
       infrastructure: "Infrastructure",
       labs: "Labs",
       about: "About",
       "ai-agents": "Agent Defaults",
       "model-setup": "Model Setup",
-      "model-providers": "Model Providers",
+      "model-providers": "Models",
       "memory-import": "Import Memory",
       notifications: "Notifications",
       security: "Privacy & Security",
@@ -357,19 +372,21 @@ describe("subtitleForRoute", () => {
       plugins: "Install and manage optional capabilities.",
       "skill-workshop": "Review, refine, and apply proposals before they become live skills.",
       nodes: "Paired devices, pairing approvals, and exec bindings.",
-      config: "Model defaults, language, and gateway host.",
-      profile: "Your agent's stats, streaks, and life in the reef.",
-      communications: "Channels, messages, and audio settings.",
+      config: "Language and shortcuts to core settings.",
+      profile: "Your display name, avatar, and identity on this gateway.",
+      communications: "Messages and text-to-speech settings.",
       appearance: "Theme, UI, and setup wizard settings.",
+      lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, cron, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
       memory: "Memory engine, backend, search, and dreaming.",
-      infrastructure: "Gateway, web, browser, and media settings.",
+      talk: "Realtime voice: provider, model, and speaker voice.",
+      infrastructure: "Gateway, browser, node host, discovery, and ACP settings.",
       labs: "Experimental agent and tool capabilities.",
       about: "Control UI and connected Gateway build identity.",
-      "ai-agents": "Global agent defaults: models, skills, tools, memory, session.",
+      "ai-agents": "Global agent defaults: skills, tools, and session.",
       "model-setup": "Connect a verified AI model",
-      "model-providers": "Configured providers with plan, quota, and cost.",
+      "model-providers": "Default models, behavior, provider access, usage, and cost.",
       "memory-import": "Bring Codex and Claude Code memory into an agent workspace.",
       notifications: "Browser push notifications from your gateway.",
       security: "Gateway auth, exec policy, tool profile, and approvals.",
@@ -702,6 +719,23 @@ describe("inferBasePathFromPathname", () => {
     expect(inferBasePathFromPathname("/index.html")).toBe("");
     expect(inferBasePathFromPathname("/ui/index.html")).toBe("/ui");
   });
+
+  it("never infers a route namespace as a mount base", () => {
+    // "/settings/config" is not a route; matching the "/config" alias must not
+    // rescope the page to base "/settings" or reconnect state and assets break.
+    expect(inferBasePathFromPathname("/settings/config")).toBe("");
+    expect(inferBasePathFromPathname("/settings/config/")).toBe("");
+    expect(inferBasePathFromPathname("/settings/chat/main")).toBe("");
+    // A leaf route is equally not a mount directory.
+    expect(inferBasePathFromPathname("/custodian/config")).toBe("");
+    // Nested unknown segments below a route namespace stay root-mounted too.
+    expect(inferBasePathFromPathname("/settings/other/config")).toBe("");
+    expect(inferBasePathFromPathname("/settings/")).toBe("");
+    expect(inferBasePathFromPathname("/skills/")).toBe("");
+    // Real mount directories that merely contain a route-suffix keep working.
+    expect(inferBasePathFromPathname("/ui/config")).toBe("/ui");
+    expect(inferBasePathFromPathname("/ui/settings/general")).toBe("/ui");
+  });
 });
 
 describe("plugin tabs route", () => {
@@ -754,6 +788,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "connection",
       "channels",
       "communications",
+      "talk",
       "nodes",
       "agents",
       "ai-agents",

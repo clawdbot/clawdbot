@@ -3012,6 +3012,47 @@ describe("workboard controller", () => {
     expect(state.cards).toEqual([archived, active]);
   });
 
+  it.each([
+    { name: "reuses the newest active captured session", inFlight: false },
+    {
+      name: "returns the newest active captured session while a capture is in flight",
+      inFlight: true,
+    },
+  ])("$name", async ({ inFlight }) => {
+    const archived = {
+      ...sampleCard,
+      id: "archived-newest-session-card",
+      sessionKey: sampleSession.key,
+      position: 0,
+      updatedAt: 30,
+      metadata: { archivedAt: 40 },
+    } satisfies WorkboardCard;
+    const older = {
+      ...sampleCard,
+      id: "older-active-session-card",
+      sessionKey: sampleSession.key,
+      position: 1000,
+      updatedAt: 10,
+    } satisfies WorkboardCard;
+    const newest = {
+      ...sampleCard,
+      id: "newest-active-session-card",
+      sessionKey: sampleSession.key,
+      position: 2000,
+      updatedAt: 20,
+    } satisfies WorkboardCard;
+    state.loaded = true;
+    state.cards = [archived, older, newest];
+    if (inFlight) {
+      state.capturingSessionKeys.add(sampleSession.key);
+    }
+    const client = createClient({});
+
+    await expect(captureSession(client, sampleSession)).resolves.toBe(newest);
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.cards).toEqual([archived, older, newest]);
+  });
+
   it("returns the active captured session while a duplicate capture is in flight", async () => {
     const archived = {
       ...sampleCard,
@@ -3412,6 +3453,37 @@ describe("workboard controller", () => {
         agentId: "codex-main",
         sessionKey: expectedSessionKey,
       }),
+    );
+  });
+
+  // Cards persist whatever agent id they were created with, so the worker key
+  // canonicalizes it: "Codex-Main" and "codex-main" name one session, not two.
+  it("canonicalizes a card's agent id in the worker session key", async () => {
+    const expectedSessionKey = "agent:codex-main:subagent:workboard-default-card-1";
+    const mixedCase = { ...sampleCard, agentId: "Codex-Main" } satisfies WorkboardCard;
+    const running = {
+      ...mixedCase,
+      status: "running",
+      sessionKey: expectedSessionKey,
+      runId: "run-1",
+    } satisfies WorkboardCard;
+    const client = createClient({
+      agent: { runId: "run-1" },
+      "tasks.list": { tasks: [] },
+      "workboard.cards.update": { card: running },
+    });
+
+    const sessionKey = await startWorkboardCard({
+      host,
+      client: client as never,
+      card: mixedCase,
+    });
+
+    expect(sessionKey).toBe(expectedSessionKey);
+    expect(client.request).toHaveBeenNthCalledWith(
+      2,
+      "agent",
+      expect.objectContaining({ sessionKey: expectedSessionKey }),
     );
   });
 

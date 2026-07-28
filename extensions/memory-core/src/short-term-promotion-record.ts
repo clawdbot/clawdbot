@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import type {
+  MemoryEntryProvenance,
+  MemorySearchResult,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import pLimit from "p-limit";
@@ -8,6 +11,7 @@ import { deriveConceptTags } from "./concept-vocabulary.js";
 import { readStore, withShortTermLock, writeStore } from "./short-term-promotion-store.js";
 import type { ShortTermRecallEntry } from "./short-term-promotion-types.js";
 import {
+  buildDailyClaimEntryKey,
   buildClaimHash,
   buildEntryKey,
   clampScore,
@@ -27,6 +31,37 @@ import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
 // One recall batch can inspect every retained entry; cap filesystem pressure.
 const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
+
+function mergeRecallProvenance(
+  existing: MemoryEntryProvenance | undefined,
+  incoming: MemoryEntryProvenance | undefined,
+  nowMs: number,
+): MemoryEntryProvenance {
+  // Recorded recalls are memory-source only (workspace files, filtered by the
+  // caller), so a hit that carries no explicit provenance defaults to 'agent'
+  // to match the index provenance trigger. Untrusted only arrives when a hit
+  // explicitly carries it, and then the merge below keeps the taint.
+  const next = incoming ?? {
+    originClass: "agent" as const,
+    sessionKind: "unknown" as const,
+    observedAt: nowMs,
+  };
+  if (!existing) {
+    return next;
+  }
+  const priority = ["owner", "agent", "system", "untrusted"] as const;
+  const originClass = priority.findLast(
+    (origin) => origin === existing.originClass || origin === next.originClass,
+  );
+  return {
+    originClass: originClass ?? "untrusted",
+    sessionKind: existing.sessionKind === next.sessionKind ? next.sessionKind : "unknown",
+    observedAt: Math.max(existing.observedAt, next.observedAt),
+    ...(existing.supersedesKey && existing.supersedesKey === next.supersedesKey
+      ? { supersedesKey: existing.supersedesKey }
+      : {}),
+  };
+}
 
 async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
   try {
@@ -100,7 +135,7 @@ function buildMemoryRecallSkippedEvent(params: {
 export async function recordShortTermRecalls(params: {
   workspaceDir?: string;
   query: string;
-  results: MemorySearchResult[];
+  results: Array<MemorySearchResult & { identitySnippet?: string }>;
   signalType?: "recall" | "daily";
   dedupeByQueryPerDay?: boolean;
   dayBucket?: string;
@@ -155,18 +190,46 @@ export async function recordShortTermRecalls(params: {
       ) {
         continue;
       }
-      const claimHash = buildClaimHash(rawSnippet);
+      const identitySnippet =
+        signalType === "daily"
+          ? normalizeSnippet(result.identitySnippet ?? rawSnippet)
+          : rawSnippet;
+      const claimHash = buildClaimHash(identitySnippet);
+      const nonDailyEntry =
+        signalType === "daily"
+          ? Object.values(store.entries).find(
+              (entry) =>
+                !entry.key.startsWith("memory:claim:") &&
+                Math.max(0, Math.floor(entry.recallCount ?? 0)) +
+                  Math.max(0, Math.floor(entry.groundedCount ?? 0)) >
+                  0 &&
+                entry.claimHash === claimHash,
+            )
+          : undefined;
+      // Interactive/grounded writers retain their path-qualified identity. Do
+      // not create a competing daily aggregate for the same claim; reinforce
+      // the existing authoritative candidate instead.
       const groundedKey = claimHash
-        ? buildEntryKey({
-            path: normalizedPath,
-            startLine: Math.max(1, Math.floor(result.startLine)),
-            endLine: Math.max(1, Math.floor(result.endLine)),
-            source: "memory",
-            claimHash,
-          })
+        ? signalType === "daily"
+          ? // Interactive recall intentionally retains its path/range identity;
+            // only daily ingestion aggregates cross-file recurrence by claim.
+            buildDailyClaimEntryKey(claimHash)
+          : buildEntryKey({
+              path: normalizedPath,
+              startLine: Math.max(1, Math.floor(result.startLine)),
+              endLine: Math.max(1, Math.floor(result.endLine)),
+              source: "memory",
+              claimHash,
+            })
         : null;
       const baseKey = buildEntryKey(result);
-      const key = groundedKey && store.entries[groundedKey] ? groundedKey : baseKey;
+      const key =
+        nonDailyEntry?.key ??
+        (signalType === "daily" && groundedKey
+          ? groundedKey
+          : groundedKey && store.entries[groundedKey]
+            ? groundedKey
+            : baseKey);
       const existing = store.entries[key];
       const score = clampScore(result.score);
       const recallDaysBase = existing?.recallDays ?? [];
@@ -188,20 +251,31 @@ export async function recordShortTermRecalls(params: {
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
+      const provenance = mergeRecallProvenance(existing?.provenance, result.provenance, nowMs);
 
       const unchangedRepeatedSignal =
-        Boolean(params.dedupeByQueryPerDay) &&
+        (Boolean(params.dedupeByQueryPerDay) || signalType === "daily") &&
         queryHashesBase.includes(queryHash) &&
         existing?.snippet === snippet;
+      // This preserves freshness only. dedupeSignal above independently owns
+      // whether counts/scores advance, so changed-file daily ingestion still adds evidence.
       const lastRecalledAt = unchangedRepeatedSignal
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
+      // Daily claim keys deliberately omit the file path so the same fact in
+      // three distinct day files accumulates three query/day signals and can
+      // clear the default dreaming gates. Keep the first source for citation.
+      const preserveFirstDailySource = signalType === "daily" && existing !== undefined;
 
       store.entries[key] = {
         key,
-        path: normalizedPath,
-        startLine: Math.max(1, Math.floor(result.startLine)),
-        endLine: Math.max(1, Math.floor(result.endLine)),
+        path: preserveFirstDailySource ? existing.path : normalizedPath,
+        startLine: preserveFirstDailySource
+          ? existing.startLine
+          : Math.max(1, Math.floor(result.startLine)),
+        endLine: preserveFirstDailySource
+          ? existing.endLine
+          : Math.max(1, Math.floor(result.endLine)),
         source: "memory",
         snippet: snippet || existing?.snippet || "",
         recallCount,
@@ -214,7 +288,8 @@ export async function recordShortTermRecalls(params: {
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
-        ...(existing?.claimHash ? { claimHash: existing.claimHash } : {}),
+        provenance,
+        claimHash,
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };
     }
@@ -345,6 +420,15 @@ export async function recordGroundedShortTermCandidates(params: {
       const queryHashes = mergeQueryHashes(existing?.queryHashes ?? [], queryHash);
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
+      const provenance = mergeRecallProvenance(
+        existing?.provenance,
+        {
+          originClass: "agent",
+          sessionKind: "unknown",
+          observedAt: nowMs,
+        },
+        nowMs,
+      );
 
       const unchangedRepeatedSignal =
         Boolean(params.dedupeByQueryPerDay) &&
@@ -371,6 +455,7 @@ export async function recordGroundedShortTermCandidates(params: {
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
+        provenance,
         claimHash,
         ...(existing?.promotedAt ? { promotedAt: existing.promotedAt } : {}),
       };

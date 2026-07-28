@@ -619,11 +619,20 @@ final class NodeAppModel {
         if self.isAppleReviewDemoModeEnabled {
             return AppleReviewDemoChatTransport()
         }
+        let imageArtifactLoader = IOSImageArtifactLoader { [weak self] in
+            guard let config = self?.activeGatewayConnectConfig else { return nil }
+            return IOSImageArtifactLoader.Connection(
+                config: config,
+                gatewayID: config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID,
+                customHeaders: GatewaySettingsStore.loadGatewayCustomHeaders(
+                    gatewayStableID: config.effectiveStableID))
+        }
         return IOSGatewayChatTransport(
             gateway: self.operatorSession,
             widgetGateway: self.nodeGateway,
             globalAgentId: self.chatDeliveryAgentId,
-            outboxGatewayID: outboxGatewayID)
+            outboxGatewayID: outboxGatewayID,
+            imageArtifactLoader: imageArtifactLoader)
     }
 
     /// Gateway identity the transcript cache is scoped to: the active
@@ -5728,12 +5737,15 @@ extension NodeAppModel {
             transport: event.transport,
             messageKind: .quickReply)
         let needsReconnect = !self.isWatchMessageSendAvailable()
+        let routeGeneration = self.gatewayRouteGeneration
         await self.handleWatchMessage(message)
         guard needsReconnect else { return }
 
         let connected = await ensureOperatorApprovalConnectionForWatchReview(
             timeoutMs: 12000,
-            reason: "watch_reply")
+            reason: "watch_reply",
+            routeGeneration: routeGeneration,
+            gatewayStableID: gatewayStableID)
         guard connected,
               GatewayStableIdentifier.matches(
                   self.currentWatchChatGatewayStableID(),
@@ -8859,7 +8871,9 @@ extension NodeAppModel {
         {
             await self.ensureOperatorApprovalConnectionForWatchReview(
                 timeoutMs: 12000,
-                reason: sourceReason)
+                reason: sourceReason,
+                routeGeneration: routeGeneration,
+                gatewayStableID: gatewayStableID)
         } else {
             await self.ensureOperatorApprovalConnection(timeoutMs: 12000)
         }
@@ -9795,10 +9809,23 @@ extension NodeAppModel {
             sessionBox: sessionBox)
     }
 
-    private func ensureOperatorApprovalConnectionForWatchReview(timeoutMs: Int, reason: String) async -> Bool {
+    private func ensureOperatorApprovalConnectionForWatchReview(
+        timeoutMs: Int,
+        reason: String,
+        routeGeneration: UInt64,
+        gatewayStableID: String) async -> Bool
+    {
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         let normalizedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
         let reconnectReason = normalizedReason.isEmpty ? "watch_request" : normalizedReason
         if await self.isOperatorConnected() {
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=already_connected")
@@ -9810,6 +9837,10 @@ extension NodeAppModel {
                 "watch exec approval: watch_request_reconnect_begin "
                     + "reason=\(reconnectReason) backgrounded=false strategy=default")
             let connected = await ensureOperatorApprovalConnection(timeoutMs: timeoutMs)
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                     + "reason=\(reconnectReason) phase=foreground_delegate")
@@ -9866,17 +9897,29 @@ extension NodeAppModel {
             pollMs: 200,
             owner: .operator)
         {
+            guard self.isCurrentGatewayRoute(
+                generation: routeGeneration,
+                stableID: gatewayStableID)
+            else { return false }
             GatewayDiagnostics.log(
                 "watch exec approval: watch_request_reconnect_connected "
                     + "reason=\(reconnectReason) phase=initial")
             return true
         }
 
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_restart reason=\(reconnectReason)")
         self.operatorGatewayTask?.cancel()
         self.operatorGatewayTask = nil
         await self.operatorGateway.disconnect()
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         self.setOperatorConnected(false)
         self.talkMode.updateGatewayConnected(false)
         self.stopGatewayHealthMonitor()
@@ -9899,6 +9942,10 @@ extension NodeAppModel {
             timeoutMs: remainingWaitMs,
             pollMs: 200,
             owner: .operator)
+        guard self.isCurrentGatewayRoute(
+            generation: routeGeneration,
+            stableID: gatewayStableID)
+        else { return false }
         GatewayDiagnostics.log(
             "watch exec approval: watch_request_reconnect_\(connected ? "connected" : "timeout") "
                 + "reason=\(reconnectReason) phase=restart")

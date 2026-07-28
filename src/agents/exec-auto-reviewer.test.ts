@@ -453,6 +453,92 @@ describe("createModelExecAutoReviewer", () => {
     });
   });
 
+  it.each([
+    { name: "terminal controls", message: "first\n\u001b[31msecond\u001b[0m\u202e" },
+    { name: "operating-system commands", message: "first\u001b]0;hidden title\u0007second" },
+    { name: "Unicode line separators", message: "first\u2028second\u2029third" },
+    { name: "oversized provider output", message: "x".repeat(10_000) },
+    { name: "a surrogate-pair boundary", message: "x".repeat(499) + "🚀tail" },
+  ])("normalizes model preparation failures containing $name", async ({ message }) => {
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+          error: message,
+        })) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+      },
+    });
+
+    const decision = await reviewer(input);
+
+    expect(decision).toMatchObject({ decision: "ask", risk: "unknown" });
+    expect(decision.rationale).toContain("exec reviewer model unavailable:");
+    expect(decision.rationale.length).toBeLessThanOrEqual(500);
+    expect(decision.rationale).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+    expect(decision.rationale).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it.each([
+    { name: "terminal controls", message: "first\n\u001b[31msecond\u001b[0m\u202e" },
+    { name: "operating-system commands", message: "first\u001b]0;hidden title\u0007second" },
+    { name: "Unicode line separators", message: "first\u2028second\u2029third" },
+    { name: "oversized provider output", message: "x".repeat(10_000) },
+    { name: "a surrogate-pair boundary", message: "x".repeat(499) + "🚀tail" },
+  ])("normalizes complete model errors containing $name", async ({ message }) => {
+    const { prepare } = createReviewerHarness();
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent:
+          prepare as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+        completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
+          stopReason: "error" as const,
+          errorMessage: message,
+          content: [],
+        })) as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
+      },
+    });
+
+    const decision = await reviewer(input);
+
+    expect(decision).toMatchObject({ decision: "ask", risk: "unknown" });
+    expect(decision.rationale).toContain("exec reviewer completion failed:");
+    expect(decision.rationale.length).toBeLessThanOrEqual(500);
+    expect(decision.rationale).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+    expect(decision.rationale).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
+  it.each([
+    { name: "terminal controls", message: "first\n\u001b[31msecond\u001b[0m\u202e" },
+    { name: "operating-system commands", message: "first\u001b]0;hidden title\u0007second" },
+    { name: "Unicode line separators", message: "first\u2028second\u2029third" },
+    { name: "oversized provider output", message: "x".repeat(10_000) },
+    { name: "a surrogate-pair boundary", message: "x".repeat(499) + "🚀tail" },
+  ])("normalizes thrown provider failures containing $name", async ({ message }) => {
+    const reviewer = createModelExecAutoReviewer({
+      cfg: {},
+      deps: {
+        prepareSimpleCompletionModelForAgent: vi.fn(async () => {
+          throw new Error(message);
+        }) as unknown as typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent,
+      },
+    });
+
+    const decision = await reviewer(input);
+
+    expect(decision).toMatchObject({ decision: "ask", risk: "unknown" });
+    expect(decision.rationale).toContain("exec reviewer failed:");
+    expect(decision.rationale.length).toBeLessThanOrEqual(500);
+    expect(decision.rationale).not.toMatch(/[\p{Cc}\p{Cf}\u2028\u2029]/u);
+    expect(decision.rationale).not.toMatch(
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u,
+    );
+  });
+
   it.each(["aborted", "length", "toolUse"] as const)(
     "rejects %s completions even when partial content says allow",
     async (stopReason) => {

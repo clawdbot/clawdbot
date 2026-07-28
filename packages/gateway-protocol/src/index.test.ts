@@ -89,6 +89,24 @@ describe("protocol export registries", () => {
 });
 
 describe("lazy protocol validators", () => {
+  it("accepts bounded request-frame trace context metadata", () => {
+    const request = {
+      type: "req",
+      id: "request-1",
+      method: "status.summary",
+      params: {},
+    };
+
+    expect(protocol.validateRequestFrame(request)).toBe(true);
+    expect(
+      protocol.validateRequestFrame({
+        ...request,
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      }),
+    ).toBe(true);
+    expect(protocol.validateRequestFrame({ ...request, traceparent: "x".repeat(129) })).toBe(false);
+  });
+
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);

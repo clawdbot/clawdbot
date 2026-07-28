@@ -10,9 +10,13 @@ import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { listTaskRecordsUnsorted } from "../../tasks/task-registry.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { createCronExecutionId } from "../run-id.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { cronStoreKey } from "../store/key.js";
+import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob } from "../types.js";
+import { start, stop } from "./ops-lifecycle.js";
 import { add, remove } from "./ops-mutations.js";
 import { createCronServiceState } from "./state.js";
 import {
@@ -70,6 +74,119 @@ function findCronTask(jobId: string) {
 }
 
 describe("cron batch outcome finalization", () => {
+  it.each(["scheduled", "startup"] as const)(
+    "recovers one finalized %s run when admission advances its execution clock",
+    async (trigger) => {
+      const store = fixtures.makeStorePath();
+      const reservedAt = Date.parse("2026-02-06T10:05:00.250Z");
+      const startedAt = reservedAt + 7;
+      const job = createDueIsolatedJob({
+        id: `${trigger}-recover-advanced-execution-clock`,
+        nowMs: reservedAt,
+        nextRunAtMs: reservedAt,
+      });
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      let now = reservedAt;
+      let reservationPersisted = false;
+      let terminalWriteRejected = false;
+      const events: Array<{ action: string; jobId: string; status?: string }> = [];
+      const runIsolatedAgentJob = vi.fn(async () => ({
+        status: "ok" as const,
+        summary: "finished before terminal store failure",
+      }));
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+        onEvent: (event) => events.push(event),
+      });
+      const save = cronStoreModule.saveCronJobsStore;
+      const saveSpy = vi
+        .spyOn(cronStoreModule, "saveCronJobsStore")
+        .mockImplementation(async (...args) => {
+          const persistedJob = args[1].jobs.find((entry) => entry.id === job.id);
+          if (!reservationPersisted && persistedJob?.state.queuedAtMs === reservedAt) {
+            await save(...args);
+            reservationPersisted = true;
+            now = startedAt;
+            return;
+          }
+          if (!terminalWriteRejected && persistedJob?.state.lastRunStatus === "ok") {
+            terminalWriteRejected = true;
+            throw new Error("cron terminal write failed");
+          }
+          await save(...args);
+        });
+
+      let recoveryState: ReturnType<typeof createCronServiceState> | undefined;
+      try {
+        await expect(startBatch(trigger, state)).rejects.toThrow("cron terminal write failed");
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect((await loadCronStore(store.storePath)).jobs[0]?.state.runningAtMs).toBe(startedAt);
+
+        const task = findCronTask(job.id);
+        expect(task).toMatchObject({
+          runId: expect.stringMatching(new RegExp(`^${createCronExecutionId(job.id, startedAt)}:`)),
+          startedAt,
+          status: "succeeded",
+          terminalSummary: "finished before terminal store failure",
+        });
+        expect(events.filter((event) => event.action === "finished")).toEqual([
+          expect.objectContaining({ jobId: job.id, status: "ok" }),
+        ]);
+
+        saveSpy.mockRestore();
+        recoveryState = createCronServiceState({
+          cronEnabled: true,
+          storePath: store.storePath,
+          log: noopLogger,
+          nowMs: () => startedAt + 1,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob,
+          onEvent: (event) => events.push(event),
+        });
+        await start(recoveryState);
+
+        expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+        expect(
+          listTaskRecordsUnsorted().filter(
+            (record) => record.runtime === "cron" && record.sourceId === job.id,
+          ),
+        ).toEqual([expect.objectContaining({ runId: task?.runId, status: "succeeded" })]);
+        expect(
+          readCronTaskRunHistoryPage({
+            storeKey: cronStoreKey(store.storePath),
+            jobId: job.id,
+          }).entries,
+        ).toEqual([
+          expect.objectContaining({
+            jobId: job.id,
+            runAtMs: startedAt,
+            status: "ok",
+            summary: "finished before terminal store failure",
+          }),
+        ]);
+        expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
+          enabled: false,
+          state: { lastRunAtMs: startedAt, lastRunStatus: "ok", lastStatus: "ok" },
+        });
+        expect(events.filter((event) => event.action === "finished")).toHaveLength(1);
+      } finally {
+        saveSpy.mockRestore();
+        stop(state);
+        if (recoveryState) {
+          stop(recoveryState);
+        }
+      }
+    },
+  );
+
   it.each([
     { trigger: "scheduled", deleteAfterRun: false },
     { trigger: "scheduled", deleteAfterRun: true },

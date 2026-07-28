@@ -1,3 +1,10 @@
+import {
+  normalizeSessionProjectionRunId,
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+  reduceSessionProjection,
+  type SessionProjectionScope,
+} from "@openclaw/gateway-client/browser";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
@@ -38,13 +45,21 @@ import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
 import {
+  getChatSessionProjection,
+  rememberLiveAuthoritativeUserMessage,
+  setChatSessionProjection,
+} from "./history-merge.ts";
+import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
   reconcileStaleChatRunAfterSessionStatePublication,
 } from "./run-lifecycle.ts";
 import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
-import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
+import {
+  isLiveTerminalForRun,
+  rememberAuthoritativeTerminal,
+} from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 function sessionMessageMatchesChat(
@@ -52,6 +67,85 @@ function sessionMessageMatchesChat(
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
 ): boolean {
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
+}
+
+function readChatSessionProjectionScope(state: ChatPageHost): SessionProjectionScope {
+  return {
+    sessionKey: state.sessionKey,
+    agentId: resolveChatAgentId(state),
+    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
+    ...(Object.hasOwn(state, "chatDisplayedLeafEntryId")
+      ? { activeLeafEntryId: state.chatDisplayedLeafEntryId ?? null }
+      : {}),
+  };
+}
+
+function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return;
+  }
+  const event = payload as {
+    clientRunId?: unknown;
+    message?: unknown;
+    messageId?: unknown;
+    messageSeq?: unknown;
+  };
+  const sourceMessage = event.message;
+  const incoming = readSessionMessageIdentity(sourceMessage, event);
+  if (incoming?.role !== "user") {
+    return;
+  }
+  // Partial import provenance cannot turn an envelope position into durable
+  // transcript identity; only the persisted row can prove its source order.
+  if (
+    incoming.isImported &&
+    !incoming.externalSource &&
+    readSessionMessageSequence(sourceMessage) === null
+  ) {
+    return;
+  }
+  if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
+    return;
+  }
+  const sourceRecord = sourceMessage as Record<string, unknown>;
+  const marker = sourceRecord["__openclaw"];
+  const sourceMetadata =
+    marker && typeof marker === "object" && !Array.isArray(marker)
+      ? (marker as Record<string, unknown>)
+      : {};
+  const message = {
+    ...sourceRecord,
+    __openclaw: {
+      ...sourceMetadata,
+      ...(incoming.id ? { id: incoming.id } : {}),
+      ...(incoming.idempotencyKey ? { idempotencyKey: incoming.idempotencyKey } : {}),
+      ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
+    },
+  };
+  const scope = readChatSessionProjectionScope(state);
+  let projection = reduceSessionProjection(
+    getChatSessionProjection(state, state.chatMessages, scope),
+    { type: "messagePersisted", message, envelope: event, scope },
+  );
+  const ownerRunId = incoming.runId ?? normalizeSessionProjectionRunId(event.clientRunId);
+  const terminalIndex = ownerRunId
+    ? projection.entries.findIndex((entry) => isLiveTerminalForRun(entry.message, ownerRunId))
+    : -1;
+  const messageIndex = projection.entries.findIndex((entry) => entry.message === message);
+  if (terminalIndex >= 0 && messageIndex > terminalIndex) {
+    // A persisted prompt can arrive after its run's streamed terminal; replay
+    // must still place the canonical user turn before its assistant reply.
+    const entry = projection.entries[messageIndex];
+    if (entry) {
+      const entries = projection.entries
+        .toSpliced(messageIndex, 1)
+        .toSpliced(terminalIndex, 0, entry);
+      projection = { ...projection, entries, messages: entries.map((item) => item.message) };
+    }
+  }
+  setChatSessionProjection(state, projection);
+  rememberLiveAuthoritativeUserMessage(message, projection);
+  state.chatMessages = [...projection.messages];
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
@@ -121,6 +215,7 @@ function handleSessionMessageEvent(state: ChatPageHost, payload: unknown) {
   }
   const matchesChat = sessionMessageMatchesChat(state, event);
   if (matchesChat) {
+    applyLiveUserMessage(state, payload);
     void loadChatBranches(state);
   }
   if (matchesChat && event.archived !== null) {
@@ -187,6 +282,23 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const matchesChat = Boolean(
     event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
   );
+  const source =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  const resetsSelectedSession =
+    matchesChat && (source?.reason === "reset" || source?.phase === "reset");
+  if (resetsSelectedSession) {
+    const scope = readChatSessionProjectionScope(state);
+    const projection = reduceSessionProjection(
+      getChatSessionProjection(state, state.chatMessages, scope),
+      { type: "sessionReset", scope },
+    );
+    // Reset keeps the public session ID; the explicit reducer event is the
+    // only proof that its old live and pending transcript no longer exists.
+    setChatSessionProjection(state, projection);
+    state.chatMessages = [...projection.messages];
+  }
   if (matchesChat) {
     void loadChatBranches(state);
   }
@@ -194,6 +306,22 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
+  if (resetsSelectedSession) {
+    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    return;
+  }
+  if (
+    matchesChat &&
+    source?.phase === "message" &&
+    source.message === undefined &&
+    source.messageId === undefined &&
+    source.messageSeq === undefined
+  ) {
+    // Legacy multi-message writes cannot prove individual message cursors.
+    // One scoped authoritative snapshot recovers them without ending a run.
+    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    return;
+  }
   if (
     result.applied &&
     event &&
@@ -349,6 +477,8 @@ export function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventF
       payload?.state === "delta" &&
       typeof payload.runId === "string" &&
       chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) &&
+      // Same-session background streams cannot clear the foreground run's status.
+      (!state.chatRunId || state.chatRunId === payload.runId) &&
       state.observerDigest &&
       state.observerDigest.runId !== payload.runId
     ) {

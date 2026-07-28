@@ -552,6 +552,18 @@ describe("createOpenClawCodingTools", () => {
     expect(inheritedToolAllowlistRef).not.toContain("exec");
   });
 
+  it("does not snapshot additive alsoAllow policies for spawn inheritance", () => {
+    const inheritedToolAllowlistRef: string[] = [];
+
+    createOpenClawCodingTools({
+      config: { tools: { alsoAllow: ["read"], deny: ["exec"] } },
+      inheritedToolAllowlistRef,
+    });
+
+    expect(inheritedToolAllowlistRef).toEqual([]);
+    expect(latestCreateOpenClawToolsOptions().inheritedToolDenylist).toContain("exec");
+  });
+
   it("preserves runtime-allowed message through restrictive profiles", () => {
     const tools = createOpenClawCodingTools({
       config: { tools: { profile: "minimal" } },

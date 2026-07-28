@@ -15,6 +15,7 @@ import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
   detectChangedLanesForPaths,
+  hasDeadcodeScannedSource,
   listChangedPathsFromGit,
   listStagedChangedPaths,
 } from "./changed-lanes.mjs";
@@ -436,6 +437,32 @@ export function createChangedCheckPlan(result, options = {}) {
   };
   const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
   const addLint = (name, args) => add(name, args, baseEnv);
+  const addTargetedLint = (createCommand, lintablePathRe, fallbackName, fallbackArgs) => {
+    const targets = result.paths.filter((changedPath) => lintablePathRe.test(changedPath));
+    const otherPaths = result.paths.filter((changedPath) => !lintablePathRe.test(changedPath));
+    const targetedCommands = [];
+
+    for (let offset = 0; offset < targets.length; offset += TARGETED_LINT_PATH_LIMIT) {
+      const command = createCommand(
+        [...otherPaths, ...targets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT)],
+        baseEnv,
+      );
+      if (!command) {
+        addLint(fallbackName, fallbackArgs);
+        return false;
+      }
+      targetedCommands.push(command);
+    }
+
+    if (targetedCommands.length === 0) {
+      addLint(fallbackName, fallbackArgs);
+      return false;
+    }
+    for (const command of targetedCommands) {
+      addCommand(command.name, command.bin, command.args, command.env);
+    }
+    return true;
+  };
   const addTestTempCreationReport = () => {
     if (!shouldRunTestTempCreationReport(result.paths)) {
       return;
@@ -522,6 +549,9 @@ export function createChangedCheckPlan(result, options = {}) {
       baseEnv,
     );
   }
+  if (result.lanes.all || result.lanes.bundledChannelConfigMetadata) {
+    add("bundled channel config metadata", ["check:bundled-channel-config-metadata"]);
+  }
   if (shouldRunSqliteSessionSchemaBaselineCheck(result.paths)) {
     add("SQLite sessions/transcripts schema baseline", ["sqlite:sessions-schema:check"]);
   }
@@ -554,6 +584,17 @@ export function createChangedCheckPlan(result, options = {}) {
     );
   }
   add("package patch guard", ["deps:patches:check"]);
+  if (
+    hasDeadcodeScannedSource(result.paths) &&
+    !isTruthyEnvFlag(baseEnv.OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE)
+  ) {
+    addCommand(
+      "dead export scan (skip with OPENCLAW_CHECK_CHANGED_SKIP_DEADCODE=1)",
+      "node",
+      ["scripts/check-deadcode-exports.mjs"],
+      baseEnv,
+    );
+  }
 
   if (result.docsOnly) {
     return {
@@ -632,17 +673,9 @@ export function createChangedCheckPlan(result, options = {}) {
   }
 
   if (lanes.core || lanes.coreTests || lanes.ui) {
-    const coreLintCommand = createTargetedCoreLintCommand(result.paths, baseEnv);
-    if (coreLintCommand) {
-      addCommand(
-        coreLintCommand.name,
-        coreLintCommand.bin,
-        coreLintCommand.args,
-        coreLintCommand.env,
-      );
-    } else {
-      addLint("lint core", ["lint:core"]);
-    }
+    addTargetedLint(createTargetedCoreLintCommand, LINTABLE_CORE_PATH_RE, "lint core", [
+      "lint:core",
+    ]);
   }
   if (
     lanes.liveDockerTooling &&
@@ -652,31 +685,21 @@ export function createChangedCheckPlan(result, options = {}) {
     addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
-    const extensionLintCommand = createTargetedExtensionLintCommand(result.paths, baseEnv);
-    if (extensionLintCommand) {
-      addCommand(
-        extensionLintCommand.name,
-        extensionLintCommand.bin,
-        extensionLintCommand.args,
-        extensionLintCommand.env,
-      );
-    } else {
-      addLint("lint extensions", ["lint:extensions"]);
-    }
+    addTargetedLint(
+      createTargetedExtensionLintCommand,
+      LINTABLE_EXTENSION_PATH_RE,
+      "lint extensions",
+      ["lint:extensions"],
+    );
   }
   if (lanes.tooling || lanes.liveDockerTooling) {
-    const scriptLintCommand = createTargetedScriptLintCommand(result.paths, baseEnv);
-    if (scriptLintCommand) {
+    if (
+      addTargetedLint(createTargetedScriptLintCommand, LINTABLE_SCRIPT_PATH_RE, "lint scripts", [
+        "lint:scripts",
+      ])
+    ) {
       addLint("lint docker-e2e", ["lint:docker-e2e"]);
       addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
-      addCommand(
-        scriptLintCommand.name,
-        scriptLintCommand.bin,
-        scriptLintCommand.args,
-        scriptLintCommand.env,
-      );
-    } else {
-      addLint("lint scripts", ["lint:scripts"]);
     }
   }
   if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
@@ -783,6 +806,9 @@ function createTargetedOxlintCommand({
     paths.some(
       (changedPath) =>
         !lintablePathRe.test(changedPath) &&
+        !LINTABLE_CORE_PATH_RE.test(changedPath) &&
+        !LINTABLE_EXTENSION_PATH_RE.test(changedPath) &&
+        !LINTABLE_SCRIPT_PATH_RE.test(changedPath) &&
         !neutralPathRe.test(changedPath) &&
         !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )

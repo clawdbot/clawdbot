@@ -189,16 +189,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           sessionKey: key,
         };
       } else {
-        boardProviderForSession(
-          key,
-          client,
-          true,
-          gateway.phase === "connected",
+        this.boardProviderLease.update(client, gateway.phase === "connected", {
           canPinWidgets,
           canPinMcpApps,
           canMutate,
           canGrant,
-        );
+        });
       }
       return this.boardProviderLease.provider;
     }

@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, realpath, rm, stat, symlink, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { DefaultPackageManager } from "./package-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -29,7 +30,7 @@ type PackageManagerInternals = {
 async function makeTempDir(prefix: string): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), prefix));
   tempDirs.push(dir);
-  return dir;
+  return await realpath(dir);
 }
 
 afterEach(async () => {
@@ -175,6 +176,32 @@ describe("DefaultPackageManager", () => {
     expect(skillPaths.some((skillPath) => skillPath.includes(join("skills", "linked")))).toBe(
       false,
     );
+  });
+
+  it("loads home-scoped personal skills only for the default state directory", async () => {
+    const root = await makeTempDir("openclaw-package-manager-personal-");
+    const home = join(root, "home");
+    const workspace = join(root, "workspace");
+    const personalSkill = join(home, ".agents", "skills", "personal", "SKILL.md");
+    await mkdir(join(home, ".agents", "skills", "personal"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(personalSkill, "# Personal\n", "utf-8");
+
+    const resolveSkillPaths = async (stateDir: string) =>
+      await withEnvAsync(
+        { HOME: home, OPENCLAW_HOME: undefined, OPENCLAW_STATE_DIR: stateDir },
+        async () => {
+          const manager = new DefaultPackageManager({
+            cwd: workspace,
+            agentDir: join(stateDir, "agents", "main", "agent"),
+            settingsManager: SettingsManager.inMemory({}),
+          });
+          return (await manager.resolve()).skills.map((skill) => skill.path);
+        },
+      );
+
+    expect(await resolveSkillPaths(join(home, ".openclaw"))).toContain(personalSkill);
+    expect(await resolveSkillPaths(join(root, "scratch-state"))).not.toContain(personalSkill);
   });
 
   it("keeps auto-discovered project resources inside their resource roots", async () => {

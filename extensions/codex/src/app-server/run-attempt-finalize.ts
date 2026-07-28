@@ -17,6 +17,7 @@ import {
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -433,7 +434,31 @@ export async function finalizeCodexAttempt(
       ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
       durationMs: Date.now() - attemptStartedAt,
     },
-    ctx: hookContext,
+    ctx: {
+      ...hookContext,
+      modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
+      modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
+      authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
+      modelIterations: result.modelIterations ?? 0,
+      skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
+        attemptTools.toolBridge.availableSpecs,
+      ).some((tool) => tool.name === "skill_workshop"),
+      compacted: (result.compactionCount ?? 0) > 0,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      chatType: params.chatType,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId ?? undefined,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+    },
     hookRunner,
   });
   state.shouldDelayNativeHookRelayUnregister =

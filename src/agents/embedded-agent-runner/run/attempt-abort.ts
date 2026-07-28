@@ -6,6 +6,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import type { EmbeddedAttemptSessionLockController } from "./attempt.session-lock.js";
+import { isSessionsYieldAbortError, isSessionsYieldAbortReason } from "./attempt.sessions-yield.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -220,6 +221,8 @@ export function createEmbeddedAttemptRunAbort(input: {
       log: input.log,
       runId: input.attempt.runId,
       abortKind: isTimeout ? "timeout abort" : "abort",
+      terminal:
+        isTimeout || (!isSessionsYieldAbortError(reason) && !isSessionsYieldAbortReason(reason)),
     });
   };
 }
@@ -234,10 +237,13 @@ function releaseEmbeddedAttemptSessionLockForAbort(params: {
   log: AbortLockReleaseLog;
   runId: string;
   abortKind: "abort" | "timeout abort";
+  terminal: boolean;
 }): void {
-  void params.sessionLockController.releaseHeldLockForAbort().catch((err: unknown) => {
-    params.log.warn(
-      `failed to release session lock on ${params.abortKind}: runId=${params.runId} ${String(err)}`,
-    );
-  });
+  void params.sessionLockController
+    .releaseHeldLockForAbort({ terminal: params.terminal })
+    .catch((err: unknown) => {
+      params.log.warn(
+        `failed to release session lock on ${params.abortKind}: runId=${params.runId} ${String(err)}`,
+      );
+    });
 }

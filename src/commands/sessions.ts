@@ -18,10 +18,6 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionTotalTokens } from "../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -247,15 +243,6 @@ function resolveSessionStoreDisplayPath(target: { agentId: string; storePath: st
 function toJsonSessionRow(row: SessionRow): Omit<SessionRow, "runtimeLabel"> {
   const { runtimeLabel, ...jsonRow } = row;
   void runtimeLabel;
-  const marker = parseSqliteSessionFileMarker(jsonRow.sessionFile);
-  if (marker) {
-    jsonRow.sessionFile = formatSqliteSessionFileMarker({
-      ...marker,
-      storePath: resolveSqliteTargetFromSessionStorePath(marker.storePath, {
-        agentId: marker.agentId,
-      }).path,
-    });
-  }
   return jsonRow;
 }
 

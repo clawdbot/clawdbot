@@ -9,8 +9,10 @@ read_when:
   - You are reviewing the MCP namespace bridge or virtual API declarations
 ---
 
-Code mode is an experimental, opt-in OpenClaw agent-runtime feature. When
-enabled, the model no longer sees every enabled tool schema; instead, it sees
+Code mode is an experimental OpenClaw agent-runtime feature. It defaults to the
+`"auto"` tier, which engages only models whose catalog marks them as preferred
+code-mode performers; every other model keeps normal tool exposure. When
+engaged, the model no longer sees every enabled tool schema; instead, it sees
 `exec`, `wait`, and any direct-only tool whose structured result cannot cross
 the JSON-only guest bridge. The model writes a small JavaScript or TypeScript
 program that searches, describes, and calls the hidden tool catalog.
@@ -23,8 +25,8 @@ separate implementations:
   freeform-grammar tool: the model writes raw JavaScript source (optionally
   prefixed by a `// @exec: {...}` pragma line for execution options), executed
   in Codex's in-process V8 Code Mode runtime.
-- OpenClaw code mode runs in the generic OpenClaw agent runtime and is
-  disabled unless `tools.codeMode.enabled` is `true` or `"auto"`. Its `exec`
+- OpenClaw code mode runs in the generic OpenClaw agent runtime, gated by
+  `tools.codeMode.enabled` (default `"auto"`, per-model activation). Its `exec`
   tool takes a JSON `{ code, language }` payload, executed in a QuickJS-WASI
   worker.
 
@@ -89,19 +91,25 @@ the QuickJS-WASI guest.
 
 ## Quickstart
 
-### Enable Code Mode
+### Defaults and overrides
+
+Code mode ships enabled in the `"auto"` tier: it engages only when the run's
+model is flagged as a preferred code-mode performer in its provider catalog,
+and every other model keeps normal tool exposure. No configuration is needed.
+See [Automatic per-model activation](#automatic-per-model-activation) for the
+exact semantics and the shipped model list.
+
+To opt out for every run:
 
 ```json5
 {
   tools: {
-    codeMode: {
-      enabled: true,
-    },
+    codeMode: false,
   },
 }
 ```
 
-Shorthand:
+To force code mode on for every tool-capable run, regardless of model:
 
 ```json5
 {
@@ -111,22 +119,9 @@ Shorthand:
 }
 ```
 
-Code mode stays off when `tools.codeMode` is omitted, `false`, or an object
-without `enabled: true` or `enabled: "auto"`.
-
-To engage code mode only for models whose catalog marks them as strong code-mode
-performers, use the `"auto"` tier instead of `true`:
-
-```json5
-{
-  tools: {
-    codeMode: "auto",
-  },
-}
-```
-
-See [Automatic per-model activation](#automatic-per-model-activation) for the
-exact semantics and the shipped model list.
+Object form works too: `tools.codeMode.enabled` accepts the same `false`,
+`true`, and `"auto"` values. An object without `enabled` keeps the `"auto"`
+default.
 
 If you use sandboxed agents with configured MCP servers, also allow the
 bundled MCP plugin in the sandbox tool policy, for example
@@ -205,7 +200,7 @@ validating high-risk deployments.
 |                     |                                                                                             |
 | ------------------- | ------------------------------------------------------------------------------------------- |
 | Runtime             | [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi)                               |
-| Default state       | disabled                                                                                    |
+| Default state       | `"auto"` (engages only catalog-preferred models)                                            |
 | Stability           | experimental OpenClaw surface (Codex Code Mode is a separate, stable Codex harness surface) |
 | Target surface      | generic OpenClaw agent runs                                                                 |
 | Security posture    | model code is hostile                                                                       |
@@ -252,7 +247,7 @@ enable the feature on its own.
 
 | Field                 | Default                        | Clamp                                           |
 | --------------------- | ------------------------------ | ----------------------------------------------- |
-| `enabled`             | `false`                        | `false`, `true`, or `"auto"` (per-model)        |
+| `enabled`             | `"auto"`                       | `false`, `true`, or `"auto"` (per-model)        |
 | `runtime`             | `"quickjs-wasi"`               | only supported value                            |
 | `mode`                | `"only"`                       | exposes control/direct tools, catalogs the rest |
 | `languages`           | `["javascript", "typescript"]` | any subset of the two                           |
@@ -274,13 +269,13 @@ an engaged run never silently falls back to broad direct tool exposure.
 
 `tools.codeMode.enabled` accepts three values:
 
-- `false` (default): code mode is off for every run.
+- `"auto"` (default): code mode engages only when the run's model is flagged
+  as a preferred code-mode performer in its provider catalog.
+- `false`: code mode is off for every run.
 - `true`: code mode engages for every tool-capable run, regardless of model.
-- `"auto"`: code mode engages only when the run's model is flagged as a
-  preferred code-mode performer in its provider catalog.
 
-`false` and `true` behave exactly as before the `"auto"` tier existed; `"auto"`
-is purely additive.
+`false` and `true` are absolute overrides and behave exactly as before the
+`"auto"` tier existed.
 
 ### The `compat.codeMode` catalog flag
 
@@ -305,6 +300,7 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 | anthropic | `claude-fable-5`, `claude-opus-5`, `claude-sonnet-5`, `claude-mythos-5`, `claude-opus-4-8`, `claude-haiku-4-5`                               |
 | deepseek  | `deepseek-v4-pro`, `deepseek-v4-flash`                                                                                                       |
 | google    | `gemini-3-flash-preview`, `gemini-3.1-pro-preview`, `gemini-3.1-flash-lite`, `gemini-3.5-flash`, `gemini-3.5-flash-lite`, `gemini-3.6-flash` |
+| kimi      | `k3`, `k3-256k`                                                                                                                              |
 | minimax   | `MiniMax-M3`                                                                                                                                 |
 | moonshot  | `kimi-k3`                                                                                                                                    |
 | openai    | `gpt-5.6`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.5-pro`                                                          |
@@ -313,6 +309,30 @@ Bundled provider catalogs currently flag these models as `"preferred"`:
 
 Everything else, including all Ollama-served local models, stays unflagged and
 keeps normal tool exposure under `"auto"`.
+
+### Models shipped by more than one provider
+
+Several vendors are reachable through more than one provider id: a subscription
+endpoint next to an API endpoint, or a gateway that resells another vendor's
+model. Because `"auto"` resolves the tier from whichever catalog served the run,
+two catalogs describing the same upstream model must not disagree by accident.
+
+Every catalog row for a shared model therefore states its tier explicitly once
+any sibling row states one. Rows are matched on the vendor's own name for the
+weights, so a catalog that republishes a model under a namespaced id or
+different casing is matched automatically: `novita/moonshotai/kimi-k3`,
+`nvidia/z-ai/glm-5.2`, and `together/deepseek-ai/DeepSeek-V4-Pro` all group with
+the first-party rows without anyone declaring anything. Only genuinely different
+names need the manifest's `upstreamModel` marker, as the `kimi` catalog uses for
+`moonshot/kimi-k3`.
+
+Reseller and aggregator catalogs such as `baseten`, `deepinfra`,
+`github-copilot`, `gmi`, `novita`, `nvidia`, `ollama-cloud`, `opencode`,
+`opencode-go`, `qianfan`, `together`, `venice`, and `volcengine-plan` currently
+declare `"capable"` for the models first-party catalogs flag `"preferred"`: the
+preferred tier came from evaluations on the first-party endpoints, and those
+runs have not been repeated per reseller. Promoting one of those rows is a
+deliberate, evidence-backed change rather than an oversight.
 
 For OpenAI models, the flag matters only when the run resolves to the OpenClaw
 embedded agent runtime. Default OpenAI routing uses the Codex-style harness
@@ -327,8 +347,9 @@ replacing many full tool schemas and per-tool round trips with one compact
 program surface. Models below the preferred tier showed no consistent win and
 sometimes regressed, which is why `"auto"` leaves them on direct tools.
 
-Use `"auto"` when agents switch between models: strong models get the compact
-surface, weaker or local ones keep the exposure they handle best. Use `true`
+The default `"auto"` fits agents that switch between models: strong models get
+the compact surface, weaker or local ones keep the exposure they handle best.
+Use `true`
 when you have verified a specific unflagged model performs well with code
 mode; global force-on is most predictable for single-model deployments. For
 open-weight or uncached serving where every prompt token is billed or
@@ -564,6 +585,23 @@ type ToolCatalog = {
   [safeToolName: string]: unknown;
 };
 ```
+
+Paired Gateway nodes are available through the `nodes` global:
+
+```typescript
+const available = await nodes.list();
+const node = await nodes.get(available[0].id);
+const status = await node.invoke("device.status");
+```
+
+`nodes.list()` returns paired node ids, names, platforms, connection state, and
+advertised commands. `nodes.get(idOrName)` resolves an exact id before a display
+name and returns a handle with `id`, `name`, and `invoke(command, params?)`.
+Invocation uses the normal `nodes` tool path, so pairing, command policy, scopes,
+approvals, timeouts, hooks, and telemetry are unchanged. A handle includes
+`listDir(path)` only when the node advertises `fs.listDir`. It does not include
+`exec`: the generic nodes surface reserves `system.run` for the normal shell
+`exec` tool with a node host.
 
 Convenience tool functions are installed only for unambiguous safe names:
 
@@ -953,6 +991,24 @@ Each result's `telemetry` field reports: hidden catalog size and a source
 breakdown (`openclaw`/`mcp`/`client` counts), cumulative search/describe/call
 counts for the run's catalog, and the model-visible tool names (`exec`,
 `wait`, and retained direct-only tools).
+
+The run metadata (`meta.agentMeta` in `openclaw agent --json`, mirrored on the
+`agent exec --json` envelope) adds per-run stats:
+
+- `codeModeEngaged`: `true` only when code mode actually owned the model tool
+  surface. This is the reliable engagement signal — do not infer engagement
+  from config or tool names: the shell tool is also named `exec`, the
+  `"auto"` tier engages per model capability, and a model routed through a
+  native harness surface (for example OpenAI-family models on their harness)
+  reports `codeModeEngaged: false` even with `tools.codeMode.enabled=true`,
+  making the silent no-op observable.
+- `assistantTurns`: completed assistant/provider round trips across the run.
+- `bridgeCalls`: the run's cumulative inner bridge counts
+  (`{ search, describe, call }`). These calls never reach the provider;
+  provider-visible outer tool calls remain in `meta.toolSummary.calls`.
+- `costUsd`: estimated USD cost from the run's accumulated usage and the
+  model's cost config (cache read/write tiers included); omitted when the
+  model has no cost data.
 
 Telemetry must not include secrets, raw environment values, or unredacted
 tool inputs beyond existing OpenClaw trajectory policy.

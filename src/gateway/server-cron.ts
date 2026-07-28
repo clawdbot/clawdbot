@@ -453,6 +453,7 @@ export function buildGatewayCronService(params: {
   const terminalExitCompletionTokens = new Map<string, object>();
   let exitWatcherGeneration = 0;
   let exitWatcherMutationRevision = 0;
+  let exitWatchersStopped = false;
   let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
   // snapshot against mutations that commit inside the list await.
@@ -463,11 +464,15 @@ export function buildGatewayCronService(params: {
     const generation = exitWatcherGeneration;
     exitWatcherReconciliations += 1;
     try {
-      if (!exitWatchersRef.current) {
+      if (!exitWatchersRef.current || exitWatchersStopped) {
         return;
       }
       const result = await cron.list({ includeDisabled: true });
-      if (generation !== exitWatcherGeneration || revision !== exitWatcherMutationRevision) {
+      if (
+        exitWatchersStopped ||
+        generation !== exitWatcherGeneration ||
+        revision !== exitWatcherMutationRevision
+      ) {
         return;
       }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
@@ -1305,6 +1310,9 @@ export function buildGatewayCronService(params: {
     (exitWatchersRef.current?.activeJobIds().length ?? 0) +
     (streamWatchersRef.current?.activeJobIds().length ?? 0);
   const stopExitWatchers = () => {
+    // Late completion cleanup can request reconciliation after shutdown.
+    // Fence new requests before cancellation so stopped children cannot respawn.
+    exitWatchersStopped = true;
     exitWatcherGeneration += 1;
     exitWatchersRef.current?.cancelAll();
   };
@@ -1352,28 +1360,33 @@ export function buildGatewayCronService(params: {
     unregisterSessionAutomationSource(automationSource);
   };
   cron.stopAndDrain = async () => {
-    stopCron();
-    stopExitWatchers();
-    stopHeartbeatReconcileRetry();
-    const streamWatchersStop = stopStreamWatchers().then(
-      () => ({ ok: true as const }),
-      (error: unknown) => ({ ok: false as const, error }),
-    );
-    const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
-    const [activeRunDrain, streamWatchersResult] = await Promise.all([
-      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
-      streamWatchersStop,
-    ]);
-    if (!activeRunDrain.drained) {
-      cronLogger.warn(
-        { abortedRuns, activeRuns: activeRunDrain.active },
-        "cron: active runs did not drain before shutdown timeout",
+    try {
+      stopCron();
+      stopExitWatchers();
+      stopHeartbeatReconcileRetry();
+      const streamWatchersStop = stopStreamWatchers().then(
+        () => ({ ok: true as const }),
+        (error: unknown) => ({ ok: false as const, error }),
       );
+      const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
+      const [activeRunDrain, streamWatchersResult] = await Promise.all([
+        waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+        streamWatchersStop,
+      ]);
+      if (!activeRunDrain.drained) {
+        cronLogger.warn(
+          { abortedRuns, activeRuns: activeRunDrain.active },
+          "cron: active runs did not drain before shutdown timeout",
+        );
+      }
+      if (!streamWatchersResult.ok) {
+        throw streamWatchersResult.error;
+      }
+    } finally {
+      // A failed drain still stops this source; owner comparison protects a
+      // replacement that registered while the old watchers were settling.
+      unregisterSessionAutomationSource(automationSource);
     }
-    if (!streamWatchersResult.ok) {
-      throw streamWatchersResult.error;
-    }
-    unregisterSessionAutomationSource(automationSource);
   };
   // Reconciliations serialize on one tail and only the latest requested epoch
   // executes, so an older reload's convergence can never clobber a newer one.
@@ -1422,6 +1435,7 @@ export function buildGatewayCronService(params: {
     if (generation !== streamWatcherGeneration) {
       return;
     }
+    exitWatchersStopped = false;
     streamWatchersStopped = false;
     // A reload restart owns a fresh watcher lifecycle; the next stop must run.
     streamWatchersStopPromise = undefined;

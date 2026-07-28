@@ -10,6 +10,7 @@ import "../test-helpers/app-sidebar-cases/catalog-project-activity.ts";
 import "../test-helpers/app-sidebar-cases/catalog-live.ts";
 import "../test-helpers/app-sidebar-cases/catalog-live-errors.ts";
 import "../test-helpers/app-sidebar-cases/catalog-live-state.ts";
+import "../test-helpers/app-sidebar-cases/catalog-ownership.ts";
 import "../test-helpers/app-sidebar-cases/catalog-pages.ts";
 import "../test-helpers/app-sidebar-cases/child-sessions-cap.ts";
 import "../test-helpers/app-sidebar-cases/child-sessions.ts";

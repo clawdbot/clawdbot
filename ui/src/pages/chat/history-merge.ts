@@ -1,15 +1,19 @@
+import {
+  createSessionProjection,
+  projectLiveSessionMessage,
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+  reconcileSessionProjectionSnapshot,
+  type SessionProjectionScope,
+  type SessionProjectionState,
+} from "@openclaw/gateway-client/browser";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
-type TranscriptMessageIdentity = {
-  role: string;
-  signature: string | null;
-  isImported: boolean;
-  externalSource: string | null;
-  id: string | null;
-  sequence: number | null;
-  idempotencyKey: string | null;
-};
+type TranscriptMessageIdentity = Pick<
+  NonNullable<ReturnType<typeof readSessionMessageIdentity>>,
+  "role" | "isImported" | "externalSource" | "id" | "sequence" | "idempotencyKey"
+> & { signature: string | null };
 
 type IndexedHistoryMessage = {
   index: number;
@@ -18,6 +22,90 @@ type IndexedHistoryMessage = {
 };
 
 type HistoryMessageIndex = Map<string, IndexedHistoryMessage[]>;
+
+const chatSessionProjections = new WeakMap<object, SessionProjectionState>();
+const liveAuthoritativeUserProjections = new WeakMap<object, SessionProjectionState>();
+
+function markLocallyOptimisticProjectionEntries(
+  projection: SessionProjectionState,
+): SessionProjectionState {
+  let changed = false;
+  const entries = projection.entries.map((entry) => {
+    const pendingRunId = entry.identity?.runId;
+    if (
+      entry.pending ||
+      entry.live ||
+      !pendingRunId ||
+      !isLocallyOptimisticHistoryMessage(entry.message)
+    ) {
+      return entry;
+    }
+    changed = true;
+    return { ...entry, pending: true, pendingRunId };
+  });
+  return changed ? { ...projection, entries } : projection;
+}
+
+function createChatSessionProjection(
+  messages: readonly unknown[],
+  scope: SessionProjectionScope,
+): SessionProjectionState {
+  return markLocallyOptimisticProjectionEntries(createSessionProjection(scope, messages));
+}
+
+export function getChatSessionProjection(
+  owner: object,
+  messages: readonly unknown[] = [],
+  scope: SessionProjectionScope = {},
+): SessionProjectionState {
+  const current = chatSessionProjections.get(owner);
+  const scopeChanged =
+    current !== undefined &&
+    (
+      ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
+    ).some((key) => {
+      if (!Object.hasOwn(scope, key)) {
+        return false;
+      }
+      const previous = current.scope[key];
+      const next = scope[key];
+      // An explicitly cleared leaf leaves the old branch; an omitted scope
+      // field remains a wildcard for run-only and split-pane consumers.
+      return previous !== undefined && previous !== next;
+    });
+  if (!current || scopeChanged) {
+    const projection = createChatSessionProjection(messages, scope);
+    chatSessionProjections.set(owner, projection);
+    return projection;
+  }
+  const bindsScope = (
+    ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
+  ).some(
+    (key) =>
+      Object.hasOwn(scope, key) && current.scope[key] === undefined && scope[key] !== undefined,
+  );
+  const scopedProjection = bindsScope
+    ? { ...current, scope: { ...current.scope, ...scope } }
+    : current;
+  const currentMessagesMatch =
+    scopedProjection.messages.length === messages.length &&
+    scopedProjection.messages.every((message, index) => message === messages[index]);
+  if (currentMessagesMatch) {
+    if (scopedProjection !== current) {
+      chatSessionProjections.set(owner, scopedProjection);
+    }
+    return scopedProjection;
+  }
+  const projection = markLocallyOptimisticProjectionEntries(
+    reconcileSessionProjectionSnapshot(scopedProjection, messages, scope),
+  );
+  chatSessionProjections.set(owner, projection);
+  return projection;
+}
+
+export function setChatSessionProjection(owner: object, projection: SessionProjectionState): void {
+  chatSessionProjections.set(owner, projection);
+}
 
 function readTranscriptMetadata(message: unknown): Record<string, unknown> | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -29,14 +117,6 @@ function readTranscriptMetadata(message: unknown): Record<string, unknown> | nul
     : null;
 }
 
-function readMetadataString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized || null;
-}
-
 function hasTranscriptMeta(message: unknown): boolean {
   const metadata = readTranscriptMetadata(message);
   // An idempotency marker alone identifies a locally materialized queued turn;
@@ -45,8 +125,7 @@ function hasTranscriptMeta(message: unknown): boolean {
 }
 
 export function readTranscriptSequence(message: unknown): number | null {
-  const seq = readTranscriptMetadata(message)?.seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : null;
+  return readSessionMessageSequence(message);
 }
 
 export function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
@@ -78,28 +157,15 @@ export function messageDisplaySignature(message: unknown): string | null {
 }
 
 function readTranscriptMessageIdentity(message: unknown): TranscriptMessageIdentity {
-  const metadata = readTranscriptMetadata(message);
-  const externalId = readMetadataString(metadata?.externalId);
-  const importedFrom = readMetadataString(metadata?.importedFrom);
-  const cliSessionId = readMetadataString(metadata?.cliSessionId);
-  const isImported = Boolean(externalId || importedFrom || cliSessionId);
-  // Imported ids are source-local. A partial source tuple cannot prove that
-  // two imports came from the same provider and CLI session.
-  const externalSource =
-    externalId && importedFrom && cliSessionId
-      ? JSON.stringify([importedFrom, cliSessionId, externalId])
-      : null;
+  const identity = readSessionMessageIdentity(message);
   return {
-    role:
-      message && typeof message === "object"
-        ? normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role)
-        : "",
+    role: identity?.role ?? "",
     signature: messageDisplaySignature(message),
-    isImported,
-    externalSource,
-    id: readMetadataString(metadata?.id),
-    sequence: readTranscriptSequence(message),
-    idempotencyKey: readMetadataString(metadata?.idempotencyKey),
+    isImported: identity?.isImported ?? false,
+    externalSource: identity?.externalSource ?? null,
+    id: identity?.id ?? null,
+    sequence: identity?.sequence ?? null,
+    idempotencyKey: identity?.idempotencyKey ?? null,
   };
 }
 
@@ -222,6 +288,73 @@ function findTranscriptHistoryAnchor(
   // Display text is not transcript identity. A copied legacy row is safe to
   // anchor only when its visible signature has exactly one history candidate.
   return sameInstance ?? (entries.length === 1 ? (entries[0] ?? null) : null);
+}
+
+export function rememberLiveAuthoritativeUserMessage(
+  message: unknown,
+  projection?: SessionProjectionState,
+): void {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return;
+  }
+  const identity = readTranscriptMessageIdentity(message);
+  if (identity.role === "user" && (identity.id !== null || identity.sequence !== null)) {
+    const liveProjection =
+      projection ?? projectLiveSessionMessage(createSessionProjection(), message);
+    if (liveProjection.entries.some((entry) => entry.live && entry.message === message)) {
+      liveAuthoritativeUserProjections.set(message, liveProjection);
+    }
+  }
+}
+
+export function preserveLiveAuthoritativeUserMessages(
+  historyMessages: unknown[],
+  currentMessages: unknown[],
+  shouldHideMessage: (message: unknown) => boolean = () => false,
+): unknown[] {
+  let preservedMessages = historyMessages;
+  for (let currentIndex = 0; currentIndex < currentMessages.length; currentIndex += 1) {
+    const message = currentMessages[currentIndex];
+    if (
+      !message ||
+      typeof message !== "object" ||
+      !liveAuthoritativeUserProjections
+        .get(message)
+        ?.entries.some((entry) => entry.live && entry.message === message) ||
+      shouldHideMessage(message)
+    ) {
+      continue;
+    }
+    const historyIndex = createHistoryMessageIndex(preservedMessages, shouldHideMessage);
+    if (findTranscriptHistoryAnchor(historyIndex, message)) {
+      continue;
+    }
+    const sequence = readTranscriptSequence(message);
+    let insertionIndex =
+      sequence === null
+        ? -1
+        : preservedMessages.findIndex((candidate) => {
+            const candidateSequence = readTranscriptSequence(candidate);
+            return candidateSequence !== null && candidateSequence > sequence;
+          });
+    if (insertionIndex < 0 && sequence === null) {
+      for (const nextMessage of currentMessages.slice(currentIndex + 1)) {
+        const anchor = findTranscriptHistoryAnchor(historyIndex, nextMessage);
+        if (anchor) {
+          insertionIndex = anchor.index;
+          break;
+        }
+      }
+    }
+    // Only a gateway-projected, identity-backed prompt may outlive a stale
+    // snapshot; transcript sequence or the next known row keeps its reply after it.
+    preservedMessages = preservedMessages.toSpliced(
+      insertionIndex < 0 ? preservedMessages.length : insertionIndex,
+      0,
+      message,
+    );
+  }
+  return preservedMessages;
 }
 
 function findOptimisticHistoryMatch(

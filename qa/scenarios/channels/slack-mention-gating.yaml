@@ -6,7 +6,6 @@ scenario:
     primary:
       - slack.channel-allowlists
   execution:
-    profiles: { "slack:default": 1 }
     kind: flow
     channel: slack
     timeoutMs: 8000

@@ -1,6 +1,5 @@
 // Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
@@ -12,7 +11,16 @@ import {
 } from "../routing/session-key.js";
 import type { ChatLog } from "./components/chat-log.js";
 import type { TuiAgentsList, TuiBackend, TuiSessionMutationResult } from "./tui-backend.js";
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  formatTuiErrorMessage,
+  isCommandMessage,
+} from "./tui-formatters.js";
+import {
+  readTuiSessionUserMessage,
+  readTuiTranscriptMessageSequence,
+} from "./tui-session-events.js";
 import { TUI_SESSION_LOOKUP_LIMIT } from "./tui-session-list-policy.js";
 import * as submit from "./tui-submit-state.js";
 import type { SessionInfo, TuiHistoryLoadResult, TuiOptions, TuiStateAccess } from "./tui-types.js";
@@ -106,11 +114,6 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
   );
 }
 
-function extractMessageTimestamp(message: Record<string, unknown>): number | null {
-  const raw = message.timestamp;
-  return asDateTimestampMs(typeof raw === "string" ? Date.parse(raw) : raw) ?? null;
-}
-
 export function createSessionActions(context: SessionActionContext) {
   const {
     client,
@@ -143,6 +146,17 @@ export function createSessionActions(context: SessionActionContext) {
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     state.currentAgentId === selection.agentId &&
     agentSessionKeysMatchByRequestKey(state.currentSessionKey, selection.sessionKey);
+
+  const isCurrentSessionMutation = (result: { key?: string }): boolean => {
+    if (!result.key) {
+      return true;
+    }
+    const parsed = parseAgentSessionKey(result.key);
+    return isCurrentSessionSelection({
+      sessionKey: result.key,
+      agentId: parsed ? normalizeAgentId(parsed.agentId) : state.currentAgentId,
+    });
+  };
 
   const applyAgentsResult = (result: TuiAgentsList) => {
     state.agentDefaultId = normalizeAgentId(result.defaultId);
@@ -186,7 +200,7 @@ export function createSessionActions(context: SessionActionContext) {
       const result = await client.listAgents();
       applyAgentsResult(result);
     } catch (err) {
-      chatLog.addSystem(`agents list failed: ${String(err)}`);
+      chatLog.addSystem(`agents list failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -382,7 +396,7 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentRefresh()) {
         return;
       }
-      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      chatLog.addSystem(`sessions list failed: ${formatTuiErrorMessage(err)}`);
     }
   };
 
@@ -410,7 +424,7 @@ export function createSessionActions(context: SessionActionContext) {
   const applySessionInfoFromPatch = (
     result?: SessionsPatchResult | TuiSessionMutationResult | null,
   ) => {
-    if (!result?.entry) {
+    if (!result?.entry || !isCurrentSessionMutation(result)) {
       return;
     }
     if (result.key && result.key !== state.currentSessionKey) {
@@ -441,8 +455,13 @@ export function createSessionActions(context: SessionActionContext) {
     tui.requestRender(true);
   };
 
-  const applySessionMutationResult = (result?: TuiSessionMutationResult | null): boolean => {
-    if (!result?.entry) {
+  const applySessionMutationResult = (
+    result?: TuiSessionMutationResult | null,
+    requestSelection = captureSessionSelection(),
+  ): boolean => {
+    // A reset can legitimately return a replacement key. Reject results using
+    // the request's original selection, not the key the response must adopt.
+    if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
       return false;
     }
     if (result.key && result.key !== state.currentSessionKey) {
@@ -462,6 +481,7 @@ export function createSessionActions(context: SessionActionContext) {
     // latest request may render, or a slow reload can replace a newer selection.
     const generation = ++historyLoadGeneration;
     const selection = captureSessionSelection();
+    const previousSessionId = state.currentSessionId;
     const isCurrentLoad = () =>
       generation === historyLoadGeneration && isCurrentSessionSelection(selection);
     try {
@@ -521,8 +541,14 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
-      const historyUsers: Array<{ text: string; timestamp?: number | null }> = [];
-      chatLog.clearAll({ preservePendingUsers: true });
+      const historyUsers: Array<{ text: string; runId?: string }> = [];
+      // An authoritative live prompt can arrive while history is in flight.
+      // Preserve it only while this response still owns the same session generation.
+      chatLog.clearAll({
+        preservePendingUsers: true,
+        preserveLiveUsers:
+          previousSessionId === null || previousSessionId === state.currentSessionId,
+      });
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {
@@ -530,6 +556,10 @@ export function createSessionActions(context: SessionActionContext) {
           continue;
         }
         const message = entry as Record<string, unknown>;
+        const messageSeq = readTuiTranscriptMessageSequence(message);
+        if (messageSeq !== undefined) {
+          chatLog.restoreLiveUsers(messageSeq);
+        }
         if (isCommandMessage(message)) {
           const text = extractTextFromMessage(message);
           if (text) {
@@ -540,11 +570,19 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
+            const liveUserMessage = readTuiSessionUserMessage({ message });
             historyUsers.push({
               text,
-              timestamp: extractMessageTimestamp(message),
+              ...(liveUserMessage?.runId ? { runId: liveUserMessage.runId } : {}),
             });
-            chatLog.addUser(text);
+            if (liveUserMessage) {
+              chatLog.addUser(text, {
+                messageId: liveUserMessage.messageId,
+                ...(messageSeq !== undefined ? { messageSeq } : {}),
+              });
+            } else {
+              chatLog.addUser(text);
+            }
           }
           continue;
         }
@@ -578,6 +616,7 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
+      chatLog.restoreLiveUsers();
       submit.reconcilePendingSubmitHistory(state, chatLog.reconcilePendingUsers(historyUsers));
       chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway
@@ -611,16 +650,18 @@ export function createSessionActions(context: SessionActionContext) {
       if (!isCurrentLoad()) {
         return { loaded: false };
       }
-      chatLog.addSystem(`history failed: ${String(err)}`);
+      chatLog.addSystem(`history failed: ${formatTuiErrorMessage(err)}`);
       tui.requestRender(true);
       return { loaded: false };
     }
   };
 
   const setSession = async (rawKey: string) => {
+    const previousSelection = captureSessionSelection();
     const nextKey = resolveSessionKey(rawKey);
     updateAgentFromSessionKey(nextKey);
     state.currentSessionKey = nextKey;
+    const selectionChanged = !isCurrentSessionSelection(previousSelection);
     state.activeChatRunId = null;
     submit.clearPendingSubmit(state);
     setActivityStatus("idle");
@@ -629,6 +670,10 @@ export function createSessionActions(context: SessionActionContext) {
     // so refresh data for the newly selected session isn't rejected as stale.
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
+    if (selectionChanged) {
+      // Live prompt identities belong to the old selection, not its pending successor.
+      chatLog.clearAll();
+    }
     chatLog.clearPendingUsers();
     clearLocalRunIds?.();
     btw.clear();
@@ -648,18 +693,22 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
+    const selection = captureSessionSelection();
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const abortsPendingRun = Boolean(pendingRunId);
     const activeRunId = state.activeChatRunId;
     const sessionAbortParams = {
-      sessionKey: state.currentSessionKey,
-      ...(state.currentSessionKey === "global" ? { agentId: state.currentAgentId } : {}),
+      sessionKey: selection.sessionKey,
+      ...(selection.sessionKey === "global" ? { agentId: selection.agentId } : {}),
     };
     try {
       // Session-scoped abort is the only reliable TUI stop contract: queued
       // chat.send calls can terminalize before the queue drains, so their run
       // ids may no longer exist in local UI state.
       const result = await client.abortChat(sessionAbortParams);
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
       if (!result.aborted) {
         chatLog.addSystem("no active run", { coalesceConsecutive: true });
         tui.requestRender();
@@ -684,7 +733,10 @@ export function createSessionActions(context: SessionActionContext) {
       }
       setActivityStatus("aborted");
     } catch (err) {
-      chatLog.addSystem(`abort failed: ${String(err)}`);
+      if (!isCurrentSessionSelection(selection)) {
+        return;
+      }
+      chatLog.addSystem(`abort failed: ${formatTuiErrorMessage(err)}`);
       setActivityStatus("abort failed");
     }
     tui.requestRender();

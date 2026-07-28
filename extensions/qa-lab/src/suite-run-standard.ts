@@ -138,6 +138,7 @@ export async function runQaFlowSuiteStandard(
           providerMode,
           forcedRuntime: params?.forcedRuntime,
           mockBaseUrl: activeMock?.baseUrl,
+          nativeAppServerArgs: process.env.OPENCLAW_CODEX_APP_SERVER_ARGS,
         }),
         transport.createRuntimeEnvPatch?.(),
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),

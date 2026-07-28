@@ -175,6 +175,7 @@ const threadBindingSchema = z
     threadId: z.string().refine((value) => Boolean(value.trim())),
     clientId: optionalStringSchema,
     cwd: z.string(),
+    rolloutPath: optionalNonBlankStringSchema,
     // Private runtime ownership. Only the supervision catalog creates this
     // marker; public OpenClaw session metadata must never authorize user-home access.
     connectionScope: z.literal("supervision").optional(),
@@ -215,6 +216,7 @@ const threadBindingSchema = z
     dynamicToolsFingerprint: optionalStringSchema,
     dynamicToolsContainDeferred: optionalBooleanSchema,
     webSearchThreadConfigFingerprint: optionalStringSchema,
+    nativeSkillIsolationFingerprint: optionalStringSchema,
     userMcpServersFingerprint: optionalStringSchema,
     mcpServersFingerprint: optionalStringSchema,
     ringZeroConfigFingerprint: optionalStringSchema,

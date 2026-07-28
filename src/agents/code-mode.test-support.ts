@@ -39,6 +39,7 @@ type CodeModeTestApi = {
   activeRuns: Map<
     string,
     {
+      runId: string;
       config: CodeModeConfig;
       expiresAt: number;
       replayId?: string;
@@ -90,7 +91,9 @@ type CodeModeTestApi = {
   ): CodeModeConfig;
   resolveCodeModeWorkerUrl(currentModuleUrl: string): URL;
   getTypescriptRuntimePromise(): Promise<typeof import("typescript")> | null;
-  setTypescriptRuntimeForTest(runtime: typeof import("typescript") | null): void;
+  setTypescriptRuntimeForTest(
+    runtime: typeof import("typescript") | Promise<typeof import("typescript")> | null,
+  ): void;
   setSwarmDepsForTest(overrides?: {
     emitSessionLifecycleEvent?: (event: Record<string, unknown>) => void;
     getSwarmRunByLaunchReplayKey?: (key: string, requesterSessionKey?: string) => unknown;

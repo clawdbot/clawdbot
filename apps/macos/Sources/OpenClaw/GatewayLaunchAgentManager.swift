@@ -267,6 +267,12 @@ extension GatewayLaunchAgentManager {
                 payload: Data(payload.utf8),
                 message: nil)
         }
+        if ProcessInfo.processInfo.isRunningTests {
+            return CommandResult(
+                success: false,
+                payload: nil,
+                message: "Gateway daemon commands require explicit interception during tests")
+        }
         #endif
         let command = CommandResolver.openclawCommand(
             subcommand: "gateway",

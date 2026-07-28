@@ -333,6 +333,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     await this.phase("fresh.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
       this.bootstrapGuest(),
     );
+    await this.phase("fresh.reset-state", 180, () => this.resetState());
     await this.phase("fresh.preflight", 90, () => this.logGuestPreflight());
     await this.phase("fresh.install-latest-bootstrap", 420, () => this.installLatestRelease());
     await this.phase("fresh.install-main", 420, () =>
@@ -361,6 +362,7 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     await this.phase("upgrade.bootstrap-guest", BOOTSTRAP_TIMEOUT_SECONDS, () =>
       this.bootstrapGuest(),
     );
+    await this.phase("upgrade.reset-state", 180, () => this.resetState());
     await this.phase("upgrade.preflight", 90, () => this.logGuestPreflight());
     await this.phase("upgrade.install-latest", 420, () => this.installLatestRelease());
     this.status.latestInstalledVersion = await this.extractLastVersion("upgrade.install-latest");
@@ -489,6 +491,16 @@ run_apt_with_lock_retry() {
 }
 run_apt_with_lock_retry apt-get -o Acquire::Check-Date=false -o DPkg::Lock::Timeout=30 update
 run_apt_with_lock_retry apt-get -o DPkg::Lock::Timeout=30 install -y curl ca-certificates`);
+  }
+
+  private resetState(): void {
+    this.guestBash(String.raw`set -euo pipefail
+pkill -f '[o]penclaw.*gateway run' >/dev/null 2>&1 || true
+pkill -f '[o]penclaw-gateway' >/dev/null 2>&1 || true
+pkill -f '[o]penclaw.mjs gateway' >/dev/null 2>&1 || true
+npm uninstall -g openclaw >/dev/null 2>&1 || true
+rm -rf /root/.openclaw /root/.npm/_cacache
+rm -f /tmp/openclaw-parallels-linux-gateway.log`);
   }
 
   private installLatestRelease(): void {

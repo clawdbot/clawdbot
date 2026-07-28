@@ -5,6 +5,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import {
+  acquireBoardProviderForSession,
   boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
@@ -566,6 +567,102 @@ describe("chat pane board shell", () => {
       };
 
       expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+    }
+  });
+
+  it("updates chat authorization without changing another consumer of the same board", async () => {
+    window.history.replaceState({}, "", "/");
+    const pane = createTestPane();
+    const sessionKey = "agent:main:chat-lease-scope-change";
+    const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
+    const removeListener = vi.fn();
+    const request = vi.fn(async () => snapshot);
+    const addEventListener = vi.fn(() => removeListener);
+    const client = {
+      request,
+      addEventListener,
+    } as unknown as GatewayBrowserClient;
+    const features = {
+      methods: ["board.get", "board.widget.appView", "board.widget.put"],
+      capabilities: ["board-widget-put-canvas-doc"],
+    };
+    pane.state.sessionKey = sessionKey;
+    pane.state.client = client;
+    Reflect.set(pane, "boardProviderLifecycleConnected", true);
+    pane.context = {
+      ...pane.context,
+      gateway: {
+        snapshot: {
+          client,
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+            features,
+          },
+        },
+      },
+    } as unknown as ApplicationContext;
+    const chat = pane.resolveBoardProvider();
+    const approvals = acquireBoardProviderForSession(
+      sessionKey,
+      client,
+      true,
+      false,
+      false,
+      false,
+      true,
+    );
+
+    try {
+      await vi.waitFor(() => expect(chat.snapshot$.value).toEqual(snapshot));
+      expect(chat).toMatchObject({
+        canPinWidgets: true,
+        canPinMcpApps: true,
+        canMutate: true,
+        canGrant: false,
+      });
+      expect(approvals.provider).toMatchObject({
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: true,
+      });
+
+      pane.context = {
+        ...pane.context,
+        gateway: {
+          snapshot: {
+            client,
+            phase: "connected",
+            hello: {
+              auth: { role: "operator", scopes: ["operator.read"] },
+              features,
+            },
+          },
+        },
+      } as unknown as ApplicationContext;
+
+      expect(pane.resolveBoardProvider()).toBe(chat);
+      expect(chat).toMatchObject({
+        canPinWidgets: false,
+        canPinMcpApps: false,
+        canMutate: false,
+        canGrant: false,
+      });
+      expect(approvals.provider.canGrant).toBe(true);
+      expect(approvals.provider.canMutate).toBe(false);
+      expect(request).toHaveBeenCalledOnce();
+      expect(addEventListener).toHaveBeenCalledOnce();
+
+      approvals.release();
+      expect(removeListener).not.toHaveBeenCalled();
+      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
+      release.call(pane);
+      expect(removeListener).toHaveBeenCalledOnce();
+    } finally {
+      approvals.release();
+      const release = Reflect.get(pane, "releaseBoardProviderLease") as () => void;
+      release.call(pane);
     }
   });
 

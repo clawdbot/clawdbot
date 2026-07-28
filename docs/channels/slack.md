@@ -1224,6 +1224,10 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
+    <Note>
+    `dm.groupEnabled` and `dm.groupChannels` only filter group DMs Slack already delivers to the app. They cannot make the app see a group DM it never joined. Convert the group DM to a private channel and invite the app, or have the app open a new MPDM with `conversations.open`. See [Group DMs (MPDMs) and bots](/channels/slack#group-dms-mpdms-and-bots).
+    </Note>
+
     Multi-account precedence:
 
     - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
@@ -1323,6 +1327,20 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 
   </Tab>
 </Tabs>
+
+### Group DMs (MPDMs) and bots
+
+Slack group DMs, also called multi-person direct messages or MPDMs, are not channels an app can join by being mentioned. Typing `@YourBot` in an existing group DM does not add the app or make the conversation visible to it.
+
+- If the app was included when the group DM was created, Slack delivers `message.mpim` events and OpenClaw can respond when DM policy allows it.
+- If the app is mentioned in an existing group DM where it is not a member, the bot token cannot see the conversation at all. Slack Web API calls such as `conversations.info`, `conversations.members`, and `conversations.history` fail with method- and context-dependent access or not-found errors, the MPDM does not appear in `conversations.list?types=mpim`, and no event is delivered to OpenClaw.
+- OpenClaw wakes in MPDMs through delivered `message.mpim` events. `app_mention` events do not add the app to DM or MPDM contexts.
+- `dm.groupEnabled` and `dm.groupChannels` only filter MPDMs Slack already delivers to the app. They cannot grant membership or visibility into a group DM the app was never part of. There is no OpenClaw config setting that makes the app see a group DM it never joined.
+
+To bring the app into a group DM, use one of these Slack-supported paths:
+
+1. Convert the group DM to a private channel, then ask a current member to invite the app with `/invite @YourBot`. An API-based invite must call `conversations.invite` with a token whose actor is already a member and allowed to invite the app.
+2. Have the app open a new MPDM with `conversations.open` using a bot token with `mpim:write`, passing the human recipients in `users`. Slack includes the calling bot user automatically.
 
 ## Threading, sessions, and reply tags
 
@@ -1440,6 +1458,7 @@ Slack native progress task cards are opt-in for progress mode. Set `channels.sla
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
+- Custom outbound username/icon settings keep portable previews enabled. OpenClaw keeps the preview app-authored so partial/block previews can be removed before a separately customized final; progress mode may instead collapse the app-authored draft into a receipt. Slack does not allow impersonated messages to be deleted.
 - Media and non-text payloads fall back to normal delivery.
 - Media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
@@ -1692,6 +1711,13 @@ text from valid raw `data_table` cells, while malformed custom blocks may
 degrade to their caption or general Block Kit fallback. Portable agent, CLI,
 and plugin output should use `presentation`.
 
+Slack clients can also deliver pasted spreadsheet content as a legacy `table`
+block in the message's top-level blocks or attachments. OpenClaw renders those
+inbound cells as delimiter-safe TSV for live agent input, thread context, and
+Slack `read` actions. Only native table blocks are admitted from ordinary
+attachments; link-unfurl and other non-forwarded attachment text remains
+excluded.
+
 ## Plugin-owned modal submissions
 
 Slack plugins that register an interactive handler can also receive modal
@@ -1789,6 +1815,7 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Agent View `app_context` entities are validated in Slack relevance order and exposed only as structured untrusted context; an omitted context clears the turn rather than reusing stale entities.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
+- Dedicated Web API reads used for probes, scope discovery, conversation classification, and delivery reconciliation have a 30-second deadline per request attempt. Transient failures can still retry, so the full operation may take longer. Shared Bolt and mutation-capable clients do not receive this default deadline because Slack may commit a mutation before a late response reaches OpenClaw.
 - Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
   - global shortcuts: callback and actor metadata, routed to the actor's direct session

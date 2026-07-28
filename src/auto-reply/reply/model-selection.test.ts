@@ -1555,7 +1555,13 @@ describe("createModelSelectionState auto-failover overrides", () => {
       modelOverrideRouteResolution: params.modelOverrideRouteResolution,
       modelOverrideFallbackOriginProvider: params.modelOverrideFallbackOriginProvider,
       modelOverrideFallbackOriginModel: params.modelOverrideFallbackOriginModel,
-      fallbackNoticeSelectedModel: params.fallbackNoticeSelectedModel,
+      fallbackNotice: params.fallbackNoticeSelectedModel
+        ? {
+            kind: "active",
+            selectedModel: params.fallbackNoticeSelectedModel,
+            activeModel: `${params.providerOverride}/${params.modelOverride}`,
+          }
+        : undefined,
       authProfileOverride: params.authProfileOverride,
       authProfileOverrideSource: params.authProfileOverrideSource,
     });

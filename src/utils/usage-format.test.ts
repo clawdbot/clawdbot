@@ -641,6 +641,8 @@ describe("usage-format", () => {
     metadataOnlyModel.cost = { input: 9, output: 8, cacheRead: 7, cacheWrite: 6 };
     const after = resolveModelCostConfigFingerprint(config);
 
+    expect(before).toMatch(/^[0-9a-f]{64}$/u);
+    expect(after).toMatch(/^[0-9a-f]{64}$/u);
     expect(after).not.toBe(before);
     expect(
       resolveModelCostConfig({

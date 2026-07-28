@@ -221,6 +221,51 @@ describe("formatQaGatewayProcessBoundaryStartupFailure", () => {
   });
 });
 
+describe("waitForGatewayReady", () => {
+  it.each(["startup", "restart"] as const)(
+    "does not accept a healthy listener as %s readiness",
+    async (phase) => {
+      vi.useFakeTimers();
+      const baseUrl = "http://127.0.0.1:43124";
+      const release = vi.fn(async () => {});
+      let ready = false;
+
+      fetchWithSsrFGuardMock.mockImplementation(async ({ url }: { url: string }) => {
+        const status = url.endsWith("/healthz") || ready ? 200 : 503;
+        return { response: { ok: status === 200, status }, release };
+      });
+
+      try {
+        const readiness = testing.waitForGatewayReady({
+          baseUrl,
+          logs: () => `${phase} logs`,
+          child: { exitCode: null, signalCode: null },
+          timeoutMs: 1_000,
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+          `${baseUrl}/readyz`,
+        ]);
+        expect(release).toHaveBeenCalledTimes(1);
+
+        ready = true;
+        await vi.advanceTimersByTimeAsync(250);
+
+        await expect(readiness).resolves.toBeUndefined();
+        expect(fetchWithSsrFGuardMock.mock.calls.map(([request]) => request.url)).toEqual([
+          `${baseUrl}/readyz`,
+          `${baseUrl}/readyz`,
+        ]);
+        expect(release).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+});
+
 describe("Gateway child fixture helpers", () => {
   it("creates an empty transport config seam", () => {
     expect(testing.createQaGatewayEmptyTransport()).toEqual({
@@ -264,7 +309,7 @@ describe("Gateway child fixture helpers", () => {
       }),
     ).toEqual(
       expect.objectContaining({
-        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} --listen stdio://`,
+        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
       }),
     );
   });
@@ -288,6 +333,39 @@ describe("Gateway child fixture helpers", () => {
     await expect(
       readFile(path.join(tempRoot, "codex-model-catalog.json"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("confines live Codex QA without replacing its native provider configuration", () => {
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
+        "-c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://",
+    });
+  });
+
+  it("preserves preconfigured live Codex arguments while enforcing QA containment", () => {
+    expect(
+      testing.buildQaForcedRuntimeEnvPatch({
+        forcedRuntime: "codex",
+        providerMode: "live-frontier",
+        nativeAppServerArgs:
+          'app-server -c openai_base_url="https://live.example/v1" --listen stdio://',
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        'app-server -c openai_base_url="https://live.example/v1" --listen stdio:// ' +
+        "-c sandbox_workspace_write.exclude_tmpdir_env_var=true " +
+        "-c sandbox_workspace_write.exclude_slash_tmp=true",
+    });
   });
 
   it("resolves source and built Gateway CLI commands", async () => {

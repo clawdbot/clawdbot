@@ -1,8 +1,16 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
+import type { ApplicationGatewaySnapshot } from "./gateway.ts";
+import {
+  approval,
+  client,
+  createGatewayHarness,
+  deferred,
+  flushMicrotasks,
+  registerOverlayPairingAccessTests,
+  type RequestFn,
+} from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
 vi.mock("../build-info.ts", () => ({
@@ -16,110 +24,7 @@ vi.mock("../lib/nodes/index.ts", () => ({
   peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
 
-type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 const VERIFICATION_POLL_MS = 250;
-
-function deferred<T = unknown>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
-
-function approval(id: string, createdAtMs: number) {
-  return {
-    id,
-    createdAtMs,
-    expiresAtMs: Date.now() + 60_000,
-    request: { command: `echo ${id}` },
-  };
-}
-
-function createGatewayHarness(
-  initialClient: GatewayBrowserClient | null,
-  initialConnected = initialClient !== null,
-) {
-  let snapshot: ApplicationGatewaySnapshot = {
-    assistantAgentId: "main",
-    client: initialClient,
-    phase: initialConnected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    lastError: null,
-    lastErrorCode: null,
-    sessionKey: "main",
-  };
-  const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
-  const connect = vi.fn();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: "ws://gateway.test", password: "", token: "", bootstrapToken: "" },
-    eventLog: [],
-    connect,
-    setSessionKey() {},
-    start() {},
-    stop() {},
-    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
-      snapshotListeners.add(listener);
-      return () => snapshotListeners.delete(listener);
-    },
-    subscribeEventLog() {
-      return () => {};
-    },
-    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
-      eventListeners.add(listener);
-      return () => eventListeners.delete(listener);
-    },
-  } satisfies ApplicationGateway;
-  return {
-    emitApproval(id: string, createdAtMs: number) {
-      const event: GatewayEventFrame = {
-        event: "exec.approval.requested",
-        payload: approval(id, createdAtMs),
-        type: "event",
-      };
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    emitSystemApproval(id: string, createdAtMs: number) {
-      const event: GatewayEventFrame = {
-        event: "openclaw.approval.requested",
-        payload: {
-          id,
-          createdAtMs,
-          expiresAtMs: Date.now() + 60_000,
-          request: {
-            title: "OpenClaw change",
-            description: "Set gateway.port to 19001",
-            command: "Set gateway.port to 19001",
-            proposalHash: "a".repeat(64),
-            allowedDecisions: ["allow-once", "deny"],
-          },
-        },
-        type: "event",
-      };
-      for (const listener of eventListeners) {
-        listener(event);
-      }
-    },
-    gateway,
-    connect,
-    update(next: Partial<ApplicationGatewaySnapshot>) {
-      snapshot = { ...snapshot, ...next };
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
 
 describe("device-auth upgrade migration", () => {
   beforeEach(() => {
@@ -299,16 +204,6 @@ describe("device-auth upgrade migration", () => {
   });
 });
 
-function client(request: RequestFn): GatewayBrowserClient {
-  return { request } as unknown as GatewayBrowserClient;
-}
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("Control UI refresh nudge", () => {
   it("waits for a reconnect before flagging a version mismatch", () => {
     const gatewayClient = client(async () => []);
@@ -363,6 +258,289 @@ describe("Control UI refresh nudge", () => {
 });
 
 describe("application approval overlays", () => {
+  it("keeps no-auth approvals readable without granting resolution authority", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({ hello: null });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+
+    harness.emitApproval("approval-review-only", 1_000);
+    await overlays.decideApproval("allow-once", "approval-review-only");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-review-only",
+    ]);
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(
+      request.mock.calls.some(
+        ([method]) => method === "exec.approval.resolve" || method === "approval.resolve",
+      ),
+    ).toBe(false);
+    overlays.dispose();
+  });
+
+  it.each([
+    { name: "reviewer", scopes: ["operator.approvals"] },
+    { name: "administrator", scopes: ["operator.admin"] },
+  ])("resolves a queued approval with an authenticated $name grant", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-authorized", 1_000);
+
+    await overlays.decideApproval("allow-once", "approval-authorized");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-authorized",
+      decision: "allow-once",
+    });
+    overlays.dispose();
+  });
+
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+  ])("does not request or expose approvals for a $name operator", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
+
+    expect(request).not.toHaveBeenCalledWith("exec.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(request).not.toHaveBeenCalledWith("openclaw.approval.list", {});
+
+    harness.emitApproval("hidden-approval", 1_000);
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    overlays.dispose();
+  });
+
+  it.each([
+    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
+    { name: "admin", auth: { role: "operator", scopes: ["operator.admin"] } },
+    { name: "legacy operator", auth: { role: "operator" } },
+  ])("loads pending approvals for a $name", async ({ auth }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve([]));
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: client(request),
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth,
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
+
+    expect(request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(request).toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(request).toHaveBeenCalledWith("openclaw.approval.list", {});
+    overlays.dispose();
+  });
+
+  it("discards pending approvals when access changes on the same client", async () => {
+    const firstList = deferred();
+    const secondList = deferred();
+    let execListRequests = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method !== "exec.approval.list") {
+        return Promise.resolve([]);
+      }
+      execListRequests += 1;
+      return execListRequests === 1 ? firstList.promise : secondList.promise;
+    });
+    const gatewayClient = client(request);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.update({
+      client: gatewayClient,
+      phase: "connected",
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    expect(execListRequests).toBe(1);
+
+    harness.update({
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    expect(execListRequests).toBe(1);
+
+    harness.update({
+      hello: {
+        server: { version: "1.0.0" },
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    expect(execListRequests).toBe(2);
+
+    secondList.resolve([approval("approval-current", 2_000)]);
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+        "approval-current",
+      ]);
+    });
+
+    firstList.resolve([approval("approval-stale", 1_000)]);
+    await flushMicrotasks();
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-current"]);
+    overlays.dispose();
+  });
+
+  it("rejects a retained approval action after same-client approval access is revoked", async () => {
+    const request = vi.fn<RequestFn>((method) =>
+      Promise.resolve(method.endsWith(".list") ? [] : { ok: true }),
+    );
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-retired", 1_000);
+
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await overlays.decideApproval("allow-once", "approval-retired");
+
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    expect(request.mock.calls.some(([method]) => method === "exec.approval.resolve")).toBe(false);
+    overlays.dispose();
+  });
+
+  it("does not let a revoked approval decision release a restored decision", async () => {
+    const staleResolution = deferred();
+    const currentResolution = deferred();
+    let resolutionCount = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolutionCount += 1;
+      return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale", 1_000);
+    const staleDecision = overlays.decideApproval("allow-once");
+
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await flushMicrotasks();
+    harness.emitApproval("approval-current", 2_000);
+    const currentDecision = overlays.decideApproval("deny");
+
+    staleResolution.resolve({ ok: true });
+    await staleDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(true);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-current"]);
+
+    currentResolution.resolve({ ok: true });
+    await currentDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    overlays.dispose();
+  });
+
+  it("retires a grant-only downgrade without clearing the readable approval queue", async () => {
+    const staleResolution = deferred();
+    const currentResolution = deferred();
+    let resolutionCount = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolutionCount += 1;
+      return resolutionCount === 1 ? staleResolution.promise : currentResolution.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway);
+    await flushMicrotasks();
+    harness.emitApproval("approval-stale-grant", 1_000);
+    const staleDecision = overlays.decideApproval("allow-once", "approval-stale-grant");
+
+    harness.update({ hello: null });
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+    ]);
+    harness.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    harness.emitApproval("approval-current-grant", 2_000);
+    const currentDecision = overlays.decideApproval("deny", "approval-current-grant");
+
+    staleResolution.resolve({ ok: true });
+    await staleDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(true);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+      "approval-current-grant",
+    ]);
+
+    currentResolution.resolve({ ok: true });
+    await currentDecision;
+    expect(overlays.snapshot.approvalBusy).toBe(false);
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
+      "approval-stale-grant",
+    ]);
+    overlays.dispose();
+  });
+
   it("resolves OpenClaw changes through unified human approval", async () => {
     const request = vi.fn<RequestFn>(async (method) =>
       method.endsWith(".list") ? [] : { ok: true },
@@ -608,7 +786,31 @@ describe("application approval overlays", () => {
   });
 });
 
+registerOverlayPairingAccessTests();
+
 describe("application update overlays", () => {
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+    { name: "approval-only", scopes: ["operator.approvals"] },
+    { name: "explicitly ungranted", scopes: [] },
+  ])("rejects an update request from a $name operator", async ({ scopes }) => {
+    const request = vi.fn<RequestFn>(() => Promise.resolve({ ok: true }));
+    const drainConfigWrites = vi.fn(async () => undefined);
+    const harness = createGatewayHarness(client(request));
+    harness.update({
+      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+    });
+    const overlays = createApplicationOverlays(harness.gateway, { drainConfigWrites });
+
+    await overlays.runUpdate();
+
+    expect(request).not.toHaveBeenCalledWith("update.run", {});
+    expect(drainConfigWrites).not.toHaveBeenCalled();
+    expect(overlays.snapshot.updateRunning).toBe(false);
+    overlays.dispose();
+  });
+
   it("drains config writes after suspending and before issuing update.run", async () => {
     const order: string[] = [];
     const request = vi.fn<RequestFn>().mockImplementation(async (method) => {

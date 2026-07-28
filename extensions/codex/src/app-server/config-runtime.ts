@@ -8,6 +8,7 @@ import type {
   CodexAppServerStartOptions,
   CodexManagedCommandOrder,
   CodexComputerUseConfig,
+  CodexPluginConfig,
   OpenClawExecMode,
   OpenClawExecPolicyForCodexAppServer,
   ProviderAuthAliasConfig,
@@ -58,8 +59,28 @@ import {
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
-import { isForcedPrivateQaCodexRuntime } from "./dynamic-tool-profile.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
+
+/**
+ * Sole owner of the app-server home-scope decision. Ordinary harness connections
+ * default to the isolated agent home; the supervision connection owns the operator's
+ * native Codex home on local transports. Auth handoffs must read the scope from here
+ * (or from resolved start options) because a prepared login on a native home rewrites
+ * the account Codex CLI and Desktop share.
+ */
+export function resolveCodexAppServerHomeScope(params: {
+  appServer: CodexPluginConfig["appServer"];
+  connectionScope?: "harness" | "supervision";
+}): CodexAppServerHomeScope {
+  const configured = params.appServer?.homeScope;
+  if (configured) {
+    return configured;
+  }
+  return params.connectionScope === "supervision" &&
+    resolveTransport(params.appServer?.transport) !== "websocket"
+    ? "user"
+    : "agent";
+}
 
 export function resolveCodexAppServerRuntimeOptions(
   params: {
@@ -85,7 +106,7 @@ export function resolveCodexAppServerRuntimeOptions(
   const pluginConfig = readCodexPluginConfig(params.pluginConfig);
   const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const homeScope: CodexAppServerHomeScope = config.homeScope ?? "agent";
+  const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
   const configCommand = readNonEmptyString(config.command);
   const envCommand = readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_BIN);
   const command = configCommand ?? envCommand ?? "codex";
@@ -191,17 +212,11 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
-  const configuredRuntimeSandbox =
+  const resolvedSandbox =
     forcedPolicy?.sandbox ??
     configuredSandbox ??
     defaultPolicy?.sandbox ??
     (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
-  // Private QA may bound production yolo, but must never widen a configured
-  // read-only sandbox or override the ordinary policy precedence.
-  const resolvedSandbox =
-    isForcedPrivateQaCodexRuntime(env) && configuredRuntimeSandbox === "danger-full-access"
-      ? "workspace-write"
-      : configuredRuntimeSandbox;
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
@@ -497,7 +512,7 @@ export function codexAppServerStartOptionsKey(
 export function codexSandboxPolicyForTurn(
   mode: CodexAppServerSandboxMode,
   cwd: string,
-  env: NodeJS.ProcessEnv = process.env,
+  nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {
   if (mode === "danger-full-access") {
     return { type: "dangerFullAccess" };
@@ -505,15 +520,42 @@ export function codexSandboxPolicyForTurn(
   if (mode === "read-only") {
     return { type: "readOnly", networkAccess: false };
   }
-  // Codex includes /tmp and TMPDIR in workspace-write by default. Private QA
-  // workspaces live there, so retaining either root defeats sibling containment.
-  const excludePrivateQaTempRoots = isForcedPrivateQaCodexRuntime(env);
+  let excludeTmpdirEnvVar = false;
+  let excludeSlashTmp = false;
+  for (let index = 0; index < nativeArgs.length; index += 1) {
+    const arg = nativeArgs[index];
+    const override =
+      arg === "-c" || arg === "--config"
+        ? nativeArgs[++index]
+        : arg?.startsWith("--config=")
+          ? arg.slice("--config=".length)
+          : undefined;
+    if (!override) {
+      continue;
+    }
+    const separator = override.indexOf("=");
+    if (separator < 0) {
+      continue;
+    }
+    const key = override.slice(0, separator).trim();
+    const value = override.slice(separator + 1).trim();
+    if (value !== "true" && value !== "false") {
+      continue;
+    }
+    if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
+      excludeTmpdirEnvVar = value === "true";
+    } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
+      excludeSlashTmp = value === "true";
+    }
+  }
+  // Native turn/start overrides replace the thread's sandbox. Carry explicit
+  // Codex CLI root exclusions forward or /tmp silently becomes writable again.
   return {
     type: "workspaceWrite",
     writableRoots: [cwd],
     networkAccess: false,
-    excludeTmpdirEnvVar: excludePrivateQaTempRoots,
-    excludeSlashTmp: excludePrivateQaTempRoots,
+    excludeTmpdirEnvVar,
+    excludeSlashTmp,
   };
 }
 
@@ -523,8 +565,10 @@ export function resolveCodexSupervisionAppServerRuntimeOptions(
 ): CodexAppServerRuntimeOptions {
   const pluginConfig = readCodexPluginConfig(params.pluginConfig);
   const appServer = pluginConfig.appServer ?? {};
-  const transport = resolveTransport(appServer.transport);
-  const homeScope = appServer.homeScope ?? (transport === "websocket" ? "agent" : "user");
+  const homeScope = resolveCodexAppServerHomeScope({
+    appServer,
+    connectionScope: "supervision",
+  });
   return resolveCodexAppServerRuntimeOptions({
     ...params,
     pluginConfig: {

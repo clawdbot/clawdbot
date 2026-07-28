@@ -146,7 +146,10 @@ export async function setupSkills(
   workspaceDir: string,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-  options: { nodeManager?: NodeManagerChoice } = {},
+  options: {
+    nodeManager?: NodeManagerChoice;
+    beforePersistentEffect?: () => Promise<void>;
+  } = {},
 ): Promise<OpenClawConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
@@ -296,6 +299,7 @@ export async function setupSkills(
       }
       // Onboarding installs the primary recipe only; alternative recipes remain
       // visible through `openclaw skills list --verbose`.
+      await options.beforePersistentEffect?.();
       const spin = prompter.progress(t("wizard.skills.installing", { name: target.name }));
       const result = await installSkill({
         workspaceDir,
