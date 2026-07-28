@@ -115,6 +115,7 @@ export {
 export {
   ObserverDigestHistory,
   pickFreshestObserverDigest,
+  projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 export { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
@@ -175,6 +176,7 @@ export { sendSessionObserverVisibility } from "./chat-observer.ts";
 export {
   applySelectedSessionProjection,
   dismissChatError,
+  resolveChatArtifactDownload,
   resolveAssistantAttachmentAuthToken,
   SessionParticipationTracker,
 } from "./chat-pane-state.ts";

@@ -566,6 +566,21 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
             connection: self.connection)
     }
 
+    func loadImageArtifact(
+        sessionKey: String,
+        artifactId: String) async throws -> OpenClawChatLoadedImage?
+    {
+        guard let serverLease = await connection.captureServerLease() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        let target = self.sessionTarget(for: sessionKey)
+        return try await self.connection.loadImageArtifact(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            artifactId: artifactId,
+            ifCurrentServerLease: serverLease)
+    }
+
     var supportsSlashCommandCatalog: Bool {
         true
     }
