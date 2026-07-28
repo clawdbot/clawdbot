@@ -81,6 +81,23 @@ If you already manage Node yourself:
     ```
 
     <Note>
+    npm 12 blocks package lifecycle scripts by default, so the command above
+    skips OpenClaw's `preinstall` and `postinstall` steps — npm reports them
+    as `blocked because they are not covered by allowScripts`. Allow them
+    explicitly:
+
+    ```bash
+    npm install -g openclaw@latest --allow-scripts openclaw
+    ```
+
+    npm 11.16.x only warns that the scripts are `not yet covered by
+    allowScripts` and still runs them. If you want to clear that warning, be
+    aware that the `npm approve-scripts openclaw` command it suggests does not
+    work for a global install — it fails with `ENOMATCH  No installed packages
+    match: openclaw`. npm 11.12 and earlier have no such policy.
+    </Note>
+
+    <Note>
     The hosted installer clears npm freshness filters such as `min-release-age`
     for the OpenClaw package install. If you install manually with npm, your own
     npm policy still applies.
