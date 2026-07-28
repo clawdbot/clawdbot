@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { html, render } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
@@ -227,6 +228,77 @@ describe("chat media resource lifecycle", () => {
     expect(isChatMediaResourceCurrent(secondResource)).toBe(false);
     expect(container.querySelectorAll(".chat-message-image")).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resubscribes a guarded managed image when its Lit root reconnects", async () => {
+    const blobUrl = installManagedImageUrls();
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    const source = managedImageSource();
+    const image = { url: source, displayUrl: source, alt: "Managed image" };
+    const renderImageRow = vi.fn(() => renderMessageImages([image], { onRequestUpdate: rerender }));
+    let root!: ReturnType<typeof render>;
+    const rerender = observeSubscriber(() => {
+      root = render(html`${guard([source], renderImageRow)}`, container);
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    const originalResource = observeChatMediaResource<string | null>(
+      "managed-image",
+      `${source}::::`,
+    );
+    expect(originalResource.subscribers.size).toBe(1);
+
+    root.setConnected(false);
+    expect(isChatMediaResourceCurrent(originalResource)).toBe(false);
+
+    root.setConnected(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const reconnectedResource = observeChatMediaResource<string | null>(
+      "managed-image",
+      `${source}::::`,
+    );
+    expect(reconnectedResource.subscribers.size).toBe(1);
+    expect(renderImageRow).toHaveBeenCalledTimes(1);
+    expect(container.querySelector<HTMLImageElement>(".chat-message-image")?.src).toBe(blobUrl);
+  });
+
+  it("does not subscribe or fetch a managed image while its Lit root is disconnected", async () => {
+    installManagedImageUrls();
+    const fetchMock = vi.fn(async () => imageResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const container = document.createElement("div");
+    let source = managedImageSource();
+    let root!: ReturnType<typeof render>;
+    const rerender = observeSubscriber(() => {
+      const image = { url: source, displayUrl: source, alt: "Managed image" };
+      root = render(
+        html`${guard([source], () => renderMessageImages([image], { onRequestUpdate: rerender }))}`,
+        container,
+      );
+    });
+
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    root.setConnected(false);
+    source = managedImageSource();
+    rerender();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    root.setConnected(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
   });
 
   it("evicts settled subscriber-free resources with their managed image blobs", async () => {

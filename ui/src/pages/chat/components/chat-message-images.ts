@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, noChange, nothing, type TemplateResult } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
 import { until } from "lit/directives/until.js";
 import { t } from "../../../i18n/index.ts";
@@ -36,6 +36,11 @@ const MANAGED_OUTGOING_IMAGE_RETRY_MS = 5_000;
 
 class ManagedImageResourceDirective extends AsyncDirective {
   private cacheKey: string | undefined;
+  private image: RenderableImageBlock | undefined;
+  private options: ImageRenderOptions | undefined;
+  private renderImageElement:
+    | ((image: RenderableImageBlock, previewUrl: string) => TemplateResult)
+    | undefined;
   private onRequestUpdate: (() => void) | undefined;
   private readonly requestUpdate = () => this.onRequestUpdate?.();
 
@@ -44,6 +49,16 @@ class ManagedImageResourceDirective extends AsyncDirective {
     options: ImageRenderOptions | undefined,
     renderImageElement: (image: RenderableImageBlock, previewUrl: string) => TemplateResult,
   ) {
+    this.image = image;
+    this.options = options;
+    this.renderImageElement = renderImageElement;
+    if (!this.isConnected) {
+      releaseChatMediaResourceSubscriber(this.requestUpdate);
+      this.cacheKey = undefined;
+      this.onRequestUpdate = options?.onRequestUpdate;
+      return noChange;
+    }
+
     const cacheKey = resolveManagedOutgoingImageBlobUrlCacheKey(
       image.displayUrl,
       options,
@@ -79,7 +94,11 @@ class ManagedImageResourceDirective extends AsyncDirective {
   }
 
   protected override reconnected() {
-    this.onRequestUpdate?.();
+    if (this.image && this.renderImageElement) {
+      // Guarded transcript rows can skip their next pane render. Reinstall the
+      // image promise and its subscriber directly when Lit reconnects its part.
+      this.setValue(this.render(this.image, this.options, this.renderImageElement));
+    }
   }
 }
 
