@@ -166,29 +166,36 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           const removeAbortListener = () => {
             telegramLifecycle.abortSignal.removeEventListener("abort", onAbort);
           };
+          // Two-arg then: the rejection arm must observe only a participant.task
+          // rejection. Chaining it as .catch would also swallow onFailed/onAdopted
+          // settlement errors and re-drive them through onFailed with an
+          // infrastructure error — applying the wrong disposition, or silently
+          // discarding a wedged tombstone once the phase moved past pre-adoption.
           void participant.task
-            .then(async (terminal) => {
-              removeAbortListener();
-              if (terminal.kind === "failed-retryable") {
-                await telegramLifecycle.onFailed(terminal.error);
-                return;
-              }
-              if (abortedWhilePending) {
+            .then(
+              async (terminal) => {
+                removeAbortListener();
+                if (terminal.kind === "failed-retryable") {
+                  await telegramLifecycle.onFailed(terminal.error);
+                  return;
+                }
+                if (abortedWhilePending) {
+                  await telegramLifecycle.onFailed(
+                    telegramLifecycle.abortSignal.reason instanceof Error
+                      ? telegramLifecycle.abortSignal.reason
+                      : new Error("ingress-aborted"),
+                  );
+                  return;
+                }
+                await lifecycle.onAdopted();
+              },
+              async (error: unknown) => {
+                removeAbortListener();
                 await telegramLifecycle.onFailed(
-                  telegramLifecycle.abortSignal.reason instanceof Error
-                    ? telegramLifecycle.abortSignal.reason
-                    : new Error("ingress-aborted"),
+                  error instanceof Error ? error : new Error(String(error)),
                 );
-                return;
-              }
-              await lifecycle.onAdopted();
-            })
-            .catch(async (error: unknown) => {
-              removeAbortListener();
-              await telegramLifecycle.onFailed(
-                error instanceof Error ? error : new Error(String(error)),
-              );
-            })
+              },
+            )
             .catch((error: unknown) => {
               params.onLog?.(
                 `telegram ingress: deferred settlement failed for update ${
