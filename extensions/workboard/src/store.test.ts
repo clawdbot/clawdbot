@@ -2552,7 +2552,9 @@ describe("WorkboardStore", () => {
     });
     await expect(store.get(parent.id)).resolves.toMatchObject({
       metadata: {
-        links: expect.arrayContaining([expect.objectContaining({ type: "child", targetCardId: child.id })]),
+        links: expect.arrayContaining([
+          expect.objectContaining({ type: "child", targetCardId: child.id }),
+        ]),
       },
     });
   });

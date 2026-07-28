@@ -652,5 +652,4 @@ export class WorkboardWorkflowStore extends WorkboardRepairStore {
       }
     });
   }
-
 }
