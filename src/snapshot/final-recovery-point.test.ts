@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { stableStringify } from "../agents/stable-stringify.js";
+import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db.js";
@@ -75,15 +76,27 @@ describe("final recovery-point capture", () => {
     });
   });
 
+  it("fences a handoff independently of the requested repository", async () => {
+    const fixture = await createFixture();
+    await captureFinalRecoveryPoint(fixture.request);
+    const otherRepository = path.join(path.dirname(fixture.request.repositoryPath), "other");
+
+    await expect(
+      captureFinalRecoveryPoint({ ...fixture.request, repositoryPath: otherRepository }),
+    ).rejects.toMatchObject({
+      code: "final-capture.operation-conflict",
+      disposition: "quarantine",
+    });
+    await expect(fs.access(otherRepository)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("quarantines durable intent without a committed result", async () => {
     const fixture = await createFixture();
     const operationPath = path.join(fixture.request.repositoryPath, operationId(fixture.request));
     await fs.mkdir(operationPath, { recursive: true, mode: 0o700 });
-    await writeRecoveryJournalRecord(
-      resolveRecoveryJournalPath(operationPath),
-      "intent",
-      fixture.request,
-    );
+    const journalPath = operationJournalPath(fixture.request);
+    await fs.mkdir(path.dirname(journalPath), { recursive: true, mode: 0o700 });
+    await writeRecoveryJournalRecord(journalPath, "intent", fixture.request);
 
     await expect(captureFinalRecoveryPoint(fixture.request)).rejects.toMatchObject({
       code: "final-capture.operation-conflict",
@@ -236,5 +249,11 @@ function operationId(request: FinalRecoveryPointRequest): string {
       handoffId: request.handoffId,
       sourceGeneration: request.sourceGeneration,
     }),
+  );
+}
+
+function operationJournalPath(request: FinalRecoveryPointRequest): string {
+  return resolveRecoveryJournalPath(
+    path.join(resolveStateDir(), "recovery", "final-capture", operationId(request)),
   );
 }

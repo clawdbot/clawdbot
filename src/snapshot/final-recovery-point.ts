@@ -3,6 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { stableStringify } from "../agents/stable-stringify.js";
+import { resolveStateDir } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { requireDirectorySync, syncDirectory } from "../infra/directory-durability.js";
 import { ensureAbsoluteDirectory, root } from "../infra/fs-safe.js";
@@ -163,22 +164,10 @@ export async function captureFinalRecoveryPoint(
       sourceGeneration: request.sourceGeneration,
     }),
   );
+  const journalDirectory = path.join(resolveStateDir(), "recovery", "final-capture", operationId);
   const recoveryPointPath = path.join(request.repositoryPath, operationId);
-  try {
-    await ensurePrivateDirectory(recoveryPointPath);
-  } catch (error) {
-    if (error instanceof FinalRecoveryPointError) {
-      throw error;
-    }
-    throw new FinalRecoveryPointError(
-      "final-capture.snapshot-failed",
-      "hold",
-      "Final recovery-point repository could not be prepared.",
-      { cause: error },
-    );
-  }
-
-  const journalPath = resolveRecoveryJournalPath(recoveryPointPath);
+  await prepareOperationDirectory(journalDirectory, "operation journal");
+  const journalPath = resolveRecoveryJournalPath(journalDirectory);
   const existingResult = await readJournalRecord(journalPath, "result");
   const existingIntent = await readJournalRecord(journalPath, "intent");
   if (existingResult !== undefined) {
@@ -192,6 +181,7 @@ export async function captureFinalRecoveryPoint(
       "Final recovery-point capture has durable intent without a committed result.",
     );
   }
+  await prepareOperationDirectory(recoveryPointPath, "repository");
   await writeJournalRecord(journalPath, "intent", request);
 
   let snapshots: RecoveryPointSqliteSnapshot[];
@@ -389,6 +379,22 @@ function buildResult(params: {
       artifactSizeBytes: params.acceptance.components[index]!.artifactSizeBytes,
     })),
   });
+}
+
+async function prepareOperationDirectory(directoryPath: string, label: string): Promise<void> {
+  try {
+    await ensurePrivateDirectory(directoryPath);
+  } catch (error) {
+    if (error instanceof FinalRecoveryPointError) {
+      throw error;
+    }
+    throw new FinalRecoveryPointError(
+      "final-capture.snapshot-failed",
+      "hold",
+      `Final recovery-point ${label} could not be prepared.`,
+      { cause: error },
+    );
+  }
 }
 
 async function ensurePrivateDirectory(directoryPath: string): Promise<void> {
