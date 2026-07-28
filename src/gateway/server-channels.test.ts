@@ -3839,6 +3839,50 @@ describe("server-channels auto restart", () => {
     expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
   });
 
+  it("clears private known-account handoffs when ambient suppression rejects the paired start", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    const stopAccount = vi.fn(
+      async ({ accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: false, connected: false });
+      },
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        stopAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager({ ambientAutostartSuppressedChannelIds: new Set(["discord"]) });
+
+    await manager.startChannel("discord", "account-a", { manual: true });
+
+    accountIds = [];
+    await manager.stopChannel("discord", undefined, {
+      manual: false,
+      restartPending: false,
+      preserveKnownAccount: true,
+    });
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(false);
+
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+    manager.setAmbientAutostartSuppressedChannelIds(new Set());
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(manager.isHealthMonitorEnabled("discord", "account-a")).toBe(true);
+    expect(startAccount.mock.calls.map(([ctx]) => ctx?.accountId)).toEqual(["account-a"]);
+  });
+
   it("does not include known accounts on ordinary caller-owned restarts", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
