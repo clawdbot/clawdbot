@@ -37,6 +37,7 @@ import {
   extractAllUserTexts,
   extractAllRequestTexts,
   extractCompletedImageGenerationMediaPath,
+  hasSuccessfulWriteToolOutput,
   extractLatestImageUserTurn,
   extractToolOutputCallId,
   parseToolOutputJson,
@@ -247,11 +248,7 @@ export function buildAssistantText(
     return promptExactReplyDirective;
   }
   if ((toolOutput || allInputText) && /repo contract followthrough check/i.test(allInputText)) {
-    const repoEvidenceText = [scenarioToolOutput, allInputText].filter(Boolean).join("\n");
-    if (
-      /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
-      /status:\s*complete/i.test(repoEvidenceText)
-    ) {
+    if (hasSuccessfulWriteToolOutput(input, "repo-contract-summary.txt")) {
       return [
         "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",
         "Wrote: repo-contract-summary.txt",

@@ -160,6 +160,71 @@ function functionCallOutputIsStructuredError(item: ResponsesInputItem) {
   return item.is_error === true || item.isError === true;
 }
 
+function normalizeToolPath(value: unknown) {
+  return typeof value === "string"
+    ? value
+        .trim()
+        .replaceAll("\\", "/")
+        .replace(/^\.\/+/, "")
+    : "";
+}
+
+function parseFunctionCallArguments(item: ResponsesInputItem) {
+  if (item.type !== "function_call" || typeof item.arguments !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(item.arguments);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function extractSuccessfulWriteOutputPath(item: ResponsesInputItem) {
+  const output = extractFunctionCallOutputText(item).trim();
+  const match = /^Successfully wrote \d+ bytes to (.+)$/u.exec(output);
+  return normalizeToolPath(match?.[1]);
+}
+
+export function hasSuccessfulWriteToolOutput(input: ResponsesInputItem[], expectedPath: string) {
+  const canonicalExpectedPath = normalizeToolPath(expectedPath);
+  if (!canonicalExpectedPath) {
+    return false;
+  }
+  for (const [callIndex, item] of input.entries()) {
+    if (
+      item.type !== "function_call" ||
+      item.name !== "write" ||
+      typeof item.call_id !== "string" ||
+      !item.call_id.trim()
+    ) {
+      continue;
+    }
+    const args = parseFunctionCallArguments(item);
+    if (normalizeToolPath(args?.path) !== canonicalExpectedPath) {
+      continue;
+    }
+    const matchingOutput = input
+      .slice(callIndex + 1)
+      .find(
+        (candidate) =>
+          isResponsesToolCallOutput(candidate) &&
+          extractFunctionCallOutputCallId(candidate) === item.call_id,
+      );
+    if (
+      matchingOutput &&
+      !functionCallOutputIsStructuredError(matchingOutput) &&
+      extractSuccessfulWriteOutputPath(matchingOutput) === canonicalExpectedPath
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function extractToolOutput(input: ResponsesInputItem[]) {
   const lastUserIndex = findLastUserIndex(input);
   for (const item of input.slice(lastUserIndex + 1).toReversed()) {

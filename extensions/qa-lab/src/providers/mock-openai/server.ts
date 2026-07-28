@@ -142,6 +142,7 @@ import {
   buildWhatsAppGroupDispatchReply,
   buildWhatsAppBatchedReply,
   countImageInputs,
+  hasSuccessfulWriteToolOutput,
   extractLatestImageUserTurn,
   parseToolOutputJson,
 } from "./mock-openai-input.js";
@@ -1194,10 +1195,7 @@ async function buildResponsesPayload(
     ]
       .filter(Boolean)
       .join("\n");
-    if (
-      /successfully (?:wrote|created|updated|replaced)/i.test(repoEvidenceText) ||
-      /status:\s*complete/i.test(repoEvidenceText)
-    ) {
+    if (hasSuccessfulWriteToolOutput(input, "repo-contract-summary.txt")) {
       return buildAssistantEvents(
         [
           "Read: AGENT.md, SOUL.md, FOLLOWTHROUGH_INPUT.md",

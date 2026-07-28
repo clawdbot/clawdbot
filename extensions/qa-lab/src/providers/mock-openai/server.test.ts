@@ -1145,69 +1145,139 @@ describe("qa mock openai server", () => {
     const prompt =
       "Repo contract followthrough check. Read AGENT.md, SOUL.md, and FOLLOWTHROUGH_INPUT.md first. Then follow the repo contract exactly, write ./repo-contract-summary.txt, and reply with three labeled lines: Read, Wrote, Status.";
 
-    const first = await postResponses(server, {
-      stream: true,
+    const plannedCalls: Record<string, unknown>[] = [];
+
+    const firstPayload = await expectResponsesJson(server, {
+      stream: false,
       model: "gpt-5.6-luna",
       input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
     });
-    expect(first.status).toBe(200);
-    expect(await first.text()).toContain('"arguments":"{\\"path\\":\\"AGENT.md\\"}"');
+    const firstCall = outputToolCall(firstPayload, "read");
+    plannedCalls.push(firstCall);
+    expect(outputToolArgsFromItem(firstCall)).toEqual({ path: "AGENT.md" });
 
-    const second = await postResponses(server, {
-      stream: true,
+    const secondPayload = await expectResponsesJson(server, {
+      stream: false,
       model: "gpt-5.6-luna",
       input: [
         { role: "user", content: [{ type: "input_text", text: prompt }] },
+        firstCall,
         {
           type: "function_call_output",
+          call_id: outputToolCallId(firstCall, "call_mock_read_agent"),
           output:
             "# Repo contract\n\nStep order:\n1. Read AGENT.md.\n2. Read SOUL.md.\n3. Read FOLLOWTHROUGH_INPUT.md.\n4. Write ./repo-contract-summary.txt.\n",
         },
       ],
     });
-    expect(second.status).toBe(200);
-    expect(await second.text()).toContain('"arguments":"{\\"path\\":\\"SOUL.md\\"}"');
+    const secondCall = outputToolCall(secondPayload, "read");
+    plannedCalls.push(secondCall);
+    expect(outputToolArgsFromItem(secondCall)).toEqual({ path: "SOUL.md" });
 
-    const third = await postResponses(server, {
-      stream: true,
+    const thirdPayload = await expectResponsesJson(server, {
+      stream: false,
       model: "gpt-5.6-luna",
       input: [
         { role: "user", content: [{ type: "input_text", text: prompt }] },
+        secondCall,
         {
           type: "function_call_output",
+          call_id: outputToolCallId(secondCall, "call_mock_read_soul"),
           output: "# Execution style\n\nStay brief, honest, and action-first.\n",
         },
       ],
     });
-    expect(third.status).toBe(200);
-    expect(await third.text()).toContain('"arguments":"{\\"path\\":\\"FOLLOWTHROUGH_INPUT.md\\"}"');
+    const thirdCall = outputToolCall(thirdPayload, "read");
+    plannedCalls.push(thirdCall);
+    expect(outputToolArgsFromItem(thirdCall)).toEqual({ path: "FOLLOWTHROUGH_INPUT.md" });
 
-    const fourth = await postResponses(server, {
-      stream: true,
+    const fourthPayload = await expectResponsesJson(server, {
+      stream: false,
       model: "gpt-5.6-luna",
       input: [
         { role: "user", content: [{ type: "input_text", text: prompt }] },
+        thirdCall,
         {
           type: "function_call_output",
+          call_id: outputToolCallId(thirdCall, "call_mock_read_followthrough"),
           output:
             "Mission: prove you followed the repo contract.\nEvidence path: AGENT.md -> SOUL.md -> FOLLOWTHROUGH_INPUT.md -> repo-contract-summary.txt\n",
         },
       ],
     });
-    expect(fourth.status).toBe(200);
-    const fourthBody = await fourth.text();
-    expect(fourthBody).toContain('"name":"write"');
-    expect(fourthBody).toContain("repo-contract-summary.txt");
+    const writeCall = outputToolCall(fourthPayload, "write");
+    plannedCalls.push(writeCall);
+    const writeArgs = outputToolArgsFromItem(writeCall);
+    expect(writeArgs.path).toBe("repo-contract-summary.txt");
+    expect(writeArgs.content).toEqual(expect.stringContaining("repo contract"));
+    expect(writeArgs.content).toEqual(expect.stringContaining("Evidence:"));
+    expect(
+      plannedCalls.map((call) => ({ name: call.name, path: outputToolArgsFromItem(call).path })),
+    ).toEqual([
+      { name: "read", path: "AGENT.md" },
+      { name: "read", path: "SOUL.md" },
+      { name: "read", path: "FOLLOWTHROUGH_INPUT.md" },
+      { name: "write", path: "repo-contract-summary.txt" },
+    ]);
 
-    const fifth = await postResponses(server, {
+    const proseOnlyPayload = await expectResponsesJson(server, {
       stream: false,
       model: "gpt-5.6-luna",
       input: [
         { role: "user", content: [{ type: "input_text", text: prompt }] },
         {
           type: "function_call_output",
-          output:
-            "Successfully wrote repo-contract-summary.txt\nMission: prove you followed the repo contract.\nStatus: complete\n",
+          output: "Successfully wrote repo-contract-summary.txt. Status: complete",
+        },
+      ],
+    });
+    expect(outputText(proseOnlyPayload)).toContain("Status: blocked");
+
+    const wrongPathWrite = {
+      ...writeCall,
+      call_id: "call_mock_write_wrong_path",
+      arguments: JSON.stringify({ ...writeArgs, path: "other-summary.txt" }),
+    };
+    const wrongPathPayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: prompt }] },
+        wrongPathWrite,
+        {
+          type: "function_call_output",
+          call_id: "call_mock_write_wrong_path",
+          output: "Successfully wrote 12 bytes to other-summary.txt",
+        },
+      ],
+    });
+    expect(outputText(wrongPathPayload)).toContain("Status: blocked");
+
+    const failedWritePayload = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: prompt }] },
+        writeCall,
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(writeCall, "call_mock_write_repo_contract"),
+          output: "Error: EACCES",
+        },
+      ],
+    });
+    expect(outputText(failedWritePayload)).toContain("Status: blocked");
+
+    const fifth = await postResponses(server, {
+      stream: false,
+      model: "gpt-5.6-luna",
+      input: [
+        { role: "user", content: [{ type: "input_text", text: prompt }] },
+        writeCall,
+        {
+          type: "function_call_output",
+          call_id: outputToolCallId(writeCall, "call_mock_write_repo_contract"),
+          output: `Successfully wrote ${Buffer.byteLength(String(writeArgs.content), "utf8")} bytes to repo-contract-summary.txt`,
         },
       ],
     });
