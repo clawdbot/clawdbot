@@ -20,7 +20,7 @@ pr_subcommand_classification() {
     ls | ci-dispatch)
       printf 'advisory\n'
       ;;
-    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-artifacts-repin | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
+    gc | lock-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run)
       printf 'landing\n'
       ;;
     *) return 1 ;;
@@ -178,7 +178,6 @@ Usage:
   scripts/pr review-claim <PR>
   scripts/pr review-guard <PR>
   scripts/pr review-artifacts-init <PR>
-  scripts/pr review-artifacts-repin <PR>
   scripts/pr review-validate-artifacts <PR>
   scripts/pr review-tests <PR> <test-file> [<test-file> ...]
   scripts/pr prepare-init <PR>
@@ -294,7 +293,7 @@ main() {
         exit 2
       fi
       ;;
-    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-artifacts-repin | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
+    review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | ci-dispatch | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }
       ;;
     *)
@@ -359,11 +358,6 @@ main() {
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
       review_artifacts_init "$pr"
-      ;;
-    review-artifacts-repin)
-      local pr="${1-}"
-      [ -n "$pr" ] || { usage; exit 2; }
-      review_artifacts_repin "$pr"
       ;;
     review-validate-artifacts)
       local pr="${1-}"

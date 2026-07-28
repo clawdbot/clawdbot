@@ -207,30 +207,6 @@ review_artifacts_init() {
   echo "files=.local/review.md .local/review.json"
 }
 
-review_artifacts_repin() {
-  local pr="$1"
-  enter_worktree "$pr" false
-  if [ ! -f .local/pr-meta.json ]; then
-    echo "Missing .local/pr-meta.json; run scripts/pr review-init $pr."
-    return 1
-  fi
-  local artifact
-  for artifact in .local/review.json .local/review.md; do
-    if [ ! -f "$artifact" ]; then
-      echo "Missing $artifact; run scripts/pr review-artifacts-init $pr."
-      return 1
-    fi
-  done
-
-  mark_pr_operation_side_effects_started
-  node "$(review_artifacts_helper_path)" repin \
-    "$pr" \
-    .local/review.json \
-    .local/review.md \
-    .local/pr-meta.json
-  echo "review artifacts repinned to PR #$pr identity from .local/pr-meta.json"
-}
-
 validate_review_artifact_data() {
   # pr-meta.json is the identity authority the review artifacts are stamped against,
   # so it must itself be anchored: review_guard binds pr-meta.env to the guarded PR
