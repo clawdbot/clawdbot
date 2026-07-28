@@ -23,6 +23,7 @@ import {
   listActiveDegradedSecretOwners,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { evaluateChannelHealth } from "./channel-health-policy.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 
 const hoisted = vi.hoisted(() => {
@@ -481,6 +482,35 @@ describe("server-channels auto restart", () => {
     expect(account?.running).toBe(false);
     expect(account?.connected).toBe(false);
     expect(account?.lastError).toBeNull();
+  });
+
+  it("keeps a running channel without transport reporting free of a synthetic disconnect", async () => {
+    // Socketless channels (imessage, signal, sms, ...) never publish `connected`.
+    // Projecting a synthetic `false` made the health monitor read them as
+    // disconnected and restart them once per cooldown window forever.
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      ctx.setStatus({ accountId: DEFAULT_ACCOUNT_ID, running: true });
+      await new Promise<void>((resolve) => {
+        ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await flushMicrotasks();
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.running).toBe(true);
+    expect(account).not.toHaveProperty("connected");
+    expect(
+      evaluateChannelHealth(account ?? {}, {
+        channelId: "discord",
+        now: Date.now() + 60 * 60_000,
+        channelConnectGraceMs: 120_000,
+        staleEventThresholdMs: 30 * 60_000,
+      }),
+    ).toEqual({ healthy: true, reason: "healthy" });
   });
 
   it("settles every account before surfacing a stop hook failure", async () => {
