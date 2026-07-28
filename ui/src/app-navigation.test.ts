@@ -238,6 +238,15 @@ describe("settingsSearchTextMatches", () => {
     expect(settingsSearchTextMatches("MCP", "cp")).toBe(false);
     expect(settingsSearchTextMatches("外観設定", "設定")).toBe(true);
   });
+
+  it.each([
+    ["Cámara", "Ca\u0301mara"],
+    ["Ca\u0301mara", "Cámara"],
+    ["Notificación", "Notificacio\u0301n"],
+    ["Notificacio\u0301n", "Notificación"],
+  ])("matches canonically equivalent setting text %j against %j", (value, query) => {
+    expect(settingsSearchTextMatches(value, query)).toBe(true);
+  });
 });
 
 describe("formatDocumentTitle", () => {
