@@ -28,30 +28,9 @@ print_file_list_with_limit() {
 
 auto_merge_unavailable_error() {
   local log_file="$1"
-  local auto_merge_pattern='[Aa][Uu][Tt][Oo][ -][Mm][Ee][Rr][Gg][Ee]'
-  local unavailable_pattern
-  local line
-
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      *$auto_merge_pattern*)
-        for unavailable_pattern in \
-          '[Nn][Oo][Tt] [Aa][Ll][Ll][Oo][Ww][Ee][Dd]' \
-          '[Nn][Oo][Tt] [Ee][Nn][Aa][Bb][Ll][Ee][Dd]' \
-          '[Nn][Oo][Tt] [Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]' \
-          '[Uu][Nn][Aa][Vv][Aa][Ii][Ll][Aa][Bb][Ll][Ee]' \
-          '[Nn][Oo][Tt] [Cc][Oo][Nn][Ff][Ii][Gg][Uu][Rr][Ee][Dd]' \
-          '[Nn][Oo][Tt] [Ss][Uu][Pp][Pp][Oo][Rr][Tt][Ee][Dd]' \
-          '[Mm][Uu][Ss][Tt] [Bb][Ee] [Ee][Nn][Aa][Bb][Ll][Ee][Dd]'; do
-          case "$line" in
-            *$unavailable_pattern*) return 0 ;;
-          esac
-        done
-        ;;
-    esac
-  done < "$log_file"
-
-  return 1
+  rg -q -i -- \
+    'auto[- ]merge.*(not allowed|not enabled|not available|unavailable|not configured|not supported|must be enabled)|(not allowed|not enabled|not available|unavailable|not configured|not supported|must be enabled).*auto[- ]merge' \
+    "$log_file"
 }
 
 mainline_drift_requires_sync() {
