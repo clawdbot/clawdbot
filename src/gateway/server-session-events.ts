@@ -9,6 +9,7 @@ import {
   resolveTranscriptSessionKeyBySessionId,
 } from "../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { hasPluginSessionsChangedSubscribers } from "../plugins/gateway-events.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
@@ -37,6 +38,10 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
+
+function hasSessionsChangedReceiver(connIds: ReadonlySet<string>): boolean {
+  return connIds.size > 0 || hasPluginSessionsChangedSubscribers();
+}
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -184,7 +189,9 @@ async function handleTranscriptUpdateBroadcast(
     }
   }
   if (connIds.size === 0) {
-    return;
+    if (!hasPluginSessionsChangedSubscribers() || projectChatDisplayMessage(update.message)) {
+      return;
+    }
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
@@ -264,7 +271,7 @@ async function handleTranscriptUpdateBroadcast(
   // Messages suppressed from display can still change transcript state, so
   // notify broad session listeners even when no session.message is emitted.
   const sessionEventConnIds = params.sessionEventSubscribers.getAll();
-  if (sessionEventConnIds.size === 0) {
+  if (!hasSessionsChangedReceiver(sessionEventConnIds)) {
     return;
   }
   params.broadcastToConnIds(
@@ -296,7 +303,7 @@ export function createLifecycleEventBroadcastHandler(params: {
       text?: string;
     };
     const connIds = params.sessionEventSubscribers.getAll();
-    if (connIds.size === 0) {
+    if (!hasSessionsChangedReceiver(connIds)) {
       return;
     }
     const sessionRow = loadGatewaySessionRow(event.sessionKey);

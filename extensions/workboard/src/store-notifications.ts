@@ -51,7 +51,9 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
   }
 
   async deleteNotificationSubscription(id: string): Promise<{ deleted: boolean }> {
-    return { deleted: await this.subscriptionStore.delete(id.trim()) };
+    return await this.enqueueMutation(async () => ({
+      deleted: await this.subscriptionStore.delete(id.trim()),
+    }));
   }
 
   private async collectNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
@@ -115,20 +117,19 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
         if (subscription?.eventKinds?.length && !subscription.eventKinds.includes(event.kind)) {
           continue;
         }
-        const eventSequence = notificationSequence(event);
-        if (subscription?.lastEventSequence && eventSequence !== undefined) {
-          if (
-            eventSequence < subscription.lastEventSequence ||
-            (eventSequence === subscription.lastEventSequence &&
-              event.id <= (subscription.lastEventId ?? ""))
-          ) {
-            continue;
-          }
-        } else if (
-          subscription?.lastEventAt &&
-          (event.createdAt < subscription.lastEventAt ||
-            (event.createdAt === subscription.lastEventAt &&
-              event.id <= (subscription.lastEventId ?? "")))
+        // Cursor advancement must use the same mixed-sequence ordering as
+        // event delivery or valid same-millisecond notifications disappear.
+        if (
+          subscription?.lastEventAt !== undefined &&
+          compareNotifications(event, {
+            id: subscription.lastEventId ?? "",
+            kind: event.kind,
+            createdAt: subscription.lastEventAt,
+            ...(subscription.lastEventSequence !== undefined
+              ? { sequence: subscription.lastEventSequence }
+              : {}),
+            message: "",
+          }) <= 0
         ) {
           continue;
         }

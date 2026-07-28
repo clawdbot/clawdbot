@@ -33,7 +33,7 @@ import {
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
-import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
+import { resolveExecAutoReviewDecision, type ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -722,7 +722,7 @@ async function evaluateSystemRunPolicyPhase(
         agentExec,
         globalExec,
       });
-      const decision = await reviewer({
+      const decision = await resolveExecAutoReviewDecision(reviewer, {
         command: parsed.commandText,
         argv: autoReviewArgv,
         cwd: parsed.cwd,

@@ -354,17 +354,23 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
 
     const divider = page.locator(".board-session-surface__divider");
     const dock = page.locator(".board-session-surface__chat");
+    const dockHeight = () => dock.evaluate((element) => getComputedStyle(element).height);
     await divider.focus();
     await page.keyboard.press("End");
-    await expect.poll(() => dock.getAttribute("style")).not.toBe("height: 320px");
-    const persistedStyle = await dock.getAttribute("style");
-    expect(persistedStyle).toMatch(/^height: \d+(?:\.\d+)?px$/u);
+    await expect.poll(dockHeight).not.toBe("320px");
+    const clampedHeight = await dockHeight();
+    // End pins the bottom dock against its clamp, so step back off it: comparing
+    // a clamped height to itself after reload would pass if persistence broke and
+    // the dock merely fell back to its minimum.
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(dockHeight).not.toBe(clampedHeight);
+    const persistedHeight = await dockHeight();
+    expect(persistedHeight).toMatch(/^\d+(?:\.\d+)?px$/u);
 
     await page.reload();
-    await page.locator(".board-session-surface__chat").waitFor();
-    expect(await page.locator(".board-session-surface__chat").getAttribute("style")).toBe(
-      persistedStyle,
-    );
+    await dock.waitFor();
+    expect(await dockHeight()).toBe(persistedHeight);
     await expect
       .poll(() =>
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),

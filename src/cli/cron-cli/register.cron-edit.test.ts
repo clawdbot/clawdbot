@@ -54,6 +54,58 @@ describe("cron edit command", () => {
     });
   });
 
+  it("reuses one versioned snapshot for combined pacing and tool edits", async () => {
+    const configRevision = "current-job-revision";
+    callGatewayFromCli.mockImplementation(async (method: string) => {
+      if (method === "cron.get") {
+        return {
+          id: "job-1",
+          configRevision,
+          pacing: { min: "15m", max: "4h" },
+          payload: { kind: "agentTurn", message: "hello" },
+        };
+      }
+      return { ok: true };
+    });
+
+    await createCronProgram().parseAsync(
+      ["edit", "job-1", "--pacing-min", "30m", "--tools", "read"],
+      { from: "user" },
+    );
+
+    expect(callGatewayFromCli.mock.calls.filter(([method]) => method === "cron.get")).toHaveLength(
+      1,
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledWith("cron.update", expect.anything(), {
+      id: "job-1",
+      patch: {
+        pacing: { min: "30m", max: "4h" },
+        payload: { kind: "agentTurn", toolsAllow: ["read"] },
+      },
+      expectedConfigRevision: configRevision,
+    });
+  });
+
+  it.each(["read", ""])("rejects --tools %j combined with --clear-tools", async (tools) => {
+    const errorSpy = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(defaultRuntime, "exit").mockImplementation((() => undefined) as never);
+
+    try {
+      await createCronProgram().parseAsync(
+        ["edit", "job-1", "--pacing-min", "30m", "--tools", tools, "--clear-tools"],
+        { from: "user" },
+      );
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Use --tools or --clear-tools, not both"),
+      );
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
+  });
+
   it("keeps --best-effort-deliver-only edits delivery-only (#83908)", async () => {
     const program = createCronProgram();
 

@@ -651,6 +651,9 @@ openclaw-session-owner-chip {
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;
+  /* Labels never break mid-text; tight clusters wrap whole buttons instead
+     (see .settings-row--actions). */
+  white-space: nowrap;
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out),

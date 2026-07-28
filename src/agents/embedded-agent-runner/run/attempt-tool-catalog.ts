@@ -93,10 +93,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
     : [];
   // When the message tool is the only reply path it must stay directly visible
   // in every search mode; a hidden delivery tool can leave the run mute.
-  const requiredDirectToolNames =
-    attempt.forceMessageTool === true || attempt.sourceReplyDeliveryMode === "message_tool_only"
-      ? ["message"]
-      : [];
+  const requiredDirectToolNames = preparedToolBase.forceDirectMessageTool ? ["message"] : [];
   const toolSearch = codeModeControlsEnabledForRun
     ? applyCodeModeCatalog({
         tools: [...codeModeTools, ...effectiveTools],
@@ -107,6 +104,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
         runId: attempt.runId,
         catalogRef: preparedToolBase.toolSearchCatalogRef,
         toolHookContext: catalogToolHookContext,
+        directToolNames: requiredDirectToolNames,
       })
     : toolSearchConfig.mode === "directory"
       ? applyToolSchemaDirectoryCatalog({

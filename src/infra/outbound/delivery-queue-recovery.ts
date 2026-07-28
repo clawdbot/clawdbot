@@ -21,6 +21,11 @@ import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import {
+  createQueuedDeliveryOwner,
+  persistQueuedPostSendState,
+  type QueuedPostSendState,
+} from "./deliver-queue-state.js";
+import {
   isOutboundDeliveryError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
@@ -42,7 +47,6 @@ import {
   createDeliveryQueueMediaRecoveryLease,
 } from "./delivery-queue-media-staging.js";
 import {
-  ackDelivery,
   claimDeliveryPlatformSendAttempt,
   failDelivery,
   failDeliveryAfterPlatformSend,
@@ -50,7 +54,6 @@ import {
   failPendingDelivery,
   loadPendingDelivery,
   loadPendingDeliveries,
-  markDeliveryPlatformOutcomeUnknown,
   moveToFailed,
   reserveDeliveryAttempt,
   type QueuedDelivery,
@@ -442,17 +445,11 @@ async function ackRecoveredDelivery(
   options?: { retainSpoolArtifacts?: boolean; suppressCompletionReceipt?: boolean },
   claimedAttemptId?: string,
 ): Promise<void> {
-  const attemptId = recoveryPlatformAttemptId(entry, claimedAttemptId);
-  if (attemptId !== undefined) {
-    await ackDelivery(entry.id, stateDir, {
-      ...options,
-      expectedPlatformSendAttemptId: attemptId,
-    });
-  } else if (options) {
-    await ackDelivery(entry.id, stateDir, options);
-  } else {
-    await ackDelivery(entry.id, stateDir);
-  }
+  await createQueuedDeliveryOwner({
+    queueId: entry.id,
+    stateDir,
+    expectedPlatformSendAttemptId: recoveryPlatformAttemptId(entry, claimedAttemptId),
+  }).ack(options);
 }
 
 async function recordRecoveredFailure(
@@ -462,12 +459,11 @@ async function recordRecoveredFailure(
   stateDir?: string,
   claimedAttemptId?: string,
 ): Promise<void> {
-  const attemptId = recoveryPlatformAttemptId(entry, claimedAttemptId);
-  if (attemptId !== undefined) {
-    await record(entry.id, error, stateDir, attemptId);
-  } else {
-    await record(entry.id, error, stateDir);
-  }
+  await createQueuedDeliveryOwner({
+    queueId: entry.id,
+    stateDir,
+    expectedPlatformSendAttemptId: recoveryPlatformAttemptId(entry, claimedAttemptId),
+  }).fail(record, error);
 }
 
 function markDurableDeliveryFailedBestEffort(entry: QueuedDelivery, log: RecoveryLogger): void {
@@ -587,51 +583,22 @@ async function persistRecoveredPostSendState(opts: {
   log: RecoveryLogger;
   stateDir?: string;
   producerClaimId?: string;
-}): Promise<"marked" | "acked" | "failed"> {
-  try {
-    const attemptId = recoveryPlatformAttemptId(opts.entry, opts.producerClaimId);
-    if (attemptId !== undefined) {
-      await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir, attemptId);
-    } else {
-      await markDeliveryPlatformOutcomeUnknown(opts.entry.id, opts.stateDir);
-    }
-    return "marked";
-  } catch (markErr) {
-    if (opts.producerClaimId) {
-      await recordRecoveredFailure(
-        failDeliveryAfterPlatformSend,
-        opts.entry,
-        `post-send state persistence failed: ${formatErrorMessage(markErr)}`,
-        opts.stateDir,
-        opts.producerClaimId,
+}): Promise<QueuedPostSendState> {
+  // Recovery keeps its media lease until the adapter settles, even if the
+  // canonical post-send marker has to finalize the queue with a direct ack.
+  return persistQueuedPostSendState({
+    queueId: opts.entry.id,
+    queuePolicy: opts.entry.queuePolicy ?? "best_effort",
+    stateDir: opts.stateDir,
+    producerClaimId: opts.producerClaimId,
+    expectedPlatformSendAttemptId: recoveryPlatformAttemptId(opts.entry, opts.producerClaimId),
+    retainSpoolArtifacts: true,
+    onPostSendMarkerError: (error) => {
+      opts.log.warn(
+        `Delivery entry ${opts.entry.id} failed to persist post-send state; falling back to direct ack: ${formatErrorMessage(error)}`,
       );
-      return "failed";
-    }
-    // A result proves at least one send completed. If the intermediate marker
-    // is unavailable, direct ack still removes the replayable intent.
-    opts.log.warn(
-      `Delivery entry ${opts.entry.id} failed to persist post-send state; falling back to direct ack: ${formatErrorMessage(markErr)}`,
-    );
-    try {
-      await ackRecoveredDelivery(
-        opts.entry,
-        opts.stateDir,
-        { retainSpoolArtifacts: true },
-        opts.producerClaimId,
-      );
-      return "acked";
-    } catch (ackErr) {
-      const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
-      await recordRecoveredFailure(
-        failDeliveryAfterPlatformSend,
-        opts.entry,
-        error,
-        opts.stateDir,
-        opts.producerClaimId,
-      );
-      return "failed";
-    }
-  }
+    },
+  });
 }
 
 async function drainQueuedEntry(opts: {
@@ -756,7 +723,7 @@ async function drainQueuedEntry(opts: {
     }
   }
   const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
-  let postSendState: "marked" | "acked" | "failed" | undefined;
+  let postSendState: QueuedPostSendState | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
   const collectResults = (results: readonly OutboundDeliveryResult[]): void => {

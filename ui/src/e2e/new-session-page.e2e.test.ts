@@ -52,6 +52,27 @@ const SESSION_LIST_DEFAULTS = {
   modelProvider: "openai",
 };
 
+function createdSessionListResult(sessionKey: string) {
+  return {
+    count: 1,
+    defaults: SESSION_LIST_DEFAULTS,
+    path: "",
+    sessions: [
+      {
+        contextTokens: null,
+        displayName: "Created session",
+        key: sessionKey,
+        kind: "direct",
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        totalTokens: 0,
+        updatedAt: Date.now(),
+      },
+    ],
+    ts: Date.now(),
+  };
+}
+
 async function captureUiProof(page: Page, fileName: string) {
   if (!captureUiProofEnabled) {
     return;
@@ -287,6 +308,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
+        "sessions.list": createdSessionListResult(sessionKey),
         "chat.startup": {
           messages: [
             {
@@ -352,6 +374,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.create": { key: sessionKey, runStarted: true },
+        "sessions.list": createdSessionListResult(sessionKey),
         "chat.startup": {
           messages: [],
           sessionId: "reconnected-initial-prompt",
@@ -428,6 +451,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           runStarted: true,
           messageSeq: 1,
         },
+        "sessions.list": createdSessionListResult(sessionKey),
         "chat.startup": {
           messages: [
             {
@@ -1373,7 +1397,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const trigger = page.locator("#new-session-place-trigger");
       await trigger.click();
       await page.getByRole("button", { name: "Browse folders" }).click();
-      await page.locator("input.new-session-page__browser-path").fill(TARGET_REPO);
+      const browserPath = page.locator("input.new-session-page__browser-path");
+      // Resolve the browser listing without resolving the deferred agent roster;
+      // otherwise its initial path update can race Playwright's folder input.
+      await expect.poll(() => browserPath.inputValue()).toBe(TARGET_REPO);
+      await browserPath.fill(TARGET_REPO);
       await page.getByRole("button", { name: "Use this folder" }).click();
       await gateway.resolveDeferred("agents.list", {
         agents: [
@@ -2038,6 +2066,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           repositoryStatus: "git",
         },
         "sessions.create": { key: sessionKey },
+        "sessions.list": createdSessionListResult(sessionKey),
         "sessions.dispatch": {
           ok: true,
           key: sessionKey,
@@ -4209,6 +4238,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           runStarted: false,
           runError: { code: "INVALID_REQUEST", message: runError },
         },
+        "sessions.list": createdSessionListResult(sessionKey),
         "chat.history": {
           messages: [],
           sessionId: "storage-failed-initial-turn",
@@ -4331,6 +4361,7 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           ],
         },
         "sessions.create": { key: "agent:main:node-draft-e2e" },
+        "sessions.list": createdSessionListResult("agent:main:node-draft-e2e"),
       },
     });
 

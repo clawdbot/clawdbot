@@ -3,7 +3,10 @@ import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { getWorkboardState, stopWorkboardLifecycleRefresh } from "../../lib/workboard/index.ts";
-import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
+import {
+  createWorkboardCard,
+  createWorkboardExecution,
+} from "../../lib/workboard/test/index-helpers.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { renderWorkboard } from "./view.ts";
 
@@ -143,15 +146,29 @@ describe("renderWorkboard", () => {
       } as unknown as GatewayBrowserClient,
     });
 
-    renderInto(container, props);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", { sessionKey }));
+    try {
+      renderInto(container, props);
+      // The dashboard element is lazily imported; on loaded CI runners that
+      // import can outlive vi.waitFor's default timeout. Await the definition
+      // and the upgraded element's first update, which acquires the provider
+      // and issues board.get synchronously.
+      await customElements.whenDefined("openclaw-workboard-card-dashboard");
+      const dashboard = container.querySelector("openclaw-workboard-card-dashboard");
+      expect(dashboard).not.toBeNull();
+      await dashboard!.updateComplete;
+      expect(request).toHaveBeenCalledWith("board.get", { sessionKey });
 
-    state.detailCardId = null;
-    renderInto(container, props);
-    await nextFrame();
+      state.detailCardId = null;
+      renderInto(container, props);
+      await nextFrame();
 
-    expect(removeListener).toHaveBeenCalledOnce();
-    container.remove();
+      expect(removeListener).toHaveBeenCalledOnce();
+    } finally {
+      // A leaked open drawer poisons later dialog tests in this shared jsdom
+      // document, so tear down even when an assertion above fails.
+      render(nothing, container);
+      container.remove();
+    }
   });
 
   it("keeps manual recovery refresh visible while data is loading", () => {
@@ -2586,6 +2603,81 @@ describe("renderWorkboard", () => {
 
     expect(container.querySelector(".workboard-live")?.textContent).toContain("live");
     expect(container.querySelector('button[aria-label="Stop thread"]')).not.toBeNull();
+  });
+
+  it.each([
+    {
+      scenario: "an execution-owned linked session",
+      sessionKey: "agent:main:execution-linked-session",
+      topLevelSessionKey: undefined,
+    },
+    {
+      scenario: "the authoritative top-level session",
+      sessionKey: "agent:main:top-level-linked-session",
+      topLevelSessionKey: "agent:main:top-level-linked-session",
+    },
+  ])("preserves $scenario when editing a Workboard card", async (testCase) => {
+    const { host, state } = createLoadedWorkboardState();
+    const card = createWorkboardCard({
+      title: "Keep my linked session",
+      ...(testCase.topLevelSessionKey ? { sessionKey: testCase.topLevelSessionKey } : {}),
+      execution: createWorkboardExecution({
+        sessionKey: "agent:main:execution-linked-session",
+      }),
+    });
+    state.cards = [card];
+    state.detailCardId = card.id;
+    const request = vi.fn(async () => ({
+      card: { ...card, title: "Renamed without unlinking", updatedAt: 2 },
+    }));
+    const props = createWorkboardRenderProps(host, {
+      client: { request } as unknown as GatewayBrowserClient,
+      onRequestUpdate: () => undefined,
+      sessions: [
+        {
+          key: testCase.sessionKey,
+          kind: "direct",
+          displayName: "Active linked session",
+          updatedAt: 1,
+          status: "running",
+        },
+      ],
+    });
+    const container = document.createElement("div");
+
+    renderInto(container, props);
+    const editButton = buttonByLabel(container, "Edit card");
+    expect(editButton).not.toBeNull();
+    editButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    renderInto(container, props);
+
+    expect(state.draftSessionKey).toBe(testCase.sessionKey);
+    expect(
+      [...container.querySelectorAll(".workboard-draft wa-select")].some(
+        (select) => select.getAttribute("value") === testCase.sessionKey,
+      ),
+    ).toBe(true);
+
+    const title = container.querySelector<HTMLInputElement>(".workboard-draft__title");
+    expect(title).not.toBeNull();
+    title!.value = "Renamed without unlinking";
+    title!.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    container
+      .querySelector<HTMLFormElement>(".workboard-draft")
+      ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledWith("workboard.cards.update", {
+      id: card.id,
+      patch: expect.objectContaining({
+        title: "Renamed without unlinking",
+        sessionKey: testCase.sessionKey,
+      }),
+    });
+    expect(state.cards[0]?.execution?.sessionKey).toBe("agent:main:execution-linked-session");
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).not.toBeNull();
   });
 
   it("opens an edit modal and submits card updates", async () => {

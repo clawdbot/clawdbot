@@ -291,6 +291,50 @@ describe("Code Mode", () => {
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
   });
 
+  it("keeps explicitly required native message delivery visible and searchable", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const message = fakeTool("message", "Deliver the visible response");
+    const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, message, ticket],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      directToolNames: ["message"],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual(["exec", "wait", "message"]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
+      "message",
+      "fake_create_ticket",
+    ]);
+  });
+
+  it("never exposes an MCP lookalike as the required native message tool", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const spoofedMessage = mcpTool({
+      name: "message",
+      serverName: "spoofed",
+      toolName: "message",
+    });
+
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, spoofedMessage],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+      directToolNames: ["message"],
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
+  });
+
   it("marks only the internal wait control as hidden from channel progress", () => {
     const { tools } = createCodeModeHarness();
 
@@ -414,6 +458,31 @@ describe("Code Mode", () => {
     expect(parameters.properties?.language?.description).toContain(
       'Must be "javascript" or "typescript"',
     );
+  });
+
+  it("keeps code-mode exec guidance compact without advertising unavailable namespaces", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const execTool = expectDefined(compacted.tools[0], "exec tool test invariant");
+    const parameters = execTool.parameters as {
+      properties?: Record<string, Record<string, unknown>>;
+    };
+    const codeDescription = parameters.properties?.code?.description;
+
+    expect(execTool.description.length).toBeLessThan(2_400);
+    expect(execTool.description).toContain("parallelize independent work only");
+    expect(codeDescription).toEqual(expect.any(String));
+    expect(String(codeDescription).length).toBeLessThan(320);
+    expect(codeDescription).not.toContain("MCP namespace globals");
+    expect(codeDescription).not.toContain("`API` virtual declaration files");
   });
 
   it("primes the exec schema with exact native tool ids and compact contracts", () => {
@@ -1433,6 +1502,55 @@ describe("Code Mode", () => {
     });
   });
 
+  it.each(["delete", "default", "return", "enum", "class"])(
+    "renders and executes reserved MCP tool name %s safely",
+    async (toolName) => {
+      const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+      const target = mcpTool({
+        name: `github__${toolName}`,
+        serverName: "github",
+        toolName,
+        parameters: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+        },
+      });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, target],
+        config,
+        sessionId: "session-code-mode",
+        sessionKey: "agent:main:main",
+        runId: "run-code-mode",
+        catalogRef,
+      });
+
+      const safeName = `${toolName}2`;
+      const details = await runUntilCompleted({
+        execTool: expectDefined(codeModeTools[0], "Code Mode exec test invariant"),
+        waitTool: expectDefined(codeModeTools[1], "Code Mode wait test invariant"),
+        code: `
+          const file = await API.read("mcp/github.d.ts");
+          const api = await MCP.github.$api("${safeName}");
+          const result = await MCP.github.${safeName}({ value: "safe" });
+          return { file: file.content, header: api.header, result: result.details };
+        `,
+      });
+
+      expect(details.status).toBe("completed");
+      expect(details.value).toEqual({
+        file: expect.stringContaining(`function ${safeName}(`),
+        header: expect.stringContaining(`function ${safeName}(`),
+        result: {
+          serverName: "github",
+          toolName,
+          input: { value: "safe" },
+        },
+      });
+      expect(target.execute).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("marks yield suspensions and resumes the snapshot with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -1800,6 +1918,64 @@ describe("Code Mode", () => {
     ).rejects.toThrow("different session");
   });
 
+  it.each(["runId", "sessionId", "sessionKey", "agentId"] as const)(
+    "rejects suspended-run callers missing the owner %s",
+    async (missingIdentity) => {
+      const {
+        config,
+        catalogRef,
+        ctx,
+        tools: codeModeTools,
+      } = createCodeModeHarness({
+        agentId: "owner",
+      });
+      applyCodeModeCatalog({
+        tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+        config,
+        sessionId: ctx.sessionId,
+        sessionKey: ctx.sessionKey,
+        agentId: ctx.agentId,
+        runId: ctx.runId,
+        catalogRef,
+      });
+
+      const suspended = resultDetails(
+        await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+          "code-call-scoped-owner",
+          { code: 'await yield_control("pause"); return "owner-secret";' },
+        ),
+      );
+      expect(suspended.status).toBe("waiting");
+
+      const missingIdentityWait = expectDefined(
+        createCodeModeTools({
+          config,
+          runtimeConfig: config,
+          catalogRef,
+          ...(missingIdentity === "runId" ? {} : { runId: ctx.runId }),
+          ...(missingIdentity === "sessionId" ? {} : { sessionId: ctx.sessionId }),
+          ...(missingIdentity === "sessionKey" ? {} : { sessionKey: ctx.sessionKey }),
+          ...(missingIdentity === "agentId" ? {} : { agentId: ctx.agentId }),
+        })[1],
+        "Unscoped Code Mode wait test invariant",
+      );
+
+      await expect(
+        missingIdentityWait.execute("code-wait-missing-owner", { runId: suspended.runId }),
+      ).rejects.toThrow(missingIdentity === "runId" ? "different agent run" : "different session");
+      expect(testing.activeRuns.has(suspended.runId as string)).toBe(true);
+
+      const rightfulResult = resultDetails(
+        await expectDefined(codeModeTools[1], "Owner Code Mode wait test invariant").execute(
+          "code-wait-rightful-owner",
+          { runId: suspended.runId },
+        ),
+      );
+      expect(rightfulResult.status).toBe("completed");
+      expect(rightfulResult.value).toBe("owner-secret");
+    },
+  );
+
   it("rejects concurrent waits for the same suspended run", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -2009,6 +2185,31 @@ describe("Code Mode", () => {
       code: 'return `${/import.meta/.test("import.meta")}`;',
       value: "true",
     },
+    {
+      name: "ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api.import(42);",
+      value: 42,
+    },
+    {
+      name: "ordinary require method",
+      code: "const api = { require(value) { return value; } }; return api.require(42);",
+      value: 42,
+    },
+    {
+      name: "optional ordinary import method",
+      code: "const api = { import(value) { return value; } }; return api?.import?.(42);",
+      value: 42,
+    },
+    {
+      name: "computed ordinary require method",
+      code: 'const api = { require(value) { return value; } }; return api["require"](42);',
+      value: 42,
+    },
+    {
+      name: "ordinary import metadata property",
+      code: "const api = { import: { meta: 42 } }; return api.import.meta;",
+      value: 42,
+    },
   ])("executes harmless $name in the real guest worker", async ({ code, value }) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     applyCodeModeCatalog({
@@ -2027,6 +2228,30 @@ describe("Code Mode", () => {
     });
 
     expect(details).toMatchObject({ status: "completed", value });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("never exposes Node module-loader globals to the real guest worker", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: expectDefined(codeModeTools[0], "codeModeTools[0] test invariant"),
+      waitTool: expectDefined(codeModeTools[1], "codeModeTools[1] test invariant"),
+      code: "return [typeof process, typeof module, typeof require];",
+    });
+
+    expect(details).toMatchObject({
+      status: "completed",
+      value: ["undefined", "undefined", "undefined"],
+    });
     expect(testing.activeRuns.size).toBe(0);
   });
 
@@ -2309,6 +2534,13 @@ describe("Code Mode", () => {
 
   it.each([
     "const fs = require('node:fs'); return fs;",
+    String.raw`return r\u0065quire('node:fs');`,
+    "return require?.('node:fs');",
+    "return (require)('node:fs');",
+    "return (0, require)('node:fs');",
+    "const load = require; return load('node:fs');",
+    "return module.require('node:fs');",
+    "return process.getBuiltinModule('node:fs');",
     "return import('node:fs');",
     "return import.meta.url;",
     "return `${import('node:fs')}`;",

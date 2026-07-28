@@ -2015,11 +2015,13 @@ class OpenClawShell extends OpenClawLightDomElement {
         <openclaw-terminal-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${terminalAvailable}
+          .suppressed=${settingsTakeover}
           .themeMode=${resolveTerminalThemeMode()}
         ></openclaw-terminal-panel>
         <openclaw-browser-panel
           .client=${gatewayConnected ? gatewaySnapshot.client : null}
           .available=${browserPanelAvailable}
+          .suppressed=${settingsTakeover}
           .basePath=${context.basePath}
           .authToken=${resolveControlUiAuthToken({
             hello: gatewaySnapshot.hello,

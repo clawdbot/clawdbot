@@ -1,6 +1,5 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { createHash } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
@@ -24,6 +23,13 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
+import {
+  legacyMigrationSourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch as snapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  resolveLegacyMigrationRelativePath,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
 
 const DOCTOR_CLAIM_SUFFIX = ".doctor-importing";
@@ -39,15 +45,7 @@ type ExecApprovalsMigrationDatabase = Pick<
   "exec_approvals_config" | "migration_runs" | "migration_sources"
 >;
 
-type LegacySourceSnapshot = {
-  buffer: Buffer;
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  raw: string | null;
-  sha256: string;
-  size: number;
-};
+type LegacySourceSnapshot = Omit<LegacyMigrationSourceSnapshot, "raw"> & { raw: string | null };
 
 type MigrationDecision =
   | "canonical-preserved"
@@ -56,15 +54,6 @@ type MigrationDecision =
   | "malformed-legacy-preserved"
   | "receipt-authoritative";
 
-function legacyPathMayExist(filePath: string): boolean {
-  try {
-    fs.lstatSync(filePath);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ENOENT";
-  }
-}
-
 /** Detect retired approvals only when an explicit Doctor flow opts in. */
 export function detectLegacyExecApprovals(params: {
   stateDir: string;
@@ -72,8 +61,7 @@ export function detectLegacyExecApprovals(params: {
 }): LegacyExecApprovalsDetection {
   const env = { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
   const sourcePath = resolveExecApprovalsPath(env);
-  const sourcePresent =
-    legacyPathMayExist(sourcePath) || legacyPathMayExist(`${sourcePath}${DOCTOR_CLAIM_SUFFIX}`);
+  const sourcePresent = legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX);
   return {
     sourcePath,
     hasLegacy: params.doctorOnlyStateMigrations === true && sourcePresent,
@@ -81,16 +69,7 @@ export function detectLegacyExecApprovals(params: {
 }
 
 function relativeLegacyPath(stateDir: string, filePath: string): string {
-  const relativePath = path.relative(path.resolve(stateDir), path.resolve(filePath));
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath)
-  ) {
-    throw new Error("legacy exec approvals path is outside the state directory");
-  }
-  return relativePath;
+  return resolveLegacyMigrationRelativePath(stateDir, filePath, "exec approvals", false);
 }
 
 async function readLegacySourceSnapshot(
@@ -98,39 +77,20 @@ async function readLegacySourceSnapshot(
   stateDir: string,
   sourcePath: string,
 ): Promise<LegacySourceSnapshot> {
-  const opened = await stateRoot.read(relativeLegacyPath(stateDir, sourcePath), {
-    hardlinks: "reject",
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot,
+    stateDir,
+    sourcePath,
     maxBytes: MAX_LEGACY_EXEC_APPROVALS_BYTES,
-    symlinks: "reject",
+    label: "exec approvals",
   });
-  if (!opened.stat.isFile() || opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error("legacy exec approvals are not a stable regular file");
-  }
   let raw: string | null = null;
   try {
-    raw = utf8Decoder.decode(opened.buffer);
+    raw = utf8Decoder.decode(snapshot.buffer);
   } catch {
     // Invalid UTF-8 is malformed input that must stay available for recovery.
   }
-  return {
-    buffer: opened.buffer,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
-    mtimeMs: opened.stat.mtimeMs,
-    raw,
-    sha256: createHash("sha256").update(opened.buffer).digest("hex"),
-    size: opened.stat.size,
-  };
-}
-
-function snapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
+  return { ...snapshot, raw };
 }
 
 function receiptSourceKey(sourcePath: string): string {

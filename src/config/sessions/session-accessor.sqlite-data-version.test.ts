@@ -111,6 +111,55 @@ function createSessionScope(label: string) {
 }
 
 describe("SQLite session entry cache", () => {
+  it("keeps sqlite-entry-cache list projections lazy and memoized per key", async () => {
+    const scope = createSessionScope("lazy-list-projection");
+    await upsertSessionEntry(scope, {
+      label: "projected",
+      sessionId: "lazy-list-projection",
+      updatedAt: 1,
+      skillsSnapshot: { prompt: "large skill prompt", skills: [] },
+      systemPromptReport: {
+        source: "run",
+        generatedAt: 1,
+        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
+        injectedWorkspaceFiles: [],
+        skills: { promptChars: 0, entries: [] },
+        tools: { listChars: 0, schemaChars: 0, entries: [] },
+      },
+    });
+
+    const cloneEntry = globalThis.structuredClone;
+    const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+    try {
+      const fullEntry = listSessionEntries({ ...scope, clone: false })[0]?.entry;
+      expect(fullEntry).toBeDefined();
+      expect(cloneSpy).not.toHaveBeenCalled();
+      if (!fullEntry) {
+        throw new Error("missing seeded lazy-list-projection entry");
+      }
+      const expected = cloneEntry(fullEntry);
+      delete expected.skillsSnapshot;
+      delete expected.systemPromptReport;
+
+      const first = listSessionEntries({
+        ...scope,
+        clone: false,
+        projection: "list",
+      })[0]?.entry;
+      const second = listSessionEntries({
+        ...scope,
+        clone: false,
+        projection: "list",
+      })[0]?.entry;
+
+      expect(first).toEqual(expected);
+      expect(second).toBe(first);
+      expect(cloneSpy).toHaveBeenCalledOnce();
+    } finally {
+      cloneSpy.mockRestore();
+    }
+  });
+
   it("reuses parsed entries on the second list", async () => {
     const scope = createSessionScope("second-list");
     await upsertSessionEntry(scope, { label: "first", sessionId: "first", updatedAt: 1 });

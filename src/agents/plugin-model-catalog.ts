@@ -9,6 +9,7 @@ import { linkSync, readFileSync, readdirSync, renameSync, unlinkSync, type Diren
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -17,13 +18,20 @@ import {
   resolveAuthProfileDatabaseOwnerId,
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
+import {
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  repairPluginModelCatalogTransportMetadata,
+} from "./plugin-model-catalog-repair.js";
+
+export { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog-repair.js";
 
 // The in-memory planning key retains the established owner encoding; generated
 // payloads themselves are persisted only in the agent SQLite cache.
 const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
-export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-v1";
 const PLUGIN_MODEL_CATALOG_CACHE_SCOPE = "plugin-model-catalog-v1";
 const PLUGIN_MODEL_CATALOG_MIGRATION_SCOPE = "plugin-model-catalog-migration-v1";
+
+const log = createSubsystemLogger("agents/plugin-model-catalog");
 
 /** Recognizes canonical catalogs and recoverable atomic migration claims. */
 export function isPluginModelCatalogMigrationFile(filename: string): boolean {
@@ -74,6 +82,58 @@ function readPersistedPluginModelCatalogEntries(
 
 function readPersistedPluginModelCatalogs(agentDir: string): PersistedPluginModelCatalog[] {
   return readPersistedPluginModelCatalogEntries(agentDir, PLUGIN_MODEL_CATALOG_CACHE_SCOPE);
+}
+
+function repairPersistedPluginModelCatalogs(params: {
+  agentDir: string;
+  catalogs: readonly PersistedPluginModelCatalog[];
+}): boolean {
+  const repairs = params.catalogs.flatMap((catalog) => {
+    const repaired = repairPluginModelCatalogTransportMetadata(catalog.contents);
+    return repaired.removedModelCount > 0
+      ? [
+          {
+            ...catalog,
+            repairedContents: repaired.contents,
+            removedModelCount: repaired.removedModelCount,
+          },
+        ]
+      : [];
+  });
+  if (repairs.length === 0) {
+    return false;
+  }
+
+  const updatedAt = Date.now();
+  const applied = runOpenClawAgentWriteTransaction(
+    (database) => {
+      const kysely = getNodeSqliteKysely<PluginModelCatalogDatabase>(database.db);
+      return repairs.flatMap((repair) => {
+        // Compare-and-set protects a concurrent provider refresh from being
+        // overwritten by repair work planned from an older catalog snapshot.
+        const result = executeSqliteQuerySync(
+          database.db,
+          kysely
+            .updateTable("cache_entries")
+            .set({ value_json: repair.repairedContents, updated_at: updatedAt })
+            .where("scope", "=", PLUGIN_MODEL_CATALOG_CACHE_SCOPE)
+            .where("key", "=", repair.pluginId)
+            .where("value_json", "=", repair.contents),
+        );
+        return result.numAffectedRows === 1n ? [repair] : [];
+      });
+    },
+    pluginModelCatalogDatabaseOptions(params.agentDir),
+    { operationLabel: "plugin-model-catalog.repair" },
+  );
+  for (const repair of applied) {
+    log.warn(
+      `Repaired generated model catalog for plugin ${repair.pluginId}: removed ${repair.removedModelCount} model row(s) without provider or model api metadata.`,
+    );
+  }
+  // A concurrent refresh can win the compare-and-set. The caller still needs
+  // to reread so this stale pre-transaction snapshot never reaches consumers.
+  return true;
 }
 
 function readPersistedPluginModelCatalogMigrationPayloads(
@@ -546,8 +606,15 @@ export function loadPersistedPluginModelCatalogs(
   agentDir: string,
 ): PersistedPluginModelCatalogLoadResult {
   const migration = migrateLegacyPluginModelCatalogs({ agentDir });
+  let catalogs = readPersistedPluginModelCatalogs(agentDir);
+  if (
+    migration.warnings.length === 0 &&
+    repairPersistedPluginModelCatalogs({ agentDir, catalogs })
+  ) {
+    catalogs = readPersistedPluginModelCatalogs(agentDir);
+  }
   return {
-    catalogs: readPersistedPluginModelCatalogs(agentDir),
+    catalogs,
     warnings: migration.warnings,
   };
 }
@@ -563,7 +630,7 @@ export function replacePersistedPluginModelCatalogs(params: {
     if (!pluginId) {
       throw new Error(`Invalid generated plugin model catalog key: ${relativePath}`);
     }
-    planned.set(pluginId, contents);
+    planned.set(pluginId, repairPluginModelCatalogTransportMetadata(contents).contents);
   }
   return replacePersistedPluginModelCatalogEntries({ agentDir: params.agentDir, planned });
 }

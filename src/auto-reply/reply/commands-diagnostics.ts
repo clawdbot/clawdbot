@@ -628,17 +628,15 @@ function rewritePresentationAction(action: MessagePresentationAction): MessagePr
 }
 
 function rewriteSelectPresentationAction(
-  action: Extract<MessagePresentationAction, { type: "command" | "callback" }>,
-): Extract<MessagePresentationAction, { type: "command" | "callback" }> {
-  return action.type === "command"
-    ? {
-        type: "command",
-        command: rewriteCodexDiagnosticsCommandPrefix(action.command),
-      }
-    : {
-        type: "callback",
-        value: rewriteCodexDiagnosticsCommandPrefix(action.value),
-      };
+  action: Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }>,
+): Extract<MessagePresentationAction, { type: "command" | "callback" | "model-picker" }> {
+  if (action.type === "command") {
+    return { type: "command", command: rewriteCodexDiagnosticsCommandPrefix(action.command) };
+  }
+  if (action.type === "callback") {
+    return { type: "callback", value: rewriteCodexDiagnosticsCommandPrefix(action.value) };
+  }
+  return action;
 }
 
 function rewriteCodexDiagnosticsCommandPrefix(value: string): string {

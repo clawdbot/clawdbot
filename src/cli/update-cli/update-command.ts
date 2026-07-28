@@ -115,7 +115,6 @@ async function updateCommandInternal(
   recoveryState: UpdateCommandRecoveryState,
 ): Promise<void> {
   suppressDeprecations();
-  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
@@ -125,6 +124,15 @@ async function updateCommandInternal(
   if (timeoutMs === null) {
     return;
   }
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel !== undefined && !requestedChannel) {
+    defaultRuntime.error(
+      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
   if (!postCoreUpdateResume && opts.dryRun !== true && isGatewayExternallySupervised()) {
     defaultRuntime.error(formatExternalSupervisorUpdateRequired());
     defaultRuntime.exit(1);
@@ -137,6 +145,9 @@ async function updateCommandInternal(
       await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
       throw err;
     }
+
+    // Cleanup deletes handoff directories, so previews and rejected invocations must never run it.
+    await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
 
@@ -158,15 +169,6 @@ async function updateCommandInternal(
     fetchGit: false,
     includeRegistry: false,
   });
-
-  const requestedChannel = normalizeUpdateChannel(opts.channel);
-  if (opts.channel && !requestedChannel) {
-    defaultRuntime.error(
-      `--channel must be "stable", "extended-stable", "beta", or "dev" (got "${opts.channel}")`,
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
 
   if (requestedChannel === "extended-stable" && updateStatus.installKind === "git") {
     await reportPreMutationUpdateFailure({

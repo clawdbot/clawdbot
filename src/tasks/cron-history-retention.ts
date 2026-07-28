@@ -36,6 +36,7 @@ export function collectCronHistoryOverflowTaskIds(tasks: readonly TaskRecord[]):
       rows.sort((left, right) => {
         return (
           resolveCronTaskRecordTimestamp(right) - resolveCronTaskRecordTimestamp(left) ||
+          right.createdAt - left.createdAt ||
           right.taskId.localeCompare(left.taskId)
         );
       });
