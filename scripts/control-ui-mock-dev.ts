@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
 import type {
+  RequestFrame,
   SystemAgentChatHistoryResult,
   SystemAgentChatQuestion,
   SystemAgentChatResult,
@@ -2071,19 +2072,26 @@ function installControlUiCustodianMock(replyDelayMs: number): void {
   if (!gateway || !MockWebSocket) {
     return;
   }
-  const originalSend = MockWebSocket.prototype.send;
+  const sendDescriptor = Object.getOwnPropertyDescriptor(MockWebSocket.prototype, "send");
+  const originalSend = sendDescriptor?.value as WebSocket["send"] | undefined;
+  if (typeof originalSend !== "function") {
+    return;
+  }
+  const sendOriginal = (socket: WebSocket, data: Parameters<WebSocket["send"]>[0]): void => {
+    Reflect.apply(originalSend, socket, [data]);
+  };
   const sessionTurns = new Map<string, number>();
   MockWebSocket.prototype.send = function (data): void {
-    let frame: { method?: unknown; params?: unknown; type?: unknown } | null = null;
+    let frame: RequestFrame | null = null;
     if (typeof data === "string") {
       try {
-        frame = JSON.parse(data) as typeof frame;
+        frame = JSON.parse(data) as RequestFrame;
       } catch {
         frame = null;
       }
     }
     if (frame?.type !== "req" || frame.method !== "openclaw.chat") {
-      originalSend.call(this, data);
+      sendOriginal(this, data);
       return;
     }
 
@@ -2145,7 +2153,7 @@ function installControlUiCustodianMock(replyDelayMs: number): void {
     // Defer before forwarding so the generic gateway records the request but
     // cannot race its normal immediate response against this stateful reply.
     gateway.deferNext("openclaw.chat");
-    originalSend.call(this, data);
+    sendOriginal(this, data);
     window.setTimeout(
       () => gateway.resolveDeferred("openclaw.chat", response),
       message === undefined ? 0 : replyDelayMs,

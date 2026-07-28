@@ -8,7 +8,6 @@ import "../../components/openclaw-mascot.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import "../../styles/custodian.css";
 import { renderCustodianChangeHistory } from "./custodian-history.ts";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
@@ -37,11 +36,6 @@ export class CustodianPage extends OpenClawLightDomElement {
   private historyRequestEpoch = 0;
   private subscribedStore: CustodianSessionStore | null = null;
   private storeCleanup: (() => void) | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
-    () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
-    () => this.synchronizeHistoryClient(),
-  );
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -68,6 +62,7 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (changedProperties.has("store")) {
       this.subscribeToStore();
     }
+    this.synchronizeHistoryClient();
   }
 
   private subscribeToStore(): void {

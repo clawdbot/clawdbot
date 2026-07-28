@@ -16,7 +16,7 @@ import * as eventNudgeState from "./event-nudge.ts";
 import { sessionVariant } from "./session-lifecycle.ts";
 import { renderCustodianTranscriptEntry } from "./transcript.ts";
 
-export class CustodianSurface extends OpenClawLightDomElement {
+class CustodianSurface extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
