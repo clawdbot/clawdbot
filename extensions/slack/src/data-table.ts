@@ -9,7 +9,8 @@ import { renderSlackMessagePresentationTableFallbackText } from "./presentation-
 
 const SLACK_DATA_TABLE_COLUMNS_MAX = 20;
 const SLACK_DATA_TABLE_ROWS_MAX = 100;
-export const SLACK_DATA_TABLE_CELL_CHARACTERS_MAX = 10_000;
+// Slack applies the same 10k aggregate budget to one table and to all table cells in a message.
+export const SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX = 10_000;
 
 type SlackDataTableRawTextCell = {
   type: "raw_text";
@@ -162,7 +163,7 @@ function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
     }
     const row = rawRow.map(readSlackBasicTableCell);
     characterCount += row.reduce((total, cell) => total + countCharacters(cell), 0);
-    if (characterCount > SLACK_DATA_TABLE_CELL_CHARACTERS_MAX) {
+    if (characterCount > SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX) {
       return undefined;
     }
     rows.push(row);
@@ -227,7 +228,7 @@ function parseSlackDataTable(
     options.enforceNativeLimits &&
     (block.rows.length > SLACK_DATA_TABLE_ROWS_MAX + 1 ||
       headers.length > SLACK_DATA_TABLE_COLUMNS_MAX ||
-      cellCharacterCount > SLACK_DATA_TABLE_CELL_CHARACTERS_MAX)
+      cellCharacterCount > SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX)
   ) {
     return undefined;
   }
@@ -319,7 +320,7 @@ function canRenderSlackDataTable(
   const cellCharacterCount = resolvePortableTableCellCharacterCount(block);
   return (
     cellCharacterCount !== undefined &&
-    cellCharacterCountOffset + cellCharacterCount <= SLACK_DATA_TABLE_CELL_CHARACTERS_MAX
+    cellCharacterCountOffset + cellCharacterCount <= SLACK_DATA_TABLE_AGGREGATE_CELL_CHARACTERS_MAX
   );
 }
 
