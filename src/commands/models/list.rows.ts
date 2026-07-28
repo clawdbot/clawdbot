@@ -664,6 +664,11 @@ export async function appendConfiguredRows(params: {
   const catalogByKey = params.catalogSnapshot
     ? indexModelCatalogEntriesByKey(params.catalogSnapshot)
     : undefined;
+  // Route-aware auth/projection keeps configured rows consistent with the
+  // catalog rows built from the same snapshot two sources later.
+  const routeIndex = params.catalogSnapshot
+    ? createModelCatalogLogicalRouteIndex(params.catalogSnapshot.routeVariants)
+    : undefined;
   for (const entry of params.entries) {
     if (!matchesProviderFilter(params.context, entry.ref.provider)) {
       continue;
@@ -704,6 +709,7 @@ export async function appendConfiguredRows(params: {
       model,
       key: entry.key,
       context: params.context,
+      ...(routeIndex ? { routeIndex } : {}),
       configuredEntry: entry,
       allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
         modelKey(model.provider, model.id),
