@@ -591,12 +591,12 @@ private fun VoiceHomeMode(
       else -> colors.voiceAccent
     }
   val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
-  val liveVoiceDescription = stringResource(R.string.live_voice)
+  val liveVoiceDescription = stringResource(R.string.talk)
   val liveClickLabel =
     when {
       ttsOnly -> stringResource(R.string.stop_speaking)
-      realtimeActive -> stringResource(R.string.stop_live_voice)
-      else -> stringResource(R.string.start_live_voice)
+      realtimeActive -> stringResource(R.string.stop_speaking)
+      else -> stringResource(R.string.speak_to_agent)
     }
   val dictateClickLabel = stringResource(R.string.dictate)
   val fontScale = LocalDensity.current.fontScale
@@ -632,7 +632,7 @@ private fun VoiceHomeMode(
             .height(layout.contentHeight),
       ) {
         VoiceGestureLabel(
-          title = stringResource(R.string.open),
+          title = stringResource(R.string.tap),
           detail = stringResource(R.string.thread),
           accent = colors.voiceAccent,
           onClick = onOpenThread,
@@ -770,12 +770,12 @@ private fun ThreadVoiceMode(
 ) {
   val colors = OpenClawWearTheme.colors
   val listState = rememberTransformingLazyColumnState()
-  val liveVoiceDescription = stringResource(R.string.live_voice)
+  val liveVoiceDescription = stringResource(R.string.talk)
   val liveClickLabel =
     if (realtimeActive) {
-      stringResource(R.string.stop_live_voice)
+      stringResource(R.string.stop_speaking)
     } else {
-      stringResource(R.string.start_live_voice)
+      stringResource(R.string.speak_to_agent)
     }
   val coroutineScope = rememberCoroutineScope()
   val visibleConversation = conversation.takeLast(VISIBLE_REALTIME_ENTRY_COUNT)

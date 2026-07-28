@@ -12,10 +12,11 @@
     <string name="dictate">Dictate</string>
     <string name="live">Live</string>
     <string name="thread">Thread</string>
+    <string name="open_thread">Open thread</string>
     <string name="swipe_between_voice_modes">← Swipe →</string>
     <string name="hold">Hold</string>
     <string name="tap">Tap</string>
-    <string name="open">Open</string>
+    <string name="show_new_messages">Show new messages</string>
     <string name="no_live_conversation">Start Live to see the conversation here.</string>
     <string name="new_messages">New</string>
     <string name="type">Type</string>
@@ -85,9 +86,4 @@
     <string name="tile_description">Open sessions and reply through your paired phone</string>
     <string name="tile_open">OPEN</string>
     <string name="tile_phone_proxy">PHONE PROXY</string>
-    <string name="live_voice">Live voice</string>
-    <string name="start_live_voice">Start live voice</string>
-    <string name="stop_live_voice">Stop live voice</string>
-    <string name="open_thread">Open thread</string>
-    <string name="show_new_messages">Show new messages</string>
 </resources>
