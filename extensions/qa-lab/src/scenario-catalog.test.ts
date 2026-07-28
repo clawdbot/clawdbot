@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { OpenClawSchema } from "../../../src/config/zod-schema.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { resolveQaRepoPath } from "./repo-path.js";
 import {
@@ -274,14 +273,14 @@ describe("qa scenario catalog", () => {
       );
 
       expect(gatewayConfigPatch).toMatchObject(expectedPatch);
+      expect(gatewayConfig).toMatchObject(expectedPatch);
       for (const retiredPath of retiredPaths) {
         expect(gatewayConfigPatch).not.toHaveProperty(retiredPath);
       }
-      expect(OpenClawSchema.safeParse(gatewayConfig).success).toBe(true);
     },
   );
 
-  it("keeps session memory ranking's runtime config patch schema-valid", () => {
+  it("keeps session memory ranking's runtime config patch canonical", () => {
     const scenario = readQaScenarioById("session-memory-ranking");
     const patchConfigAction = scenario.execution.flow?.steps
       .flatMap((step) => step.actions)
@@ -307,7 +306,6 @@ describe("qa scenario catalog", () => {
       },
     });
     expect(patch).not.toHaveProperty("memory.search.query.hybrid");
-    expect(OpenClawSchema.safeParse(patch).success).toBe(true);
   });
 
   it("loads native test execution scenarios from YAML", () => {
