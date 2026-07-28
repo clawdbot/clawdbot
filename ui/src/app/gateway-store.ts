@@ -402,7 +402,7 @@ export function createApplicationGateway(
         }
         // Snapshot listeners so subscriptions changed during delivery affect
         // only the next frame, not sibling consumers of the current frame.
-        for (const listener of [...eventListeners]) {
+        for (const listener of Array.from(eventListeners)) {
           if (client !== nextClient) {
             return;
           }
