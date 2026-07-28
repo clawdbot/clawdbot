@@ -434,6 +434,21 @@ describe("session discussion panel", () => {
     expect(openDiscussion).not.toHaveBeenCalled();
   });
 
+  it("does not open after the available-state callback revokes write access", async () => {
+    const openDiscussion = vi.fn<SessionDiscussionOpener>();
+    let panel!: DiscussionPanelElement;
+    panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
+      openDiscussion,
+      onStateChange: () => {
+        panel.canOpen = false;
+      },
+    });
+
+    await vi.waitFor(() => expect(panel.canOpen).toBe(false));
+    expect(openDiscussion).not.toHaveBeenCalled();
+  });
+
   it("does not render non-HTTP discussion URLs", async () => {
     const panel = mount({
       loadInfo: vi.fn().mockResolvedValue({

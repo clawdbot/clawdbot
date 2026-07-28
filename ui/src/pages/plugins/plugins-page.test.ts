@@ -13,6 +13,7 @@ import type {
   PluginCatalogItem,
   PluginListResult,
   PluginMutationResult,
+  PluginSearchResult,
 } from "../../lib/plugins/index.ts";
 import {
   createApplicationContextProvider,
@@ -36,6 +37,7 @@ type TestPluginsPage = HTMLElement & {
   loading: boolean;
   busy: Record<string, boolean>;
   activeTab: "installed" | "discover";
+  searchResults: PluginSearchResult[] | null;
   applyMutationResult: (result: PluginMutationResult) => void;
 };
 
@@ -260,6 +262,28 @@ describe("PluginsPage", () => {
     expect(page.querySelector("h1")?.textContent).toBe("Plugins");
   });
 
+  it("surfaces an initial catalog load failure", async () => {
+    const { client } = createClient(async () => {
+      throw new Error("catalog unavailable");
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+    );
+
+    await waitForFast(() =>
+      expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
+        "catalog unavailable",
+      ),
+    );
+    expect(
+      page.querySelector(".plugins-page-error")?.textContent?.match(/catalog unavailable/gu),
+    ).toHaveLength(1);
+  });
+
   it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
     const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
     const revokeObjectURL = vi.fn();
@@ -474,7 +498,11 @@ describe("PluginsPage", () => {
     harness.emit(client, true);
 
     await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
-    expect(request).toHaveBeenCalledWith("plugins.list", {});
+    expect(request).toHaveBeenCalledWith(
+      "plugins.list",
+      {},
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("debounces two-character ClawHub searches and cancels stale input", async () => {
@@ -511,10 +539,65 @@ describe("PluginsPage", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith("plugins.search", {
-      query: "workboard",
-      limit: 20,
+    expect(request).toHaveBeenCalledWith(
+      "plugins.search",
+      {
+        query: "workboard",
+        limit: 20,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("commits only the latest ClawHub search result", async () => {
+    vi.useFakeTimers();
+    const first = deferred<{ results: PluginSearchResult[] }>();
+    const second = deferred<{ results: PluginSearchResult[] }>();
+    const { client, request } = createClient(async (method, params) => {
+      if (method !== "plugins.search") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      return (params as { query: string }).query === "first" ? first.promise : second.promise;
     });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(
+        harness.gateway,
+        vi.fn(async () => undefined),
+      ),
+      {
+        gateway: harness.gateway,
+        gatewaySnapshot: harness.gateway.snapshot,
+        initialTab: "discover",
+        result: createResult(),
+        error: null,
+      },
+    );
+    const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
+    search.value = "first";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    search.value = "second";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const latest: PluginSearchResult = {
+      score: 1,
+      package: {
+        name: "latest-plugin",
+        displayName: "Latest Plugin",
+        family: "code-plugin",
+        channel: "community",
+        isOfficial: false,
+      },
+    };
+    second.resolve({ results: [latest] });
+    await vi.waitFor(() => expect(page.searchResults).toEqual([latest]));
+    first.resolve({ results: [] });
+    await Promise.resolve();
+
+    expect(page.searchResults).toEqual([latest]);
   });
 
   it("refreshes plugins and runtime config without discarding a pending config draft", async () => {
@@ -638,10 +721,14 @@ describe("PluginsPage", () => {
 
     harness.emit(client, true);
     await vi.advanceTimersByTimeAsync(300);
-    expect(request).toHaveBeenCalledWith("plugins.search", {
-      query: "calendar",
-      limit: 20,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "plugins.search",
+      {
+        query: "calendar",
+        limit: 20,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("clears visible catalog loading when a mutation supersedes a manual refresh", async () => {
@@ -706,7 +793,10 @@ describe("PluginsPage", () => {
     let refreshCalls = 0;
     const refreshConfig = vi.fn(async () => {
       refreshCalls += 1;
-      runtimeConfigState.lastError = refreshCalls === 1 ? "config.get failed" : null;
+      if (refreshCalls === 1) {
+        throw new Error("config.get failed");
+      }
+      runtimeConfigState.lastError = null;
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
