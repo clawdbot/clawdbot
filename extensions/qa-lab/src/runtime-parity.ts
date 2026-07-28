@@ -20,6 +20,10 @@ import {
 } from "./gateway-log-sentinel.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
+import {
+  buildRuntimeParityCacheDiagnostics,
+  type RuntimeParityCacheDiagnostics,
+} from "./runtime-parity-cache-diagnostics.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 
 // These are the canonical QA comparison cells, not the extensible product
@@ -56,6 +60,7 @@ export type RuntimeParityCell = {
   providerPlanToolCalls?: RuntimeParityToolCall[];
   finalText: string;
   usage: RuntimeParityUsage;
+  cacheDiagnostics?: RuntimeParityCacheDiagnostics;
   wallClockMs: number;
   bootstrapWallClockMs?: number;
   transportErrorClass?: string;
@@ -1471,6 +1476,11 @@ export async function captureRuntimeParityCell(
     ...(mockToolCalls ? { providerPlanToolCalls: mockToolCalls } : {}),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
+    cacheDiagnostics: buildRuntimeParityCacheDiagnostics(
+      transcriptRecords
+        .filter((record) => record.role === "assistant")
+        .map((record) => readUsageTotals(record.message.usage ?? null)),
+    ),
     wallClockMs: params.wallClockMs,
     ...(params.bootstrapWallClockMs === undefined
       ? {}
