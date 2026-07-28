@@ -424,7 +424,7 @@ function collapseDuplicateSourceKey(message: unknown): string | null {
     return null;
   }
   const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
-  if (role !== "assistant") {
+  if (role !== "assistant" && role !== "user") {
     return null;
   }
   const id = sourceMessageId(message);

@@ -1,10 +1,14 @@
 // @vitest-environment node
 // Control UI tests cover history merge behavior.
+import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import {
+  getChatSessionProjection,
   preserveLiveAuthoritativeUserMessages,
   preserveOptimisticTailMessages,
+  readTranscriptSequence,
   rememberLiveAuthoritativeUserMessage,
+  setChatSessionProjection,
 } from "./history-merge.ts";
 
 function createHistoryMessage(
@@ -20,6 +24,357 @@ function createHistoryMessage(
     ...(metadata === undefined ? {} : { __openclaw: metadata }),
   };
 }
+
+describe("canonical browser session projection", () => {
+  it("keeps each split pane's live projection independent", () => {
+    const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
+    const firstPane = {};
+    const secondPane = {};
+    const liveUser = createHistoryMessage("user", "first pane", { id: "first-user", seq: 1 });
+    const firstProjection = reduceSessionProjection(
+      getChatSessionProjection(firstPane, [], scope),
+      {
+        type: "messagePersisted",
+        message: liveUser,
+        scope,
+      },
+    );
+    setChatSessionProjection(firstPane, firstProjection);
+
+    expect(getChatSessionProjection(firstPane, [liveUser], scope).messages).toEqual([liveUser]);
+    expect(getChatSessionProjection(secondPane, [], scope).messages).toEqual([]);
+  });
+
+  it("binds newly learned session and branch identity without losing live messages or runs", () => {
+    const owner = {};
+    const liveUser = createHistoryMessage("user", "same live turn", {
+      id: "same-live-user",
+      seq: 1,
+    });
+    const initialScope = { sessionKey: "agent:main:shared" };
+    const initialProjection = reduceSessionProjection(
+      getChatSessionProjection(owner, [liveUser], initialScope),
+      { type: "runDelta", runId: "same-live-run", scope: initialScope },
+    );
+    setChatSessionProjection(owner, initialProjection);
+
+    const boundScope = {
+      ...initialScope,
+      sessionId: "learned-session",
+      activeLeafEntryId: "learned-leaf",
+    };
+    const boundProjection = getChatSessionProjection(owner, [liveUser], boundScope);
+
+    expect(boundProjection.scope).toEqual(boundScope);
+    expect(boundProjection.entries).toBe(initialProjection.entries);
+    expect(boundProjection.runs).toBe(initialProjection.runs);
+    expect(boundProjection.messages).toEqual([liveUser]);
+    expect(boundProjection.runs["same-live-run"]?.status).toBe("streaming");
+  });
+
+  it("resets learned live and run state when a subsequently proven branch changes", () => {
+    const owner = {};
+    const initialScope = { sessionKey: "agent:main:shared" };
+    const liveUser = createHistoryMessage("user", "obsolete live turn", {
+      id: "obsolete-live-user",
+      seq: 1,
+    });
+    const liveProjection = reduceSessionProjection(
+      getChatSessionProjection(owner, [], initialScope),
+      { type: "messagePersisted", message: liveUser, scope: initialScope },
+    );
+    const runningProjection = reduceSessionProjection(liveProjection, {
+      type: "runDelta",
+      runId: "obsolete-run",
+      scope: initialScope,
+    });
+    setChatSessionProjection(owner, runningProjection);
+    const learnedScope = {
+      ...initialScope,
+      sessionId: "learned-session",
+      activeLeafEntryId: "learned-leaf",
+    };
+    expect(getChatSessionProjection(owner, [liveUser], learnedScope).runs).toHaveProperty(
+      "obsolete-run",
+    );
+
+    const nextProjection = getChatSessionProjection(owner, [], {
+      ...learnedScope,
+      activeLeafEntryId: "next-leaf",
+    });
+
+    expect(nextProjection.messages).toEqual([]);
+    expect(nextProjection.runs).toEqual({});
+    expect(nextProjection.scope.activeLeafEntryId).toBe("next-leaf");
+  });
+
+  it("binds an explicitly unbranched transcript before a later branch is selected", () => {
+    const owner = {};
+    const initialScope = { sessionKey: "agent:main:shared" };
+    const liveUser = createHistoryMessage("user", "unbranched live turn", {
+      id: "unbranched-user",
+      seq: 1,
+    });
+    const liveProjection = reduceSessionProjection(
+      getChatSessionProjection(owner, [], initialScope),
+      { type: "messagePersisted", message: liveUser, scope: initialScope },
+    );
+    setChatSessionProjection(owner, liveProjection);
+    const unbranchedScope = { ...initialScope, activeLeafEntryId: null };
+
+    expect(getChatSessionProjection(owner, [liveUser], unbranchedScope).scope).toEqual(
+      unbranchedScope,
+    );
+    expect(
+      getChatSessionProjection(owner, [], {
+        ...initialScope,
+        activeLeafEntryId: "selected-leaf",
+      }).messages,
+    ).toEqual([]);
+  });
+
+  it("discards a previous session projection when a pane changes session", () => {
+    const owner = {};
+    const previousScope = { sessionKey: "agent:main:previous", sessionId: "previous-session" };
+    const previousUser = createHistoryMessage("user", "previous session", {
+      id: "previous-user",
+      seq: 1,
+    });
+    const previousProjection = reduceSessionProjection(
+      getChatSessionProjection(owner, [], previousScope),
+      { type: "messagePersisted", message: previousUser, scope: previousScope },
+    );
+    setChatSessionProjection(owner, previousProjection);
+
+    const nextScope = { sessionKey: "agent:main:next", sessionId: "next-session" };
+    expect(getChatSessionProjection(owner, [], nextScope).messages).toEqual([]);
+  });
+
+  it("discards obsolete live messages when the active transcript branch changes", () => {
+    const owner = {};
+    const previousScope = {
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+      activeLeafEntryId: "previous-leaf",
+    };
+    const previousUser = createHistoryMessage("user", "removed branch", {
+      id: "removed-user",
+      seq: 1,
+    });
+    const previousProjection = reduceSessionProjection(
+      getChatSessionProjection(owner, [], previousScope),
+      { type: "messagePersisted", message: previousUser, scope: previousScope },
+    );
+    setChatSessionProjection(owner, previousProjection);
+
+    expect(
+      getChatSessionProjection(owner, [], {
+        ...previousScope,
+        activeLeafEntryId: "current-leaf",
+      }).messages,
+    ).toEqual([]);
+  });
+
+  it("discards obsolete live messages when the active transcript branch is cleared", () => {
+    const owner = {};
+    const previousScope = {
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+      activeLeafEntryId: "previous-leaf",
+    };
+    const previousUser = createHistoryMessage("user", "removed branch", {
+      id: "removed-user",
+      seq: 1,
+    });
+    const previousProjection = reduceSessionProjection(
+      getChatSessionProjection(owner, [], previousScope),
+      { type: "messagePersisted", message: previousUser, scope: previousScope },
+    );
+    setChatSessionProjection(owner, previousProjection);
+
+    expect(
+      getChatSessionProjection(owner, [], {
+        ...previousScope,
+        activeLeafEntryId: null,
+      }).messages,
+    ).toEqual([]);
+  });
+
+  it("keeps a pane's live projection when a consumer omits its optional branch scope", () => {
+    const owner = {};
+    const scope = {
+      sessionKey: "agent:main:shared",
+      sessionId: "shared-session",
+      activeLeafEntryId: "current-leaf",
+    };
+    const liveUser = createHistoryMessage("user", "same branch", {
+      id: "live-user",
+      seq: 1,
+    });
+    const projection = reduceSessionProjection(getChatSessionProjection(owner, [], scope), {
+      type: "messagePersisted",
+      message: liveUser,
+      scope,
+    });
+    setChatSessionProjection(owner, projection);
+
+    expect(
+      getChatSessionProjection(owner, [liveUser], {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+      }),
+    ).toBe(projection);
+  });
+
+  it("adopts a later pending send after its pane projection already exists", () => {
+    const owner = {};
+    const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
+    const firstUser = createHistoryMessage("user", "first persisted prompt", {
+      id: "first-user",
+      idempotencyKey: "first-run:user",
+      seq: 1,
+    });
+    getChatSessionProjection(owner, [firstUser], scope);
+
+    const pendingSecondUser = createHistoryMessage("user", "second prompt", {
+      idempotencyKey: "second-run:user",
+    });
+    const pendingProjection = getChatSessionProjection(
+      owner,
+      [firstUser, pendingSecondUser],
+      scope,
+    );
+    expect(pendingProjection.entries[0]?.pending).toBe(false);
+    expect(pendingProjection.entries[1]).toMatchObject({
+      pending: true,
+      pendingRunId: "second-run",
+    });
+
+    const authoritativeSecondUser = createHistoryMessage("user", "second prompt", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    const persistedProjection = reduceSessionProjection(pendingProjection, {
+      type: "messagePersisted",
+      message: authoritativeSecondUser,
+      scope,
+    });
+
+    expect(persistedProjection.messages).toEqual([firstUser, authoritativeSecondUser]);
+    expect(persistedProjection.entries[1]).toMatchObject({
+      pending: false,
+      identity: { id: "second-user", runId: "second-run" },
+    });
+  });
+
+  it("does not classify later canonical history messages as pending sends", () => {
+    const owner = {};
+    const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
+    const firstUser = createHistoryMessage("user", "first persisted prompt", {
+      id: "first-user",
+      idempotencyKey: "first-run:user",
+      seq: 1,
+    });
+    const secondUser = createHistoryMessage("user", "second persisted prompt", {
+      id: "second-user",
+      idempotencyKey: "second-run:user",
+      seq: 2,
+    });
+    getChatSessionProjection(owner, [firstUser], scope);
+
+    const projection = getChatSessionProjection(owner, [firstUser, secondUser], scope);
+
+    expect(projection.messages).toEqual([firstUser, secondUser]);
+    expect(projection.entries.map((entry) => entry.pending)).toEqual([false, false]);
+  });
+
+  it("adopts an attachment-only pending turn through canonical run identity", () => {
+    const owner = {};
+    const scope = { sessionKey: "agent:main:shared", sessionId: "shared-session" };
+    const pendingUser = {
+      role: "user",
+      content: "",
+      __openclaw: { idempotencyKey: "attachment-run:user" },
+    };
+    const authoritativeUser = {
+      role: "user",
+      content: "",
+      __openclaw: {
+        id: "attachment-user",
+        idempotencyKey: "attachment-run:user",
+        seq: 4,
+        media: [{ mimeType: "application/pdf", fileName: "brief.pdf" }],
+      },
+    };
+
+    const projection = reduceSessionProjection(
+      getChatSessionProjection(owner, [pendingUser], scope),
+      { type: "messagePersisted", message: authoritativeUser, scope },
+    );
+
+    expect(projection.messages).toEqual([authoritativeUser]);
+  });
+
+  it("keeps same-text peer turns with distinct canonical message identities", () => {
+    const scope = { sessionKey: "agent:main:shared" };
+    const first = createHistoryMessage("user", "continue", {
+      id: "first-peer-user",
+      idempotencyKey: "first-peer:user",
+      seq: 1,
+    });
+    const second = createHistoryMessage("user", "continue", {
+      id: "second-peer-user",
+      idempotencyKey: "second-peer:user",
+      seq: 2,
+    });
+    const firstProjection = reduceSessionProjection(getChatSessionProjection({}, [], scope), {
+      type: "messagePersisted",
+      message: first,
+      scope,
+    });
+    const projection = reduceSessionProjection(firstProjection, {
+      type: "messagePersisted",
+      message: second,
+      scope,
+    });
+
+    expect(projection.messages).toEqual([first, second]);
+  });
+
+  it("keeps persisted identity and ordering ahead of misleading event envelopes", () => {
+    const canonicalUser = createHistoryMessage("user", "canonical prompt", {
+      id: "persisted-user",
+      seq: 3,
+    });
+    const projection = reduceSessionProjection(getChatSessionProjection({}, []), {
+      type: "messagePersisted",
+      message: canonicalUser,
+      envelope: { messageId: "misleading-envelope", messageSeq: 90 },
+    });
+
+    expect(projection.entries[0]?.identity).toMatchObject({ id: "persisted-user", sequence: 3 });
+    expect(readTranscriptSequence(canonicalUser)).toBe(3);
+  });
+
+  it("retains transcript sequences for role-less status and history markers", () => {
+    const marker = {
+      content: [{ type: "status", value: "transcript marker" }],
+      __openclaw: { id: "history-marker", seq: 7 },
+    };
+
+    expect(readTranscriptSequence(marker)).toBe(7);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects unsafe persisted transcript sequence %s",
+    (sequence) => {
+      expect(
+        readTranscriptSequence(createHistoryMessage("user", "prompt", { seq: sequence })),
+      ).toBe(null);
+    },
+  );
+});
 
 describe("preserveLiveAuthoritativeUserMessages", () => {
   it("keeps a gateway-projected user ahead of a later stale-history reply", () => {

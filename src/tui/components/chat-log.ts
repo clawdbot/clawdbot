@@ -7,9 +7,6 @@ import { BtwInlineMessage } from "./btw-inline-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
 
-// Tolerates history timestamps slightly before locally pending messages.
-const PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS = 60_000;
-
 type RepeatableSystemMessage = {
   component: Container;
   textNode: Text;
@@ -48,7 +45,6 @@ export class ChatLog extends Container {
     {
       component: UserMessageComponent;
       text: string;
-      createdAt: number;
     }
   >();
   private pendingSystemNotices = new Map<string, Container>();
@@ -385,16 +381,15 @@ export class ChatLog extends Container {
     return component;
   }
 
-  addPendingUser(runId: string, text: string, createdAt = Date.now()) {
+  addPendingUser(runId: string, text: string) {
     const existing = this.pendingUsers.get(runId);
     if (existing) {
       existing.text = text;
-      existing.createdAt = createdAt;
       existing.component.setText(text);
       return existing.component;
     }
     const component = new UserMessageComponent(text);
-    this.pendingUsers.set(runId, { component, text, createdAt });
+    this.pendingUsers.set(runId, { component, text });
     this.appendNonSystem(component);
     return component;
   }
@@ -428,29 +423,17 @@ export class ChatLog extends Container {
   reconcilePendingUsers(
     historyUsers: Array<{
       text: string;
-      timestamp?: number | null;
+      runId?: string;
     }>,
   ) {
-    // Gateway history may echo a just-submitted local message; remove pending rows when it does.
-    const normalizedHistory = historyUsers
-      .map((entry) => ({
-        text: entry.text.trim(),
-        timestamp: typeof entry.timestamp === "number" ? entry.timestamp : null,
-      }))
-      .filter((entry) => entry.text.length > 0 && entry.timestamp !== null);
+    // Text and clocks cannot identify a send: another client can persist the
+    // same prompt. Only this client's canonical persisted run adopts its row.
+    const persistedRunIds = new Set(
+      historyUsers.flatMap((entry) => (entry.runId ? [entry.runId] : [])),
+    );
     const clearedRunIds: string[] = [];
     for (const [runId, entry] of this.pendingUsers.entries()) {
-      const pendingText = entry.text.trim();
-      if (!pendingText) {
-        continue;
-      }
-      const matchIndex = normalizedHistory.findIndex(
-        (historyEntry) =>
-          historyEntry.text === pendingText &&
-          (historyEntry.timestamp ?? 0) >=
-            entry.createdAt - PENDING_HISTORY_CLOCK_SKEW_TOLERANCE_MS,
-      );
-      if (matchIndex === -1) {
+      if (!persistedRunIds.has(runId)) {
         continue;
       }
       if (this.children.includes(entry.component)) {
@@ -458,7 +441,6 @@ export class ChatLog extends Container {
       }
       this.pendingUsers.delete(runId);
       clearedRunIds.push(runId);
-      normalizedHistory.splice(matchIndex, 1);
     }
     return clearedRunIds;
   }

@@ -1,3 +1,9 @@
+import {
+  getGatewaySessionMessageSubscriptionCoordinator,
+  releaseGatewaySessionMessageSubscription,
+  resetGatewaySessionMessageSubscriptionCoordinator,
+  type GatewaySessionMessageSubscription,
+} from "@openclaw/gateway-client/browser";
 import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import {
   GatewayRequestError,
@@ -188,10 +194,7 @@ type SessionConnectionScope = {
 
 type SessionCreateReconciliation = "blocking" | "background";
 
-export type SessionMessageSubscription = {
-  key: string;
-  agentId?: string | null;
-};
+export type SessionMessageSubscription = GatewaySessionMessageSubscription;
 
 export type SessionCapability = {
   readonly state: SessionState;
@@ -254,7 +257,7 @@ export type SessionCapability = {
   ) => Promise<SessionWorkspaceSetResult | null>;
   subscribeMessages: (
     key: string,
-    options?: { agentId?: string | null },
+    options?: { agentId?: string | null; includeApprovals?: boolean },
   ) => Promise<SessionMessageSubscription>;
   unsubscribeMessages: (subscription: SessionMessageSubscription) => Promise<void>;
   listCheckpoints: (
@@ -535,66 +538,14 @@ function subscribeSessionGateway(client: SessionRequestClient): Promise<void> {
   return client.request("sessions.subscribe", {}).then(() => undefined);
 }
 
-async function requestSessionMessageSubscription(
-  client: SessionRequestClient,
-  key: string,
-  options: { agentId?: string | null } = {},
-): Promise<SessionMessageSubscription> {
-  const result = await client.request("sessions.messages.subscribe", {
-    ...buildSessionRequestParams(key, options.agentId),
-  });
-  const subscribedKey =
-    result && typeof result === "object" && typeof (result as { key?: unknown }).key === "string"
-      ? (result as { key: string }).key.trim()
-      : "";
-  return {
-    key: subscribedKey || key.trim(),
-    agentId: options.agentId?.trim() || null,
-  };
-}
-
-function requestSessionMessageUnsubscribe(
-  client: SessionRequestClient,
-  subscription: SessionMessageSubscription,
-): Promise<void> {
-  return client
-    .request(
-      "sessions.messages.unsubscribe",
-      buildSessionRequestParams(subscription.key, subscription.agentId),
-    )
-    .then(() => undefined);
-}
-
-type SessionMessageSubscriptionEntry = {
-  key: string;
-  agentId: string | null;
-  owners: number;
-  result: Promise<SessionMessageSubscription>;
-};
-
-const sessionMessageSubscriptionRegistries = new WeakMap<
-  GatewayBrowserClient,
-  Set<SessionMessageSubscriptionEntry>
->();
-const sessionMessageSubscriptionOwners = new WeakMap<
-  SessionMessageSubscription,
-  {
-    client: GatewayBrowserClient;
-    entry: SessionMessageSubscriptionEntry;
-    registry: Set<SessionMessageSubscriptionEntry>;
-    onRelease: (subscription: SessionMessageSubscription) => void;
-  }
->();
-
 function resetSessionMessageSubscriptionRegistry(client: GatewayBrowserClient): void {
-  sessionMessageSubscriptionRegistries.get(client)?.clear();
-  sessionMessageSubscriptionRegistries.delete(client);
+  resetGatewaySessionMessageSubscriptionCoordinator(client);
 }
 
-async function acquireSessionMessageSubscription(
+function acquireSessionMessageSubscription(
   client: GatewayBrowserClient,
   key: string,
-  options: { agentId?: string | null } = {},
+  options: { agentId?: string | null; includeApprovals?: boolean } = {},
   onRelease: (subscription: SessionMessageSubscription) => void = () => undefined,
 ): Promise<SessionMessageSubscription> {
   const normalizedKey = key.trim();
@@ -602,52 +553,16 @@ async function acquireSessionMessageSubscription(
     isUiGlobalSessionKey(normalizedKey) && options.agentId?.trim()
       ? normalizeAgentId(options.agentId)
       : null;
-  const registry = sessionMessageSubscriptionRegistries.get(client) ?? new Set();
-  sessionMessageSubscriptionRegistries.set(client, registry);
-  let entry = [...registry].find(
-    (candidate) =>
-      candidate.agentId === agentId && areUiSessionKeysEquivalent(candidate.key, normalizedKey),
-  );
-  if (!entry) {
-    const result = requestSessionMessageSubscription(client, normalizedKey, { agentId });
-    entry = { key: normalizedKey, agentId, owners: 0, result };
-    registry.add(entry);
-    void result.catch(() => registry.delete(entry!));
-  }
-  entry.owners += 1;
-  try {
-    const resolved = await entry.result;
-    const subscription: SessionMessageSubscription = {
-      key: resolved.key,
-      agentId: resolved.agentId ?? null,
-    };
-    sessionMessageSubscriptionOwners.set(subscription, { client, entry, registry, onRelease });
-    return subscription;
-  } catch (error) {
-    entry.owners -= 1;
-    throw error;
-  }
+  return getGatewaySessionMessageSubscriptionCoordinator(client, {
+    keysEquivalent: areUiSessionKeysEquivalent,
+  }).acquire(normalizedKey, {
+    agentId,
+    ...(options.includeApprovals ? { includeApprovals: true } : {}),
+    onRelease,
+  });
 }
 
-async function releaseSessionMessageSubscription(
-  subscription: SessionMessageSubscription,
-): Promise<void> {
-  const owner = sessionMessageSubscriptionOwners.get(subscription);
-  if (!owner) {
-    return;
-  }
-  sessionMessageSubscriptionOwners.delete(subscription);
-  owner.onRelease(subscription);
-  owner.entry.owners -= 1;
-  if (
-    owner.entry.owners > 0 ||
-    sessionMessageSubscriptionRegistries.get(owner.client) !== owner.registry ||
-    !owner.registry.delete(owner.entry)
-  ) {
-    return;
-  }
-  await requestSessionMessageUnsubscribe(owner.client, subscription);
-}
+const releaseSessionMessageSubscription = releaseGatewaySessionMessageSubscription;
 
 async function listSessionCheckpoints(
   client: SessionRequestClient,
@@ -1773,7 +1688,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
 
   const subscribeMessages = async (
     key: string,
-    options: { agentId?: string | null } = {},
+    options: { agentId?: string | null; includeApprovals?: boolean } = {},
   ): Promise<SessionMessageSubscription> => {
     const scope = captureConnection();
     if (!scope) {

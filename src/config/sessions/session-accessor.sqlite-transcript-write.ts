@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -52,6 +54,7 @@ import {
   ensureTranscriptHeader,
   readActiveTranscriptAppendParentId,
   readMessageIdempotencyKey,
+  readTranscriptIdentityByEventId,
   readTranscriptMessageByEventId,
   readTranscriptMessageByScopedIdempotencyKey,
   redactTranscriptMessageForStorage,
@@ -117,6 +120,87 @@ type SqliteTranscriptWriteLockContext = {
 type SqliteTranscriptSnapshotState =
   | { kind: "current"; rows: SqliteTranscriptSnapshotRow[] }
   | { kind: "stale" };
+
+// Append results are public SDK contracts. Keep commit-only cursor metadata
+// attached to their object lifetime without changing the returned message shape.
+const committedTranscriptMessageSequences = new WeakMap<object, number>();
+
+/** Reads the visible-message sequence captured inside the append transaction. */
+export function readCommittedSqliteTranscriptMessageSequence(
+  message: TranscriptMessageAppendResult<unknown>,
+): number | undefined {
+  return committedTranscriptMessageSequences.get(message);
+}
+
+function rememberCommittedTranscriptMessageSequences(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+): void {
+  const appendedMessages = messages.filter((message) => message.appended);
+  for (const message of appendedMessages) {
+    committedTranscriptMessageSequences.delete(message);
+  }
+  if (appendedMessages.length === 0) {
+    return;
+  }
+  const db = getNodeSqliteKysely<
+    Pick<
+      OpenClawAgentKyselyDatabase,
+      "session_transcript_active_events" | "session_transcript_index_state"
+    >
+  >(database.db);
+  const projection = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_transcript_index_state")
+      .select("needs_rebuild")
+      .where("session_id", "=", sessionId),
+  );
+  if (projection?.needs_rebuild !== 0) {
+    return;
+  }
+  for (const message of appendedMessages) {
+    const identity = readTranscriptIdentityByEventId(database, sessionId, message.messageId);
+    if (!identity) {
+      continue;
+    }
+    const active = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_transcript_active_events")
+        .select("message_position")
+        .where("session_id", "=", sessionId)
+        .where("event_seq", "=", identity.seq),
+    );
+    if (active?.message_position !== null && active?.message_position !== undefined) {
+      // Raw transcript sequence includes headers and control rows. Gateway history
+      // instead identifies messages by their position on the final active branch.
+      committedTranscriptMessageSequences.set(message, active.message_position + 1);
+    }
+  }
+}
+
+/** Captures committed cursors after the final append while its turn still owns the writer. */
+export function rememberCommittedSqliteTranscriptMessageSequences(
+  scope: SessionTranscriptTurnWriteContext,
+  messages: readonly TranscriptMessageAppendResult<unknown>[],
+): void {
+  if (!scope.agentId || !scope.sessionId || !scope.sessionKey) {
+    return;
+  }
+  const resolved = resolveSqliteTranscriptScope({
+    agentId: scope.agentId,
+    sessionId: scope.sessionId,
+    sessionKey: scope.sessionKey,
+    ...(scope.storePath ? { storePath: scope.storePath } : {}),
+  });
+  rememberCommittedTranscriptMessageSequences(
+    openOpenClawAgentDatabase(toDatabaseOptions(resolved)),
+    resolved.sessionId,
+    messages,
+  );
+}
 
 export async function replaceSqliteTranscriptEvents(
   scope: SessionTranscriptAccessScope,
@@ -429,6 +513,14 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
       ) {
         throw new Error("SQLite transcript batch was not wholly inserted or replayed");
       }
+
+      // Later explicit parents can abandon earlier rows. Capture every cursor
+      // from the final active projection before this atomic transaction commits.
+      rememberCommittedTranscriptMessageSequences(
+        transactionDb,
+        resolved.sessionId,
+        appendedMessages,
+      );
 
       const sessionPatch = buildExpectedTranscriptTurnSessionPatch({
         appendedMessages,

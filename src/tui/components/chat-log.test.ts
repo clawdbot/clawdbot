@@ -1095,7 +1095,7 @@ describe("ChatLog", () => {
   it("re-keys a pending user in place without moving its position", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("local", "queued hello", 1_000);
+    chatLog.addPendingUser("local", "queued hello");
     chatLog.startAssistant("hi there", "r-accepted");
 
     expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
@@ -1107,29 +1107,62 @@ describe("ChatLog", () => {
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 
-  it("reconciles pending users against rebuilt history using timestamps", () => {
+  it("reconciles pending users against their persisted canonical run identity", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("run-1", "queued hello", 2_000);
+    chatLog.addPendingUser("run-1", "queued hello");
 
     expect(
       chatLog.reconcilePendingUsers([
-        { text: "queued hello", timestamp: 2_100 },
-        { text: "older", timestamp: 1_000 },
+        { text: "queued hello", runId: "run-1" },
+        { text: "older", runId: "another-run" },
       ]),
     ).toEqual(["run-1"]);
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 
-  it("reconciles pending users when the gateway clock is slightly behind the client", () => {
+  it("does not consume a pending prompt when another client persists identical text", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("run-1", "queued hello", 65_000);
+    chatLog.addPendingUser("run-1", "queued hello");
 
-    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", timestamp: 20_000 }])).toEqual([
+    expect(
+      chatLog.reconcilePendingUsers([{ text: "queued hello", runId: "another-client-run" }]),
+    ).toEqual([]);
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  it("does not adopt a same-text history row without persisted run ownership", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "queued hello");
+
+    expect(chatLog.reconcilePendingUsers([{ text: "queued hello" }])).toEqual([]);
+    expect(chatLog.countPendingUsers()).toBe(1);
+  });
+
+  it("adopts the canonical run even when persisted formatting changes the prompt text", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "  queued hello  ");
+
+    expect(chatLog.reconcilePendingUsers([{ text: "queued hello", runId: "run-1" }])).toEqual([
       "run-1",
     ]);
     expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("adopts only each independently persisted pending run", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingUser("run-1", "continue");
+    chatLog.addPendingUser("run-2", "continue");
+
+    expect(chatLog.reconcilePendingUsers([{ text: "continue", runId: "run-2" }])).toEqual([
+      "run-2",
+    ]);
+    expect(chatLog.countPendingUsers()).toBe(1);
+    expect(chatLog.dropPendingUser("run-1")).toBe(true);
   });
 
   it("dismisses a pending system notice by runId", () => {
@@ -1159,14 +1192,12 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
-  it("does not hide a new repeated prompt when only older history matches", () => {
+  it("does not hide a new repeated prompt when historical ownership is missing", () => {
     const chatLog = new ChatLog(40);
 
-    chatLog.addPendingUser("run-1", "continue", 5_000);
+    chatLog.addPendingUser("run-1", "continue");
 
-    expect(chatLog.reconcilePendingUsers([{ text: "continue", timestamp: -56_000 }])).toStrictEqual(
-      [],
-    );
+    expect(chatLog.reconcilePendingUsers([{ text: "continue" }])).toStrictEqual([]);
     expect(chatLog.countPendingUsers()).toBe(1);
   });
 });

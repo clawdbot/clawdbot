@@ -741,7 +741,13 @@ export async function syncSelectedSessionMessageSubscription(
     }
     if (!isCurrent()) {
       // Generation advances before awaiting, so only the newest lease can reach assignment below.
-      await state.sessions.unsubscribeMessages(subscribed).catch(() => undefined);
+      try {
+        await state.sessions.unsubscribeMessages(subscribed);
+      } catch {
+        // A rejected release still owns its live Gateway observer; retain the
+        // exact handle so the next sync can complete the original unsubscribe.
+        rememberPendingSessionMessageSubscriptionRelease(state, subscribed);
+      }
       return;
     }
     state.chatSessionMessageSubscriptionRequestedKey = nextKey;

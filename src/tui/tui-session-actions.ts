@@ -1,6 +1,5 @@
 // Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
@@ -113,11 +112,6 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
     left.displayName === right.displayName &&
     goalEquals(left.goal, right.goal)
   );
-}
-
-function extractMessageTimestamp(message: Record<string, unknown>): number | null {
-  const raw = message.timestamp;
-  return asDateTimestampMs(typeof raw === "string" ? Date.parse(raw) : raw) ?? null;
 }
 
 export function createSessionActions(context: SessionActionContext) {
@@ -547,7 +541,7 @@ export function createSessionActions(context: SessionActionContext) {
         }
       }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
-      const historyUsers: Array<{ text: string; timestamp?: number | null }> = [];
+      const historyUsers: Array<{ text: string; runId?: string }> = [];
       // An authoritative live prompt can arrive while history is in flight.
       // Preserve it only while this response still owns the same session generation.
       chatLog.clearAll({
@@ -576,11 +570,11 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
+            const liveUserMessage = readTuiSessionUserMessage({ message });
             historyUsers.push({
               text,
-              timestamp: extractMessageTimestamp(message),
+              ...(liveUserMessage?.runId ? { runId: liveUserMessage.runId } : {}),
             });
-            const liveUserMessage = readTuiSessionUserMessage({ message });
             if (liveUserMessage) {
               chatLog.addUser(text, {
                 messageId: liveUserMessage.messageId,

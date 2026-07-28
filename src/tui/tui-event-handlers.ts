@@ -1,17 +1,19 @@
 // Handles TUI keyboard, paste, backend, and command events.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
+  createSessionProjection,
+  hasSessionProjectionAcceptedFinal,
+  readSessionMessageIdentity,
+  reduceSessionProjection,
+} from "../../packages/gateway-client/src/session-projection.js";
+import {
   asString,
   extractTextFromMessage,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
 import { createTuiRunLifecycle } from "./tui-run-lifecycle.js";
-import {
-  matchesSelectedTuiSession,
-  readTuiSessionUserMessage,
-  readTuiTranscriptMessageSequence,
-} from "./tui-session-events.js";
+import { matchesSelectedTuiSession, readTuiSessionUserMessage } from "./tui-session-events.js";
 import { TuiSessionRunCoordinator } from "./tui-session-run-coordinator.js";
 import {
   clearPendingSubmit,
@@ -108,6 +110,12 @@ export function createEventHandlers(context: EventHandlerContext) {
     clearLocalBtwRunIds,
     localMode,
   } = context;
+  const currentProjectionScope = () => ({
+    sessionKey: state.currentSessionKey,
+    agentId: state.currentAgentId,
+    ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
+  });
+  let sessionProjection = createSessionProjection(currentProjectionScope());
   const runCoordinator = new TuiSessionRunCoordinator({
     state,
     loadHistory,
@@ -232,17 +240,91 @@ export function createEventHandlers(context: EventHandlerContext) {
       runCoordinator.deferHistoryRunEvent(evt);
       return;
     }
+    const projectionScope = currentProjectionScope();
+    if (
+      sessionProjection.scope.sessionKey !== projectionScope.sessionKey ||
+      sessionProjection.scope.agentId !== projectionScope.agentId ||
+      sessionProjection.scope.sessionId !== projectionScope.sessionId
+    ) {
+      sessionProjection = createSessionProjection(projectionScope);
+    }
+    const eventRecord = evt as ChatEvent & {
+      stopReason?: unknown;
+      errorKind?: unknown;
+      yielded?: unknown;
+    };
+    const messageRecord =
+      evt.message && typeof evt.message === "object" && !Array.isArray(evt.message)
+        ? (evt.message as Record<string, unknown>)
+        : null;
+    const stopReason =
+      typeof eventRecord.stopReason === "string"
+        ? eventRecord.stopReason
+        : typeof messageRecord?.stopReason === "string"
+          ? messageRecord.stopReason
+          : undefined;
+    const errorKind = typeof eventRecord.errorKind === "string" ? eventRecord.errorKind : undefined;
+    const previousProjectedRun = sessionProjection.runs[evt.runId];
+    if (evt.state === "delta") {
+      sessionProjection = reduceSessionProjection(sessionProjection, {
+        type: "runDelta",
+        runId: evt.runId,
+        ...(evt.message === undefined ? {} : { message: evt.message }),
+        scope: projectionScope,
+      });
+    } else {
+      const terminalStatus =
+        evt.state === "aborted"
+          ? "aborted"
+          : evt.state === "error"
+            ? errorKind === "timeout"
+              ? "timeout"
+              : "error"
+            : eventRecord.yielded === true && stopReason === "end_turn"
+              ? "yielded"
+              : stopReason === "error"
+                ? "error"
+                : "completed";
+      sessionProjection = reduceSessionProjection(sessionProjection, {
+        type: "runTerminal",
+        runId: evt.runId,
+        status: terminalStatus,
+        ...(evt.message === undefined ? {} : { message: evt.message }),
+        ...(stopReason === undefined ? {} : { stopReason }),
+        ...(errorKind === undefined ? {} : { errorKind }),
+        ...(evt.errorMessage === undefined ? {} : { errorMessage: evt.errorMessage }),
+        scope: projectionScope,
+      });
+    }
+    if (evt.state === "aborted" && previousProjectedRun?.status === "aborted") {
+      clearStaleStreamingIfNoTrackedRunRemains();
+      return;
+    }
     if (finalizedRuns.has(evt.runId)) {
       if (evt.state === "delta") {
         return;
       }
       if (evt.state === "error" && finalizedRunsWithDisplay.has(evt.runId)) {
+        const lateError = evt.errorMessage?.trim();
+        if (
+          lateError &&
+          !runCoordinator.liveTerminalErrorMessages.has(evt.runId) &&
+          sessionProjection.runs[evt.runId]?.errorMessage === lateError
+        ) {
+          // A completed reply remains authoritative; a later provider failure
+          // is one diagnostic and must not clear a newer run or replay the reply.
+          renderTerminalRunError({ runId: evt.runId, errorMessage: lateError });
+          tui.requestRender(true);
+          return;
+        }
         clearStaleStreamingIfNoTrackedRunRemains();
         return;
       }
       if (evt.state === "final") {
         const hasLateDisplayableFinal =
-          hasDisplayableFinalEvent(evt) && !finalizedRunsWithDisplay.has(evt.runId);
+          hasDisplayableFinalEvent(evt) &&
+          (!finalizedRunsWithDisplay.has(evt.runId) ||
+            !hasSessionProjectionAcceptedFinal(previousProjectedRun, evt.message));
         if (!hasLateDisplayableFinal) {
           clearStaleStreamingIfNoTrackedRunRemains();
           return;
@@ -415,6 +497,38 @@ export function createEventHandlers(context: EventHandlerContext) {
       return;
     }
 
+    if (evt.phase === "message") {
+      const changedMessage = evt as SessionChangedEvent & {
+        message?: unknown;
+        messageId?: unknown;
+        messageSeq?: unknown;
+      };
+      const matchesCurrentSessionId =
+        typeof evt.sessionId !== "string" ||
+        !state.currentSessionId ||
+        evt.sessionId === state.currentSessionId;
+      const hasConcreteMessageIdentity =
+        changedMessage.message !== undefined ||
+        (typeof changedMessage.messageId === "string" &&
+          changedMessage.messageId.trim().length > 0) ||
+        (typeof changedMessage.messageSeq === "number" &&
+          Number.isSafeInteger(changedMessage.messageSeq) &&
+          changedMessage.messageSeq > 0) ||
+        (typeof evt.runId === "string" && evt.runId.trim().length > 0) ||
+        (typeof evt.clientRunId === "string" && evt.clientRunId.trim().length > 0);
+      if (
+        !matchesSelectedTuiSession(state, evt, { requireAliasOwnership: true }) ||
+        !matchesCurrentSessionId ||
+        hasConcreteMessageIdentity
+      ) {
+        return;
+      }
+      // Legacy atomic batches expose no replayable message identity. Refresh
+      // their authoritative history without resetting the current run or stream.
+      queueHistoryReload();
+      return;
+    }
+
     const persistedRunId = evt.clientRunId || evt.runId;
     if (persistedRunId && (evt.phase === "end" || evt.phase === "error")) {
       runCoordinator.notePersistedRun(persistedRunId);
@@ -478,6 +592,10 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (typeof evt.updatedAt === "number" || evt.updatedAt === null) {
       state.sessionInfo.updatedAt = evt.updatedAt;
     }
+    sessionProjection = reduceSessionProjection(sessionProjection, {
+      type: "sessionReset",
+      scope: currentProjectionScope(),
+    });
     if (reloadingRunIds.size > 0) {
       queueHistoryReload(reloadingRunIds, finalizedRunIds, displayedRunIds);
     } else {
@@ -498,13 +616,7 @@ export function createEventHandlers(context: EventHandlerContext) {
 
     const liveUserMessage = readTuiSessionUserMessage(evt);
     if (liveUserMessage) {
-      const envelopeSequence = evt.messageSeq;
-      const messageSeq =
-        typeof envelopeSequence === "number" &&
-        Number.isSafeInteger(envelopeSequence) &&
-        envelopeSequence > 0
-          ? envelopeSequence
-          : readTuiTranscriptMessageSequence(evt.message);
+      const messageSeq = readSessionMessageIdentity(evt.message, evt)?.sequence ?? undefined;
       chatLog.addLiveUser(liveUserMessage.text, {
         messageId: liveUserMessage.messageId,
         ...(messageSeq !== undefined ? { messageSeq } : {}),

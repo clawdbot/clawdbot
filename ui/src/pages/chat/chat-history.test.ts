@@ -195,6 +195,51 @@ describe("syncSelectedSessionMessageSubscription", () => {
     expect(state.chatSessionMessageSubscriptionRequestedKey).toBe(subscribed.key);
     expect(state.chatSessionMessageSubscription).toBe(subscribed);
   });
+
+  it("retries a stale generation's rejected subscription release", async () => {
+    const stale = { key: "agent:main:stale", agentId: null };
+    const selected = { key: "agent:main:selected", agentId: null };
+    let resolveStale: (subscription: typeof stale) => void = () => undefined;
+    const staleSubscription = new Promise<typeof stale>((resolve) => {
+      resolveStale = resolve;
+    });
+    const unsubscribeMessages = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("stale release temporarily failed"))
+      .mockResolvedValueOnce(undefined);
+    const subscribeMessages = vi.fn(async (key: string) =>
+      key === stale.key ? await staleSubscription : selected,
+    );
+    const state = createState({ messages: [] }) as TestState & {
+      chatSessionMessageSubscriptionRequestedKey: string | null;
+      chatSessionMessageSubscription: typeof stale | null;
+    };
+    state.sessionKey = stale.key;
+    state.chatSessionMessageSubscriptionRequestedKey = null;
+    state.chatSessionMessageSubscription = null;
+    state.sessions = {
+      setModelOverride: vi.fn((_key: string, _value: string | null | undefined) => undefined),
+      subscribeMessages,
+      unsubscribeMessages,
+    };
+
+    const staleSync = syncSelectedSessionMessageSubscription(state as never);
+    await Promise.resolve();
+    state.sessionKey = selected.key;
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    resolveStale(stale);
+    await staleSync;
+
+    expect(state.chatSessionMessageSubscription).toBe(selected);
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(1, stale);
+
+    await syncSelectedSessionMessageSubscription(state as never);
+
+    expect(unsubscribeMessages).toHaveBeenNthCalledWith(2, stale);
+    expect(state.chatSessionMessageSubscription).toBe(selected);
+    expect(subscribeMessages).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("rewindChatHistory", () => {

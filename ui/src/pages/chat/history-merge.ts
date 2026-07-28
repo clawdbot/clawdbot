@@ -1,15 +1,19 @@
+import {
+  createSessionProjection,
+  projectLiveSessionMessage,
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+  reconcileSessionProjectionSnapshot,
+  type SessionProjectionScope,
+  type SessionProjectionState,
+} from "@openclaw/gateway-client/browser";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 
-type TranscriptMessageIdentity = {
-  role: string;
-  signature: string | null;
-  isImported: boolean;
-  externalSource: string | null;
-  id: string | null;
-  sequence: number | null;
-  idempotencyKey: string | null;
-};
+type TranscriptMessageIdentity = Pick<
+  NonNullable<ReturnType<typeof readSessionMessageIdentity>>,
+  "role" | "isImported" | "externalSource" | "id" | "sequence" | "idempotencyKey"
+> & { signature: string | null };
 
 type IndexedHistoryMessage = {
   index: number;
@@ -19,7 +23,89 @@ type IndexedHistoryMessage = {
 
 type HistoryMessageIndex = Map<string, IndexedHistoryMessage[]>;
 
-const liveAuthoritativeUserMessages = new WeakSet<object>();
+const chatSessionProjections = new WeakMap<object, SessionProjectionState>();
+const liveAuthoritativeUserProjections = new WeakMap<object, SessionProjectionState>();
+
+function markLocallyOptimisticProjectionEntries(
+  projection: SessionProjectionState,
+): SessionProjectionState {
+  let changed = false;
+  const entries = projection.entries.map((entry) => {
+    const pendingRunId = entry.identity?.runId;
+    if (
+      entry.pending ||
+      entry.live ||
+      !pendingRunId ||
+      !isLocallyOptimisticHistoryMessage(entry.message)
+    ) {
+      return entry;
+    }
+    changed = true;
+    return { ...entry, pending: true, pendingRunId };
+  });
+  return changed ? { ...projection, entries } : projection;
+}
+
+function createChatSessionProjection(
+  messages: readonly unknown[],
+  scope: SessionProjectionScope,
+): SessionProjectionState {
+  return markLocallyOptimisticProjectionEntries(createSessionProjection(scope, messages));
+}
+
+export function getChatSessionProjection(
+  owner: object,
+  messages: readonly unknown[] = [],
+  scope: SessionProjectionScope = {},
+): SessionProjectionState {
+  const current = chatSessionProjections.get(owner);
+  const scopeChanged =
+    current !== undefined &&
+    (
+      ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
+    ).some((key) => {
+      if (!Object.hasOwn(scope, key)) {
+        return false;
+      }
+      const previous = current.scope[key];
+      const next = scope[key];
+      // An explicitly cleared leaf leaves the old branch; an omitted scope
+      // field remains a wildcard for run-only and split-pane consumers.
+      return previous !== undefined && previous !== next;
+    });
+  if (!current || scopeChanged) {
+    const projection = createChatSessionProjection(messages, scope);
+    chatSessionProjections.set(owner, projection);
+    return projection;
+  }
+  const bindsScope = (
+    ["sessionKey", "sessionId", "agentId", "lifecycleRevision", "activeLeafEntryId"] as const
+  ).some(
+    (key) =>
+      Object.hasOwn(scope, key) && current.scope[key] === undefined && scope[key] !== undefined,
+  );
+  const scopedProjection = bindsScope
+    ? { ...current, scope: { ...current.scope, ...scope } }
+    : current;
+  const currentMessagesMatch =
+    scopedProjection.messages.length === messages.length &&
+    scopedProjection.messages.every((message, index) => message === messages[index]);
+  if (currentMessagesMatch) {
+    if (scopedProjection !== current) {
+      chatSessionProjections.set(owner, scopedProjection);
+    }
+    return scopedProjection;
+  }
+  const projection = markLocallyOptimisticProjectionEntries(
+    reconcileSessionProjectionSnapshot(scopedProjection, messages, scope),
+  );
+  chatSessionProjections.set(owner, projection);
+  return projection;
+}
+
+export function setChatSessionProjection(owner: object, projection: SessionProjectionState): void {
+  chatSessionProjections.set(owner, projection);
+}
 
 function readTranscriptMetadata(message: unknown): Record<string, unknown> | null {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
@@ -31,14 +117,6 @@ function readTranscriptMetadata(message: unknown): Record<string, unknown> | nul
     : null;
 }
 
-function readMetadataString(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim();
-  return normalized || null;
-}
-
 function hasTranscriptMeta(message: unknown): boolean {
   const metadata = readTranscriptMetadata(message);
   // An idempotency marker alone identifies a locally materialized queued turn;
@@ -47,8 +125,7 @@ function hasTranscriptMeta(message: unknown): boolean {
 }
 
 export function readTranscriptSequence(message: unknown): number | null {
-  const seq = readTranscriptMetadata(message)?.seq;
-  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : null;
+  return readSessionMessageSequence(message);
 }
 
 export function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
@@ -80,28 +157,15 @@ export function messageDisplaySignature(message: unknown): string | null {
 }
 
 function readTranscriptMessageIdentity(message: unknown): TranscriptMessageIdentity {
-  const metadata = readTranscriptMetadata(message);
-  const externalId = readMetadataString(metadata?.externalId);
-  const importedFrom = readMetadataString(metadata?.importedFrom);
-  const cliSessionId = readMetadataString(metadata?.cliSessionId);
-  const isImported = Boolean(externalId || importedFrom || cliSessionId);
-  // Imported ids are source-local. A partial source tuple cannot prove that
-  // two imports came from the same provider and CLI session.
-  const externalSource =
-    externalId && importedFrom && cliSessionId
-      ? JSON.stringify([importedFrom, cliSessionId, externalId])
-      : null;
+  const identity = readSessionMessageIdentity(message);
   return {
-    role:
-      message && typeof message === "object"
-        ? normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role)
-        : "",
+    role: identity?.role ?? "",
     signature: messageDisplaySignature(message),
-    isImported,
-    externalSource,
-    id: readMetadataString(metadata?.id),
-    sequence: readTranscriptSequence(message),
-    idempotencyKey: readMetadataString(metadata?.idempotencyKey),
+    isImported: identity?.isImported ?? false,
+    externalSource: identity?.externalSource ?? null,
+    id: identity?.id ?? null,
+    sequence: identity?.sequence ?? null,
+    idempotencyKey: identity?.idempotencyKey ?? null,
   };
 }
 
@@ -226,13 +290,20 @@ function findTranscriptHistoryAnchor(
   return sameInstance ?? (entries.length === 1 ? (entries[0] ?? null) : null);
 }
 
-export function rememberLiveAuthoritativeUserMessage(message: unknown): void {
+export function rememberLiveAuthoritativeUserMessage(
+  message: unknown,
+  projection?: SessionProjectionState,
+): void {
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return;
   }
   const identity = readTranscriptMessageIdentity(message);
   if (identity.role === "user" && (identity.id !== null || identity.sequence !== null)) {
-    liveAuthoritativeUserMessages.add(message);
+    const liveProjection =
+      projection ?? projectLiveSessionMessage(createSessionProjection(), message);
+    if (liveProjection.entries.some((entry) => entry.live && entry.message === message)) {
+      liveAuthoritativeUserProjections.set(message, liveProjection);
+    }
   }
 }
 
@@ -247,7 +318,9 @@ export function preserveLiveAuthoritativeUserMessages(
     if (
       !message ||
       typeof message !== "object" ||
-      !liveAuthoritativeUserMessages.has(message) ||
+      !liveAuthoritativeUserProjections
+        .get(message)
+        ?.entries.some((entry) => entry.live && entry.message === message) ||
       shouldHideMessage(message)
     ) {
       continue;

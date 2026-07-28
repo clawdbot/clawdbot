@@ -2150,6 +2150,74 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("keeps identical user prompts separate when canonical transcript identities differ", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: {
+            id: "canonical-web-user",
+            idempotencyKey: "web-same-text-run:user",
+            seq: 1,
+          },
+          role: "user",
+          content: [{ type: "text", text: "Both clients independently sent the same prompt." }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: {
+            id: "canonical-tui-user",
+            idempotencyKey: "tui-same-text-run:user",
+            seq: 2,
+          },
+          role: "user",
+          content: [{ type: "text", text: "Both clients independently sent the same prompt." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(messageRecord(groupAt(groups, 0), 0)["__openclaw"]).toMatchObject({
+      id: "canonical-web-user",
+    });
+    expect(messageRecord(groupAt(groups, 0), 1)["__openclaw"]).toMatchObject({
+      id: "canonical-tui-user",
+    });
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+  });
+
+  it("collapses a replay of the same canonical user prompt", () => {
+    const metadata = {
+      id: "canonical-replayed-user",
+      idempotencyKey: "replayed-user-run:user",
+      seq: 1,
+    };
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: metadata,
+          role: "user",
+          content: [{ type: "text", text: "This prompt was delivered twice." }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: { ...metadata },
+          role: "user",
+          content: [{ type: "text", text: "This prompt was delivered twice." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).role).toBe("user");
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBe(2);
+  });
+
   it("keeps same-id user relay copies separate so sender identity is preserved", () => {
     const groups = messageGroups({
       messages: [
