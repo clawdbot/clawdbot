@@ -149,11 +149,13 @@ describe("createCurrentDmRecoveryHost", () => {
 
   it("accepts the semantic final only after that exact payload is delivered", async () => {
     const finalOutcome = deferredOutcome();
+    const markFinalAccepted = vi.fn(async () => undefined);
+    const markError = vi.fn(async () => undefined);
     const coordinator: CurrentDmRecoveryCoordinator = {
       noteActivity: vi.fn(async () => undefined),
-      markFinalAccepted: vi.fn(async () => undefined),
+      markFinalAccepted,
       cancel: vi.fn(async () => undefined),
-      markError: vi.fn(async () => undefined),
+      markError,
     };
     const captureDelivery = vi.fn(() => finalOutcome);
     const onSemanticFinalOwned = vi.fn();
@@ -175,25 +177,28 @@ describe("createCurrentDmRecoveryHost", () => {
     expect(onSemanticFinalOwned).toHaveBeenCalledTimes(1);
     expect(host?.ownsSemanticFinal(payload)).toBe(true);
     expect(host?.ownsSemanticFinal({ text: "different final" })).toBe(false);
-    expect(coordinator.markFinalAccepted).not.toHaveBeenCalled();
+    expect(markFinalAccepted).not.toHaveBeenCalled();
     await flushPromises();
 
     finalOutcome.resolve("delivered");
 
     expect(captureDelivery).toHaveBeenCalledWith(payload);
-    await vi.waitFor(() => expect(coordinator.markFinalAccepted).toHaveBeenCalledTimes(1));
-    expect(coordinator.markError).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(markFinalAccepted).toHaveBeenCalledTimes(1));
+    expect(markError).not.toHaveBeenCalled();
   });
 
   it.each(["cancelled", "failed-before-deliver", "failed-deliver"] as const)(
     "does not accept a semantic final that settles as %s",
     async (deliveryOutcome) => {
       const finalOutcome = deferredOutcome();
+      const markFinalAccepted = vi.fn(async () => undefined);
+      const cancel = vi.fn(async () => undefined);
+      const markError = vi.fn(async () => undefined);
       const coordinator: CurrentDmRecoveryCoordinator = {
         noteActivity: vi.fn(async () => undefined),
-        markFinalAccepted: vi.fn(async () => undefined),
-        cancel: vi.fn(async () => undefined),
-        markError: vi.fn(async () => undefined),
+        markFinalAccepted,
+        cancel,
+        markError,
       };
       const host = createCurrentDmRecoveryHost({
         context: createContext(),
@@ -212,11 +217,11 @@ describe("createCurrentDmRecoveryHost", () => {
       await flushPromises();
       finalOutcome.resolve(deliveryOutcome);
 
-      expect(coordinator.markFinalAccepted).not.toHaveBeenCalled();
+      expect(markFinalAccepted).not.toHaveBeenCalled();
       if (deliveryOutcome === "cancelled") {
-        await vi.waitFor(() => expect(coordinator.cancel).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(cancel).toHaveBeenCalledTimes(1));
       } else {
-        await vi.waitFor(() => expect(coordinator.markError).toHaveBeenCalledTimes(1));
+        await vi.waitFor(() => expect(markError).toHaveBeenCalledTimes(1));
       }
     },
   );

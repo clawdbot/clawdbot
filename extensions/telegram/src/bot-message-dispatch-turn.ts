@@ -156,7 +156,9 @@ export async function runTelegramDispatchTurn(params: {
               applyCurrentDmRecoveryBeforeDeliver(recovery, payload, info),
             onBeforeDeliverCancelled: params.reply.onBeforeDeliverCancelled,
             onSkip: params.reply.onSkip,
-            onDispatcherReady: recovery?.onDispatcherReady,
+            onDispatcherReady: recovery
+              ? (dispatcher) => recovery.onDispatcherReady(dispatcher)
+              : undefined,
           },
           replyOptions: {
             skillFilter: context.skillFilter,
@@ -175,7 +177,7 @@ export async function runTelegramDispatchTurn(params: {
             queuedDeliveryCorrelations: isRoomEvent
               ? [{ begin: beginDeliveryCorrelation }]
               : undefined,
-            onAgentRunStart: recovery?.onAgentRunStart,
+            onAgentRunStart: recovery ? (runId) => recovery.onAgentRunStart(runId) : undefined,
             suppressTyping: isRoomEvent,
             onPartialReply:
               params.draft.answerLane.stream || params.draft.reasoningLane.stream
