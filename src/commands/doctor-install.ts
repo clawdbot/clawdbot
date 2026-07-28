@@ -44,7 +44,7 @@ export function noteSourceInstallIssues(root: string | null) {
 }
 
 const SELF_LINK_RECOVERY =
-  "Inspect the diff: git diff package.json pnpm-workspace.yaml. Manually revert only the self-referential link: lines, then reinstall: pnpm install. Never run pnpm link/npm link inside a deployment checkout.";
+  "Restore the manifests and reinstall: git checkout -- package.json pnpm-workspace.yaml && pnpm install. Never run pnpm link/npm link inside a deployment checkout.";
 
 /** Detects self-referential `openclaw: link:` damage left by link commands run inside a source checkout. */
 function detectSelfLinkWarnings(root: string): string[] {

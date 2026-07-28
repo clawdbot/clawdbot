@@ -49,4 +49,64 @@ describe("noteSourceInstallIssues", () => {
       );
     });
   });
+
+  it("warns when package.json gained a self-referential openclaw link dependency", async () => {
+    await withTempDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
+      await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
+      await writeFile(root, "src/entry.ts", "export {};\n");
+      await writeFile(
+        root,
+        "package.json",
+        JSON.stringify({ name: "openclaw", dependencies: { openclaw: "link:" } }),
+      );
+
+      noteSourceInstallIssues(root);
+
+      const output = vi
+        .mocked(note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+      expect(output).toContain('self-referential "openclaw": "link:" dependency');
+      expect(output).toContain("git checkout -- package.json pnpm-workspace.yaml && pnpm install");
+    });
+  });
+
+  it("warns when pnpm-workspace.yaml gained a self-referential openclaw link entry", async () => {
+    await withTempDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
+      await writeFile(
+        root,
+        "pnpm-workspace.yaml",
+        "packages:\n  - .\noverrides:\n  openclaw: link:\n",
+      );
+      await writeFile(root, "src/entry.ts", "export {};\n");
+      await writeFile(root, "package.json", JSON.stringify({ name: "openclaw" }));
+
+      noteSourceInstallIssues(root);
+
+      const output = vi
+        .mocked(note)
+        .mock.calls.map(([message]) => String(message))
+        .join("\n");
+      expect(output).toContain('self-referential "openclaw: link:" entry');
+      expect(output).toContain("git checkout -- package.json pnpm-workspace.yaml && pnpm install");
+    });
+  });
+
+  it("stays silent for a healthy source checkout without self-links", async () => {
+    await withTempDir({ prefix: "openclaw-doctor-install-" }, async (root) => {
+      await fs.mkdir(path.join(root, "node_modules", ".pnpm"), { recursive: true });
+      await writeFile(root, "node_modules/.bin/tsx", "#!/bin/sh\n");
+      await writeFile(root, "pnpm-workspace.yaml", "packages:\n  - .\n");
+      await writeFile(root, "src/entry.ts", "export {};\n");
+      await writeFile(
+        root,
+        "package.json",
+        JSON.stringify({ name: "openclaw", dependencies: { react: "^19.0.0" } }),
+      );
+
+      noteSourceInstallIssues(root);
+
+      expect(note).not.toHaveBeenCalled();
+    });
+  });
 });
