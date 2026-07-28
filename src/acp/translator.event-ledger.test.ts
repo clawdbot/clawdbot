@@ -101,7 +101,8 @@ async function waitForChatSend(requestMock: { mock: { calls: Array<readonly unkn
 
 describe("ACP translator event ledger replay", () => {
   it("restores bridge routing when resuming after a translator restart", async () => {
-    const eventLedger = createInMemoryAcpEventLedger({ maxSessions: 1 });
+    let now = 1000;
+    const eventLedger = createInMemoryAcpEventLedger({ maxSessions: 1, now: () => now++ });
     const firstSessionStore = createInMemorySessionStore();
     const firstAgent = new AcpGatewayAgent(
       createAcpConnection(),
