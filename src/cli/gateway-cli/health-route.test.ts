@@ -36,7 +36,7 @@ describe("runGatewayHealthJsonRoute", () => {
     );
 
     expect(callGateway).toHaveBeenCalledWith("health", { json: true, timeout: "10000" });
-    expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true, durationMs: 6 });
+    expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true, durationMs: 6 }, 2);
     expect(readBestEffortConfig).not.toHaveBeenCalled();
     expect(emitReachableGatewayAuthDiagnostic).not.toHaveBeenCalled();
     expect(formatGatewayClientRequestErrorJson).not.toHaveBeenCalled();
@@ -86,7 +86,7 @@ describe("runGatewayHealthJsonRoute", () => {
       formatGatewayTransportErrorJson: vi.fn(() => payload) as never,
     });
 
-    expect(runtime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload, 2);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 });
