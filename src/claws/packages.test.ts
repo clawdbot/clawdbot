@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installClawPackages } from "./packages.js";
+import { installClawPackages, resolveClawPluginSetupRequirements } from "./packages.js";
 import type { PersistedClawPackageRef } from "./provenance.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
@@ -115,6 +115,40 @@ const probePlugin = vi.fn(async ({ spec }: { spec: string }) => {
       integrity,
     },
   };
+});
+
+describe("resolveClawPluginSetupRequirements", () => {
+  const setup = {
+    providers: [
+      {
+        id: "evidence",
+        authMethods: ["api-key"],
+        envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
+      },
+    ],
+  };
+
+  it("reports plugin setup when no declared environment credential is present", () => {
+    expect(resolveClawPluginSetupRequirements({ pluginId: "evidence", setup, env: {} })).toEqual([
+      {
+        kind: "plugin-setup",
+        plugin: "evidence",
+        provider: "evidence",
+        envVars: ["EVIDENCE_API_KEY", "EVIDENCE_TOKEN"],
+        authMethods: ["api-key"],
+      },
+    ]);
+  });
+
+  it("accepts any declared environment credential", () => {
+    expect(
+      resolveClawPluginSetupRequirements({
+        pluginId: "evidence",
+        setup,
+        env: { EVIDENCE_TOKEN: "configured" },
+      }),
+    ).toEqual([]);
+  });
 });
 
 describe("installClawPackages", () => {

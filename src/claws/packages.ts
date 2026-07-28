@@ -2,6 +2,7 @@ import { runPluginInstallCommand } from "../cli/plugins-install-command.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import type { PluginManifestSetup } from "../plugins/manifest.js";
 import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
@@ -21,7 +22,13 @@ import {
   updateClawPackageRefStatus,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type { ClawAddPlan, ClawAddPlanAction, ClawPackage, ResolvedClawPackage } from "./types.js";
+import type {
+  ClawAddPlan,
+  ClawAddPlanAction,
+  ClawLocalPrerequisite,
+  ClawPackage,
+  ResolvedClawPackage,
+} from "./types.js";
 
 export class ClawPackageInstallError extends Error {
   constructor(
@@ -122,6 +129,7 @@ type ClawPackagePreflightResult =
       integrity: string;
       installId?: string;
       warning?: string;
+      requirements?: ClawLocalPrerequisite[];
     }
   | {
       ok: false;
@@ -133,9 +141,32 @@ type ClawPackagePreflightResult =
       warning?: string;
     };
 
+export function resolveClawPluginSetupRequirements(params: {
+  pluginId: string;
+  setup?: PluginManifestSetup;
+  env: NodeJS.ProcessEnv;
+}): ClawLocalPrerequisite[] {
+  return (params.setup?.providers ?? []).flatMap((provider) => {
+    const envVars = provider.envVars ?? [];
+    if (envVars.length === 0 || envVars.some((name) => Boolean(params.env[name]?.trim()))) {
+      return [];
+    }
+    return [
+      {
+        kind: "plugin-setup" as const,
+        plugin: params.pluginId,
+        provider: provider.id,
+        envVars,
+        authMethods: provider.authMethods ?? [],
+      },
+    ];
+  });
+}
+
 export async function preflightClawPackage(
   pkg: ClawPackage,
   workspaceDir: string,
+  options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<ClawPackagePreflightResult> {
   if (pkg.kind === "skill") {
     const result = await preflightSkillFromClawHub({
@@ -199,11 +230,17 @@ export async function preflightClawPackage(
       message: `Plugin ${pkg.ref}@${pkg.version} is installed as ${result.installedId} with integrity ${result.installedIntegrity ?? "unknown"}, expected ${probe.pluginId} with ${integrity}.`,
     };
   }
+  const requirements = resolveClawPluginSetupRequirements({
+    pluginId: probe.pluginId,
+    setup: probe.setup,
+    env: options.env ?? process.env,
+  });
   return {
     ok: true,
     action: result.action,
     integrity,
     installId: probe.pluginId,
+    ...(requirements.length > 0 ? { requirements } : {}),
     ...(probe.warning ? { warning: probe.warning } : {}),
   };
 }
