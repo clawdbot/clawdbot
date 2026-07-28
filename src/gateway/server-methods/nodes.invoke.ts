@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -13,11 +9,7 @@ import {
 import { isAdminOnlyNodeInvokeCommand } from "../../infra/node-commands.js";
 import { captureNodePairingGeneration } from "../../infra/node-pairing-state.js";
 import { isForbiddenBrowserProxyMutation } from "../node-browser-proxy-policy.js";
-import {
-  isForegroundRestrictedPluginNodeCommand,
-  isNodeCommandAllowed,
-  resolveNodeCommandAllowlist,
-} from "../node-command-policy.js";
+import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
@@ -38,6 +30,11 @@ import {
   respondUnavailableOnThrow,
   safeParseJson,
 } from "./nodes.helpers.js";
+import {
+  awaitNodeInvokeWithinDeadline,
+  NODE_INVOKE_DEADLINE_EXPIRED,
+} from "./nodes.invoke-deadline.js";
+import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
 import {
   isNodePairingWorkCurrent,
@@ -58,81 +55,7 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
-const NODE_WAKE_INVOKE_DEADLINE_EXPIRED = Symbol("node wake invoke deadline expired");
 const talkPttEventSeqBySessionId = new Map<string, number>();
-
-async function awaitNodeWakeWithinInvokeDeadline<T>(
-  operation: () => Promise<T>,
-  deadlineAtMs: number | undefined,
-): Promise<T | typeof NODE_WAKE_INVOKE_DEADLINE_EXPIRED> {
-  if (deadlineAtMs === undefined) {
-    return await operation();
-  }
-  const remainingMs = Math.max(0, deadlineAtMs - Date.now());
-  if (remainingMs === 0) {
-    return NODE_WAKE_INVOKE_DEADLINE_EXPIRED;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    // Arm the timer before plugin or push code can synchronously consume the
-    // budget; Node timer callbacks alone cannot establish absolute deadlines.
-    const deadline = new Promise<typeof NODE_WAKE_INVOKE_DEADLINE_EXPIRED>((resolve) => {
-      // Node silently overflows long timers; reschedule against the absolute
-      // deadline so a valid long request never expires or disappears early.
-      const waitForDeadline = () => {
-        const remainingMs = Math.max(0, deadlineAtMs - Date.now());
-        if (remainingMs === 0) {
-          resolve(NODE_WAKE_INVOKE_DEADLINE_EXPIRED);
-          return;
-        }
-        timer = setTimeout(waitForDeadline, Math.min(remainingMs, MAX_TIMER_TIMEOUT_MS));
-      };
-      waitForDeadline();
-    });
-    return await Promise.race([
-      deadline,
-      operation().then((result) =>
-        Date.now() >= deadlineAtMs ? NODE_WAKE_INVOKE_DEADLINE_EXPIRED : result,
-      ),
-    ]);
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-  }
-}
-
-function isForegroundRestrictedIosCommand(command: string): boolean {
-  return (
-    isForegroundRestrictedPluginNodeCommand(command) ||
-    command.startsWith("camera.") ||
-    command.startsWith("screen.") ||
-    command.startsWith("talk.")
-  );
-}
-
-function shouldQueueAsPendingForegroundAction(params: {
-  platform?: string;
-  command: string;
-  error: unknown;
-}): boolean {
-  // iOS cannot run camera/screen/Talk commands in the background. Queue only
-  // those foreground-only commands when the node explicitly reports that state.
-  const platform = normalizeLowercaseStringOrEmpty(params.platform);
-  if (!platform.startsWith("ios") && !platform.startsWith("ipados")) {
-    return false;
-  }
-  if (!isForegroundRestrictedIosCommand(params.command)) {
-    return false;
-  }
-  const error =
-    params.error && typeof params.error === "object"
-      ? (params.error as { code?: unknown; message?: unknown })
-      : null;
-  const code = normalizeOptionalString(error?.code)?.toUpperCase() ?? "";
-  const message = normalizeOptionalString(error?.message)?.toUpperCase() ?? "";
-  return code === "NODE_BACKGROUND_UNAVAILABLE" || message.includes("BACKGROUND_UNAVAILABLE");
-}
 
 function emitTalkPttNodeEvent(params: {
   context: Pick<GatewayRequestContext, "broadcast">;
@@ -297,11 +220,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       return true;
     };
     await respondUnavailableOnThrow(respond, async () => {
-      const generation = await awaitNodeWakeWithinInvokeDeadline(
+      const generation = await awaitNodeInvokeWithinDeadline(
         () => captureNodePairingGeneration(nodeId),
         invokeDeadlineAtMs,
       );
-      if (generation === NODE_WAKE_INVOKE_DEADLINE_EXPIRED) {
+      if (generation === NODE_INVOKE_DEADLINE_EXPIRED) {
         respondIfInvokeExpired();
         return;
       }
@@ -312,11 +235,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
       try {
         const continuePairingWork = async (): Promise<boolean> => {
-          const pairingCurrent = await awaitNodeWakeWithinInvokeDeadline(
+          const pairingCurrent = await awaitNodeInvokeWithinDeadline(
             () => isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
             invokeDeadlineAtMs,
           );
-          if (pairingCurrent === NODE_WAKE_INVOKE_DEADLINE_EXPIRED) {
+          if (pairingCurrent === NODE_INVOKE_DEADLINE_EXPIRED) {
             respondIfInvokeExpired();
             return false;
           }
@@ -344,7 +267,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
 
           // Wake attempts can be shared; expire this caller without aborting a
           // push that another live invocation still owns.
-          const wake = await awaitNodeWakeWithinInvokeDeadline(
+          const wake = await awaitNodeInvokeWithinDeadline(
             () =>
               maybeWakeNodeWithApns(nodeId, {
                 cfg,
@@ -353,7 +276,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               }),
             invokeDeadlineAtMs,
           );
-          if (wake === NODE_WAKE_INVOKE_DEADLINE_EXPIRED) {
+          if (wake === NODE_INVOKE_DEADLINE_EXPIRED) {
             respondIfInvokeExpired();
             return;
           }
@@ -393,7 +316,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
           );
           if (!nodeSession && wake.available) {
-            const retryWake = await awaitNodeWakeWithinInvokeDeadline(
+            const retryWake = await awaitNodeInvokeWithinDeadline(
               () =>
                 maybeWakeNodeWithApns(nodeId, {
                   force: true,
@@ -403,7 +326,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 }),
               invokeDeadlineAtMs,
             );
-            if (retryWake === NODE_WAKE_INVOKE_DEADLINE_EXPIRED) {
+            if (retryWake === NODE_INVOKE_DEADLINE_EXPIRED) {
               respondIfInvokeExpired();
               return;
             }
@@ -448,7 +371,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               return;
             }
             const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-            const nudge = await awaitNodeWakeWithinInvokeDeadline(
+            const nudge = await awaitNodeInvokeWithinDeadline(
               () =>
                 maybeSendNodeWakeNudge(nodeId, {
                   cfg,
@@ -457,7 +380,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 }),
               invokeDeadlineAtMs,
             );
-            if (nudge === NODE_WAKE_INVOKE_DEADLINE_EXPIRED) {
+            if (nudge === NODE_INVOKE_DEADLINE_EXPIRED) {
               respondIfInvokeExpired();
               return;
             }
@@ -538,7 +461,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         if (respondIfInvokeExpired()) {
           return;
         }
-        const policyResult = await awaitNodeWakeWithinInvokeDeadline(
+        const policyResult = await awaitNodeInvokeWithinDeadline(
           () =>
             applyPluginNodeInvokePolicy({
               context,
@@ -566,7 +489,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             }),
           invokeDeadlineAtMs,
         );
-        if (policyResult === NODE_WAKE_INVOKE_DEADLINE_EXPIRED) {
+        if (policyResult === NODE_INVOKE_DEADLINE_EXPIRED) {
           respondIfInvokeExpired(true);
           return;
         }
