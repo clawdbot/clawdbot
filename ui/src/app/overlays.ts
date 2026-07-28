@@ -33,7 +33,7 @@ import {
   type ExecApprovalRequest,
 } from "./exec-approval.ts";
 import type { ApplicationGateway } from "./gateway.ts";
-import { hasOperatorApprovalsAccess } from "./operator-access.ts";
+import { readGatewayOperatorAccess } from "./operator-access.ts";
 import {
   isPendingUpdateHandoffSentinel,
   readUpdateAvailable,
@@ -87,11 +87,6 @@ function isGatewayEvent(value: unknown): value is GatewayEventFrame {
   return Boolean(value && typeof value === "object" && "event" in value);
 }
 
-function canReviewGatewayApprovals(snapshot: ApplicationGateway["snapshot"]): boolean {
-  const auth = snapshot.hello?.auth;
-  return !auth || hasOperatorApprovalsAccess(auth);
-}
-
 type UpdateVerificationWait = {
   timer: ReturnType<typeof globalThis.setTimeout>;
   resolve: (active: boolean) => void;
@@ -128,7 +123,10 @@ export function createApplicationOverlays(
   let activeClient = gateway.snapshot.client;
   let connectedSource: NonNullable<typeof activeClient> | null = null; // Retries start a new source epoch.
   let connectedEpoch = 0;
-  let approvalsAccess = canReviewGatewayApprovals(gateway.snapshot);
+  const initialAccess = readGatewayOperatorAccess(gateway.snapshot);
+  let adminAccess = initialAccess.canAdmin;
+  let approvalsAccess = initialAccess.canReviewApprovals;
+  let pairingAccess = initialAccess.canPair;
   let approvalAccessGeneration = 0;
   let pendingUpdateExpectedVersion: string | null = null;
   let pendingUpdateHandoff = false;
@@ -139,6 +137,7 @@ export function createApplicationOverlays(
   let approvalDecision: {
     client: NonNullable<typeof activeClient>;
     epoch: number;
+    accessGeneration: number;
     id: string;
   } | null = null;
   const devicePairSetupState = createDevicePairSetupState({
@@ -202,7 +201,9 @@ export function createApplicationOverlays(
       !client ||
       gateway.snapshot.phase !== "connected" ||
       disposed ||
-      !devicePairSetupState.devicePairSetupOpen
+      !devicePairSetupState.devicePairSetupOpen ||
+      !pairingAccess ||
+      !readGatewayOperatorAccess(gateway.snapshot).canPair
     ) {
       return;
     }
@@ -218,7 +219,9 @@ export function createApplicationOverlays(
       generation !== devicePairPendingCountGeneration ||
       gateway.snapshot.client !== client ||
       gateway.snapshot.phase !== "connected" ||
-      !devicePairSetupState.devicePairSetupOpen
+      !devicePairSetupState.devicePairSetupOpen ||
+      !pairingAccess ||
+      !readGatewayOperatorAccess(gateway.snapshot).canPair
     ) {
       return;
     }
@@ -234,7 +237,7 @@ export function createApplicationOverlays(
     if (
       !approvalsAccess ||
       accessGeneration !== approvalAccessGeneration ||
-      !canReviewGatewayApprovals(gateway.snapshot)
+      !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
     ) {
       return;
     }
@@ -244,7 +247,7 @@ export function createApplicationOverlays(
         epoch === connectedEpoch &&
         accessGeneration === approvalAccessGeneration &&
         approvalsAccess &&
-        canReviewGatewayApprovals(gateway.snapshot) &&
+        readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
         isCurrentClient(client),
     });
     if (applied && !disposed) {
@@ -377,11 +380,31 @@ export function createApplicationOverlays(
     const connected = next.phase === "connected";
     const nextConnectedSource = connected ? next.client : null;
     const connectedSourceChanged = connectedSource !== nextConnectedSource;
-    const nextApprovalsAccess = canReviewGatewayApprovals(next);
+    const nextAccess = readGatewayOperatorAccess(next);
+    const nextApprovalsAccess = nextAccess.canReviewApprovals;
     const approvalAccessChanged = approvalsAccess !== nextApprovalsAccess;
     approvalsAccess = nextApprovalsAccess;
     if (approvalAccessChanged) {
       approvalAccessGeneration += 1;
+    }
+    if (adminAccess !== nextAccess.canAdmin) {
+      adminAccess = nextAccess.canAdmin;
+      if (!adminAccess) {
+        // Setup codes are admin-only bearer credentials. Closing retires the
+        // setup owner's request token before a same-client response can publish.
+        closeDevicePairSetupState(devicePairSetupState);
+        devicePairPendingCountGeneration += 1;
+        devicePairSetupState.pendingCount = 0;
+        updateRunGeneration += 1;
+        snapshot = { ...snapshot, updateRunning: false };
+      }
+    }
+    if (pairingAccess !== nextAccess.canPair) {
+      pairingAccess = nextAccess.canPair;
+      devicePairPendingCountGeneration += 1;
+      if (!pairingAccess) {
+        devicePairSetupState.pendingCount = 0;
+      }
     }
     activeClient = next.client;
     connectedSource = nextConnectedSource;
@@ -461,7 +484,7 @@ export function createApplicationOverlays(
       publish();
       return;
     }
-    if (!approvalsAccess || !canReviewGatewayApprovals(gateway.snapshot)) {
+    if (!approvalsAccess || !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals) {
       return;
     }
     const requestedApproval = parseApprovalRequestedEvent(event.event, event.payload);
@@ -494,7 +517,13 @@ export function createApplicationOverlays(
     },
     async runUpdate() {
       const client = gateway.snapshot.client;
-      if (!client || gateway.snapshot.phase !== "connected" || disposed || snapshot.updateRunning) {
+      if (
+        !client ||
+        gateway.snapshot.phase !== "connected" ||
+        disposed ||
+        snapshot.updateRunning ||
+        !readGatewayOperatorAccess(gateway.snapshot).canAdmin
+      ) {
         return;
       }
       const generation = ++updateRunGeneration;
@@ -505,7 +534,11 @@ export function createApplicationOverlays(
         // into the runtime-config capability); this barrier drains writes
         // already in flight so none can commit or restart mid-install.
         await hooks.drainConfigWrites?.();
-        if (disposed || generation !== updateRunGeneration) {
+        if (
+          disposed ||
+          generation !== updateRunGeneration ||
+          !readGatewayOperatorAccess(gateway.snapshot).canAdmin
+        ) {
           return;
         }
         const response = await client.request<UpdateRunResponse>("update.run", {});
@@ -587,16 +620,30 @@ export function createApplicationOverlays(
         ? promptState.execApprovalQueue.find((entry) => entry.id === approvalId)
         : promptState.execApprovalQueue[0];
       const client = gateway.snapshot.client;
-      if (!active || !client || promptState.execApprovalBusy || disposed) {
+      if (
+        !active ||
+        !client ||
+        promptState.execApprovalBusy ||
+        disposed ||
+        gateway.snapshot.phase !== "connected" ||
+        !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals
+      ) {
         return;
       }
       promptState.execApprovalBusy = true;
       promptState.execApprovalErrors.delete(active.id);
-      const operation = { client, epoch: connectedEpoch, id: active.id };
+      const operation = {
+        client,
+        epoch: connectedEpoch,
+        accessGeneration: approvalAccessGeneration,
+        id: active.id,
+      };
       approvalDecision = operation;
       const isCurrentOperation = () =>
         approvalDecision === operation &&
         operation.epoch === connectedEpoch &&
+        operation.accessGeneration === approvalAccessGeneration &&
+        readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
         isCurrentClient(operation.client);
       publish();
       try {
@@ -638,7 +685,8 @@ export function createApplicationOverlays(
       }
     },
     async openDevicePairSetup() {
-      if (disposed) {
+      const access = readGatewayOperatorAccess(gateway.snapshot);
+      if (disposed || (!access.canAdmin && !access.canPair)) {
         return;
       }
       devicePairSetupState.pendingCount = 0;
@@ -648,13 +696,13 @@ export function createApplicationOverlays(
       await publishDevicePairSetupOperation(setupOperation);
     },
     async refreshDevicePairSetup() {
-      if (disposed) {
+      if (disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
         return;
       }
       await publishDevicePairSetupOperation(refreshDevicePairSetupState(devicePairSetupState));
     },
     async setDevicePairSetupAccess(access) {
-      if (disposed) {
+      if (disposed || !readGatewayOperatorAccess(gateway.snapshot).canAdmin) {
         return;
       }
       await publishDevicePairSetupOperation(setPairAccess(devicePairSetupState, access));

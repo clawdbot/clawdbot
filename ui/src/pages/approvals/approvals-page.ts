@@ -18,7 +18,7 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { renderSettingsPage } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { i18n, t } from "../../i18n/index.ts";
@@ -167,8 +167,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
   private applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
     const clientChanged = snapshot.client !== this.client;
     const connectionChanged = (snapshot.phase === "connected") !== this.connected;
-    const auth = snapshot.hello?.auth;
-    const nextApprovalsAccess = !auth || hasOperatorApprovalsAccess(auth);
+    const nextApprovalsAccess = readGatewayOperatorAccess(snapshot).canReviewApprovals;
     const approvalAccessChanged = nextApprovalsAccess !== this.approvalsAccess;
     this.connected = snapshot.phase === "connected";
     this.approvalsAccess = nextApprovalsAccess;
@@ -208,6 +207,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       !gateway ||
       !this.connected ||
       !this.approvalsAccess ||
+      !readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals ||
       this.loading ||
       this.loadingMore
     ) {
@@ -231,6 +231,7 @@ class ApprovalsPage extends OpenClawLightDomElement {
       this.gatewaySource === gateway &&
       this.context.gateway === gateway &&
       gateway.snapshot.phase === "connected" &&
+      readGatewayOperatorAccess(gateway.snapshot).canReviewApprovals &&
       this.client === client &&
       this.requestGeneration === generation;
     try {
