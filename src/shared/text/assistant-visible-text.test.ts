@@ -11,6 +11,25 @@ import {
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
+// Built by concatenation so this source carries no literal invoke markup that a
+// sanitizer could mistake for a leaked call while the file is processed elsewhere.
+const LT = "<";
+function indentedQualifiedInvokeSample(): string {
+  const open = `${LT}antml:invoke name="get_weather">`;
+  const paramOpen = `${LT}antml:parameter name="city">`;
+  const paramClose = `${LT}/antml:parameter>`;
+  const close = `${LT}/antml:invoke>`;
+  return [
+    "Here is the call shape:",
+    "",
+    `    ${open}`,
+    `    ${paramOpen}Paris${paramClose}`,
+    `    ${close}`,
+    "",
+    "That is the format.",
+  ].join("\n");
+}
+
 describe("stripAssistantInternalScaffolding", () => {
   function expectVisibleText(input: string, expected: string) {
     expect(stripAssistantInternalScaffolding(input)).toBe(expected);
@@ -925,6 +944,14 @@ describe("sanitizeAssistantVisibleText", () => {
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
   });
 
+  it("preserves a qualified indented invoke example on the delivery path (#97750)", () => {
+    // A namespace-qualified invoke inside a 4-space CommonMark indented code block
+    // is a documentation example; the scrub must leave it verbatim, closing the
+    // data-loss gap where indented examples were flattened as prose.
+    const input = indentedQualifiedInvokeSample();
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
   it("strips relevant-memories blocks on the canonical user-visible path", () => {
     const input = [
       "<relevant-memories>",
@@ -1041,6 +1068,13 @@ describe("sanitizeAssistantVisibleTextWithProfile", () => {
       "That is the format.",
     ].join("\n");
 
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
+  });
+
+  it("preserves a qualified indented invoke example on the history path (#97750)", () => {
+    // Persisted transcripts must keep an indented qualified invoke example intact;
+    // the history profile does no scrubbing that would delete the documentation.
+    const input = indentedQualifiedInvokeSample();
     expect(sanitizeAssistantVisibleTextWithProfile(input, "history")).toBe(input);
   });
 

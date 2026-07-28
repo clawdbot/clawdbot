@@ -252,6 +252,26 @@ describe("stripPlainTextToolCallBlocks: degraded invoke dialect (#97750)", () =>
     expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
   });
 
+  const indentLines = (value: string, pad: string) =>
+    value
+      .split("\n")
+      .map((line) => pad + line)
+      .join("\n");
+
+  it("preserves an indented namespaced invoke example after a blank line (#97750)", () => {
+    // A 4-space indented block after a blank line is a CommonMark indented code
+    // block, so the qualified invoke example inside it is documentation, not a leak.
+    const raw = `Here you go.\n\n${indentLines(block("antml:"), "    ")}`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("scrubs an indented namespaced invoke on a paragraph-continuation line (#97750)", () => {
+    // A 4-space indented invoke directly under prose is a lazy paragraph
+    // continuation, not indented code, so a genuine leak there is still removed.
+    const raw = `Some prose paragraph.\n${indentLines(block("antml:"), "    ")}`;
+    expect(stripPlainTextToolCallBlocks(raw)).toBe("Some prose paragraph.\n");
+  });
+
   it("scrubs a fenced namespaced invoke when the predicate never preserves (strict)", () => {
     const raw = `See:\n\`\`\`xml\n${block("antml:")}\n\`\`\`\nDone.`;
     const stripped = stripPlainTextToolCallBlocks(raw, () => false);
