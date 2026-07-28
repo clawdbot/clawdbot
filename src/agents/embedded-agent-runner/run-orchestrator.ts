@@ -24,8 +24,10 @@ import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveAgentDir,
+  resolveAgentRunBudget,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
+  resolveSessionAgentIds,
 } from "../agent-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -47,6 +49,7 @@ import { runEmbeddedAgentViaCliBackendIfEligible } from "./cli-backend-dispatch.
 import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
+import { applyRunBudgetEnvelope, EmbeddedAgentRunBudgetController } from "./run-budget.js";
 import { executePreparedEmbeddedRun } from "./run-execution.js";
 import {
   createEmbeddedRunStageSummaryEmitter,
@@ -69,7 +72,58 @@ import type { EmbeddedAgentRunResult } from "./types.js";
 
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
-export function runEmbeddedAgent(
+async function runEmbeddedAgentWithRunBudget(input: {
+  params: RunEmbeddedAgentInternalParams;
+  config: OpenClawConfig | undefined;
+  lifecycleGeneration: string;
+  controller: EmbeddedAgentRunBudgetController;
+  completeOnReturn: boolean;
+}): Promise<EmbeddedAgentRunResult> {
+  if (input.controller.isTerminal()) {
+    const envelope = input.controller.snapshot();
+    return {
+      payloads: [],
+      meta: {
+        aborted: true,
+        durationMs: envelope.durationMs,
+        runBudget: envelope,
+      },
+    };
+  }
+  try {
+    const result = await withAgentRunLifecycleGeneration(input.lifecycleGeneration, () =>
+      runEmbeddedAgentInternal({
+        ...input.params,
+        abortSignal: input.controller.signal,
+        config: input.config,
+        lifecycleGeneration: input.lifecycleGeneration,
+        runBudgetController: input.controller,
+        timeoutMs: input.controller.limits.maxDurationMs,
+      }),
+    );
+    if (input.completeOnReturn) {
+      return applyRunBudgetEnvelope(result, input.controller.complete());
+    }
+    return input.controller.isTerminal()
+      ? applyRunBudgetEnvelope(result, input.controller.snapshot())
+      : result;
+  } catch (error) {
+    if (!input.controller.isTerminal()) {
+      throw error;
+    }
+    const envelope = input.controller.snapshot();
+    return {
+      payloads: [],
+      meta: {
+        aborted: true,
+        durationMs: envelope.durationMs,
+        runBudget: envelope,
+      },
+    };
+  }
+}
+
+export async function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
   const internalParamsInput = paramsInput as RunEmbeddedAgentInternalParams;
@@ -83,13 +137,55 @@ export function runEmbeddedAgent(
   const lifecycleGeneration =
     internalParamsInput.lifecycleGeneration ??
     captureAgentRunLifecycleGeneration(internalParamsInput.runId);
-  return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runEmbeddedAgentInternal({
-      ...internalParamsInput,
+  const sessionAgentId = resolveSessionAgentIds({
+    config,
+    agentId: internalParamsInput.agentId,
+    sessionKey: internalParamsInput.sessionKey,
+  }).sessionAgentId;
+  const sharedRunBudgetController = internalParamsInput.runBudgetController;
+  if (sharedRunBudgetController) {
+    return await runEmbeddedAgentWithRunBudget({
+      params: internalParamsInput,
       config,
       lifecycleGeneration,
-    }),
-  );
+      controller: sharedRunBudgetController,
+      completeOnReturn: false,
+    });
+  }
+
+  const configuredBudget = resolveAgentRunBudget(config, sessionAgentId);
+  if (!configuredBudget) {
+    return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runEmbeddedAgentInternal({
+        ...internalParamsInput,
+        config,
+        lifecycleGeneration,
+      }),
+    );
+  }
+
+  const limits = {
+    ...configuredBudget,
+    maxDurationMs: Math.max(
+      1,
+      Math.min(configuredBudget.maxDurationMs, internalParamsInput.timeoutMs),
+    ),
+  };
+  const runBudgetController = new EmbeddedAgentRunBudgetController({
+    limits,
+    callerAbortSignal: internalParamsInput.abortSignal,
+  });
+  try {
+    return await runEmbeddedAgentWithRunBudget({
+      params: internalParamsInput,
+      config,
+      lifecycleGeneration,
+      controller: runBudgetController,
+      completeOnReturn: true,
+    });
+  } finally {
+    runBudgetController.dispose();
+  }
 }
 
 async function runEmbeddedAgentInternal(

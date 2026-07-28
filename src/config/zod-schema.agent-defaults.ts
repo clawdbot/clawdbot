@@ -49,6 +49,16 @@ const EmbeddedAgentConfigSchema = z
       .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
       .optional(),
     executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+    runBudget: z
+      .object({
+        maxModelTurns: z.number().int().min(1).max(128).optional(),
+        maxToolCalls: z.number().int().min(1).max(512).optional(),
+        maxProviderAttempts: z.number().int().min(1).max(128).optional(),
+        maxOutputTokens: z.number().int().min(1).max(1_000_000).optional(),
+        maxDurationSeconds: z.number().int().min(1).max(3_600).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

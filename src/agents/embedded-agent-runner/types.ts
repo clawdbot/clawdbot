@@ -17,6 +17,7 @@ import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 import type { ContextUsage } from "../usage.js";
+import type { EmbeddedAgentRunBudgetEnvelope } from "./run-budget.js";
 
 export type BlockReplyFlushContext =
   | {
@@ -159,6 +160,8 @@ export type EmbeddedRunFailureSignal = {
 
 export type EmbeddedAgentRunMeta = {
   durationMs: number;
+  /** Authoritative terminal envelope for runs with configured hard ceilings. */
+  runBudget?: EmbeddedAgentRunBudgetEnvelope;
   agentMeta?: EmbeddedAgentMeta;
   aborted?: boolean;
   systemPromptReport?: SessionSystemPromptReport;

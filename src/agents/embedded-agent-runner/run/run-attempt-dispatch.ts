@@ -10,16 +10,16 @@ import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
-import type { RunEmbeddedAgentParams } from "./params.js";
 import { preparePluginHarnessPromptImages } from "./plugin-harness-prompt-images.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
-type InternalRunParams = RunEmbeddedAgentParams & {
+type InternalRunParams = RunEmbeddedAgentInternalParams & {
   sessionFile: string;
   systemAgentTool?: SystemAgentToolOptions;
 };
@@ -174,6 +174,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
+    runBudgetController: params.runBudgetController,
     sandboxSessionKey: params.sandboxSessionKey,
     trigger: params.trigger,
     memoryFlushWritePath: params.memoryFlushWritePath,

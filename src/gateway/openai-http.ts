@@ -7,9 +7,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveAgentRunBudget } from "../agents/agent-scope.js";
 import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
+import type { EmbeddedAgentRunBudgetEnvelope } from "../agents/embedded-agent-runner/run-budget.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   hasNonzeroUsage,
@@ -20,6 +22,7 @@ import {
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
+import { getRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
 import type { GatewayHttpChatCompletionsConfig } from "../config/types.gateway.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
@@ -270,6 +273,84 @@ function applyChatToolChoice(params: { tools: ClientToolDefinition[]; toolChoice
   throw new Error(`tool_choice ${choiceType} is not supported`);
 }
 
+type OpenAiRunTerminalEnvelope = {
+  version: 1;
+  completed: boolean;
+  terminal_reason: EmbeddedAgentRunBudgetEnvelope["terminalReason"];
+  counters: {
+    model_turns: number;
+    tool_calls: number;
+    provider_attempts: number;
+    output_tokens: number;
+  };
+  limits: {
+    model_turns: number;
+    tool_calls: number;
+    provider_attempts: number;
+    output_tokens: number;
+    duration_ms: number;
+  };
+  duration_ms: number;
+  retryable: boolean;
+};
+
+function resolveRunBudgetEnvelope(result: unknown): EmbeddedAgentRunBudgetEnvelope | undefined {
+  const meta = (result as { meta?: { runBudget?: unknown } } | null)?.meta;
+  const envelope = meta?.runBudget;
+  if (!envelope || typeof envelope !== "object") {
+    return undefined;
+  }
+  return envelope as EmbeddedAgentRunBudgetEnvelope;
+}
+
+function toOpenAiRunTerminalEnvelope(
+  envelope: EmbeddedAgentRunBudgetEnvelope | undefined,
+): OpenAiRunTerminalEnvelope | undefined {
+  if (!envelope) {
+    return undefined;
+  }
+  return {
+    version: envelope.version,
+    completed: envelope.completed,
+    terminal_reason: envelope.terminalReason,
+    counters: {
+      model_turns: envelope.counters.modelTurns,
+      tool_calls: envelope.counters.toolCalls,
+      provider_attempts: envelope.counters.providerAttempts,
+      output_tokens: envelope.counters.outputTokens,
+    },
+    limits: {
+      model_turns: envelope.limits.maxModelTurns,
+      tool_calls: envelope.limits.maxToolCalls,
+      provider_attempts: envelope.limits.maxProviderAttempts,
+      output_tokens: envelope.limits.maxOutputTokens,
+      duration_ms: envelope.limits.maxDurationMs,
+    },
+    duration_ms: envelope.durationMs,
+    retryable: envelope.retryable,
+  };
+}
+
+function resolveRunTerminalHttpStatus(
+  reason: EmbeddedAgentRunBudgetEnvelope["terminalReason"],
+): number {
+  if (reason === "timeout") {
+    return 408;
+  }
+  if (reason === "canceled") {
+    return 499;
+  }
+  return 429;
+}
+
+function buildRunTerminalError(envelope: OpenAiRunTerminalEnvelope) {
+  return {
+    message: `OpenClaw run stopped: ${envelope.terminal_reason}`,
+    type: "run_terminal_error",
+    code: `openclaw_run_${envelope.terminal_reason}`,
+  };
+}
+
 function writeAssistantRoleChunk(res: ServerResponse, params: { runId: string; model: string }) {
   writeSse(res, {
     id: params.runId,
@@ -301,7 +382,12 @@ function writeAssistantContentChunk(
 
 function writeAssistantFinishChunk(
   res: ServerResponse,
-  params: { runId: string; model: string; finishReason: "stop" | "tool_calls" },
+  params: {
+    runId: string;
+    model: string;
+    finishReason: "stop" | "tool_calls";
+    runTerminal?: OpenAiRunTerminalEnvelope;
+  },
 ) {
   writeSse(res, {
     id: params.runId,
@@ -315,6 +401,7 @@ function writeAssistantFinishChunk(
         finish_reason: params.finishReason,
       },
     ],
+    ...(params.runTerminal ? { openclaw_run: params.runTerminal } : {}),
   });
 }
 
@@ -998,6 +1085,9 @@ export async function handleOpenAiHttpRequest(
     }
     throw err;
   }
+  const bufferRunContentUntilTerminal = Boolean(
+    resolveAgentRunBudget(getRuntimeConfigSnapshot() ?? loadConfig(), agentId),
+  );
   const { modelOverride, errorMessage: modelError } = await resolveOpenAiCompatModelOverride({
     req,
     agentId,
@@ -1088,6 +1178,14 @@ export async function handleOpenAiHttpRequest(
       }
 
       const usage = resolveChatCompletionUsage(result);
+      const runTerminal = toOpenAiRunTerminalEnvelope(resolveRunBudgetEnvelope(result));
+      if (runTerminal && !runTerminal.completed) {
+        sendJson(res, resolveRunTerminalHttpStatus(runTerminal.terminal_reason), {
+          error: buildRunTerminalError(runTerminal),
+          openclaw_run: runTerminal,
+        });
+        return true;
+      }
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1133,6 +1231,7 @@ export async function handleOpenAiHttpRequest(
             },
           ],
           usage,
+          ...(runTerminal ? { openclaw_run: runTerminal } : {}),
         });
         return true;
       }
@@ -1151,6 +1250,7 @@ export async function handleOpenAiHttpRequest(
           },
         ],
         usage,
+        ...(runTerminal ? { openclaw_run: runTerminal } : {}),
       });
     } catch (err) {
       if (abortController.signal.aborted) {
@@ -1185,6 +1285,7 @@ export async function handleOpenAiHttpRequest(
   let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
+  let finalRunTerminal: OpenAiRunTerminalEnvelope | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
@@ -1205,7 +1306,12 @@ export async function handleOpenAiHttpRequest(
     stopWatchingDisconnect();
     unsubscribe();
     if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+      writeAssistantFinishChunk(res, {
+        runId,
+        model,
+        finishReason: finalizeFinishReason,
+        runTerminal: finalRunTerminal,
+      });
       wroteStopChunk = true;
     }
     if (streamIncludeUsage && finalUsage) {
@@ -1252,7 +1358,7 @@ export async function handleOpenAiHttpRequest(
       // Hold prose until the run proves the requested client-tool call exists.
       // If the provider ignores `tool_choice`, no partial text should leak
       // before the stream fails with an OpenAI-compatible error payload.
-      if (toolChoiceConstraint) {
+      if (toolChoiceConstraint || bufferRunContentUntilTerminal) {
         bufferedAssistantContent += content;
         return;
       }
@@ -1285,8 +1391,10 @@ export async function handleOpenAiHttpRequest(
     unsubscribe();
   });
 
-  wroteRole = true;
-  writeAssistantRoleChunk(res, { runId, model });
+  if (!bufferRunContentUntilTerminal) {
+    wroteRole = true;
+    writeAssistantRoleChunk(res, { runId, model });
+  }
 
   // The streamed run outlives this handler, whose root-work admission is
   // released on return. Without retaining it, subordinate session/lane
@@ -1302,6 +1410,19 @@ export async function handleOpenAiHttpRequest(
       }
 
       finalUsage = resolveChatCompletionUsage(result);
+      finalRunTerminal = toOpenAiRunTerminalEnvelope(resolveRunBudgetEnvelope(result));
+      if (finalRunTerminal && !finalRunTerminal.completed) {
+        closed = true;
+        stopWatchingDisconnect();
+        unsubscribe();
+        writeSse(res, {
+          error: buildRunTerminalError(finalRunTerminal),
+          openclaw_run: finalRunTerminal,
+        });
+        writeDone(res);
+        res.end();
+        return;
+      }
       const meta = (result as { meta?: unknown } | null)?.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 

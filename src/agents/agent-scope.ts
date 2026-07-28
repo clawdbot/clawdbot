@@ -348,6 +348,46 @@ export function resolveAgentExecutionContract(
   return agentContract ?? defaultContract;
 }
 
+export type ResolvedEmbeddedAgentRunBudget = {
+  maxModelTurns: number;
+  maxToolCalls: number;
+  maxProviderAttempts: number;
+  maxOutputTokens: number;
+  maxDurationMs: number;
+};
+
+const DEFAULT_EMBEDDED_AGENT_RUN_BUDGET: ResolvedEmbeddedAgentRunBudget = Object.freeze({
+  maxModelTurns: 8,
+  maxToolCalls: 16,
+  maxProviderAttempts: 4,
+  maxOutputTokens: 12_000,
+  maxDurationMs: 60_000,
+});
+
+/** Resolves an opt-in run budget by merging defaults, global config, then agent config. */
+export function resolveAgentRunBudget(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): ResolvedEmbeddedAgentRunBudget | undefined {
+  const defaultBudget = cfg?.agents?.defaults?.embeddedAgent?.runBudget;
+  const agentBudget =
+    cfg && agentId ? resolveAgentConfig(cfg, agentId)?.embeddedAgent?.runBudget : null;
+  if (!defaultBudget && !agentBudget) {
+    return undefined;
+  }
+  const merged = { ...DEFAULT_EMBEDDED_AGENT_RUN_BUDGET, ...defaultBudget, ...agentBudget };
+  return {
+    maxModelTurns: merged.maxModelTurns,
+    maxToolCalls: merged.maxToolCalls,
+    maxProviderAttempts: merged.maxProviderAttempts,
+    maxOutputTokens: merged.maxOutputTokens,
+    maxDurationMs:
+      (agentBudget?.maxDurationSeconds ??
+        defaultBudget?.maxDurationSeconds ??
+        DEFAULT_EMBEDDED_AGENT_RUN_BUDGET.maxDurationMs / 1_000) * 1_000,
+  };
+}
+
 export function resolveAgentSkillsFilter(
   cfg: OpenClawConfig,
   agentId: string,

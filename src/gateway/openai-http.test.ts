@@ -13,7 +13,7 @@ import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscrib
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
-import { resetConfigRuntimeState } from "../config/config.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { enqueueCommandInLane } from "../process/command-queue.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
@@ -1501,6 +1501,81 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("returns a typed run terminal envelope without partial content", async () => {
+    const port = enabledPort;
+    try {
+      testState.agentsConfig = {
+        defaults: {
+          embeddedAgent: {
+            runBudget: {
+              maxModelTurns: 8,
+              maxToolCalls: 16,
+              maxProviderAttempts: 4,
+              maxOutputTokens: 12_000,
+              maxDurationSeconds: 60,
+            },
+          },
+        },
+        list: [{ id: "main" }],
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot({ agents: testState.agentsConfig });
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "partial customer result must not leak" }],
+        meta: {
+          runBudget: {
+            version: 1,
+            completed: false,
+            terminalReason: "tool_calls",
+            counters: {
+              modelTurns: 3,
+              toolCalls: 16,
+              providerAttempts: 3,
+              outputTokens: 800,
+            },
+            limits: {
+              maxModelTurns: 8,
+              maxToolCalls: 16,
+              maxProviderAttempts: 4,
+              maxOutputTokens: 12_000,
+              maxDurationMs: 60_000,
+            },
+            durationMs: 500,
+            retryable: false,
+          },
+        },
+      } as never);
+
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "analyze" }],
+      });
+
+      expect(res.status).toBe(429);
+      const json = (await res.json()) as {
+        choices?: unknown;
+        error?: { code?: string };
+        openclaw_run?: {
+          completed?: boolean;
+          terminal_reason?: string;
+          counters?: { tool_calls?: number };
+        };
+      };
+      expect(json.choices).toBeUndefined();
+      expect(json.error?.code).toBe("openclaw_run_tool_calls");
+      expect(json.openclaw_run).toMatchObject({
+        completed: false,
+        terminal_reason: "tool_calls",
+        counters: { tool_calls: 16 },
+      });
+      expect(JSON.stringify(json)).not.toContain("partial customer result");
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
+  });
+
   it("forwards inbound max_completion_tokens and max_tokens into streamParams", async () => {
     const port = enabledPort;
     const mockAgentOnce = (payloads: Array<{ text: string }>) => {
@@ -1877,6 +1952,76 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         },
       },
     );
+  });
+
+  it("buffers budgeted SSE content and emits only a non-completed terminal envelope", async () => {
+    const port = enabledPort;
+    try {
+      testState.agentsConfig = {
+        defaults: { embeddedAgent: { runBudget: { maxToolCalls: 1 } } },
+        list: [{ id: "main" }],
+      };
+      resetConfigRuntimeState();
+      setRuntimeConfigSnapshot({ agents: testState.agentsConfig });
+      agentCommand.mockClear();
+      agentCommand.mockImplementationOnce((async (opts: unknown) => {
+        const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { delta: "partial customer result must not leak" },
+        });
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
+        return {
+          payloads: [{ text: "partial customer result must not leak" }],
+          meta: {
+            runBudget: {
+              version: 1,
+              completed: false,
+              terminalReason: "tool_calls",
+              counters: {
+                modelTurns: 1,
+                toolCalls: 1,
+                providerAttempts: 1,
+                outputTokens: 10,
+              },
+              limits: {
+                maxModelTurns: 8,
+                maxToolCalls: 1,
+                maxProviderAttempts: 4,
+                maxOutputTokens: 12_000,
+                maxDurationMs: 60_000,
+              },
+              durationMs: 20,
+              retryable: false,
+            },
+          },
+        };
+      }) as never);
+
+      const res = await postChatCompletions(port, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "analyze" }],
+      });
+
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).not.toContain("partial customer result");
+      const data = parseSseDataLines(text);
+      const terminal = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((entry) => "openclaw_run" in entry);
+      expect(terminal).toMatchObject({
+        error: { code: "openclaw_run_tool_calls" },
+        openclaw_run: { completed: false, terminal_reason: "tool_calls" },
+      });
+      expect(data.at(-1)).toBe("[DONE]");
+    } finally {
+      testState.agentsConfig = undefined;
+      resetConfigRuntimeState();
+    }
   });
 
   it("streams SSE chunks when stream=true", async () => {

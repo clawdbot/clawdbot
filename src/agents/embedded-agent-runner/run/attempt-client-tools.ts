@@ -35,10 +35,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
   uncompactedEffectiveTools: AgentTool[];
   clientTools: EmbeddedRunAttemptParams["clientTools"];
 }) {
+  const runBudgetController = params.attempt.runBudgetController;
   const { customTools } = splitSdkTools({
     tools: params.effectiveTools,
     sandboxEnabled: params.sandboxEnabled,
     toolHookContext: params.catalogToolHookContext,
+    executionGuard: runBudgetController
+      ? {
+          signal: runBudgetController.signal,
+          beforeDispatch: () => runBudgetController.reserveToolCall(),
+        }
+      : undefined,
   });
 
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
