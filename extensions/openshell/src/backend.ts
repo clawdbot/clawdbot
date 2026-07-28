@@ -718,20 +718,21 @@ class OpenShellSandboxBackendImpl {
       cwd: this.params.createParams.workspaceDir,
     });
     if (getResult.code === 0) {
+      if (this.params.legacyRuntimeAdopted) {
+        const phase = await this.resolveLegacyRuntimePhase();
+        if (!phase) {
+          throw this.buildLegacyRuntimeUnavailableError(
+            "OpenShell did not report a lifecycle phase for this sandbox.",
+          );
+        }
+        if (phase !== "Ready") {
+          throw this.buildLegacyRuntimeUnavailableError(`OpenShell reports phase "${phase}".`);
+        }
+      }
       return;
     }
     if (this.params.legacyRuntimeAdopted) {
-      const detail = getResult.stderr.trim();
-      const recreateCommand = `openclaw sandbox recreate --session ${shellEscape(this.params.createParams.scopeKey)}`;
-      throw new Error(
-        [
-          `Registered legacy OpenShell sandbox "${this.params.execContext.sandboxName}" could not be reached.`,
-          detail,
-          `OpenClaw will not recreate this retired runtime name. Run \`${recreateCommand}\` to migrate this scope to the current naming format.`,
-        ]
-          .filter(Boolean)
-          .join(" "),
-      );
+      throw this.buildLegacyRuntimeUnavailableError(getResult.stderr.trim());
     }
     const createArgs = [
       "sandbox",
@@ -761,6 +762,57 @@ class OpenShellSandboxBackendImpl {
       throw new Error(createResult.stderr.trim() || "openshell sandbox create failed");
     }
     this.remoteSeedPending = true;
+  }
+
+  private async resolveLegacyRuntimePhase(): Promise<string | undefined> {
+    const pageSize = 100;
+    for (let offset = 0; ; offset += pageSize) {
+      const listResult = await runOpenShellCli({
+        context: this.params.execContext,
+        args: [
+          "sandbox",
+          "list",
+          "--limit",
+          String(pageSize),
+          "--offset",
+          String(offset),
+          "--output",
+          "json",
+        ],
+        cwd: this.params.createParams.workspaceDir,
+      });
+      if (listResult.code !== 0) {
+        throw this.buildLegacyRuntimeUnavailableError(listResult.stderr.trim());
+      }
+      const page = parseOpenShellSandboxPhasePage(
+        listResult.stdout,
+        this.params.execContext.sandboxName,
+      );
+      if (!page) {
+        throw this.buildLegacyRuntimeUnavailableError(
+          "OpenShell returned malformed sandbox lifecycle data.",
+        );
+      }
+      if (page.phase) {
+        return page.phase;
+      }
+      if (page.count < pageSize) {
+        return undefined;
+      }
+    }
+  }
+
+  private buildLegacyRuntimeUnavailableError(detail: string): Error {
+    const recreateCommand = `openclaw sandbox recreate --session ${shellEscape(this.params.createParams.scopeKey)}`;
+    return new Error(
+      [
+        `Registered legacy OpenShell sandbox "${this.params.execContext.sandboxName}" is not usable.`,
+        detail,
+        `OpenClaw will not recreate this retired runtime name. Run \`${recreateCommand}\` to migrate this scope to the current naming format.`,
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
   }
 
   private async syncWorkspaceToRemote(): Promise<void> {
@@ -948,6 +1000,30 @@ function resolveOpenShellSandboxName(params: {
     return { sandboxName: legacySandboxName, legacyRuntimeAdopted: true };
   }
   return { sandboxName, legacyRuntimeAdopted: false };
+}
+
+function parseOpenShellSandboxPhasePage(
+  stdout: string,
+  sandboxName: string,
+): { count: number; phase?: string } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(stdout);
+    if (!Array.isArray(parsed)) {
+      return undefined;
+    }
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") {
+        continue;
+      }
+      const record = entry as Record<string, unknown>;
+      if (record.name === sandboxName && typeof record.phase === "string") {
+        return { count: parsed.length, phase: record.phase };
+      }
+    }
+    return { count: parsed.length };
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveRemoteMaterializedSkillsWorkspaceDir(remoteWorkspaceDir: string): string {

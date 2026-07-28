@@ -259,6 +259,13 @@ upgrade so its remote workspace remains addressable. Recreating that scope
 deletes the legacy runtime; the next use creates the current 19-character
 runtime name.
 
+OpenShell v0.0.92 can still locate a sandbox record created by v0.0.68, but a
+Docker-backed sandbox may remain in a non-Ready phase after the gateway
+upgrade. OpenClaw preserves the registered runtime identity, refuses to create
+a replacement implicitly, and reports the scoped `openclaw sandbox recreate`
+command. Treat that recreation as destructive in `remote` mode because the
+remote workspace is canonical.
+
 Recreate after changing any of:
 
 - `agents.defaults.sandbox.backend`
