@@ -186,6 +186,8 @@ export type GatewayBrowserClientOptions = {
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
   onRecoveryScopeChange?: () => void;
+  requestPreflight?: (method: string) => { ok: true } | ({ ok: false } & GatewayErrorInfo);
+  operatorScopes?: readonly string[];
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -461,6 +463,8 @@ export class GatewayBrowserClient {
     const scopes = resolveGatewayConnectScopes({
       requestedScopes: selectedAuth.authBootstrapToken
         ? [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES]
+        : this.opts.operatorScopes?.length
+          ? [...this.opts.operatorScopes]
         : undefined,
       usingStoredDeviceToken: selectedAuth.usingStoredDeviceToken,
       storedScopes: selectedAuth.storedScopes,
@@ -641,6 +645,11 @@ export class GatewayBrowserClient {
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
   ): Promise<T> {
+    const preflight = this.opts.requestPreflight?.(method);
+    if (preflight && !preflight.ok) {
+      const { ok: _ok, ...error } = preflight;
+      return Promise.reject(new GatewayRequestError(error));
+    }
     return this.client.request<T>(method, params, options);
   }
 

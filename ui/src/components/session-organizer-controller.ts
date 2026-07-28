@@ -112,6 +112,9 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async deleteSessionsBatch(rows: readonly SidebarRecentSession[]): Promise<void> {
+    if (this.host.sessionDataContext?.hostPolicy.canInvokeAction("sessions.delete") === false) {
+      return;
+    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;
@@ -156,6 +159,9 @@ export class SessionOrganizerController implements ReactiveController {
   }
 
   async deleteSession(session: SidebarRecentSession): Promise<void> {
+    if (this.host.sessionDataContext?.hostPolicy.canInvokeAction("sessions.delete") === false) {
+      return;
+    }
     const scope = this.host.sessionData.beginSessionMutation();
     if (!scope) {
       return;

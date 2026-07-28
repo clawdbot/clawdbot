@@ -30,6 +30,7 @@ type SettingsSidebarProps = {
   basePath: string;
   activeRouteId: RouteId;
   activePathname?: string;
+  enabledRouteIds?: readonly RouteId[];
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
@@ -73,13 +74,16 @@ function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): bo
 function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
+  enabledRouteIds?: readonly RouteId[],
 ): readonly SettingsNavigationGroupView[] {
+  const enabledRoutes = enabledRouteIds ? new Set(enabledRouteIds) : null;
+  const routeEnabled = (routeId: RouteId) => !enabledRoutes || enabledRoutes.has(routeId);
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
     return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
       labelKey: group.labelKey,
-      items: group.routes.map((routeId) => ({ routeId, blocks: [] })),
-    }));
+      items: group.routes.filter(routeEnabled).map((routeId) => ({ routeId, blocks: [] })),
+    })).filter((group) => group.items.length > 0);
   }
   const sidebarRoutes = SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes);
   const searchableRoutes = [
@@ -88,7 +92,7 @@ function filterSettingsNavigationGroups(
       ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
       ...blockMatches.map((block) => block.routeId),
     ]),
-  ];
+  ].filter(routeEnabled);
   const directRoutes = searchableRoutes.filter((routeId) =>
     [
       settingsNavigationLabelForRoute(routeId),
@@ -102,7 +106,7 @@ function filterSettingsNavigationGroups(
     if (!groupMatches) {
       return [];
     }
-    return group.routes.filter((routeId) => {
+    return group.routes.filter(routeEnabled).filter((routeId) => {
       if (includedRoutes.has(routeId)) {
         return false;
       }
@@ -238,6 +242,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
+    props.enabledRouteIds,
   );
   return html`
     <aside class="settings-sidebar">

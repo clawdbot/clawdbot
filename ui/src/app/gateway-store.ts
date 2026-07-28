@@ -25,6 +25,10 @@ import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts"
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 type CanvasSurfaceLeaseModule = typeof import("./canvas-surface-lease.runtime.ts");
 type CanvasSurfaceLease = ReturnType<CanvasSurfaceLeaseModule["createCanvasSurfaceLease"]>;
+type HostedGatewayConfig = {
+  url: string;
+  scopes: readonly string[];
+} | null;
 
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
 // Grace window before offline presentation appears; reconnects never wait.
@@ -66,7 +70,11 @@ export function createApplicationGateway(
   initialPassword = "",
   initialBootstrapToken = "",
   createClient: GatewayClientFactory = defaultClientFactory,
-  options: { persistDefaultConnectionSettings?: boolean } = {},
+  options: {
+    persistDefaultConnectionSettings?: boolean;
+    requestPreflight?: GatewayBrowserClientOptions["requestPreflight"];
+    hostedGatewayConfig?: () => HostedGatewayConfig;
+  } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
   let persistConnectionSettings = options.persistDefaultConnectionSettings !== false;
@@ -274,10 +282,12 @@ export function createApplicationGateway(
       connectionOverrides.gatewayUrl !== undefined &&
       connectionOverrides.gatewayUrl !== connection.gatewayUrl;
     connection = nextConnection;
+    const hostedGatewayConfig = options.hostedGatewayConfig?.() ?? null;
+    const clientGatewayUrl = hostedGatewayConfig?.url ?? nextConnection.gatewayUrl;
     // Trust the connected gateway's origin for avatar route resolution so
     // split-origin Control UI deployments load uploaded/proxied avatars.
     setAvatarGatewayOrigin(
-      nextConnection.gatewayUrl,
+      clientGatewayUrl,
       resolveControlUiAuthHeader({
         settings: { token: nextConnection.token },
         password: nextConnection.password,
@@ -300,7 +310,7 @@ export function createApplicationGateway(
     client?.stop();
 
     const nextClient = createClient({
-      url: nextConnection.gatewayUrl,
+      url: clientGatewayUrl,
       token: nextConnection.token.trim() ? nextConnection.token : undefined,
       bootstrapToken: nextConnection.bootstrapToken.trim()
         ? nextConnection.bootstrapToken
@@ -310,12 +320,14 @@ export function createApplicationGateway(
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       mode: "webchat",
       instanceId: generateUUID(),
+      requestPreflight: options.requestPreflight,
+      operatorScopes: hostedGatewayConfig?.scopes,
       onHello: (hello: GatewayHelloOk) => {
         if (client !== nextClient) {
           return;
         }
         setAvatarGatewayOrigin(
-          nextConnection.gatewayUrl,
+          clientGatewayUrl,
           resolveControlUiAuthHeader({
             hello,
             settings: { token: nextConnection.token },

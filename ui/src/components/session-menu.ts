@@ -76,6 +76,7 @@ class SessionMenu extends OpenClawLightDomElement {
   // Guards both Archive and Delete: hosts pass canArchiveSessionRow() so agent
   // main sessions and active runs stay protected from casual retirement.
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) deleteAllowed = true;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
   @property({ attribute: false }) canOpenChat = false;
@@ -592,7 +593,7 @@ class SessionMenu extends OpenClawLightDomElement {
           variant="danger"
           data-shortcut="d"
           aria-keyshortcuts="D"
-          ?disabled=${this.disabled || !(session.archived || this.archiveAllowed)}
+          ?disabled=${this.disabled || !this.deleteAllowed || !(session.archived || this.archiveAllowed)}
         >
           <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.trash}</span>
           <span class="session-menu__text"

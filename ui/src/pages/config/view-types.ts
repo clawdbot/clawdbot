@@ -9,6 +9,7 @@ import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
+import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import type { WebPushUiState } from "./notifications-section.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
@@ -60,6 +61,9 @@ export type ConfigProps = {
   applying: boolean;
   /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
+  readOnly?: boolean;
+  autoSaveStatus: ConfigAutoSaveStatus;
+  needsApply: boolean;
   connected: boolean;
   schema: unknown;
   schemaLoading: boolean;
