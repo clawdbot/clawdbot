@@ -550,11 +550,13 @@ private fun VoiceHomeMode(
     )
   var dictatePreview by remember { mutableStateOf(false) }
   val coroutineScope = rememberCoroutineScope()
-  val dictateEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
-  val liveEnabled =
+  val dictateActionEnabled =
+    inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
+  // This is action availability; realtimeActive above owns the current Live state.
+  val liveActionEnabled =
     (realtimeActive || ttsOnly || (inputEnabled && !actionBusy)) && !dictatePreview
   val startDictate: () -> Unit = {
-    if (dictateEnabled) {
+    if (dictateActionEnabled) {
       coroutineScope.launch {
         dictatePreview = true
         delay(300L)
@@ -564,7 +566,7 @@ private fun VoiceHomeMode(
     }
   }
   val toggleLive: () -> Unit = {
-    if (liveEnabled) {
+    if (liveActionEnabled) {
       if (ttsOnly) {
         onStopSpeaking()
       } else {
@@ -601,10 +603,10 @@ private fun VoiceHomeMode(
       ttsOnly -> stringResource(R.string.stop_speaking)
       realtimeActive -> stringResource(R.string.stop_speaking)
       else -> stringResource(R.string.speak_to_agent)
-    }
+  }
   val dictateClickLabel = stringResource(R.string.dictate)
-  val orbClick = if (liveEnabled) toggleLive else startDictate
-  val orbClickLabel = if (liveEnabled) liveClickLabel else dictateClickLabel
+  val orbClick = if (liveActionEnabled) toggleLive else startDictate
+  val orbClickLabel = if (liveActionEnabled) liveClickLabel else dictateClickLabel
   val fontScale = LocalDensity.current.fontScale
   BoxWithConstraints(
     modifier = Modifier.fillMaxSize(),
@@ -624,7 +626,7 @@ private fun VoiceHomeMode(
         title = stringResource(R.string.hold),
         detail = stringResource(R.string.dictate),
         accent = colors.voiceAccent,
-        onClick = if (dictateEnabled) startDictate else null,
+        onClick = if (dictateActionEnabled) startDictate else null,
         onClickLabel = dictateClickLabel,
         modifier =
           Modifier
@@ -658,13 +660,13 @@ private fun VoiceHomeMode(
               .offset(y = voiceControlOffset)
               .combinedClickable(
                 // combinedClickable gates every gesture together; keep preview exclusive and fall back to Dictate.
-                enabled = !dictatePreview && (liveEnabled || dictateEnabled),
+                enabled = !dictatePreview && (liveActionEnabled || dictateActionEnabled),
                 onClickLabel = orbClickLabel,
                 role = Role.Button,
                 onClick = orbClick,
                 onDoubleClick = onOpenThread,
-                onLongClickLabel = dictateClickLabel.takeIf { dictateEnabled },
-                onLongClick = startDictate.takeIf { dictateEnabled },
+                onLongClickLabel = dictateClickLabel.takeIf { dictateActionEnabled },
+                onLongClick = startDictate.takeIf { dictateActionEnabled },
               ).semantics {
                 contentDescription = liveVoiceDescription
               },
@@ -700,7 +702,7 @@ private fun VoiceHomeMode(
         title = stringResource(R.string.tap),
         detail = stringResource(R.string.live),
         accent = colors.voiceAccent,
-        onClick = if (liveEnabled) toggleLive else null,
+        onClick = if (liveActionEnabled) toggleLive else null,
         onClickLabel = liveClickLabel,
         modifier =
           Modifier
