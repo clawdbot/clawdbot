@@ -60,6 +60,34 @@ function createPollStartEvent(params?: {
   };
 }
 
+function createHistoryMessage(params: {
+  eventId: string;
+  body: string;
+  timestamp: number;
+  sender?: string;
+  replaces?: string;
+  omitNewContent?: boolean;
+}): Record<string, unknown> {
+  return {
+    event_id: params.eventId,
+    sender: params.sender ?? "@alice:example.org",
+    type: "m.room.message",
+    origin_server_ts: params.timestamp,
+    content: {
+      msgtype: "m.text",
+      body: params.replaces ? `* ${params.body}` : params.body,
+      ...(params.replaces
+        ? {
+            "m.relates_to": { rel_type: "m.replace", event_id: params.replaces },
+            ...(params.omitNewContent
+              ? {}
+              : { "m.new_content": { msgtype: "m.text", body: params.body } }),
+          }
+        : {}),
+    },
+  };
+}
+
 function createMessagesClient(params: {
   chunk: Array<Record<string, unknown>>;
   hydratedChunk?: Array<Record<string, unknown>>;
@@ -285,6 +313,217 @@ describe("matrix message actions", () => {
     expectRecordFields(result.messages[0], { eventId: "$poll" });
     expect(result.messages[0]?.body).toContain("[Poll]");
     expect(getEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      direction: "backward",
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit-new",
+          body: "final text",
+          timestamp: 30,
+          replaces: "$original",
+        }),
+        createHistoryMessage({
+          eventId: "$edit-old",
+          body: "intermediate text",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+      after: undefined,
+    },
+    {
+      direction: "forward",
+      chunk: [
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+        createHistoryMessage({
+          eventId: "$edit-old",
+          body: "intermediate text",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({
+          eventId: "$edit-new",
+          body: "final text",
+          timestamp: 30,
+          replaces: "$original",
+        }),
+      ],
+      after: "previous-page",
+    },
+  ])("collapses valid Matrix replacements in $direction history", async ({ chunk, after }) => {
+    const { client } = createMessagesClient({ chunk });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client, after });
+
+    expect(result.messages).toEqual([
+      {
+        eventId: "$original",
+        sender: "@alice:example.org",
+        body: "final text",
+        msgtype: "m.text",
+        attachment: undefined,
+        timestamp: 10,
+        relatesTo: undefined,
+      },
+    ]);
+  });
+
+  it("uses the Matrix event-id tie-break for equally timed replacements", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit-a",
+          body: "earlier tie",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({
+          eventId: "$edit-z",
+          body: "winning tie",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "winning tie" });
+  });
+
+  it("does not let replacement content change the original event relationship", async () => {
+    const edit = createHistoryMessage({
+      eventId: "$edit",
+      body: "edited text",
+      timestamp: 20,
+      replaces: "$original",
+    });
+    const content = edit.content as Record<string, unknown>;
+    (content["m.new_content"] as Record<string, unknown>)["m.relates_to"] = {
+      rel_type: "m.thread",
+      event_id: "$forged-thread",
+    };
+    const { client } = createMessagesClient({
+      chunk: [
+        edit,
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "edited text" });
+    expect(result.messages[0]?.relatesTo).toBeUndefined();
+  });
+
+  it("ignores malformed and cross-sender Matrix replacements", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$forged",
+          body: "forged text",
+          timestamp: 40,
+          replaces: "$original",
+          sender: "@mallory:example.org",
+        }),
+        createHistoryMessage({
+          eventId: "$malformed",
+          body: "malformed text",
+          timestamp: 30,
+          replaces: "$original",
+          omitNewContent: true,
+        }),
+        createHistoryMessage({ eventId: "$original", body: "original text", timestamp: 10 }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$original", body: "original text" });
+  });
+
+  it("preserves a valid edit when its original is on another history page", async () => {
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit",
+          body: "cross-page final text",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      after: "previous-page",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({
+      eventId: "$edit",
+      body: "cross-page final text",
+      relatesTo: { relType: "m.replace", eventId: "$original" },
+    });
+  });
+
+  it("does not revive a redacted original through a replacement event", async () => {
+    const redactedOriginal = createHistoryMessage({
+      eventId: "$original",
+      body: "redacted original",
+      timestamp: 10,
+    });
+    redactedOriginal.unsigned = { redacted_because: {} };
+    const { client } = createMessagesClient({
+      chunk: [
+        createHistoryMessage({
+          eventId: "$edit",
+          body: "redacted edit",
+          timestamp: 20,
+          replaces: "$original",
+        }),
+        redactedOriginal,
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", { client });
+
+    expect(result.messages).toEqual([]);
+  });
+
+  it("applies bundled Matrix replacements to first-page thread roots", async () => {
+    const threadRoot = createHistoryMessage({
+      eventId: "$thread-root",
+      body: "original root",
+      timestamp: 10,
+    });
+    threadRoot.unsigned = {
+      "m.relations": {
+        "m.replace": createHistoryMessage({
+          eventId: "$thread-edit",
+          body: "edited root",
+          timestamp: 20,
+          replaces: "$thread-root",
+        }),
+      },
+    };
+    const { client } = createMessagesClient({ chunk: [], pollRoot: threadRoot });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$thread-root",
+    });
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0]).toMatchObject({ eventId: "$thread-root", body: "edited root" });
   });
 
   it("uses hydrated history events so encrypted poll entries can be read", async () => {
