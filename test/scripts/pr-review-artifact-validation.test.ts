@@ -140,6 +140,7 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
         'enter_worktree() { cd "$fixture_root"; }',
         'require_artifact() { [ -s "$1" ]; }',
         "mark_pr_operation_side_effects_started() { :; }",
+        'rg() { command grep -E "$@"; }',
         invocation,
       ].join("\n"),
       "pr-review-shell",
