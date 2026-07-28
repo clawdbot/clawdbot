@@ -96,7 +96,8 @@ describe("CodexAppServerEventProjector usage projection", () => {
   });
 
   it("accumulates distinct raw responses while keeping the final response fresh", async () => {
-    const projector = await createProjector();
+    const onRawResponseCompleted = vi.fn();
+    const projector = await createProjector(undefined, { onRawResponseCompleted });
 
     await projector.handleNotification(agentMessageDelta("done"));
     await projector.handleNotification(
@@ -152,6 +153,29 @@ describe("CodexAppServerEventProjector usage projection", () => {
       promptTokens: 14,
       totalTokens: 20,
     });
+    expect(onRawResponseCompleted).toHaveBeenCalledTimes(2);
+    expect(onRawResponseCompleted.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          responseId: "response-1",
+          usage: expect.objectContaining({ input: 3, output: 7, cacheRead: 2, total: 12 }),
+          completedAtMs: expect.any(Number),
+        }),
+      ],
+      [
+        expect.objectContaining({
+          responseId: "response-2",
+          usage: expect.objectContaining({
+            input: 8,
+            output: 6,
+            cacheRead: 4,
+            cacheWrite: 2,
+            total: 20,
+          }),
+          completedAtMs: expect.any(Number),
+        }),
+      ],
+    ]);
   });
 
   it("deduplicates raw responses by response id", async () => {
@@ -296,7 +320,8 @@ describe("CodexAppServerEventProjector usage projection", () => {
       },
     ],
   ])("keeps %s response usage unknown", async (_label, usage) => {
-    const projector = await createProjector();
+    const onRawResponseCompleted = vi.fn();
+    const projector = await createProjector(undefined, { onRawResponseCompleted });
 
     await projector.handleNotification(agentMessageDelta("done"));
     await projector.handleNotification(
@@ -308,6 +333,13 @@ describe("CodexAppServerEventProjector usage projection", () => {
     expect(result.assistantTexts).toEqual(["done"]);
     expect(result.attemptUsage).toBeUndefined();
     expect(result.lastAssistant?.usage.contextUsage).toBeUndefined();
+    expect(onRawResponseCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        responseId: "response-1",
+        completedAtMs: expect.any(Number),
+      }),
+    );
+    expect(onRawResponseCompleted.mock.calls[0]?.[0]).not.toHaveProperty("usage");
   });
 
   it("clears prior response usage when the final response omits usage", async () => {

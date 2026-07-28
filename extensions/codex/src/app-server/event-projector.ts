@@ -7,13 +7,11 @@ import {
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
-  type HeartbeatToolResponse,
-  type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { attemptTerminal, type AttemptFailureSource } from "./attempt-terminal.js";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
+import type { CodexAppServerToolTelemetry } from "./event-projector-contracts.js";
 import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
 import {
@@ -62,19 +60,6 @@ export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progres
 
 type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
 
-type CodexAppServerToolTelemetry = {
-  didSendViaMessagingTool: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
-  messagingToolSentTexts: string[];
-  messagingToolSentMediaUrls: string[];
-  messagingToolSentTargets: MessagingToolSend[];
-  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
-  toolMediaUrls?: string[];
-  toolAudioAsVoice?: boolean;
-  successfulCronAdds?: number;
-};
-
 export class CodexAppServerEventProjector {
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
@@ -112,6 +97,7 @@ export class CodexAppServerEventProjector {
       turnId,
       {
         runAbortSignal: options.runAbortSignal,
+        onToolCompleted: options.onToolCompleted,
       },
     );
     this.generatedMediaProjection = new CodexGeneratedMediaProjection(params.config, {
@@ -282,7 +268,12 @@ export class CodexAppServerEventProjector {
         await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
-        this.responseUsageProjection.handleCompleted(params);
+        {
+          const response = this.responseUsageProjection.handleCompleted(params);
+          if (response) {
+            this.options.onRawResponseCompleted?.({ ...response, completedAtMs: Date.now() });
+          }
+        }
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
@@ -480,6 +471,7 @@ export class CodexAppServerEventProjector {
     this.toolProgressProjection.recordDynamicToolResult(params);
     const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
+    this.options.onToolCompleted?.(Date.now());
   }
 
   markTimedOut(): void {

@@ -37,6 +37,7 @@ type CodexNativeToolLifecycleContext = Pick<
 
 type CodexNativeToolLifecycleProjectorOptions = {
   runAbortSignal?: AbortSignal;
+  onToolCompleted?: (completedAtMs: number) => void;
 };
 
 type CodexNativePreToolUseFailureRecord = {
@@ -229,6 +230,7 @@ export class CodexNativeToolLifecycleProjector {
     const startedAt = this.startedAtByItem.get(toolCallId);
     this.startedAtByItem.delete(toolCallId);
     const endedAt = options.sourceTimestampMs ?? Date.now();
+    this.options.onToolCompleted?.(endedAt);
     const durationMs =
       options.itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, endedAt - startedAt));
     if (preToolUseFailure) {

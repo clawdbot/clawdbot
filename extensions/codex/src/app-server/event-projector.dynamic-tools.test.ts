@@ -19,9 +19,11 @@ registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector dynamic tool projection", () => {
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
+    const onToolCompleted = vi.fn();
     const projector = await createProjector(undefined, {
       resolveDynamicToolResultContentSource: (toolName) =>
         toolName === "browser" ? "network" : undefined,
+      onToolCompleted,
     });
 
     projector.recordDynamicToolCall({
@@ -75,6 +77,8 @@ describe("CodexAppServerEventProjector dynamic tool projection", () => {
     ).toMatchObject({
       turnTainted: true,
     });
+    expect(onToolCompleted).toHaveBeenCalledOnce();
+    expect(onToolCompleted).toHaveBeenCalledWith(expect.any(Number));
   });
 
   it("retains MCP App preview details in mirrored dynamic tool results", async () => {

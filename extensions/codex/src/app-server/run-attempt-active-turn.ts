@@ -18,6 +18,7 @@ import { readBoundedCodexRemoteWorkspaceFile } from "./remote-workspace-media.js
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
+import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
   createCodexAppServerUserMessagePersistenceNotifier,
@@ -31,6 +32,7 @@ export async function activateCodexAttemptTurn(
   lifecycle: CodexAttemptLifecycleController,
   notifications: CodexAttemptNotificationController,
   turn: CodexTurnStartResponse,
+  requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
 ) {
   const {
     prompt,
@@ -110,6 +112,10 @@ export async function activateCodexAttemptTurn(
       trajectoryRecorder,
       resolveDynamicToolResultContentSource: toolBridge.resultContentSourceForTool,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      onToolCompleted: (completedAtMs) =>
+        requestRuntime.codexModelCallDiagnostics.recordToolCompleted(completedAtMs),
+      onRawResponseCompleted: (response) =>
+        requestRuntime.codexModelCallDiagnostics.emitResponseCompleted(response),
       ...(prepareNativeMcpAppResultDetails ? { prepareNativeMcpAppResultDetails } : {}),
       upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: () => {

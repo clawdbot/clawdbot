@@ -4,8 +4,11 @@
  */
 import { createHash } from "node:crypto";
 import {
+  createChildDiagnosticTraceContext,
   emitTrustedDiagnosticEventWithPrivateData,
+  freezeDiagnosticTraceContext,
   type DiagnosticModelCallContent,
+  type DiagnosticTraceContext,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
 
@@ -104,6 +107,36 @@ type CodexModelCallDiagnosticTool = {
   parameters?: unknown;
 };
 
+type CodexModelCallUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reasoningTokens?: number;
+  total?: number;
+};
+
+type CodexResponseDiagnostic = {
+  responseId: string;
+  usage?: CodexModelCallUsage;
+  completedAtMs?: number;
+};
+
+function diagnosticUsage(usage: CodexModelCallUsage | undefined): CodexModelCallUsage | undefined {
+  if (!usage) {
+    return undefined;
+  }
+  const projected = {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    reasoningTokens: usage.reasoningTokens,
+    total: usage.total,
+  };
+  return Object.values(projected).some((value) => value !== undefined) ? projected : undefined;
+}
+
 /**
  * Creates lifecycle emitters for trusted model-call diagnostics with optional
  * private payload capture.
@@ -121,10 +154,15 @@ export function createCodexModelCallDiagnosticEmitter(params: {
   const toolDefinitions = params.capture.toolDefinitions
     ? buildCodexDiagnosticToolDefinitions(params.tools)
     : undefined;
+  const turnCallId = String(params.baseFields.callId);
+  const turnTrace = params.baseFields.trace as DiagnosticTraceContext | undefined;
   let startedAt = now();
   let started = false;
   let terminalEmitted = false;
   let requestPayloadBytes: number | undefined;
+  let responseSequence = 0;
+  let nextResponseStartedAt = startedAt;
+  const completedResponseIds = new Set<string>();
 
   const privateData = (modelContent: DiagnosticModelCallContent | undefined) =>
     modelContent && Object.keys(modelContent).length > 0 ? { modelContent } : undefined;
@@ -145,6 +183,7 @@ export function createCodexModelCallDiagnosticEmitter(params: {
     },
     emitStarted(): void {
       startedAt = now();
+      nextResponseStartedAt = startedAt;
       started = true;
       emitTrustedDiagnosticEventWithPrivateData(
         {
@@ -154,17 +193,23 @@ export function createCodexModelCallDiagnosticEmitter(params: {
         privateData(buildContent()),
       );
     },
-    emitCompleted(result: { assistantTexts?: unknown; lastAssistant?: unknown }): void {
+    emitCompleted(result: {
+      assistantTexts?: unknown;
+      lastAssistant?: unknown;
+      attemptUsage?: CodexModelCallUsage;
+    }): void {
       if (!started || terminalEmitted) {
         return;
       }
       terminalEmitted = true;
+      const usage = diagnosticUsage(result.attemptUsage);
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.completed",
           ...params.baseFields,
           durationMs: Math.max(0, now() - startedAt),
           ...requestPayloadBytesField(),
+          ...(usage ? { usage } : {}),
         } as TrustedDiagnosticEventInput,
         privateData({
           ...buildContent(),
@@ -177,6 +222,50 @@ export function createCodexModelCallDiagnosticEmitter(params: {
             : {}),
         }),
       );
+    },
+    recordToolCompleted(completedAtMs = now()): void {
+      if (!started || terminalEmitted || !Number.isFinite(completedAtMs)) {
+        return;
+      }
+      nextResponseStartedAt = Math.max(nextResponseStartedAt, completedAtMs);
+    },
+    emitResponseCompleted(response: CodexResponseDiagnostic): void {
+      if (
+        !started ||
+        terminalEmitted ||
+        !response.responseId ||
+        completedResponseIds.has(response.responseId)
+      ) {
+        return;
+      }
+      const usage = diagnosticUsage(response.usage);
+      completedResponseIds.add(response.responseId);
+      responseSequence += 1;
+      const completedAtMs =
+        response.completedAtMs !== undefined && Number.isFinite(response.completedAtMs)
+          ? response.completedAtMs
+          : now();
+      const responseStartedAt = Math.min(nextResponseStartedAt, completedAtMs);
+      nextResponseStartedAt = completedAtMs;
+      const responseTrace = turnTrace
+        ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(turnTrace))
+        : undefined;
+      // App-server exposes response completion but no matching request-start event.
+      // A completed-only diagnostic lets the OTel recorder backdate the span from
+      // this duration instead of tracking a zero-length synthetic start.
+      emitTrustedDiagnosticEventWithPrivateData({
+        type: "model.call.completed",
+        ...params.baseFields,
+        callId: `${turnCallId}:response:${responseSequence}`,
+        observationUnit: "request",
+        ...(responseTrace ? { trace: responseTrace } : {}),
+        durationMs: Math.max(0, completedAtMs - responseStartedAt),
+        upstreamRequestIdHash: fingerprintCodexLogValue(
+          "openclaw:codex:response-id:v1",
+          response.responseId,
+        ),
+        ...(usage ? { usage } : {}),
+      } as TrustedDiagnosticEventInput);
     },
     emitError(error: unknown, fields: { failureKind?: CodexModelCallFailureKind } = {}): void {
       if (!started || terminalEmitted) {
