@@ -767,6 +767,15 @@ local launch normalization: `CODEX_HOME` stays pointed at the selected
 agent or user scope, and `HOME` stays inherited so subprocesses can use
 normal user-home state.
 
+Verified local setup turns also attest the selected Codex launcher and package.
+Inherited `NODE_OPTIONS` may contain bounded resource, warning, DNS result order,
+network-family autoselection, environment-proxy, and CA-source options because
+those settings cannot preload code or change module resolution. For example,
+`--dns-result-order=ipv4first --no-network-family-autoselection` is allowed.
+Malformed or unknown options and code-loading options such as `--require` or
+`--import` fail closed. If an inherited option is not needed by Codex, remove
+`NODE_OPTIONS` with `appServer.clearEnv`.
+
 ### Dynamic tools and web search
 
 Codex dynamic tools default to `searchable` loading. OpenClaw normally does
