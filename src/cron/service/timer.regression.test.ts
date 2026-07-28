@@ -12,8 +12,6 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { CommandLane } from "../../process/lanes.js";
 import { cancelTaskById, listTaskRecords } from "../../tasks/task-registry.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
@@ -70,22 +68,6 @@ function requireTimestamp(value: number | undefined, label: string): number {
     throw new Error(`expected ${label} timestamp`);
   }
   return value;
-}
-
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
-
-function firstMockArg(mock: unknown): unknown {
-  const calls = (mock as { mock: { calls: readonly (readonly unknown[])[] } }).mock.calls;
-  const call = calls[0];
-  if (!call) {
-    throw new Error("Expected mock to have at least one call");
-  }
-  return call[0];
 }
 
 function findCronTaskByBaseRunId(baseRunId: string) {

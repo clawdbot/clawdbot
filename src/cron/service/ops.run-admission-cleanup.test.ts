@@ -1,14 +1,17 @@
 // Queued cron reservation cleanup regressions across every trigger.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { stop } from "./ops-lifecycle.js";
 import { run } from "./ops-run.js";
+import { runWithCronAdmission } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
@@ -18,6 +21,49 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service run admission cleanup", () => {
+  it("releases immediate and queued admission slots in FIFO order after failures", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const releaseFirst = createDeferred<void>();
+    const executionOrder: string[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => 0,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+
+    const immediate = runWithCronAdmission(state, async () => {
+      executionOrder.push("immediate");
+      await releaseFirst.promise;
+      return "immediate";
+    });
+    const failed = runWithCronAdmission(state, async () => {
+      executionOrder.push("failed");
+      throw new Error("queued admission failed");
+    });
+    const failure = expect(failed).rejects.toThrow("queued admission failed");
+    const queued = runWithCronAdmission(state, async () => {
+      executionOrder.push("queued");
+      return "queued";
+    });
+
+    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    expect(state.runAdmission.waiters).toHaveLength(2);
+
+    releaseFirst.resolve();
+
+    await expect(immediate).resolves.toEqual({ kind: "admitted", value: "immediate" });
+    await failure;
+    await expect(queued).resolves.toEqual({ kind: "admitted", value: "queued" });
+    expect(executionOrder).toEqual(["immediate", "failed", "queued"]);
+    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+    expect(state.runAdmission.waiters).toHaveLength(0);
+  });
+
   it.each(["manual", "scheduled", "startup"] as const)(
     "does not start a %s run when stop wins the activation write",
     async (trigger) => {
