@@ -1398,6 +1398,212 @@ describe("handleCommands reset hooks", () => {
     expect(preparedCatalogMock.loadPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
+  it("names a fresh session from a model-brand word that no configured provider serves", async () => {
+    // Regression: the old prefix heuristic classified any tail starting with a known
+    // model-brand word (gemini, claude, …) as a model directive even when no configured
+    // provider could resolve it, so `/new Gemini planning` silently dropped the name.
+    // The classifier must mirror the reset-model resolver: with only openai/gpt-5.5
+    // configured, "Gemini planning" cannot resolve and stays a session name.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new Gemini planning",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "Gemini planning" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Gemini planning”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Gemini planning",
+    );
+  });
+
+  it("names a fresh session from a tail matching only a fallback model's bare id", async () => {
+    // Regression: configured fallback refs were folded into the classification set, so
+    // `/new foo planning` was swallowed as a model directive whenever some fallback ended
+    // in "foo". The reset-model resolver keeps fallbacks out of its allowed keys, so the
+    // classifier must too — the tail stays a session name.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildResetParams(
+      "/new foo planning",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.5", fallbacks: ["other/foo"] } },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "foo planning" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “foo planning”." },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "foo planning",
+    );
+  });
+
+  it("keeps native --model title args for the reset-model resolver instead of naming", async () => {
+    // A native title of `--model openai/gpt-5.5` is an explicit model flag, not a bare
+    // model ref, so ref classification alone would miss it and freeze the flag text as
+    // the session name. The native path must mirror the text path's explicit-flag reject.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    for (const title of ["--model openai/gpt-5.5", "model:openai/gpt-5.5"]) {
+      const params = buildResetParams(
+        `/new ${title}`,
+        {
+          commands: { text: true },
+          channels: { discord: { allowFrom: ["*"] } },
+        } as OpenClawConfig,
+        {
+          CommandSource: "native",
+          CommandArgs: { values: { title } },
+          Provider: "discord",
+          Surface: "discord",
+        },
+      );
+      params.storePath = storePath;
+      params.sessionStore = {
+        "agent:main:main": {
+          sessionId: "fresh-session",
+          updatedAt: 1,
+          totalTokens: 0,
+          totalTokensFresh: true,
+        },
+      };
+      params.sessionEntry = params.sessionStore["agent:main:main"];
+
+      const result = await maybeHandleResetCommand(params);
+
+      expect(result, title).toBeNull();
+      expect(
+        loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label,
+        title,
+      ).toBeUndefined();
+    }
+  });
+
+  it("refuses to relabel a session that rotated while /new hooks were running", async () => {
+    // The label write is bound to the session incarnation the /new targeted. When a
+    // concurrent reset rotates the persisted session while hooks are awaited, naming
+    // must fail instead of silently relabeling the replacement session.
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey: "agent:main:main" },
+      { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    triggerInternalHookMock.mockImplementation(async () => {
+      await upsertSessionEntry(
+        { storePath, sessionKey: "agent:main:main" },
+        { sessionId: "rotated-session", updatedAt: 2, totalTokens: 0, totalTokensFresh: true },
+      );
+    });
+    const params = buildResetParams(
+      "/new Rotated notes",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "Rotated notes" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "✅ New session started, but couldn't name it: the session changed before it could be named",
+      },
+    });
+    expect(loadSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBeUndefined();
+  });
+
   it("allows slashes in native structured /new title args", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry(

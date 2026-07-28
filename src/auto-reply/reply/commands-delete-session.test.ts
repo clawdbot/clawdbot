@@ -18,9 +18,20 @@ import type { HandleCommandsParams } from "./commands-types.js";
 const DELETE_CALL_TIMEOUT_MS = SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000;
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
+const admissionHandoffMock = vi.hoisted(() =>
+  vi.fn((_params: { scope: string; identities: string[] }): string | undefined => undefined),
+);
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (params: unknown) => callGatewayMock(params),
+}));
+
+vi.mock("../../sessions/session-lifecycle-admission.js", async () => ({
+  ...(await vi.importActual<typeof import("../../sessions/session-lifecycle-admission.js")>(
+    "../../sessions/session-lifecycle-admission.js",
+  )),
+  createSessionWorkAdmissionHandoffForCurrent: (params: { scope: string; identities: string[] }) =>
+    admissionHandoffMock(params),
 }));
 
 const sessionKey = "agent:main:web:delete-me";
@@ -29,6 +40,8 @@ let tempRoots: string[] = [];
 beforeEach(() => {
   callGatewayMock.mockReset();
   callGatewayMock.mockResolvedValue({ deleted: true });
+  admissionHandoffMock.mockReset();
+  admissionHandoffMock.mockReturnValue(undefined);
 });
 
 afterEach(async () => {
@@ -213,7 +226,7 @@ describe("delete session command", () => {
     expect(mirror?.expectedSessionId).toBe("incarnation-1");
   });
 
-  it("binds the deletion to the captured session incarnation", async () => {
+  it("binds the deletion to the captured session incarnation without pinning updatedAt", async () => {
     const storePath = await createStorePath();
     const params = buildDeleteParams("/close", storePath);
     params.sessionStore = {
@@ -234,9 +247,12 @@ describe("delete session command", () => {
         deleteTranscript: true,
         expectedSessionId: "incarnation-1",
         expectedLifecycleRevision: "rev-7",
-        expectedSessionUpdatedAt: 42,
       },
     });
+    // updatedAt is bumped by metadata-only touches (labels, pins) without rotating
+    // the session, so binding the deletion to it would spuriously fail /close.
+    const call = callGatewayMock.mock.calls[0]?.[0] as { params: Record<string, unknown> };
+    expect(call.params).not.toHaveProperty("expectedSessionUpdatedAt");
   });
 
   it("forwards the initiating chat run id so the /close turn is not self-aborted", async () => {
@@ -287,6 +303,79 @@ describe("delete session command", () => {
     });
     expect(callGatewayMock).not.toHaveBeenCalled();
     expect(loadSessionEntry({ storePath, sessionKey })?.sessionId).toBe("delete-me");
+  });
+
+  it("rejects unauthorized senders before leaking argument usage feedback", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry(
+      { storePath, sessionKey },
+      { sessionId: "delete-me", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    );
+    const params = buildDeleteParams("/delete Planning notes", storePath, {
+      isAuthorizedSender: false,
+    });
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    // The authorization gate must run before argument validation so a probing
+    // unauthorized sender gets the same silent rejection as for a bare /delete.
+    expect(result).toEqual({ shouldContinue: false });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ storePath, sessionKey })?.sessionId).toBe("delete-me");
+  });
+
+  it("hands off the admission under the normalized session key", async () => {
+    const storePath = await createStorePath();
+    admissionHandoffMock.mockReturnValueOnce("handoff-normalized");
+    const params = buildDeleteParams("/close", storePath);
+
+    await handleDeleteSessionCommand(params, true);
+
+    expect(admissionHandoffMock).toHaveBeenCalledTimes(1);
+    expect(admissionHandoffMock).toHaveBeenCalledWith({
+      scope: storePath,
+      identities: [sessionKey],
+    });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          key: sessionKey,
+          admissionHandoffId: "handoff-normalized",
+        }),
+      }),
+    );
+  });
+
+  it("falls back to the raw-key admission handoff and targets the RPC at that key", async () => {
+    const storePath = await createStorePath();
+    // The turn admission is registered under the RAW session key; when it differs
+    // from the normalized key (e.g. legacy casing) the normalized handoff misses.
+    const rawSessionKey = "agent:main:web:Delete-ME";
+    admissionHandoffMock.mockImplementation((handoff: { identities: string[] }) =>
+      handoff.identities[0] === rawSessionKey ? "handoff-raw" : undefined,
+    );
+    const params = buildDeleteParams("/close", storePath, { sessionKey: rawSessionKey });
+
+    await handleDeleteSessionCommand(params, true);
+
+    expect(admissionHandoffMock).toHaveBeenNthCalledWith(1, {
+      scope: storePath,
+      identities: [sessionKey],
+    });
+    expect(admissionHandoffMock).toHaveBeenNthCalledWith(2, {
+      scope: storePath,
+      identities: [rawSessionKey],
+    });
+    // The server consumes the handoff with the key it receives, so the RPC must
+    // target the same key the handoff was created for or the lease is never adopted.
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({
+          key: rawSessionKey,
+          admissionHandoffId: "handoff-raw",
+        }),
+      }),
+    );
   });
 
   it("does not delete the main session", async () => {

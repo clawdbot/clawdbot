@@ -76,11 +76,6 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   if (!parsed) {
     return null;
   }
-  if (parsed.tail) {
-    return deleteSessionReply(
-      `${parsed.command} only deletes the current session and does not accept arguments.`,
-    );
-  }
   const unauthorized = rejectUnauthorizedCommand(params, parsed.command);
   if (unauthorized) {
     return unauthorized;
@@ -92,6 +87,13 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   });
   if (missingAdminScope) {
     return missingAdminScope;
+  }
+  // Only authorized senders get usage feedback; unauthorized ones were rejected above
+  // so a probing sender cannot distinguish this command from an unknown one.
+  if (parsed.tail) {
+    return deleteSessionReply(
+      `${parsed.command} only deletes the current session and does not accept arguments.`,
+    );
   }
 
   if (!params.storePath || !params.sessionKey) {
@@ -115,12 +117,28 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   // returns). Hand the retained lease to the server so it adopts and exempts the
   // initiating admission. When no covering admission is active this is undefined
   // and the server falls back to the normal drain-and-retry contract.
-  const admissionHandoffId = params.storePath
-    ? createSessionWorkAdmissionHandoffForCurrent({
+  // The admission was registered under the RAW turn session key while the RPC
+  // targets the normalized key; the server consumes the handoff with the key it
+  // receives, so the handoff identity and the RPC key must match. Prefer the
+  // normalized key and fall back to the raw key, sending whichever key the
+  // handoff was actually created for.
+  let rpcSessionKey = resolved.normalizedKey;
+  let admissionHandoffId: string | undefined;
+  if (params.storePath) {
+    admissionHandoffId = createSessionWorkAdmissionHandoffForCurrent({
+      scope: params.storePath,
+      identities: [resolved.normalizedKey],
+    });
+    if (admissionHandoffId === undefined && params.sessionKey !== resolved.normalizedKey) {
+      admissionHandoffId = createSessionWorkAdmissionHandoffForCurrent({
         scope: params.storePath,
         identities: [params.sessionKey],
-      })
-    : undefined;
+      });
+      if (admissionHandoffId !== undefined) {
+        rpcSessionKey = params.sessionKey;
+      }
+    }
+  }
   // A /close issued from a gateway client (e.g. Control UI) arrives as a chat run
   // and is itself registered in the gateway's chat-run table. The nested
   // sessions.delete aborts competing runs on this session before deleting; without
@@ -140,14 +158,16 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
     // client does not time out (default 10s) before the lifecycle mutation reports back.
     timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS + 5_000,
     params: {
-      key: resolved.normalizedKey,
+      key: rpcSessionKey,
       deleteTranscript: true,
       // Bind the deletion to the incarnation the user closed: if a concurrent /new,
       // reset, or rollover rotates this key first, the gateway returns "session
-      // changed" instead of deleting the replacement session.
+      // changed" instead of deleting the replacement session. updatedAt is NOT part
+      // of that binding: label edits, pinned-state changes, or any metadata touch
+      // bump it without rotating the session, and binding to it would make /close
+      // spuriously fail for the very session the user is looking at.
       expectedSessionId: targetEntry?.sessionId,
       expectedLifecycleRevision: targetEntry?.lifecycleRevision,
-      expectedSessionUpdatedAt: targetEntry?.updatedAt,
       ...(admissionHandoffId ? { admissionHandoffId } : {}),
       ...(exemptChatRunId ? { exemptChatRunId } : {}),
     },
