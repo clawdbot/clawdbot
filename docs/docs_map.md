@@ -10710,6 +10710,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick start
   - H2: Supported providers
   - H2: Configuration
+  - H3: Local Speech Swift and speech-core
   - H3: Per-agent voice overrides
   - H2: Personas
   - H3: Minimal persona

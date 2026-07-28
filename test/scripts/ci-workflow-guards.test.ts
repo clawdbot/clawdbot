@@ -4304,7 +4304,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiE2e.if).toBe(
       "needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'",
     );
-    expect(uiE2e["runs-on"]).toBe(ui["runs-on"]);
+    expect(uiE2e["runs-on"]).toContain("blacksmith-8vcpu-ubuntu-2404");
+    expect(uiE2e["runs-on"]).not.toBe(ui["runs-on"]);
     // The full suite runs one file at a time (fileParallelism: false), so it
     // needs a wider budget than the single-file gate this job replaced.
     expect(uiE2e["timeout-minutes"]).toBe(45);
