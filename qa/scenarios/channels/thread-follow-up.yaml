@@ -23,6 +23,7 @@ scenario:
     - extensions/qa-lab/src/live-transports/matrix/adapter.runtime.ts
   execution:
     kind: flow
+    channels: [qa-channel, slack, matrix]
     summary: Send a deterministic follow-up through the shared host and require native thread relation evidence.
     config:
       rootMarker: QA-THREAD-ROOT-OK
