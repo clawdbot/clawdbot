@@ -66,7 +66,7 @@ export {
 } from "./store-record.js";
 export { readSkillProposalRollback, writeSkillProposalRollback } from "./store-sqlite-rollback.js";
 
-export type SkillProposalLookupScope = {
+type SkillProposalLookupScope = {
   agentId?: string;
   workspaceDir?: string;
 };
@@ -427,12 +427,6 @@ export async function readSkillProposalManifest(
     updatedAt: proposals[0]?.updatedAt ?? new Date(0).toISOString(),
     proposals,
   };
-}
-
-export async function refreshSkillProposalManifest(
-  options: SkillWorkshopStoreOptions = {},
-): Promise<SkillProposalManifest> {
-  return await readSkillProposalManifest(options);
 }
 
 async function reconcileInterruptedApply(

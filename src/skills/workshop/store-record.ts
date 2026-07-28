@@ -13,7 +13,7 @@ import {
 
 export const PROPOSAL_DRAFT_FILE = "PROPOSAL.md";
 export const MAX_PROPOSAL_SUPPORT_FILES = 64;
-export const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
+const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
 
 export function assertProposalId(proposalId: string): void {
   if (!PROPOSAL_ID_PATTERN.test(proposalId)) {

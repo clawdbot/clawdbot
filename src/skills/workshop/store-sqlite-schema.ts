@@ -16,9 +16,6 @@ export type SkillWorkshopDatabase = Pick<
   | "skill_workshop_proposals"
 >;
 export type SkillProposalRow = Selectable<SkillWorkshopDatabase["skill_workshop_proposals"]>;
-export type SkillProposalRollbackRow = Selectable<
-  SkillWorkshopDatabase["skill_workshop_proposal_rollbacks"]
->;
 export type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
