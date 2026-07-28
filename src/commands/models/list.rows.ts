@@ -208,8 +208,9 @@ async function buildRow(params: {
   routeIndex?: ModelCatalogLogicalRouteIndex;
   authEvaluation?: ModelListAuthEvaluation;
   allowAuthAvailabilityOverride?: boolean;
+  configuredEntry?: ConfiguredEntry;
 }): Promise<ModelRow> {
-  const configured = params.context.configuredByKey.get(params.key);
+  const configured = params.configuredEntry ?? params.context.configuredByKey.get(params.key);
   const authRef = toModelAuthRef(params.model, params.routeIndex);
   const authEvaluation =
     params.authEvaluation ??
@@ -299,6 +300,7 @@ async function appendVisibleRow(params: {
   allowAuthAvailabilityOverride?: boolean;
   skipSuppression?: boolean;
   normalizeWithProviderPlugin?: boolean;
+  configuredEntry?: ConfiguredEntry;
 }): Promise<boolean> {
   if (params.seenKeys?.has(params.key)) {
     return false;
@@ -338,6 +340,7 @@ async function appendVisibleRow(params: {
       ...(params.routeIndex ? { routeIndex: params.routeIndex } : {}),
       authEvaluation,
       allowAuthAvailabilityOverride: params.allowAuthAvailabilityOverride,
+      ...(params.configuredEntry ? { configuredEntry: params.configuredEntry } : {}),
     }),
   );
   params.seenKeys?.add(params.key);
@@ -674,47 +677,37 @@ export async function appendConfiguredRows(params: {
             cfg: params.context.cfg,
           })
         : toFallbackConfiguredListModel(entry, params.context.cfg, catalogByKey?.get(entry.key));
-    const model = resolvedModel
-      ? normalizeListRowWithProviderPlugin({ model: resolvedModel, context: params.context })
-      : resolvedModel;
-    if (params.context.filter.local && !model) {
+    if (!resolvedModel) {
+      // Registry-resolved refs can miss entirely; the configured view still
+      // surfaces the ref as a "missing" row so a typo'd fallback is visible.
+      if (!params.context.filter.local) {
+        params.rows.push(
+          toModelRow({
+            key: entry.key,
+            tags: Array.from(entry.tags),
+            aliases: entry.aliases,
+            availableKeys: params.context.availableKeys,
+            authAvailability: undefined,
+          }),
+        );
+      }
       continue;
     }
-    const authEvaluation = model
-      ? params.context.authIndex.evaluateModelAuth(model.provider, toModelAuthRef(model))
-      : undefined;
-    const projectedModel =
-      model && authEvaluation
-        ? projectListRowModel({ model, evaluation: authEvaluation, cfg: params.context.cfg })
-        : model;
-    if (
-      params.context.filter.local &&
-      projectedModel &&
-      !isLocalBaseUrl(projectedModel.baseUrl ?? "")
-    ) {
-      continue;
-    }
-    if (
-      projectedModel &&
-      shouldSuppressListModel({ model: projectedModel, context: params.context })
-    ) {
-      continue;
-    }
-    params.rows.push(
-      toModelRow({
-        model: projectedModel,
-        key: entry.key,
-        tags: Array.from(entry.tags),
-        aliases: entry.aliases,
-        availableKeys: params.context.availableKeys,
-        authAvailability: authEvaluation?.availability,
-        authAvailabilityAuthoritative:
-          Boolean(
-            model && !params.context.discoveredKeys.has(modelKey(model.provider, model.id)),
-          ) ||
-          normalizeProviderIdForAuth(model?.provider ?? entry.ref.provider) === "openai" ||
-          (authEvaluation !== undefined && authEvaluation.routeResolution !== null),
-      }),
-    );
+    // Normalize before the availability decision so the discovered-keys check
+    // uses the same canonical key the registry rows carry.
+    const model = normalizeListRowWithProviderPlugin({
+      model: resolvedModel,
+      context: params.context,
+    });
+    await appendVisibleRow({
+      rows: params.rows,
+      model,
+      key: entry.key,
+      context: params.context,
+      configuredEntry: entry,
+      allowAuthAvailabilityOverride: !params.context.discoveredKeys.has(
+        modelKey(model.provider, model.id),
+      ),
+    });
   }
 }
