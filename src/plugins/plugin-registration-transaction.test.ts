@@ -324,6 +324,7 @@ describe("plugin registration transaction", () => {
 
   it("restores the active PluginRecord's arrays and scalars after a failed registration (loader #106647)", () => {
     const registry = createEmptyPluginRegistry();
+    const initialFailureDate = new Date(123);
 
     // Simulate the loader pattern: record exists before transaction,
     // register() mutates its id-collection arrays, scalars, and the registry.
@@ -361,6 +362,7 @@ describe("plugin registration transaction", () => {
       hookCount: 0,
       configSchema: false,
       memorySlotSelected: false,
+      failedAt: initialFailureDate,
     };
 
     const transaction = createPluginRegistrationTransaction({
@@ -377,6 +379,7 @@ describe("plugin registration transaction", () => {
     record.configSchema = true;
     record.memorySlotSelected = true;
     record.enabled = false;
+    initialFailureDate.setTime(456);
     (record as Record<string, unknown>).transientMetadata = "leaked";
     registry.tools.push({
       pluginId: "test-plugin",
@@ -407,6 +410,8 @@ describe("plugin registration transaction", () => {
     expect(record.configSchema).toBe(false);
     expect(record.memorySlotSelected).toBe(false);
     expect(record.enabled).toBe(true);
+    expect(record.failedAt?.getTime()).toBe(123);
+    expect(record.failedAt).not.toBe(initialFailureDate);
     expect(record).not.toHaveProperty("transientMetadata");
   });
 
