@@ -577,12 +577,13 @@ describe("resolveBundledStaticCatalogModel", () => {
     });
   });
 
-  it("ignores non-bundled and non-static manifest catalog rows", () => {
-    // Workspace plugins and refreshable/runtime catalogs are not process-stable
-    // enough for this fallback path.
+  it("ignores non-bundled and runtime-only manifest catalog rows", () => {
+    // Workspace plugins and runtime-only catalogs are not process-stable
+    // enough for this fallback path. Refreshable providers ship manifest
+    // rows as their static fallback and are accepted by the bundled
+    // resolver (#103532).
     for (const plugin of [
       createMistralManifestPlugin({ origin: "workspace" }),
-      createMistralManifestPlugin({ discovery: "refreshable" }),
       createMistralManifestPlugin({ discovery: "runtime" }),
     ]) {
       setManifestPlugins([plugin]);
@@ -616,14 +617,16 @@ describe("resolveBundledStaticCatalogModel", () => {
     }
   });
 
-  it("can include bundled refreshable manifest catalog rows for configured fallbacks", () => {
+  it("resolves bundled refreshable manifest catalog rows as static fallback", () => {
+    // Refreshable providers ship manifest rows that serve as the static
+    // fallback for the bundled resolver; includeRuntimeDiscovery is not
+    // required for refreshable entries (#103532, #112412).
     setManifestPlugins([createMistralManifestPlugin({ discovery: "refreshable" })]);
 
     const model = resolveBundledStaticCatalogModel({
       provider: "mistral",
       modelId: "mistral-medium-3-5",
       cfg: {},
-      includeRuntimeDiscovery: true,
     });
 
     expect(model?.maxTokens).toBe(8192);

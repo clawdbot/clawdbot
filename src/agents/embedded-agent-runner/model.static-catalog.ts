@@ -313,12 +313,15 @@ export function createBundledStaticCatalogModelResolver(params?: {
       state.plans.set(provider, plan);
     }
     for (const entry of plan.entries) {
+      // Refreshable providers ship manifest rows as their static fallback;
+      // include them alongside explicitly-static entries so the bundled
+      // resolver can surface models from providers like Novita (#103532).
+      // Runtime-only providers still gate behind includeRuntimeDiscovery
+      // because they have no bundled manifest rows to fall back to.
       if (
         entry.discovery !== "static" &&
-        !(
-          params?.includeRuntimeDiscovery &&
-          (entry.discovery === "runtime" || entry.discovery === "refreshable")
-        )
+        entry.discovery !== "refreshable" &&
+        !(params?.includeRuntimeDiscovery && entry.discovery === "runtime")
       ) {
         continue;
       }

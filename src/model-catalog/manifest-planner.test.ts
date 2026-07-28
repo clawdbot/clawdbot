@@ -112,7 +112,14 @@ describe("manifest model catalog planner", () => {
       "static-provider/known",
       "static-provider/refreshed",
     ]);
-    expect(refsFor("static")).toEqual(["static-provider/known", "static-provider/refreshed"]);
+    // "static" selection now includes both static and refreshable providers
+    // whose shipped manifest rows serve as static-authoritative fallback (#103532).
+    expect(refsFor("static")).toEqual([
+      "refreshable-provider/known",
+      "refreshable-provider/refreshed",
+      "static-provider/known",
+      "static-provider/refreshed",
+    ]);
     expect(refsFor("supplemental")).toEqual([
       "refreshable-provider/known",
       "refreshable-provider/refreshed",

@@ -144,8 +144,11 @@ export function planManifestModelCatalogRows(params: {
       return false;
     }
     const discovery = seenRows.get(row.mergeKey)?.discovery;
+    // "static" selection accepts both explicitly-static and refreshable
+    // providers whose shipped manifest rows serve as the static fallback
+    // for the model selector and gateway-auth wizard (#103532).
     if (params.selection === "static") {
-      return discovery === "static";
+      return discovery === "static" || discovery === "refreshable";
     }
     return (
       params.selection !== "supplemental" ||
