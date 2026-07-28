@@ -104,6 +104,25 @@ describe("persistBrowserProxyFiles", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("rejects malformed base64 before persisting files", async () => {
+    const error = await persistBrowserProxyFiles([
+      {
+        path: "/tmp/malformed.bin",
+        base64: "aGVsbG8$",
+        mimeType: "application/octet-stream",
+      },
+    ]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("browser proxy file contains malformed base64 data");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
   it("rejects too many files before persisting any", async () => {
     const files = Array.from({ length: BROWSER_PROXY_MAX_FILES + 1 }, (_, index) => ({
       path: `/tmp/file-${index}.bin`,
