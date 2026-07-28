@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from tools.dashboard.test_scorecard_approval import dashboard
+
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = Path(__file__).with_name("gunicorn.conf.py")
@@ -61,6 +63,57 @@ class DashboardWsgiConfigurationTests(unittest.TestCase):
         self.assertIn("KillSignal=SIGQUIT", unit)
         self.assertIn("NoNewPrivileges=true", unit)
         self.assertNotIn("tools/dashboard/app.py", unit)
+
+
+class DashboardDirectLaunchTests(unittest.TestCase):
+    def test_direct_flask_launch_requires_explicit_development_flag(self):
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch.object(dashboard.app, "run", create=True) as app_run,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Direct Flask startup is disabled",
+            ):
+                dashboard.run_flask_development_server()
+
+        app_run.assert_not_called()
+
+    def test_explicit_development_launch_is_loopback_only_without_debug(self):
+        environment = {
+            "OPENCLAW_DASHBOARD_ALLOW_FLASK_DEV_SERVER": "1",
+        }
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(dashboard.app, "run", create=True) as app_run,
+        ):
+            dashboard.run_flask_development_server()
+
+        app_run.assert_called_once_with(
+            host="127.0.0.1",
+            port=5051,
+            debug=False,
+            use_reloader=False,
+        )
+
+    def test_development_bind_and_port_require_explicit_overrides(self):
+        environment = {
+            "OPENCLAW_DASHBOARD_ALLOW_FLASK_DEV_SERVER": "1",
+            "OPENCLAW_DASHBOARD_DEV_HOST": "0.0.0.0",
+            "OPENCLAW_DASHBOARD_DEV_PORT": "15051",
+        }
+        with (
+            mock.patch.dict(os.environ, environment, clear=True),
+            mock.patch.object(dashboard.app, "run", create=True) as app_run,
+        ):
+            dashboard.run_flask_development_server()
+
+        app_run.assert_called_once_with(
+            host="0.0.0.0",
+            port=15051,
+            debug=False,
+            use_reloader=False,
+        )
 
 
 if __name__ == "__main__":

@@ -48,9 +48,11 @@ The dashboard exposes `tools.dashboard.wsgi:application` and is launched by
 Gunicorn from its supervised service definition. Both development and
 production were observed with one Gunicorn master and two workers.
 
-The `app.run()` block at the end of `tools/dashboard/app.py` is not used by the
-supervised service. It remains a developer convenience and must not be used as
-a deployment entry point.
+The direct launcher at the end of `tools/dashboard/app.py` is not used by the
+supervised service. It refuses to start unless
+`OPENCLAW_DASHBOARD_ALLOW_FLASK_DEV_SERVER=1` is explicitly set, defaults to
+`127.0.0.1:5051`, and always disables debug mode and the reloader. It remains a
+local developer convenience and must not be used as a deployment entry point.
 
 ### PropertyManager API
 

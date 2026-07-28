@@ -6944,5 +6944,23 @@ def backup():
     return redirect("/?backup=success")
 
 
+def run_flask_development_server():
+    if os.environ.get("OPENCLAW_DASHBOARD_ALLOW_FLASK_DEV_SERVER") != "1":
+        raise RuntimeError(
+            "Direct Flask startup is disabled. Use the supervised Gunicorn service, "
+            "or explicitly set OPENCLAW_DASHBOARD_ALLOW_FLASK_DEV_SERVER=1 for "
+            "local development."
+        )
+
+    host = os.environ.get("OPENCLAW_DASHBOARD_DEV_HOST", "127.0.0.1")
+    port = int(os.environ.get("OPENCLAW_DASHBOARD_DEV_PORT", "5051"))
+    app.run(
+        host=host,
+        port=port,
+        debug=False,
+        use_reloader=False,
+    )
+
+
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5051)
+    run_flask_development_server()
