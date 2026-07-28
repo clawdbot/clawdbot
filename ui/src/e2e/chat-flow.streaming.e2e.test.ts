@@ -94,12 +94,24 @@ suite.define(() => {
       if (!media) {
         throw new Error("expected rendered assistant audio");
       }
-      await page.locator(".chat-thread").evaluate((element) => {
-        const thread = element as HTMLElement;
-        thread.scrollTop = Math.max(0, thread.scrollHeight - thread.clientHeight - 120);
-        thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-      });
-      expect(await chatThreadDistanceFromBottom(page)).toBeGreaterThan(8);
+      const thread = page.locator(".chat-thread");
+      await thread.hover();
+      await page.mouse.wheel(0, -240);
+      await expect
+        .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
+        .toBeGreaterThan(8);
+      await expect
+        .poll(
+          () =>
+            page.locator("openclaw-chat-pane").evaluate((element) => {
+              const pane = element as HTMLElement & {
+                state?: { chatFollowLocked?: boolean };
+              };
+              return pane.state?.chatFollowLocked;
+            }),
+          { timeout: 10_000 },
+        )
+        .toBe(true);
       await media.evaluate((element) => {
         element.style.height = "600px";
         element.dispatchEvent(new Event("loadedmetadata", { bubbles: true }));
