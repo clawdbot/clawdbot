@@ -375,6 +375,45 @@ export function reconcileSessionTranscriptIndexInTransaction(
   if (state && !state.needsRebuild && state.indexedSeq === latest.seq) {
     return false;
   }
+  // Incremental path: when the existing projection is clean and events were
+  // only appended, forward-index just the new events instead of rebuilding
+  // the full session. Falls back to the full rebuild below when any event
+  // cannot be forward-indexed (branch, side-append, canonical flip).
+  if (state && !state.needsRebuild && state.indexedSeq >= 0 && state.indexedSeq < latest.seq) {
+    const newRows = executeSqliteQuerySync(
+      db,
+      getIndexKysely(db)
+        .selectFrom("transcript_events")
+        .select(["event_json", "seq", "created_at"])
+        .where("session_id", "=", sessionId)
+        .where("seq", ">", state.indexedSeq)
+        .orderBy("seq", "asc"),
+    ).rows;
+    let incrementalOk = newRows.length > 0;
+    for (const row of newRows) {
+      const event = JSON.parse(row.event_json) as Record<string, unknown>;
+      const eventId = typeof event.id === "string" ? event.id : null;
+      if (
+        indexAppendedTranscriptEventInTransaction(db, {
+          sessionId,
+          seq: row.seq,
+          event,
+          eventId,
+          createdAt: row.created_at,
+        })
+      ) {
+        incrementalOk = false;
+        break;
+      }
+    }
+    if (incrementalOk) {
+      return true;
+    }
+    // Incremental failed on at least one event (out-of-band write, branch,
+    // side-append). The failed call already marked the session dirty via
+    // markSessionTranscriptIndexDirtyInTransaction. Fall through so the full
+    // rebuild path re-resolves the correct active branch.
+  }
   const rows = executeSqliteQuerySync(
     db,
     getIndexKysely(db)
