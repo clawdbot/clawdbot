@@ -8,6 +8,7 @@ type SessionTranscriptUpdateTarget = {
   agentId: string;
   sessionId: string;
   sessionKey: string;
+  storePath?: string;
 };
 
 type SessionTranscriptUpdateFields = {
@@ -156,6 +157,7 @@ function normalizeUpdateTarget(update: {
     (sessionKey ? parseAgentSessionKey(sessionKey)?.agentId : undefined);
   const sessionId =
     normalizeOptionalString(update.target?.sessionId) ?? normalizeOptionalString(update.sessionId);
+  const storePath = normalizeOptionalString(update.target?.storePath);
   if (!agentId || !sessionId || !sessionKey) {
     return undefined;
   }
@@ -163,5 +165,6 @@ function normalizeUpdateTarget(update: {
     agentId,
     sessionId,
     sessionKey,
+    ...(storePath ? { storePath } : {}),
   };
 }

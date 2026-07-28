@@ -1,7 +1,7 @@
 // Mattermost plugin module implements directory behavior.
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { listMattermostAccountIds, resolveMattermostAccount } from "./accounts.js";
+import { inspectMattermostAccount, listMattermostAccountIds } from "./accounts.js";
 import {
   createMattermostClient,
   fetchMattermostMe,
@@ -23,7 +23,7 @@ function buildClient(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): MattermostClient | null {
-  const account = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = inspectMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.enabled || !account.botToken || !account.baseUrl) {
     return null;
   }

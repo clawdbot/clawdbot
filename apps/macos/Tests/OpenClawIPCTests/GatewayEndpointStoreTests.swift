@@ -1106,6 +1106,30 @@ extension GatewayEndpointStoreTests {
         #expect(url?.absoluteString == "ws://100.123.224.76:18789")
     }
 
+    @Test func `gateway url validation guidance matches trusted plaintext policy`() {
+        let accepted = [
+            "ws://localhost:18789",
+            "ws://192.168.0.202:18789",
+            "ws://169.254.20.1:18789",
+            "ws://gateway.local:18789",
+            "ws://gateway.example.ts.net:18789",
+            "ws://100.123.224.76:18789",
+        ]
+        for rawURL in accepted {
+            #expect(GatewayRemoteConfig.normalizeGatewayUrl(rawURL) != nil)
+        }
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789") == nil)
+
+        let message = GatewayRemoteConfig.directGatewayUrlValidationMessage
+        #expect(message.contains("public hosts"))
+        #expect(message.contains("localhost"))
+        #expect(message.contains("LAN"))
+        #expect(message.contains("link-local"))
+        #expect(message.contains(".local"))
+        #expect(message.contains("Tailnet"))
+        #expect(!message.contains("only for localhost"))
+    }
+
     @Test func `missing transport infers direct from private remote URL`() {
         let root: [String: Any] = [
             "gateway": [

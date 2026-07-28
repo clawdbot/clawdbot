@@ -686,34 +686,46 @@ describe("monitorSlackProvider tool results", () => {
     );
   });
 
-  it("keeps ack reaction when no reply is delivered and status reactions are disabled", async () => {
+  it("keeps ack reaction after sending the missing-reply fallback when status reactions are disabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(false);
     mockGeneralChannelInfo();
     await runMentionGatedChannelMessage();
 
-    expect(sendMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(reactMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMock, "send", 1)).toBe(
+      "PFX No reply was generated for this message. This is usually a temporary model failure - please try again.",
+    );
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
-  it("keeps ack reaction when no reply is delivered and status reactions are enabled", async () => {
+  it("keeps ack reaction after sending the missing-reply fallback when status reactions are enabled", async () => {
     replyMock.mockResolvedValue(undefined);
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
     await runMentionGatedChannelMessage();
 
-    expect(sendMock).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(reactMock).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    expect(reactMock).toHaveBeenCalledWith({
-      channel: "C1",
-      timestamp: "456",
-      name: "eyes",
-    });
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(sendMock, "send", 1)).toBe(
+      "PFX No reply was generated for this message. This is usually a temporary model failure - please try again.",
+    );
+    await vi.waitFor(
+      () =>
+        expect(reactMock).toHaveBeenCalledWith({
+          channel: "C1",
+          timestamp: "456",
+          name: "eyes",
+        }),
+      { timeout: 5_000 },
+    );
   });
 
   it("keeps status reactions for mentioned message-tool-only channel turns", async () => {

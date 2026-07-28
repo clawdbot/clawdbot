@@ -10,7 +10,7 @@ import {
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { markPageRefBlocked, markTargetBlocked, pageTargetId } from "./pw-session-connection.js";
+import { markPageRefBlocked, markTargetBlocked, pageTargetInfo } from "./pw-session-connection.js";
 
 type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
 
@@ -66,7 +66,7 @@ export async function quarantineBlockedNavigationTarget(opts: {
   targetId?: string;
 }): Promise<void> {
   markPageRefBlocked(opts.cdpUrl, opts.page);
-  const resolvedTargetId = await pageTargetId(opts.page).catch(() => null);
+  const resolvedTargetId = (await pageTargetInfo(opts.page).catch(() => null))?.targetId ?? null;
   const fallbackTargetId = normalizeOptionalString(opts.targetId) ?? "";
   const targetIdToBlock = resolvedTargetId || fallbackTargetId;
   if (targetIdToBlock) {

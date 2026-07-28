@@ -5,13 +5,14 @@ import type {
   ResponseInputItem,
   ResponseInputMessageContentList,
 } from "openai/resources/responses/responses.js";
+import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
-  stripSystemPromptCacheBoundary,
-} from "../internal/shared.js";
+} from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
+import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./host-policy.js";
 import type { createOpenAIResponsesClient } from "./openai-responses-client.js";
 import {
@@ -26,7 +27,7 @@ import {
   type ReplayableResponseReasoningItem,
 } from "./openai-responses-contracts.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
-import { log, type BaseOpenAIStreamOptions } from "./openai-transport-shared.js";
+import { log } from "./openai-transport-shared.js";
 import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,

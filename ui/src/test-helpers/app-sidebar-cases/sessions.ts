@@ -14,6 +14,7 @@ import {
   type SidebarLifecycleState,
   successfulSessionPatch,
   type TestSessionMenu,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
@@ -58,7 +59,11 @@ describe("AppSidebar session indicators", () => {
         rateLimited: false,
       }),
     );
-    const gatewayHarness = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+    const gatewayHarness = createGatewayHarness({
+      request,
+      requestSessionPullRequests: (params: { sessionKey: string }) =>
+        request("controlUi.sessionPullRequests", params),
+    } as unknown as GatewayBrowserClient);
     gatewayHarness.publish({
       hello: {
         features: { methods: ["controlUi.sessionPullRequests"] },
@@ -398,6 +403,27 @@ describe("AppSidebar session accessibility", () => {
   });
 });
 
+describe("AppSidebar session navigation", () => {
+  it("selects the session's agent before changing the active session", async () => {
+    const gateway = createGateway({} as GatewayBrowserClient);
+    const { sidebar, context } = await mountSidebar(
+      gateway,
+      createSessions("main", ["agent:main:main", "agent:research:work"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const calls: string[] = [];
+    context.agentSelection.set = vi.fn((agentId) => calls.push(`agent:${agentId}`));
+    gateway.setSessionKey = vi.fn((sessionKey) => calls.push(`session:${sessionKey}`));
+
+    (sidebar as unknown as { selectSession: (sessionKey: string) => void }).selectSession(
+      "agent:research:work",
+    );
+
+    expect(calls).toEqual(["agent:research", "session:agent:research:work"]);
+  });
+});
+
 describe("AppSidebar session mutation feedback", () => {
   async function mountMutationHarness(client: GatewayBrowserClient = {} as GatewayBrowserClient) {
     const gateway = createGatewayHarness(client);
@@ -450,8 +476,9 @@ describe("AppSidebar session mutation feedback", () => {
     const { gateway, harness, sidebar } = await mountMutationHarness();
     const setSessionKey = vi.fn();
     (gateway.gateway as { setSessionKey: (key: string) => void }).setSessionKey = setSessionKey;
-    const state = createSessionState("main", ["agent:main:main", "agent:main:a", "agent:main:b"]);
-    const archivedRow = state.result?.sessions.find((row) => row.key === "agent:main:a");
+    const archivedKey = "agent:main:dashboard:00000002-0000-4000-8000-000000000000";
+    const state = createSessionState("main", ["agent:main:main", archivedKey, "agent:main:b"]);
+    const archivedRow = state.result?.sessions.find((row) => row.key === archivedKey);
     if (!archivedRow) {
       throw new Error("expected archive row");
     }
@@ -479,16 +506,14 @@ describe("AppSidebar session mutation feedback", () => {
     toast.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
     await vi.waitFor(() => expect(harness.patch).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(setSessionKey).toHaveBeenLastCalledWith(archivedRow.key));
+    expect(setSessionKey).not.toHaveBeenCalled();
     // Undo restores through the batch helper, which refreshes once at the end.
     expect(harness.patch).toHaveBeenLastCalledWith(
       archivedRow.key,
       { archived: false, pinned: true },
       { agentId: "main", deferListRefresh: true },
     );
-    expect(navigate).toHaveBeenLastCalledWith("chat", {
-      search: "?session=agent%3Amain%3Aa",
-    });
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("patches a session icon from the picker", async () => {

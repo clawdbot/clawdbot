@@ -16,6 +16,8 @@ Background tasks track work that runs **outside your main conversation session**
 
 Tasks do **not** replace sessions, cron jobs, or heartbeats - they are the **activity ledger** that records what detached work happened, when, and whether it succeeded.
 
+For a strict, ephemeral one-shot agent run in CI or a script, use [`openclaw agent exec`](/cli/agent#agent-exec) instead of managed background work.
+
 <Note>
 Not every agent run creates a task. Heartbeat turns and normal interactive chat do not. All cron executions, ACP spawns, subagent spawns, gateway-dispatched CLI agent commands, and agent-started background `exec` commands do.
 </Note>

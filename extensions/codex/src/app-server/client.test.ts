@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { inc as incrementSemver } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -387,10 +388,14 @@ describe("CodexAppServerClient", () => {
   });
 
   it("blocks stable Codex app-server versions newer than generated schemas", async () => {
+    const newerVersion = incrementSemver(MAX_CODEX_APP_SERVER_VERSION, "patch");
+    if (!newerVersion) {
+      throw new Error(`invalid maximum Codex app-server version: ${MAX_CODEX_APP_SERVER_VERSION}`);
+    }
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
-      result: { userAgent: "openclaw/0.145.0 (macOS; test)" },
+      result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
     });
 
     await expect(initializing).rejects.toThrow(

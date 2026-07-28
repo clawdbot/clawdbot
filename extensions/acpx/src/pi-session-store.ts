@@ -14,7 +14,7 @@ const APPEND_PROOF_EDGE_BYTES = 64 * 1024;
 const IO_CONCURRENCY = 8;
 const SESSION_ID_PATTERN = /^(?!-)[A-Za-z0-9._:-]{1,256}$/u;
 
-type PiSessionSummary = SessionCatalogSession & { file: string };
+type PiSessionSummary = SessionCatalogSession & { file: string; version: number };
 
 type PiFileCandidate = {
   file: string;
@@ -374,12 +374,15 @@ async function readPiSessionSummary(
       processSummaryLine(projectedState, projectedState.pending);
     }
     const { header, name, firstMessage } = projectedState;
+    const version =
+      header?.type === "session" && typeof header.version === "number" ? header.version : 1;
     const threadId = header?.type === "session" ? optionalString(header.id, 256) : undefined;
     if (header && threadId && SESSION_ID_PATTERN.test(threadId)) {
       const cwd = optionalString(header.cwd, 4_096);
       const createdAt = timestampMs(header.timestamp);
       summary = {
         file: candidate.file,
+        version,
         threadId,
         ...(name || firstMessage ? { name: name ?? firstMessage } : {}),
         ...(cwd ? { cwd } : {}),
@@ -471,6 +474,28 @@ async function findPiSummary(
     }
   }
   return undefined;
+}
+
+export async function readPiSessionFileBaseline(
+  threadId: string,
+  env: NodeJS.ProcessEnv,
+): Promise<
+  | {
+      filePath: string;
+      offset: number;
+    }
+  | undefined
+> {
+  const summary = await findPiSummary(threadId, env);
+  if (!summary?.canContinue || summary.version < 3) {
+    return undefined;
+  }
+  try {
+    const stats = await fs.stat(summary.file);
+    return stats.isFile() ? { filePath: summary.file, offset: stats.size } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export async function readPiSessionById(

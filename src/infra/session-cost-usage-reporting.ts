@@ -8,7 +8,7 @@ import {
   isPrimarySessionTranscriptFileName,
   parseUsageCountedSessionIdFromFileName,
 } from "../config/sessions/artifacts.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
@@ -149,6 +149,12 @@ export async function loadSessionCostSummary(params: {
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
+  sessionTarget?: {
+    agentId: string;
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  };
   startMs?: number;
   endMs?: number;
   includeUntimestamped?: boolean;

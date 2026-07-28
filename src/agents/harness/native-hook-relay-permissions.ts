@@ -34,7 +34,7 @@ import type {
 } from "./native-hook-relay-types.js";
 import { readOptionalString, truncateText } from "./native-hook-relay-utils.js";
 
-type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
+export type NativeHookRelayDeferredToolApprovalRequester = typeof requestDeferredPluginToolApproval;
 
 const DEFAULT_PERMISSION_TIMEOUT_MS = 120_000;
 const PERMISSION_ALLOW_ALWAYS_TTL_MS = 30 * 60 * 1000;

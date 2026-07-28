@@ -24,6 +24,7 @@
       "mistral": {
         "baseUrl": "https://api.mistral.ai/v1",
         "api": "openai-completions",
+        "defaultModel": "mistral-large-latest",
         "models": [
           {
             "id": "codestral-latest",

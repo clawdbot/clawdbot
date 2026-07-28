@@ -371,6 +371,9 @@ const config = {
     "extensions/onepassword/onepassword-op-path.js": ["exports"],
     // Focused CLI tests exercise plan construction through this explicit test seam.
     "extensions/onepassword/src/secret-ref-cli.ts": ["exports"],
+    // Mirror config parsing, redaction mapping, cap fitting, and the runner are
+    // asserted by the focused Beam mirror tests; production wires only the service.
+    "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
@@ -399,6 +402,8 @@ const config = {
       ],
       // Platform tools and shell builtins used by package scripts and process-boundary tests.
       ignoreBinaries: ["mint", "open", "sleep", "xcrun"],
+      // The stylelint config lives under config/, not a root default path.
+      stylelint: { config: ["config/stylelint.config.mjs"] },
       project: [
         ".github/actions/**/*.{js,mjs,cjs,ts,mts,cts}!",
         "apps/**/*.{js,mjs,cjs,ts,mts,cts}!",
@@ -488,6 +493,21 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
+    "packages/model-catalog-core": {
+      // Mirror the published export map so package-owned runtime dependencies
+      // are traced from the TypeScript sources instead of the JS fallback.
+      entry: [
+        "src/index.ts!",
+        "src/configured-model-refs.ts!",
+        "src/model-catalog-normalize.ts!",
+        "src/model-catalog-refs.ts!",
+        "src/model-catalog-types.ts!",
+        "src/provider-id.ts!",
+        "src/provider-model-id-normalization.ts!",
+        "src/provider-model-id-normalize.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
     "packages/normalization-core": {
       // Mirror package.json exports; root and UI builds consume these source subpaths directly.
       entry: [
@@ -542,10 +562,7 @@ const config = {
     "packages/acp-core": {
       entry: [
         "src/index.ts!",
-        "src/normalize-text.ts!",
         "src/meta.ts!",
-        "src/numeric-options.ts!",
-        "src/record-shared.ts!",
         "src/session.ts!",
         "src/session-interaction-mode.ts!",
         "src/session-lineage-meta.ts!",

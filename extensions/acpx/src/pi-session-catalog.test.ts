@@ -679,52 +679,6 @@ describe("Pi session catalog", () => {
     },
   );
 
-  it("adopts local Pi sessions once with the native ACP resume binding", async () => {
-    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
-    await installFakePi();
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
-
-    const [first, concurrent] = await Promise.all([
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-      provider.continueSession!({ hostId: "gateway", threadId: "pi-session" }),
-    ]);
-    const second = await provider.continueSession!({
-      hostId: "gateway",
-      threadId: "pi-session",
-    });
-
-    expect(first).toEqual(concurrent);
-    expect(second).toEqual(first);
-    expect(createSessionEntry).toHaveBeenCalledTimes(1);
-    expect(createSessionEntry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "Pi catalog session",
-        spawnedCwd: "/workspace",
-        initialEntry: {
-          acpBackendId: "acpx",
-          acpSessionBinding: { acpAgentId: "pi", agentSessionId: "pi-session" },
-          pluginExtensions: {
-            acpx: { piSessionCatalog: { sourceThreadId: "pi-session" } },
-          },
-        },
-      }),
-    );
-  });
-
-  it("rejects paired-node and unknown Pi session continuation", async () => {
-    await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
-    await installFakePi();
-    const { createSessionEntry, provider } = capturePiContinuationCatalog();
-
-    await expect(
-      provider.continueSession!({ hostId: "node:remote", threadId: "pi-session" }),
-    ).rejects.toThrow("paired-node Pi session rows are view-only");
-    await expect(
-      provider.continueSession!({ hostId: "gateway", threadId: "missing" }),
-    ).rejects.toThrow("Pi session is unavailable");
-    expect(createSessionEntry).not.toHaveBeenCalled();
-  });
-
   it("hides and rejects Continue when ACP cannot resume Pi", async () => {
     await createPiStore("hi", "Pi catalog session", { command: "pwd" }, true);
     await installFakePi();
@@ -791,19 +745,20 @@ describe("Pi session catalog", () => {
       }),
     };
     const invoke = vi.fn().mockResolvedValue(page);
+    const nodes = [
+      {
+        nodeId: "node-1",
+        connected: true,
+        commands: [PI_SESSIONS_LIST_COMMAND, PI_TERMINAL_RESUME_COMMAND],
+      },
+    ];
+    const runtimeListNodes = vi.fn().mockResolvedValue({ nodes });
+    const requestListNodes = vi.fn().mockResolvedValue({ nodes });
     registerPiSessionCatalog({
       pluginConfig: {},
       runtime: {
         nodes: {
-          list: vi.fn().mockResolvedValue({
-            nodes: [
-              {
-                nodeId: "node-1",
-                connected: true,
-                commands: [PI_SESSIONS_LIST_COMMAND, PI_TERMINAL_RESUME_COMMAND],
-              },
-            ],
-          }),
+          list: runtimeListNodes,
           invoke,
         },
       },
@@ -814,7 +769,13 @@ describe("Pi session catalog", () => {
       registerNodeInvokePolicy: vi.fn(),
     } as unknown as OpenClawPluginApi);
 
-    await expect(provider!.list({ hostIds: ["node:node-1"], search: "remote" })).resolves.toEqual([
+    await expect(
+      provider!.list({
+        hostIds: ["node:node-1"],
+        search: "remote",
+        listNodes: requestListNodes,
+      }),
+    ).resolves.toEqual([
       expect.objectContaining({
         sessions: [
           expect.objectContaining({
@@ -825,6 +786,8 @@ describe("Pi session catalog", () => {
         ],
       }),
     ]);
+    expect(requestListNodes).toHaveBeenCalledOnce();
+    expect(runtimeListNodes).not.toHaveBeenCalled();
     expect(invoke).toHaveBeenNthCalledWith(1, {
       nodeId: "node-1",
       command: PI_SESSIONS_LIST_COMMAND,

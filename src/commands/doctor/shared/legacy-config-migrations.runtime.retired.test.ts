@@ -439,7 +439,6 @@ describe("retired runtime config migrations", () => {
     });
 
     expect(result.raw).toMatchObject({
-      ui: { prefs: { showAdvancedSettings: true } },
       skills: { load: { watch: true } },
       agents: {
         defaults: {
@@ -451,11 +450,15 @@ describe("retired runtime config migrations", () => {
       },
       messages: { inbound: { byChannel: { whatsapp: 4_000 } } },
     });
+    expect(result.raw).not.toHaveProperty("ui");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.default.debounceMs");
     expect(result.raw).not.toHaveProperty("channels.whatsapp.accounts.work.debounceMs");
     expect(result.changes).toContain(
       "Collapsed conflicting WhatsApp debounce values into messages.inbound.byChannel.whatsapp using channels.whatsapp.accounts.work.debounceMs (4000 ms); account-specific debounce is no longer supported.",
+    );
+    expect(result.changes).toContain(
+      "Removed browser-local ui.prefs keys: ui.prefs.chatMessageMaxWidth, ui.prefs.textScale, ui.prefs.sidebarLiveActivity, ui.prefs.showAdvancedSettings.",
     );
   });
 
@@ -528,6 +531,28 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).not.toHaveProperty("tui");
     expect(result.raw).not.toHaveProperty("commands.modelsWrite");
     expect(result.changes.length).toBeGreaterThan(8);
+  });
+
+  it("lifts the retired plan-tool switch out of the tools.experimental container", () => {
+    const result = applyAll({ tools: { experimental: { planTool: false } } });
+
+    expect(result.raw).toHaveProperty("tools.updatePlan", false);
+    expect(result.raw).not.toHaveProperty("tools.experimental");
+    expect(result.changes).toContain("Moved tools.experimental.planTool → tools.updatePlan.");
+  });
+
+  it("drops the tools.experimental container when the canonical plan-tool switch wins", () => {
+    const canonicalWins = applyAll({
+      tools: { updatePlan: true, experimental: { planTool: false } },
+    });
+    const emptyContainer = applyAll({ tools: { experimental: {} } });
+
+    expect(canonicalWins.raw).toHaveProperty("tools.updatePlan", true);
+    expect(canonicalWins.raw).not.toHaveProperty("tools.experimental");
+    expect(emptyContainer.raw).not.toHaveProperty("tools.experimental");
+    expect(emptyContainer.changes).toContain(
+      "Removed tools.experimental; tools.updatePlan now owns the switch.",
+    );
   });
 
   it("consolidates the approved tier-eval tranche with canonical values winning", () => {

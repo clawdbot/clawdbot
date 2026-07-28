@@ -10,7 +10,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
@@ -328,6 +328,21 @@ function createModelCatalogSnapshot(
   };
 }
 
+function resolveEligibleManifestCatalogPlugins(
+  snapshot: PluginMetadataSnapshot,
+  config: OpenClawConfig,
+): PluginMetadataSnapshot["plugins"] {
+  return snapshot.plugins.filter(
+    (plugin) =>
+      plugin.modelCatalog &&
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config,
+      }),
+  );
+}
+
 export function loadManifestModelCatalog(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -357,17 +372,11 @@ export function loadManifestModelCatalog(params: {
   if (cached?.snapshot === resolvedSnapshot) {
     return cached.rows;
   }
-  const eligiblePlugins = resolvedSnapshot.plugins.filter(
-    (plugin) =>
-      plugin.modelCatalog &&
-      isManifestPluginAvailableForControlPlane({
-        snapshot: resolvedSnapshot,
-        plugin,
-        config: params.config,
-      }),
-  );
-  const plan = planManifestModelCatalogRows({
-    registry: { plugins: eligiblePlugins },
+  const plan = planEffectiveModelCatalogRows({
+    registry: {
+      plugins: resolveEligibleManifestCatalogPlugins(resolvedSnapshot, params.config),
+    },
+    config: params.config,
   });
   const rows = plan.rows.map((row) => {
     const entry: ModelCatalogEntry = {
@@ -501,11 +510,30 @@ export async function buildPreparedModelCatalogSnapshot(
       models.push(model);
       mergeCatalogRouteVariants(routeVariants, [model]);
     }
+    const supplementalManifestPlan = planEffectiveModelCatalogRows({
+      registry: {
+        plugins: resolveEligibleManifestCatalogPlugins(manifestMetadataSnapshot, cfg),
+      },
+      config: cfg,
+      selection: "supplemental",
+    });
+    const supplementalManifestKeys = new Set(
+      supplementalManifestPlan.rows.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)),
+    );
+    const runtimeDiscoveryProviders = new Set(
+      supplementalManifestPlan.entries.flatMap((entry) =>
+        entry.discovery === "runtime" ? [normalizeProviderId(entry.provider)] : [],
+      ),
+    );
+    // Runtime declarations describe possible models, not account entitlement.
+    // Only live registry or refreshed rows may publish those provider models.
     const manifestModels = loadManifestModelCatalog({
       config: cfg,
       env,
       metadataSnapshot: manifestMetadataSnapshot,
-    });
+    }).filter((entry) =>
+      supplementalManifestKeys.has(catalogEntryDedupeKey(entry.provider, entry.id)),
+    );
     mergeCatalogRouteVariants(routeVariants, manifestModels);
     mergeCatalogEntries(models, manifestModels);
     logStage("manifest-models-merged", `entries=${models.length}`);
@@ -552,13 +580,35 @@ export async function buildPreparedModelCatalogSnapshot(
         },
       });
       if (supplemental.length > 0) {
+        // Explicitly configured rows are user-authorized even when live
+        // discovery omits them; normalize both sets to preserve their routes.
+        const accountVisibleModelKeys = new Set(
+          [...models, ...configuredModels].map((entry) =>
+            catalogEntryDedupeKey(
+              entry.provider,
+              normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
+                manifestPlugins: getManifestPlugins(),
+              }),
+            ),
+          ),
+        );
         const normalizedSupplemental: ModelCatalogEntry[] = [];
         for (const entry of supplemental) {
+          const id = normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
+            manifestPlugins: getManifestPlugins(),
+          });
+          // Account-discovered providers own the visible model set. Synthetic
+          // metadata can enrich an available or explicitly configured model,
+          // but must never advertise a model the account did not discover.
+          if (
+            runtimeDiscoveryProviders.has(normalizeProviderId(entry.provider)) &&
+            !accountVisibleModelKeys.has(catalogEntryDedupeKey(entry.provider, id))
+          ) {
+            continue;
+          }
           normalizedSupplemental.push({
             ...entry,
-            id: normalizeConfiguredProviderCatalogModelId(entry.provider, entry.id, {
-              manifestPlugins: getManifestPlugins(),
-            }),
+            id,
           });
         }
         mergeCatalogRouteVariants(routeVariants, normalizedSupplemental);

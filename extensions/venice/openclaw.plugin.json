@@ -43,6 +43,7 @@
       "venice": {
         "baseUrl": "https://api.venice.ai/api/v1",
         "api": "openai-completions",
+        "defaultModel": "zai-org-glm-4.7",
         "models": [
           {
             "id": "zai-org-glm-5-2",

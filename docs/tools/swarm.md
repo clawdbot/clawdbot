@@ -311,12 +311,12 @@ is rejected with the relevant config key in the error.
 
 ## Observe a Swarm
 
-Keep the parent session open in the Control UI while a swarm is active. A compact
-Swarm progress widget appears between the chat transcript and composer, rendering
-each active collector group as one dot per child with queued, running, done, or
-failed state. Labels appear in dot tooltips, so short stable labels make larger
-swarms easier to read. The widget disappears after every group child reaches a
-terminal state.
+Keep the parent session open in Chat while a swarm is active. The Control UI and
+native Android, iOS, and macOS chat surfaces show a compact Swarm progress widget
+between the transcript and composer, rendering each active collector group as one
+dot per child with queued, running, done, or failed state. Accessible labels identify
+each child and status; the Control UI also exposes them as dot tooltips. The widget
+disappears after every group child reaches a terminal state.
 
 The session sidebar keeps the normal parent/child tree. Expand the parent row to
 inspect a collector child or open its transcript without losing the swarm hierarchy.

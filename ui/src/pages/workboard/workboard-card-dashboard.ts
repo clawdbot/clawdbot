@@ -163,6 +163,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
                   .sessions=${[]}
                   .canMutate=${provider.canMutate}
                   .canGrant=${provider.canGrant}
+                  .ticketRefreshEnabled=${this.expanded}
                 ></openclaw-board-view>
               `
             : html`<p class="workboard-card-dashboard__empty">${t("workboard.dashboardEmpty")}</p>`}

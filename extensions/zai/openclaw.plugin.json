@@ -32,6 +32,7 @@
       "zai": {
         "baseUrl": "https://api.z.ai/api/paas/v4",
         "api": "openai-completions",
+        "defaultModel": "glm-5.2",
         "models": [
           {
             "id": "glm-5.2",
@@ -45,7 +46,8 @@
               "output": 4.4,
               "cacheRead": 0.26,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "glm-5-turbo",
@@ -89,7 +91,8 @@
               "output": 4.4,
               "cacheRead": 0.26,
               "cacheWrite": 0
-            }
+            },
+            "compat": { "codeMode": "preferred" }
           }
         ]
       }

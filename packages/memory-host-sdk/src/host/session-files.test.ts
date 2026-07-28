@@ -7,6 +7,7 @@ import {
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntry,
@@ -118,7 +119,7 @@ describe("listSessionFilesForAgent", () => {
 });
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
-  it("omits active JSONL session entries from accessor-backed corpus entries", async () => {
+  it("treats accessor-backed entries as live SQLite transcripts", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(path.join(sessionsDir, "narrative.jsonl"), "");
@@ -130,7 +131,15 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+      expect.objectContaining({
+        agentId: "main",
+        artifactKind: "active-session",
+        sessionFile: "agent:main:dreaming-narrative-run-1",
+        sessionId: "narrative",
+        transcriptSource: "sqlite",
+      }),
+    );
   });
 
   it("keeps archive artifacts in the corpus and inherits active session classification", async () => {
@@ -170,7 +179,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
     await upsertSessionEntry({ agentId: "main", sessionKey, storePath }, { sessionId, updatedAt });
-    const turn = await persistSessionTranscriptTurn(
+    await persistSessionTranscriptTurn(
       { agentId: "main", sessionId, sessionKey, storePath },
       {
         messages: [
@@ -206,7 +215,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
           agentId: "main",
           artifactKind: "active-session",
           contentRevision: expect.any(String),
-          sessionFile: turn.sessionFile,
+          sessionFile: sessionKey,
           sessionId,
           sessionKey,
           transcriptSource: "sqlite",
@@ -223,10 +232,19 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
 
     const liveEntry = requireSessionEntry(
-      await buildSessionEntry(turn.sessionFile, { sessionKey, updatedAtMs: updatedAt }),
+      await buildSessionEntry(sessionKey, {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath,
+        updatedAtMs: updatedAt,
+      }),
     );
-    const liveState = statSessionEntrySync(turn.sessionFile, {
+    const liveState = statSessionEntrySync(sessionKey, {
+      agentId: "main",
+      sessionId,
       sessionKey,
+      storePath,
       updatedAtMs: updatedAt,
     });
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
@@ -234,7 +252,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
     expect(liveEntry.content).toBe("User: Live SQLite transcript text");
     expect(liveState).toEqual({
-      absPath: turn.sessionFile,
+      absPath: sessionKey,
       path: liveEntry.path,
       mtimeMs: liveEntry.mtimeMs,
       size: liveEntry.size,
@@ -345,14 +363,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    const classification = loadSessionTranscriptClassificationForAgent("main");
-
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set());
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(entries.find((entry) => entry.sessionFile === normalPath)?.generatedByCronRun).toBe(
-      undefined,
-    );
+    expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
   });
 
   it("keeps archive classification when the active transcript is missing", async () => {
@@ -373,16 +385,18 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
     expect(classification.cronRunTranscriptPaths).toEqual(new Set([expectedArchivePath]));
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
-      {
-        agentId: "main",
-        artifactKind: "archive-artifact",
-        contentRevision: expect.any(String),
-        generatedByCronRun: true,
-        sessionFile: expectedArchivePath,
-        sessionId: "cron-run",
-      },
-    ]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          agentId: "main",
+          artifactKind: "archive-artifact",
+          contentRevision: expect.any(String),
+          generatedByCronRun: true,
+          sessionFile: expectedArchivePath,
+          sessionId: "cron-run",
+        }),
+      ]),
+    );
   });
 
   it("omits active session entries whose transcript files are missing", async () => {
@@ -505,7 +519,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
-  it("omits active JSONL transcripts from a custom session store", async () => {
+  it("uses SQLite identity for entries in a custom session store", async () => {
     const sessionsDir = path.join(tmpDir, "custom-sessions");
     const sessionFile = path.join(sessionsDir, "custom-thread.jsonl");
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -525,7 +539,13 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     });
 
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
+      expect.objectContaining({
+        sessionFile: "agent:main:chat:custom",
+        sessionId: "custom-thread",
+        transcriptSource: "sqlite",
+      }),
+    );
   });
 
   it("keeps unowned archives from an agent-owned fixed session store", async () => {
@@ -911,12 +931,12 @@ describe("buildSessionEntry", () => {
         message: {
           role: "user",
           content: [
-            { type: "text", text: "Conversation info (untrusted metadata):" },
+            { type: "text", text: markInboundContextLabel("Conversation info:") },
             { type: "text", text: "```json" },
             { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
             { type: "text", text: "```" },
             { type: "text", text: "" },
-            { type: "text", text: "Sender (untrusted metadata):" },
+            { type: "text", text: markInboundContextLabel("Sender:") },
             { type: "text", text: "```json" },
             { type: "text", text: '{"label":"Chris","id":"42"}' },
             { type: "text", text: "```" },

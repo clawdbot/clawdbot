@@ -368,6 +368,7 @@ export type CodexTurn = {
 export type CodexThread = {
   id: string;
   sessionId?: string;
+  path?: string | null;
   historyMode?: "legacy" | "paginated";
   extra?: JsonObject | null;
   name?: string | null;

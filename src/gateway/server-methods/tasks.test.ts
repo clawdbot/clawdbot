@@ -163,7 +163,7 @@ describe("tasks gateway handlers", () => {
     const { calls, payload } = await runTaskHandler("tasks.list", {
       status: "running",
       agentId: "main",
-      sessionKey: "agent:main:main",
+      sessionKey: "main",
     });
 
     expect(calls[0]?.[0]).toBe(true);

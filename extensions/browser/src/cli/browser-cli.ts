@@ -4,11 +4,11 @@
 import type { Command } from "commander";
 import {
   registerCommandGroups,
-  resolveCliArgvInvocation,
   shouldEagerRegisterSubcommands,
   type CommandGroupEntry,
   type CommandGroupPlaceholder,
 } from "openclaw/plugin-sdk/cli-runtime";
+import { resolveBrowserLazySubcommand } from "../../cli-output-mode.js";
 import { browserActionExamples, browserCoreExamples } from "./browser-cli-examples.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 import {
@@ -31,17 +31,6 @@ type BrowserCommandGroupDefinition = {
   placeholders: readonly CommandGroupPlaceholder[];
   register: BrowserCommandRegistrar;
 };
-
-const ROOT_BOOLEAN_OPTIONS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_OPTIONS = new Set(["--profile", "--log-level", "--container"]);
-const BROWSER_BOOLEAN_OPTIONS = new Set(["--json", "--expect-final"]);
-const BROWSER_VALUE_OPTIONS = new Set([
-  "--browser-profile",
-  "--url",
-  "--token",
-  "--timeout",
-  "--gateway-url",
-]);
 
 const command = (
   name: string,
@@ -117,6 +106,7 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
   },
   {
     placeholders: [
+      command("extract", "Answer a question from the current page"),
       command("console", "Get recent console messages"),
       command("pdf", "Save page as PDF"),
       command("responsebody", "Wait for a network response and return its body"),
@@ -167,77 +157,6 @@ function buildBrowserCommandGroups(params: {
     placeholders: entry.placeholders,
     register: async () => await entry.register(params),
   }));
-}
-
-function isValueToken(arg: string | undefined): boolean {
-  return Boolean(arg && arg !== "--" && (!arg.startsWith("-") || /^-\d+(?:\.\d+)?$/.test(arg)));
-}
-
-function consumeOption(
-  args: readonly string[],
-  index: number,
-  booleanOptions: ReadonlySet<string>,
-  valueOptions: ReadonlySet<string>,
-): number {
-  const arg = args[index];
-  if (!arg || arg === "--" || !arg.startsWith("-")) {
-    return 0;
-  }
-  const equalsIndex = arg.indexOf("=");
-  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
-  if (booleanOptions.has(flag)) {
-    return equalsIndex === -1 ? 1 : 0;
-  }
-  if (!valueOptions.has(flag)) {
-    return 0;
-  }
-  if (equalsIndex !== -1) {
-    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
-  }
-  return isValueToken(args[index + 1]) ? 2 : 1;
-}
-
-function resolveBrowserLazySubcommand(argv: string[]): string | null {
-  const { primary } = resolveCliArgvInvocation(argv);
-  if (primary !== "browser") {
-    return null;
-  }
-
-  const args = argv.slice(2);
-  let sawBrowser = false;
-  for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
-    if (!arg || arg === "--") {
-      break;
-    }
-    if (!sawBrowser) {
-      const consumed = consumeOption(args, i, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
-      if (consumed > 0) {
-        i += consumed - 1;
-        continue;
-      }
-      if (arg.startsWith("-")) {
-        continue;
-      }
-      if (arg === "browser") {
-        sawBrowser = true;
-        continue;
-      }
-      return null;
-    }
-
-    const consumed = consumeOption(args, i, BROWSER_BOOLEAN_OPTIONS, BROWSER_VALUE_OPTIONS);
-    if (consumed > 0) {
-      i += consumed - 1;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      continue;
-    }
-    return arg;
-  }
-
-  return null;
 }
 
 function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {

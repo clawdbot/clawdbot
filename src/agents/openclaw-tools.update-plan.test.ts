@@ -96,16 +96,9 @@ describe("openclaw-tools update_plan gating", () => {
       modelProvider: "anthropic",
       modelId: "claude-sonnet-4-6",
     });
-    const emptyAllowlistParams = {
-      config: {} as OpenClawConfig,
-      pluginToolAllowlist: [],
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-    };
 
     expect(defaultTools).toContain("update_plan");
     expect(defaultTools).not.toContain("ask_user");
-    expect(shouldIncludeUpdatePlanToolForOpenClawTools(emptyAllowlistParams)).toBe(true);
   });
 
   it("keeps ask_user on primary sessions and excludes spawned worker sessions", () => {
@@ -280,13 +273,7 @@ describe("openclaw-tools update_plan gating", () => {
   });
 
   it("registers update_plan when explicitly enabled", () => {
-    const config = {
-      tools: {
-        experimental: {
-          planTool: true,
-        },
-      },
-    } as OpenClawConfig;
+    const config = { tools: { updatePlan: true } } as OpenClawConfig;
 
     expectUpdatePlanEnabled({ config }, true);
     expect(createUpdatePlanTool().displaySummary).toBe("Track short work plan.");
@@ -306,19 +293,6 @@ describe("openclaw-tools update_plan gating", () => {
   it("includes update_plan when a config allowlist group includes it", () => {
     const includeUpdatePlan = shouldIncludeUpdatePlanToolForOpenClawTools({
       config: { tools: { allow: ["group:agents"] } } as OpenClawConfig,
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
-    });
-
-    expect(includeUpdatePlan).toBe(true);
-  });
-
-  it("includes update_plan when a runtime allowlist group includes it", () => {
-    const includeUpdatePlan = shouldIncludeUpdatePlanToolForOpenClawTools({
-      config: {} as OpenClawConfig,
-      pluginToolAllowlist: ["group:agents"],
-      modelProvider: "anthropic",
-      modelId: "claude-sonnet-4-6",
     });
 
     expect(includeUpdatePlan).toBe(true);
@@ -336,23 +310,9 @@ describe("openclaw-tools update_plan gating", () => {
     expect(tools).not.toContain("update_plan");
   });
 
-  it("lets explicit planTool false disable every model and override allowlists", () => {
-    const cfg = {
-      tools: {
-        experimental: {
-          planTool: false,
-        },
-      },
-    } as OpenClawConfig;
-
-    expectUpdatePlanEnabled({ config: cfg, modelProvider: "openai", modelId: "gpt-5.4" }, false);
+  it("lets an explicit updatePlan false override an allowlist that includes the tool", () => {
     expectUpdatePlanEnabled(
-      {
-        config: cfg,
-        modelProvider: "anthropic",
-        modelId: "claude-sonnet-4-6",
-        pluginToolAllowlist: ["update_plan"],
-      },
+      { config: { tools: { updatePlan: false, allow: ["update_plan"] } } as OpenClawConfig },
       false,
     );
   });

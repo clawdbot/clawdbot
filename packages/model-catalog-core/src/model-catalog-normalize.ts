@@ -412,6 +412,11 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     }
   }
 
+  const codeMode = normalizeOptionalString(value.codeMode) ?? "";
+  if (codeMode === "preferred" || codeMode === "capable") {
+    compat.codeMode = codeMode;
+  }
+
   const maxTokensField = normalizeOptionalString(value.maxTokensField) ?? "";
   if (maxTokensField === "max_completion_tokens" || maxTokensField === "max_tokens") {
     compat.maxTokensField = maxTokensField;
@@ -537,11 +542,13 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const baseUrl = normalizeOptionalString(value.baseUrl) ?? "";
   const api = normalizeModelCatalogApi(value.api);
   const headers = normalizeStringMap(value.headers);
+  const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
   return {
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
+    ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
     models,
   };

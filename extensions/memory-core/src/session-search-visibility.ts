@@ -1,5 +1,4 @@
 // Memory Core plugin module implements session search visibility behavior.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
@@ -41,11 +40,7 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  const anchorFile = anchor.sessionFile?.trim();
-  const candidateFile = candidate.sessionFile?.trim();
-  return Boolean(
-    anchorFile && candidateFile && path.resolve(anchorFile) === path.resolve(candidateFile),
-  );
+  return false;
 }
 
 function isPrivateConversation(params: {
@@ -227,7 +222,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
 
   const isSessionKeyAllowed = (key: string): boolean => {
     if (!conversationRecall || !anchorSessionKey || !recallAgentId) {
-      return guard?.check(key).allowed === true;
+      // A bare global key is local to the selected agent store. Reattach that
+      // owner before applying visibility or non-default agents look cross-agent.
+      const visibilityKey =
+        scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
+          ? `agent:${scopedAgentId}:global`
+          : key;
+      return guard?.check(visibilityKey).allowed === true;
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the

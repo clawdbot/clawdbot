@@ -11,7 +11,6 @@ import { resolveStorePath } from "../../config/sessions/paths.js";
 import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
@@ -213,10 +212,6 @@ export function initFastReplySessionState(params: {
     ? normalizedResetBody.slice(resetMatch?.[0].length ?? 0).trimStart()
     : (ctx.agentText ?? "");
   const now = Date.now();
-  const sessionFile =
-    !resetTriggered && existingEntry?.sessionFile
-      ? existingEntry.sessionFile
-      : formatSqliteSessionFileMarker({ agentId, sessionId, storePath });
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
@@ -240,7 +235,6 @@ export function initFastReplySessionState(params: {
           subagentControlScope: existingEntry.subagentControlScope,
         }
       : {}),
-    sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,

@@ -378,6 +378,72 @@ describe("tui session actions", () => {
     );
   });
 
+  it.each([
+    {
+      name: "another session",
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:current",
+      resultKey: "agent:main:previous",
+    },
+    {
+      name: "the same request key owned by another agent",
+      currentAgentId: "main",
+      currentSessionKey: "agent:main:main",
+      resultKey: "agent:work:main",
+    },
+  ])(
+    "ignores a session patch belonging to $name",
+    ({ currentAgentId, currentSessionKey, resultKey }) => {
+      const updateHeader = vi.fn();
+      const updateFooter = vi.fn();
+      const state = createBaseState({
+        currentAgentId,
+        currentSessionKey,
+        sessionInfo: { model: "current-model", modelProvider: "openai" },
+      });
+      const { applySessionInfoFromPatch } = createTestSessionActions({
+        state,
+        updateHeader,
+        updateFooter,
+      });
+
+      applySessionInfoFromPatch({
+        ok: true,
+        path: "/sessions/patch",
+        key: resultKey,
+        entry: { model: "stale-model", modelProvider: "anthropic" },
+      });
+
+      expect(state.currentSessionKey).toBe(currentSessionKey);
+      expect(state.currentAgentId).toBe(currentAgentId);
+      expect(state.sessionInfo.model).toBe("current-model");
+      expect(state.sessionInfo.modelProvider).toBe("openai");
+      expect(updateHeader).not.toHaveBeenCalled();
+      expect(updateFooter).not.toHaveBeenCalled();
+    },
+  );
+
+  it("adopts the canonical key for a patch belonging to the selected alias", () => {
+    const state = createBaseState({ currentSessionKey: "main" });
+    const updateHeader = vi.fn();
+    const { applySessionInfoFromPatch } = createTestSessionActions({
+      state,
+      updateHeader,
+    });
+
+    applySessionInfoFromPatch({
+      ok: true,
+      path: "/sessions/patch",
+      key: "agent:main:main",
+      entry: { model: "gpt-5.6-luna", modelProvider: "openai" },
+    });
+
+    expect(state.currentSessionKey).toBe("agent:main:main");
+    expect(state.currentAgentId).toBe("main");
+    expect(state.sessionInfo.model).toBe("gpt-5.6-luna");
+    expect(updateHeader).toHaveBeenCalledOnce();
+  });
+
   it("clears the footer goal when the current session has no row yet", async () => {
     const listSessions = vi.fn().mockResolvedValue({
       ts: Date.now(),
@@ -1035,12 +1101,12 @@ describe("tui session actions", () => {
     expect(state.pendingSubmit).toBeNull();
   });
 
-  it("applies reset mutation result without reloading gateway history", () => {
+  it("adopts a reset mutation's replacement key without reloading gateway history", () => {
     const loadHistory = vi.fn().mockResolvedValue({ messages: [] });
     const addSystem = vi.fn();
     const clearAll = vi.fn();
     const state = createBaseState({
-      currentSessionKey: "agent:main:old",
+      currentSessionKey: "old",
       currentSessionId: "old-session",
       sessionInfo: {
         model: "old-model",
@@ -1078,6 +1144,45 @@ describe("tui session actions", () => {
     expect(state.historyLoaded).toBe(true);
     expect(clearAll).toHaveBeenCalled();
     expect(addSystem).toHaveBeenCalledWith("session agent:main:new");
+  });
+
+  it("does not clear the selected session for another session's reset result", () => {
+    const addSystem = vi.fn();
+    const clearAll = vi.fn();
+    const updateHeader = vi.fn();
+    const state = createBaseState({
+      currentSessionKey: "agent:main:current",
+      currentSessionId: "current-session",
+      historyLoaded: true,
+      sessionInfo: { model: "current-model", modelProvider: "openai" },
+    });
+    const { applySessionMutationResult } = createTestSessionActions({
+      chatLog: { addSystem, clearAll } as unknown as ChatLog,
+      state,
+      updateHeader,
+    });
+
+    const applied = applySessionMutationResult(
+      {
+        ok: true,
+        key: "agent:main:previous",
+        entry: {
+          sessionId: "stale-reset-session",
+          model: "stale-model",
+          modelProvider: "anthropic",
+        },
+      },
+      { sessionKey: "agent:main:previous", agentId: "main" },
+    );
+
+    expect(applied).toBe(false);
+    expect(state.currentSessionKey).toBe("agent:main:current");
+    expect(state.currentSessionId).toBe("current-session");
+    expect(state.sessionInfo.model).toBe("current-model");
+    expect(state.historyLoaded).toBe(true);
+    expect(clearAll).not.toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(updateHeader).not.toHaveBeenCalled();
   });
 
   it("does not fast-clear reset results without a replacement entry", () => {
@@ -1254,6 +1359,115 @@ describe("tui session actions", () => {
 
     expect(dropPendingUser).toHaveBeenCalledTimes(1);
     expect(dropPendingUser).toHaveBeenCalledWith("run-queued");
+  });
+
+  it.each([
+    {
+      name: "successful abort after a session switch",
+      initialKey: "agent:main:first",
+      nextKey: "agent:main:second",
+      aborted: true,
+      rejected: false,
+    },
+    {
+      name: "no-active-run abort after a session switch",
+      initialKey: "agent:main:first",
+      nextKey: "agent:main:second",
+      aborted: false,
+      rejected: false,
+    },
+    {
+      name: "rejected abort after a session switch",
+      initialKey: "agent:main:first",
+      nextKey: "agent:main:second",
+      aborted: false,
+      rejected: true,
+    },
+    {
+      name: "successful global abort after an agent switch",
+      initialKey: "global",
+      nextKey: "global",
+      aborted: true,
+      rejected: false,
+    },
+    {
+      name: "no-active-run global abort after an agent switch",
+      initialKey: "global",
+      nextKey: "global",
+      aborted: false,
+      rejected: false,
+    },
+    {
+      name: "rejected global abort after an agent switch",
+      initialKey: "global",
+      nextKey: "global",
+      aborted: false,
+      rejected: true,
+    },
+  ])("ignores a $name", async ({ initialKey, nextKey, aborted, rejected }) => {
+    const deferred = createDeferred<Awaited<ReturnType<TuiBackend["abortChat"]>>>();
+    const abortChat = vi.fn(() => deferred.promise);
+    const loadHistory = vi.fn().mockResolvedValue({
+      sessionInfo: {
+        key: nextKey,
+        sessionId: "second-session",
+        model: "current-model",
+      },
+      messages: [],
+    });
+    const { chatLog, addSystem } = createHistoryChatLog();
+    const dropPendingUser = vi.fn();
+    const setActivityStatus = vi.fn();
+    const state = createBaseState({
+      currentSessionKey: initialKey,
+      currentAgentId: "main",
+      activeChatRunId: "first-active-run",
+      pendingSubmit: acceptedSubmit("first-pending-run"),
+    });
+    const { abortActive, setSession } = createTestSessionActions({
+      client: { listSessions: vi.fn(), loadHistory, abortChat } as unknown as TuiBackend,
+      chatLog: Object.assign(chatLog, { dropPendingUser }),
+      state,
+      setActivityStatus,
+    });
+
+    const pendingAbort = abortActive();
+    expect(abortChat).toHaveBeenCalledWith({
+      sessionKey: initialKey,
+      ...(initialKey === "global" ? { agentId: "main" } : {}),
+    });
+    if (initialKey === "global") {
+      state.currentAgentId = "work";
+    }
+    await setSession(nextKey);
+    state.activeChatRunId = "second-active-run";
+    state.pendingSubmit = acceptedSubmit("second-pending-run", "second draft");
+    addSystem.mockClear();
+    setActivityStatus.mockClear();
+
+    if (rejected) {
+      deferred.reject(new Error("stale session abort"));
+    } else {
+      deferred.resolve({
+        ok: true,
+        aborted,
+        runIds: ["first-active-run", "first-pending-run"],
+      });
+    }
+    await pendingAbort;
+
+    expect(state.currentSessionKey).toBe(nextKey);
+    expect(state.currentAgentId).toBe(initialKey === "global" ? "work" : "main");
+    expect(state.currentSessionId).toBe("second-session");
+    expect(state.activeChatRunId).toBe("second-active-run");
+    expect(getPendingSubmitAcceptedRunId(state)).toBe("second-pending-run");
+    expect(getPendingSubmitDraft(state)).toEqual({
+      runId: "second-pending-run",
+      text: "second draft",
+    });
+    expect(dropPendingUser).not.toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalled();
   });
 
   it("passes the selected agent when aborting selected global runs", async () => {

@@ -272,7 +272,7 @@
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["deepinfra"],
-    "memoryEmbeddingProviders": ["deepinfra"],
+    "embeddingProviders": ["deepinfra"],
     "imageGenerationProviders": ["deepinfra"],
     "speechProviders": ["deepinfra"],
     "videoGenerationProviders": ["deepinfra"]

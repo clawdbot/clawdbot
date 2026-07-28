@@ -73,6 +73,7 @@
       "gmi": {
         "baseUrl": "https://api.gmi-serving.com/v1",
         "api": "openai-completions",
+        "defaultModel": "openai/gpt-5.6-sol",
         "models": [
           {
             "id": "zai-org/GLM-5.2-FP8",

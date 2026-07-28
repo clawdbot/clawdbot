@@ -5,7 +5,7 @@ import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   DEFAULT_SECURITY,
   normalizeExecApprovalsInternal,
-  resolveExecApprovalsPath,
+  resolveExecApprovalsDisplayPath,
   resolveExecApprovalsSocketPath,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
@@ -217,7 +217,7 @@ export function resolveExecApprovalsFromFilePrepared(params: {
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
   return {
-    path: params.path ?? resolveExecApprovalsPath(),
+    path: params.path ?? resolveExecApprovalsDisplayPath(),
     socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),

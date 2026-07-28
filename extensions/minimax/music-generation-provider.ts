@@ -96,18 +96,15 @@ function resolveMinimaxGuardedRequestOptions(
   };
 }
 
-function decodePossibleBinaryWithLimit(data: string, maxBytes: number): Buffer {
+function decodeHexAudioWithLimit(data: string, maxBytes: number): Buffer {
   const trimmed = data.trim();
-  if (/^[0-9a-f]+$/iu.test(trimmed) && trimmed.length % 2 === 0) {
-    if (trimmed.length / 2 > maxBytes) {
-      throw createGeneratedMusicTooLargeError(maxBytes);
-    }
-    return Buffer.from(trimmed, "hex");
+  if (!/^[0-9a-f]+$/iu.test(trimmed) || trimmed.length % 2 !== 0) {
+    throw new Error("MiniMax music generation returned malformed hex audio");
   }
-  if (Buffer.byteLength(trimmed, "base64") > maxBytes) {
+  if (trimmed.length / 2 > maxBytes) {
     throw createGeneratedMusicTooLargeError(maxBytes);
   }
-  return Buffer.from(trimmed, "base64");
+  return Buffer.from(trimmed, "hex");
 }
 
 function decodePossibleText(data: string): string {
@@ -261,7 +258,7 @@ async function readStreamingTrack(
       if (String(frame.data?.status ?? "") === "2" && chunks.length > 0) {
         continue;
       }
-      const chunk = decodePossibleBinaryWithLimit(audio, maxBytes - decodedBytes);
+      const chunk = decodeHexAudioWithLimit(audio, maxBytes - decodedBytes);
       const nextDecodedBytes = decodedBytes + chunk.byteLength;
       if (nextDecodedBytes > maxBytes) {
         throw createGeneratedMusicTooLargeError(maxBytes);
@@ -434,7 +431,7 @@ function buildMinimaxMusicProvider(providerId: string): MusicGenerationProvider 
             })
           : inlineAudio
             ? (() => {
-                const buffer = decodePossibleBinaryWithLimit(inlineAudio, maxGeneratedMusicBytes);
+                const buffer = decodeHexAudioWithLimit(inlineAudio, maxGeneratedMusicBytes);
                 return {
                   buffer,
                   mimeType: "audio/mpeg",

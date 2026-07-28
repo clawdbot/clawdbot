@@ -172,6 +172,7 @@ function inferLiveModelReasoning(modelId: string): boolean {
 function buildOpenAICompatibleLiveModel(
   row: unknown,
   fallback: ModelProviderConfig,
+  acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
   const record = readLiveModelCatalogRecord(row);
   const id = readLiveModelString(record, ["id", "model", "model_name", "modelName"]);
@@ -202,6 +203,13 @@ function buildOpenAICompatibleLiveModel(
   if (exact) {
     return exact;
   }
+  // Manifest-published ids returned above are known-good. Everything past this
+  // point is a model the manifest has never described, so an opted-in provider
+  // gate decides whether its request shaping is understood well enough to
+  // surface it at all.
+  if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
+    return undefined;
+  }
   const template = findLiveModelTemplate(id, fallback.models);
   const inputModalities = readLiveModelStringArray(
     [record, architecture, capabilities, modelInfo],
@@ -220,6 +228,10 @@ function buildOpenAICompatibleLiveModel(
         "max_context_length",
         "maxModelLen",
         "max_model_len",
+        // Anthropic names the context window by its input side. Appended so a
+        // provider already matching an earlier key keeps its current value.
+        "max_input_tokens",
+        "maxInputTokens",
       ],
     ) ??
     fallback.contextWindow ??
@@ -235,6 +247,11 @@ function buildOpenAICompatibleLiveModel(
         "maxOutputTokens",
         "output_token_limit",
         "outputTokenLimit",
+        // Anthropic reports the output cap as max_tokens. Kept last so the
+        // unambiguous completion-specific names above still win where both
+        // appear, and no provider's existing resolution changes.
+        "max_tokens",
+        "maxTokens",
       ],
     ) ??
     fallback.maxTokens ??
@@ -276,9 +293,10 @@ function buildOpenAICompatibleLiveModel(
 export function buildOpenAICompatibleLiveModels(
   rows: readonly unknown[],
   fallback: ModelProviderConfig,
+  acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig[] {
   const models = rows
-    .map((row) => buildOpenAICompatibleLiveModel(row, fallback))
+    .map((row) => buildOpenAICompatibleLiveModel(row, fallback, acceptUnknownModel))
     .filter((model): model is ModelDefinitionConfig => Boolean(model));
   return [...new Map(models.map((model) => [model.id, model])).values()].toSorted((a, b) =>
     a.id.localeCompare(b.id),

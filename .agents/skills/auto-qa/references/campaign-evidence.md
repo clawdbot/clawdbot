@@ -21,9 +21,11 @@ lane:
   evidence:
 ```
 
+Record an independently observed live child PID, its durable supervisor or session, and the PID observation time for every CLI-backed running lane. Keep completed, failed, timed-out, and stale-baseline workers in their own wave results; a printed background PID, discarded supervisor, finished report, planned replacement, or `STOPPED REF CHANGED` response is not evidence of a running lane.
+
 Maintain at least ten active, differently scoped lanes whenever independent worker execution is authorized. Treat permission to fetch, contact a provider, or run an externally hosted model as a separate network constraint. Track blocked worker, network, remote, and device capacity explicitly. A finished worker, future worker, unstarted process, sequential inspection, or duplicate subsystem is not an active lane. For a single-agent task, inspect ten distinct surfaces but report the actual concurrency and independent-verification limitation.
 
-Freeze one baseline per worker wave. A worker may inspect that immutable SHA without independently refreshing shared remote refs. During native PR preparation or merge, pause worker fetches and let the orchestrator own `origin/main`. After a verified landing, fetch again, prove the merge commit is contained in the fetched ref, broadcast that full new SHA, and then resume workers.
+Freeze one baseline per worker wave. Verify canonical and read-only worker checkouts with both `git -C <verified-checkout> rev-parse HEAD` and empty `git --no-optional-locks -C <verified-checkout> status --porcelain=v1 --untracked-files=all --ignore-submodules=none`; never infer canonical `main` from a desktop task's detached working directory or trust a dirty checkout solely because `HEAD` matches. Require matching commit and clean-content guards at worker start and immediately before report acceptance; immutable Git-object reads are also valid. Keep intentionally dirty fix worktrees outside frozen review waves. A worker may inspect that immutable SHA without independently refreshing shared remote refs. During native PR preparation or merge, pause worker fetches and let the orchestrator own `origin/main`. After a verified landing, fetch again, prove the merge commit is contained in the fetched ref, broadcast that full new SHA, and then resume workers.
 
 ## Bug ledger
 
@@ -54,4 +56,4 @@ Require evidence that the repair eliminates the canonical cause, not only the ob
 
 ## Long-running evidence
 
-Record the actual start, elapsed time, owned process and isolated endpoint, exact completed successes, failures, skips, sampled system load, and final end time. A live stress result is incomplete until the specified duration has actually elapsed; an unavailable capability is unavailable, never skipped-and-green.
+Record the actual start, immutable gateway source, owned live PID and isolated endpoint, elapsed time, exact completed successes, failures, skips, sampled system load, and final end time. Keep an established long-running soak on its original source while current-main review workers advance. A live stress result is incomplete until the specified duration has actually elapsed; an unavailable capability is unavailable, never skipped-and-green.

@@ -355,12 +355,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         action: "edit",
         params: {
           channel: handle.channel,
-          accountId: handle.accountId,
           to: handle.to,
           threadId: handle.threadId,
           messageId: handle.messageId,
           message,
         },
+        defaultAccountId: handle.accountId,
         sessionKey: params.ctx.SessionKey,
         requesterAccountId: params.ctx.AccountId,
       });

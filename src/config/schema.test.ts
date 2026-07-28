@@ -785,17 +785,13 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
-  it("accepts experimental tool flags in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
-      experimental: {
-        planTool: true,
-      },
-    });
+  it("accepts the update_plan tool switch in the runtime zod schema", () => {
+    const parsed = ToolsSchema.parse({ updatePlan: false });
     if (!parsed) {
       throw new Error("expected parsed tools config");
     }
 
-    expect(parsed?.experimental?.planTool).toBe(true);
+    expect(parsed?.updatePlan).toBe(false);
   });
 
   it("accepts simplified Tool Search config in the runtime zod schema", () => {
@@ -898,6 +894,16 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts the Code Mode auto tier and rejects unknown tiers", () => {
+    expect(ToolsSchema.parse({ codeMode: "auto" })?.codeMode).toBe("auto");
+    expect(ToolsSchema.parse({ codeMode: false })?.codeMode).toBe(false);
+    expect(ToolsSchema.parse({ codeMode: { enabled: "auto" } })?.codeMode).toEqual({
+      enabled: "auto",
+    });
+    expect(ToolsSchema.safeParse({ codeMode: "on" }).success).toBe(false);
+    expect(ToolsSchema.safeParse({ codeMode: { enabled: "always" } }).success).toBe(false);
   });
 
   it("accepts strict Swarm config in the runtime zod schema", () => {

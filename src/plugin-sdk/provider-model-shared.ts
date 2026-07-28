@@ -47,6 +47,7 @@ export type {
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
 } from "@openclaw/model-catalog-core/model-catalog-types";
+export { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 export type {
   BedrockDiscoveryConfig,
   ModelCompatConfig,
@@ -175,6 +176,7 @@ export {
 export {
   cloneFirstTemplateModel,
   matchesExactOrPrefix,
+  resolveFamilyForwardCompatModel,
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 

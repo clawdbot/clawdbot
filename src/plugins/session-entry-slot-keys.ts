@@ -1,5 +1,5 @@
 /** Reserves session-entry keys so plugin extension slots cannot collide with core session state. */
-import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntryCore as SessionEntry } from "../config/sessions/types.js";
 
 const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "__proto__",
@@ -27,6 +27,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "markedUnreadAt",
   "lastActivityAt",
   "sessionFile",
+  "transcriptPath",
   "spawnedBy",
   "completionOwnerSessionKey",
   "spawnedWorkspaceDir",
@@ -91,6 +92,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "modelOverride",
   "agentRuntimeOverride",
   "modelOverrideSource",
+  "modelOverrideRouteResolution",
   "modelOverrideFallbackOriginProvider",
   "modelOverrideFallbackOriginModel",
   "modelFallback",
@@ -160,6 +162,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "claudeCliSessionId",
   "label",
   "category",
+  "boardFace",
   "displayName",
   "delivery",
   "groupId",
@@ -173,7 +176,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "acp",
   "quotaSuspension",
   "visibility",
-] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
+] as const satisfies ReadonlyArray<
+  keyof SessionEntry | "__proto__" | "constructor" | "prototype" | "sessionFile" | "transcriptPath"
+>;
 
 type ReservedSessionEntrySlotKey = Extract<
   (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],

@@ -1,5 +1,5 @@
 // Gateway Protocol tests cover index behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provider.js";
 import * as protocol from "./index.js";
 import {
@@ -19,8 +19,8 @@ import {
   validateSessionsCompanionAskParams,
   validateSessionsCompanionResetParams,
   validateSessionsCompanionStateParams,
-  validateSessionsObserverAskParams,
   validateSessionsObserverVisibilityParams,
+  validateSessionsPatchParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -40,6 +40,15 @@ import {
   validateWakeParams,
   type ValidationError,
 } from "./index.js";
+import type {
+  ConfigSchemaLookupParams,
+  ModelsListParams,
+  SessionsCatalogListParams,
+  TalkEvent,
+} from "./index.js";
+import * as schemaExportRegistry from "./schema-export-registry.js";
+import type * as Schema from "./schema.js";
+import * as validatorRegistry from "./validator-registry.js";
 
 /**
  * Broad protocol validator smoke tests.
@@ -62,6 +71,23 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
 /** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
+describe("protocol export registries", () => {
+  it("re-exports every runtime registry symbol by identity", () => {
+    for (const registry of [schemaExportRegistry, validatorRegistry]) {
+      for (const [name, value] of Object.entries(registry)) {
+        expect((protocol as Record<string, unknown>)[name], name).toBe(value);
+      }
+    }
+  });
+
+  it("re-exports schema-backed protocol types from the package root", () => {
+    expectTypeOf<ConfigSchemaLookupParams>().toEqualTypeOf<Schema.ConfigSchemaLookupParams>();
+    expectTypeOf<ModelsListParams>().toEqualTypeOf<Schema.ModelsListParams>();
+    expectTypeOf<SessionsCatalogListParams>().toEqualTypeOf<Schema.SessionsCatalogListParams>();
+    expectTypeOf<TalkEvent>().toEqualTypeOf<Schema.TalkEvent>();
+  });
+});
+
 describe("lazy protocol validators", () => {
   it("validates through exported lazy validators", () => {
     expect(validateCommandsListParams({})).toBe(true);
@@ -76,6 +102,38 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsListParams({ archived: true })).toBe(true);
     expect(validateSessionsListParams({ archived: "all" })).toBe(true);
     expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
+  });
+
+  it("validates session board face list and patch values", () => {
+    expect(validateSessionsListParams({ boardFace: "dashboard" })).toBe(true);
+    expect(validateSessionsListParams({ boardFace: "grid" })).toBe(false);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "chat" })).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", boardFace: "grid" })).toBe(false);
+    // The schemas are closed objects; the pre-rename name must not slip back in.
+    expect(validateSessionsListParams({ face: "dashboard" })).toBe(false);
+  });
+
+  it("validates session patch compare-and-swap identity", () => {
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        archived: true,
+        expectedSessionId: "session-self-archive",
+        expectedLifecycleRevision: "revision-self-archive",
+      }),
+    ).toBe(true);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedSessionId: "",
+      }),
+    ).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:self-archive",
+        expectedLifecycleRevision: "",
+      }),
+    ).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -276,24 +334,6 @@ describe("lazy protocol validators", () => {
     expect(validateSessionsSearchParams({ query: "deployment failure", limit: 26 })).toBe(false);
     expect(validateSessionsSearchParams({ query: "" })).toBe(false);
     expect(validateSessionsSearchParams({ query: "x".repeat(4097) })).toBe(false);
-  });
-
-  it("validates bounded session observer questions", () => {
-    expect(
-      validateSessionsObserverAskParams({
-        sessionKey: "agent:main:current",
-        question: "Why is it rerunning that test?",
-      }),
-    ).toBe(true);
-    expect(
-      validateSessionsObserverAskParams({ sessionKey: "agent:main:current", question: "" }),
-    ).toBe(false);
-    expect(
-      validateSessionsObserverAskParams({
-        sessionKey: "agent:main:current",
-        question: "x".repeat(401),
-      }),
-    ).toBe(false);
   });
 
   it("validates closed bounded session companion params", () => {

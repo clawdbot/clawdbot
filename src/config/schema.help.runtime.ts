@@ -95,10 +95,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
   "tools.agentToAgent.allow":
     "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
-  "tools.experimental":
-    "Experimental built-in tool flags. Use each tool's switch to opt in or out of its documented default.",
-  "tools.experimental.planTool":
-    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default for embedded models; set false to opt out.",
+  "tools.updatePlan":
+    "Structured `update_plan` checklist tool for non-trivial multi-step work. Enabled by default; set false to opt out.",
   "tools.toolSearch":
     "Compact large OpenClaw, MCP, and client tool catalogs. Set to true for the default code bridge or use the object form to choose structured controls or a compact visible tool directory.",
   "tools.toolSearch.enabled":
@@ -114,7 +112,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.codeMode":
     "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
   "tools.codeMode.enabled":
-    "Enables generic code mode. Default is off. When explicitly enabled, OpenClaw fails closed if the runtime is unavailable instead of exposing the full tool list.",
+    'Enables generic code mode. Default is off. `true` engages every tool-capable run and fails closed if the runtime is unavailable instead of exposing the full tool list. `"auto"` engages only models whose catalog flags `compat.codeMode: "preferred"`.',
   "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',

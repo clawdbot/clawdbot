@@ -1,27 +1,27 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import {
   createApplicationRouter,
   locationForRoute,
-  pathForRoute,
   routeIdFromPath,
   startApplicationRouter,
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
+import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
 import {
   isDefaultChatLanding,
-  locationsMatch,
-  startModelSetupFirstRunRedirect,
+  startModelSetupFirstRunRedirectAfterLocation,
 } from "../pages/model-setup/first-run.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { resolveApprovalDocumentMode, type ApprovalDocumentMode } from "./approval-deep-link.ts";
@@ -50,31 +50,11 @@ import {
   saveSettings,
   type UiSettings,
 } from "./settings.ts";
+import { createStartupLifecycle, type StartupStep } from "./startup-lifecycle.ts";
 import { resolveApplicationStartupSettings } from "./startup-settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
 import { createWebPushCapability } from "./web-push.ts";
-
-function normalizeInitialApplicationLocation(
-  location: RouteLocation,
-  basePath: string,
-  sessionKey: string,
-) {
-  const routeId = routeIdFromPath(location.pathname, basePath);
-  if (!isDefaultChatLanding(location, basePath, routeIdFromPath) || !sessionKey.trim()) {
-    return location;
-  }
-
-  const search = new URLSearchParams(location.search);
-  if (!search.get("session")?.trim()) {
-    search.set("session", sessionKey);
-  }
-  return {
-    ...location,
-    pathname: routeId === null ? pathForRoute("chat", basePath) : location.pathname,
-    search: `?${search.toString()}`,
-  };
-}
 
 function applyThemePresentation(settings: ReturnType<typeof loadSettings>): void {
   if (typeof document === "undefined") {
@@ -249,7 +229,19 @@ export type ApplicationRuntime = {
   stop: () => void;
 };
 
-export function bootstrapApplication(): ApplicationRuntime {
+type BootstrapApplicationDependencies = {
+  sessionPathBuilderReady?: Promise<void>;
+};
+
+type PendingRouterStartNavigation = {
+  routeId: RouteId;
+  location: RouteLocation;
+  mode: "push" | "replace";
+};
+
+export function bootstrapApplication(
+  dependencies: BootstrapApplicationDependencies = {},
+): ApplicationRuntime {
   const history = createBrowserHistory();
   const startupLocation = history.location();
   const initialBasePath = resolveControlUiBasePath(
@@ -271,23 +263,15 @@ export function bootstrapApplication(): ApplicationRuntime {
   const basePath = resolveControlUiBasePath(
     startup.location.pathname || globalThis.location?.pathname || "/",
   );
-  const initialLocation = documentMode
-    ? startup.location
-    : normalizeInitialApplicationLocation(startup.location, basePath, startup.settings.sessionKey);
   const firstRunDefaultLanding =
     documentMode === null && isDefaultChatLanding(startup.location, basePath, routeIdFromPath);
-  const expectedDefaultLanding = {
-    ...initialLocation,
-    pathname: pathForRoute("chat", basePath),
-  };
-  const currentLocation = history.location();
-  if (
-    currentLocation.pathname !== initialLocation.pathname ||
-    currentLocation.search !== initialLocation.search ||
-    currentLocation.hash !== initialLocation.hash
-  ) {
-    history.replace(initialLocation);
-  }
+  const sessionPathBuilderReady =
+    dependencies.sessionPathBuilderReady ??
+    (documentMode
+      ? Promise.resolve()
+      : import("@openclaw/session-url-contract").then((contract) => {
+          setSessionPathBuilder(contract.buildControlUiSessionPath);
+        }));
 
   const settings = startup.settings;
   const gateway = createApplicationGateway(
@@ -298,6 +282,40 @@ export function bootstrapApplication(): ApplicationRuntime {
     { persistDefaultConnectionSettings: documentMode === null },
   );
   const agents = createAgentCapability(gateway);
+  const startupLifecycle = createStartupLifecycle();
+  const startupRouteId = routeIdFromPath(startup.location.pathname, basePath);
+  const releasedSessionQuery =
+    (startupRouteId === "chat" || startupRouteId === "dashboard") &&
+    sessionRouteNamespaceFromPath(startup.location.pathname, basePath) === null &&
+    new URLSearchParams(startup.location.search).has("session");
+  const deferInitialLocationUntilGateway =
+    documentMode === null &&
+    !releasedSessionQuery &&
+    firstRunDefaultLanding &&
+    settings.sessionKey.trim() !== "" &&
+    !parseAgentSessionKey(settings.sessionKey);
+  const initialLocationReady = (
+    documentMode
+      ? Promise.resolve(startup.location)
+      : Promise.all([sessionPathBuilderReady, import("./bootstrap-location.ts")]).then(
+          ([, location]) =>
+            location.resolveInitialApplicationLocation({
+              location: startup.location,
+              basePath,
+              sessionKey: settings.sessionKey,
+              gateway,
+              agentsList: () => agents.state.agentsList,
+              signal: startupLifecycle.signal,
+            }),
+        )
+  ).catch((error: unknown) => {
+    // stop() aborts an eager unscoped-session lookup even when start() returns
+    // at the lazy-chunk guard, so consume that teardown-only rejection here.
+    if (startupLifecycle.signal.aborted) {
+      return startup.location;
+    }
+    throw error;
+  });
   const agentIdentity = createAgentIdentityCapability(gateway);
   const agentSelection = createAgentSelectionCapability(gateway, agents);
   const channels = createChannelCapability(gateway);
@@ -333,6 +351,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   const initialUserMessage = createInitialUserMessageHandoff();
   applyThemePresentation(settings);
   const router = createApplicationRouter();
+  let routerStarted = false;
+  // Pre-start navigations are invisible to history; retain the latest request so
+  // router.start() cannot resolve the stale browser URL over the user's route.
+  let pendingRouterStartNavigation: PendingRouterStartNavigation | null = null;
   let pendingGatewayConnection =
     startup.pendingGatewayUrl !== null
       ? {
@@ -419,15 +441,23 @@ export function bootstrapApplication(): ApplicationRuntime {
     skillWorkshopRevision,
     initialUserMessage,
     navigate: (routeId, options) => {
+      const location = routeLocation(routeId, options);
+      if (!routerStarted) {
+        pendingRouterStartNavigation = { routeId, location, mode: "push" };
+      }
       void router
-        .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
+        .navigate(routeId, context, { history: "push" }, location)
         .catch((error: unknown) => {
           console.error("[openclaw] route navigation failed", error);
         });
     },
     replace: (routeId, options) => {
+      const location = routeLocation(routeId, options);
+      if (!routerStarted) {
+        pendingRouterStartNavigation = { routeId, location, mode: "replace" };
+      }
       void router
-        .navigate(routeId, context, { history: "replace" }, routeLocation(routeId, options))
+        .navigate(routeId, context, { history: "replace" }, location)
         .catch((error: unknown) => {
           console.error("[openclaw] route replacement failed", error);
         });
@@ -435,15 +465,6 @@ export function bootstrapApplication(): ApplicationRuntime {
     revalidate: (routeId) => router.revalidate(context, routeId),
     preload: (routeId) => router.preloadRoute(routeId, context),
   };
-  const stopModelSetupRedirect = firstRunDefaultLanding
-    ? startModelSetupFirstRunRedirect({
-        context,
-        isStillDefaultLanding: () =>
-          locationsMatch(history.location(), expectedDefaultLanding, (left, right) =>
-            areUiSessionKeysEquivalentForHost({ hello: gateway.snapshot.hello }, left, right),
-          ),
-      })
-    : () => undefined;
   return {
     context,
     router,
@@ -453,19 +474,75 @@ export function bootstrapApplication(): ApplicationRuntime {
     },
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
-    start: async () => {
-      void config.refresh({ skipWithoutAuthCandidate: true });
-      const routerStart = documentMode
-        ? Promise.resolve()
-        : startApplicationRouter(router, history, basePath, context);
-      gateway.start();
-      await routerStart;
+    start: () => {
+      const stopRouter = () => router.stop();
+      if (!documentMode) {
+        startupLifecycle.addDisposer(stopRouter);
+      }
+      const steps: StartupStep[] = [
+        () => {
+          gateway.start();
+          return () => gateway.stop();
+        },
+        () => sessionPathBuilderReady,
+      ];
+      if (!deferInitialLocationUntilGateway) {
+        steps.push(() =>
+          startModelSetupFirstRunRedirectAfterLocation({
+            context,
+            enabled: firstRunDefaultLanding,
+            history,
+            initialLocationReady,
+          }),
+        );
+      }
+      steps.push(() => {
+        void config.refresh({ skipWithoutAuthCandidate: true });
+      });
+      if (!documentMode) {
+        steps.push(async () => {
+          const pendingNavigation = pendingRouterStartNavigation;
+          pendingRouterStartNavigation = null;
+          routerStarted = true;
+          if (pendingNavigation) {
+            history[pendingNavigation.mode](pendingNavigation.location);
+          }
+          await startApplicationRouter(router, history, basePath, context);
+          return stopRouter;
+        });
+      }
+      if (deferInitialLocationUntilGateway) {
+        steps.push(() => {
+          // The bare /chat route remains not-found while disconnected. Its shell
+          // fallback is gated on the same connected defaults, so both paths converge.
+          startupLifecycle.trackDisposer(
+            startModelSetupFirstRunRedirectAfterLocation({
+              context,
+              enabled: firstRunDefaultLanding,
+              history,
+              initialLocationReady,
+              installLocation: async (location) => {
+                const routeId = routeIdFromPath(location.pathname, basePath);
+                if (routeId) {
+                  await router.navigate(routeId, context, { history: "replace" }, location);
+                } else {
+                  history.replace(location);
+                }
+              },
+              shouldInstallLocation: () =>
+                isDefaultChatLanding(history.location(), basePath, routeIdFromPath),
+            }),
+            (error) => {
+              console.error("[openclaw] initial session location failed", error);
+            },
+          );
+        });
+      }
+      return startupLifecycle.run(steps);
     },
     stop: () => {
-      stopModelSetupRedirect();
+      startupLifecycle.stop();
       stopPostConnect();
-      router.stop();
-      gateway.stop();
       agents.dispose();
       channels.dispose();
       sessions.dispose();

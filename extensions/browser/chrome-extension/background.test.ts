@@ -7,12 +7,18 @@ const START_TIME_MS = Date.parse("2026-07-16T08:00:00.000Z");
 type SocketEvent = { data?: unknown };
 type SocketListener = (event: SocketEvent) => void;
 type RuntimeMessageListener = (
-  message: { type: string; tabId?: number },
+  message: { type: string; tabId?: number; note?: string; pairingString?: string },
   sender: unknown,
   sendResponse: (response: unknown) => void,
 ) => boolean;
+type PageCaptureResult = {
+  content: string;
+  selection: string;
+  title: string;
+  url: string;
+};
 
-async function loadBackground() {
+async function loadBackground({ deferSocketClose = false }: { deferSocketClose?: boolean } = {}) {
   const sockets: FakeWebSocket[] = [];
   let alarmListener: ((alarm: { name: string }) => void) | undefined;
   let messageListener: RuntimeMessageListener | undefined;
@@ -26,6 +32,10 @@ async function loadBackground() {
     readyState = FakeWebSocket.CONNECTING;
     readonly send = vi.fn();
     readonly close = vi.fn(() => {
+      if (deferSocketClose) {
+        this.readyState = FakeWebSocket.CLOSING;
+        return;
+      }
       this.readyState = FakeWebSocket.CLOSED;
       this.emit("close");
     });
@@ -47,6 +57,10 @@ async function loadBackground() {
     open() {
       this.readyState = FakeWebSocket.OPEN;
       this.emit("open");
+    }
+
+    receive(message: unknown) {
+      this.emit("message", { data: JSON.stringify(message) });
     }
 
     private emit(type: string, event: SocketEvent = {}) {
@@ -112,7 +126,9 @@ async function loadBackground() {
         set: vi.fn(async () => undefined),
       },
     },
-    scripting: { executeScript: vi.fn(async () => []) },
+    scripting: {
+      executeScript: vi.fn(async (): Promise<Array<{ result: PageCaptureResult }>> => []),
+    },
     tabGroups: {
       query: vi.fn(async () => []),
       update: vi.fn(async () => undefined),
@@ -153,11 +169,46 @@ async function loadBackground() {
     alarmListener,
     clearAlarm,
     createAlarm,
+    executeScript: chromeMock.scripting.executeScript,
     messageListener,
     setBadgeText,
     sockets,
     tabsGet: chromeMock.tabs.get,
   };
+}
+
+async function startPendingPageShare(
+  harness: Awaited<ReturnType<typeof loadBackground>>,
+  socket = harness.sockets.at(-1),
+) {
+  if (!socket) {
+    throw new Error("expected the page-share relay socket");
+  }
+  if (socket.readyState !== 1) {
+    socket.open();
+  }
+  harness.executeScript.mockResolvedValueOnce([
+    {
+      result: {
+        url: "https://example.com/article",
+        title: "Example article",
+        selection: "",
+        content: "Article body",
+      },
+    },
+  ]);
+  const response = vi.fn();
+  expect(harness.messageListener({ type: "sendPageToOpenClaw", tabId: 1 }, {}, response)).toBe(
+    true,
+  );
+  await vi.waitFor(() => {
+    expect(socket.send.mock.calls.some(([raw]) => JSON.parse(raw).type === "pageShare")).toBe(true);
+  });
+  const raw = socket.send.mock.calls.find(([frame]) => JSON.parse(frame).type === "pageShare")?.[0];
+  if (typeof raw !== "string") {
+    throw new Error("expected a sent page-share request");
+  }
+  return { socket, response, requestId: (JSON.parse(raw) as { requestId: number }).requestId };
 }
 
 describe("relay opening deadline", () => {
@@ -255,5 +306,149 @@ describe("copilot panel messaging", () => {
       ok: true,
       path: expect.stringMatching(/^sidepanel\.html\?binding=/),
     });
+  });
+});
+
+describe("page-share relay request lifecycle", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("immediately rejects a page share when its owning relay disconnects", async () => {
+    const harness = await loadBackground();
+    const pending = await startPendingPageShare(harness);
+
+    pending.socket.close();
+
+    await vi.waitFor(() => {
+      expect(pending.response).toHaveBeenCalledWith({
+        ok: false,
+        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
+      });
+    });
+    expect(pending.response).toHaveBeenCalledOnce();
+  });
+
+  it("immediately rejects a page share when the user unpairs the relay", async () => {
+    const harness = await loadBackground({ deferSocketClose: true });
+    const pending = await startPendingPageShare(harness);
+    const unpairResponse = vi.fn();
+
+    expect(harness.messageListener({ type: "unpair" }, {}, unpairResponse)).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(unpairResponse).toHaveBeenCalledWith({ ok: true });
+      expect(pending.response).toHaveBeenCalledWith({
+        ok: false,
+        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
+      });
+    });
+    expect(pending.socket.close).toHaveBeenCalledOnce();
+    expect(pending.socket.readyState).toBe(2);
+    expect(pending.response).toHaveBeenCalledOnce();
+  });
+
+  it("rejects old page shares before a replacement relay finishes closing", async () => {
+    const harness = await loadBackground({ deferSocketClose: true });
+    const pending = await startPendingPageShare(harness);
+    const pairResponse = vi.fn();
+
+    expect(
+      harness.messageListener(
+        {
+          type: "pair",
+          pairingString: "ws://127.0.0.1:18798/extension#replacement-token-placeholder",
+        },
+        {},
+        pairResponse,
+      ),
+    ).toBe(true);
+
+    await vi.waitFor(() => {
+      expect(pairResponse).toHaveBeenCalledWith({ ok: true });
+      expect(pending.response).toHaveBeenCalledWith({
+        ok: false,
+        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
+      });
+    });
+    expect(pending.socket.close).toHaveBeenCalledOnce();
+    expect(pending.socket.readyState).toBe(2);
+    expect(harness.sockets).toHaveLength(2);
+    expect(pending.response).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the acknowledgement from the page share's own relay", async () => {
+    const harness = await loadBackground();
+    const pending = await startPendingPageShare(harness);
+
+    pending.socket.receive({ type: "pageShareResult", requestId: pending.requestId, ok: true });
+
+    await vi.waitFor(() => {
+      expect(pending.response).toHaveBeenCalledWith({ ok: true });
+    });
+    pending.socket.close();
+    expect(pending.response).toHaveBeenCalledOnce();
+  });
+
+  it("preserves the delivery error returned by the page share's own relay", async () => {
+    const harness = await loadBackground();
+    const pending = await startPendingPageShare(harness);
+
+    pending.socket.receive({
+      type: "pageShareResult",
+      requestId: pending.requestId,
+      ok: false,
+      error: "Gateway page-share queue unavailable.",
+    });
+
+    await vi.waitFor(() => {
+      expect(pending.response).toHaveBeenCalledWith({
+        ok: false,
+        error: "Gateway page-share queue unavailable.",
+      });
+    });
+    pending.socket.close();
+    expect(pending.response).toHaveBeenCalledOnce();
+  });
+
+  it("does not let a stale socket reject a share on the reconnected relay", async () => {
+    const harness = await loadBackground();
+    const original = await startPendingPageShare(harness);
+
+    original.socket.close();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.sockets).toHaveLength(2);
+    const replacement = await startPendingPageShare(harness);
+
+    original.socket.receive({
+      type: "pageShareResult",
+      requestId: replacement.requestId,
+      ok: false,
+      error: "Stale relay response.",
+    });
+    original.socket.close();
+    expect(replacement.response).not.toHaveBeenCalled();
+
+    replacement.socket.receive({
+      type: "pageShareResult",
+      requestId: replacement.requestId,
+      ok: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(original.response).toHaveBeenCalledWith({
+        ok: false,
+        error: "Browser relay disconnected before OpenClaw acknowledged the page share.",
+      });
+      expect(replacement.response).toHaveBeenCalledWith({ ok: true });
+    });
+    expect(original.response).toHaveBeenCalledOnce();
+    expect(replacement.response).toHaveBeenCalledOnce();
   });
 });

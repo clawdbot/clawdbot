@@ -65,10 +65,6 @@ function prepare(root) {
     delete packageJson.bundledDependencies;
   }
   writeJson(packageJsonPath, packageJson);
-
-  // The shipped shrinkwrap points at the published package graph. This fixture is
-  // intentionally local-git shaped, so let npm resolve the staged file dependency.
-  fs.rmSync(path.join(root, "npm-shrinkwrap.json"), { force: true });
 }
 
 if (command !== "prepare" || !rootArg) {

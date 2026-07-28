@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asObjectRecord,
   defineChannelAliasMigration,
+  defineKeyMoveMigration,
+  hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor";
 
@@ -30,6 +32,12 @@ const streamingAliasMigration = defineChannelAliasMigration({
 // afterwards or `doctor --fix` would emit a schema-invalid coalesce object.
 const LEGACY_COALESCE_FIELDS = ["enabled", "minDelayMs", "maxDelayMs"] as const;
 const LEGACY_HEARTBEAT_FIELDS = ["visibility", "intervalMs"] as const;
+const toolsBaseMigration = defineKeyMoveMigration({
+  from: ["tools", "base"],
+  to: ["tools", "bitable"],
+  match: (value) => typeof value === "boolean",
+  sourceOwn: false,
+});
 
 function sanitizeLegacyHeartbeatFields(params: {
   entry: Record<string, unknown>;
@@ -89,18 +97,32 @@ function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenCla
     channelId: "feishu",
     changes,
     normalizeEntry: (params) => {
-      const coalesce = sanitizeLegacyCoalesceFields(params);
+      const tools = toolsBaseMigration.normalize(params);
+      const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: tools.entry });
       const heartbeat = sanitizeLegacyHeartbeatFields({ ...params, entry: coalesce.entry });
       return {
         entry: heartbeat.entry,
-        changed: coalesce.changed || heartbeat.changed,
+        changed: tools.changed || coalesce.changed || heartbeat.changed,
       };
     },
   }).config;
 }
 
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
-  streamingAliasMigration.legacyConfigRules;
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...streamingAliasMigration.legacyConfigRules,
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu[.accounts.<id>].tools.base is legacy; use tools.bitable. Run "openclaw doctor --fix".',
+    match: (value) => {
+      const entry = asObjectRecord(value);
+      return (
+        toolsBaseMigration.hasLegacy(entry) ||
+        hasLegacyAccountStreamingAliases(entry?.accounts, toolsBaseMigration.hasLegacy)
+      );
+    },
+  },
+];
 
 export function normalizeCompatibilityConfig({
   cfg,

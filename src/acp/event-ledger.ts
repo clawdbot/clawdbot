@@ -1,7 +1,7 @@
 /** Persistent/replayable ACP event ledger implementations for session rehydration. */
 import type { DatabaseSync } from "node:sqlite";
 import type { ContentBlock, SessionUpdate } from "@agentclientprotocol/sdk";
-import { resolveIntegerOption } from "@openclaw/acp-core/numeric-options";
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,

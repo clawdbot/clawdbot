@@ -44,9 +44,9 @@ export function renderConfigApplyBanner(props: ConfigApplyBannerProps) {
 }
 
 /**
- * Inline autosave status shared by the schema editor and Quick Settings:
- * Saving…/Saved plus the failure recoveries (Retry re-submits, conflict only
- * offers a discarding reload so the draft cannot clobber another writer).
+ * Inline autosave status shared by the schema editor and Quick Settings.
+ * Successful autosave returns to quiet; only an active write or actionable
+ * failure remains visible.
  */
 export function renderConfigAutoSaveStatus(props: {
   status: ConfigAutoSaveStatus;
@@ -57,7 +57,7 @@ export function renderConfigAutoSaveStatus(props: {
     case "saving":
       return renderSettingsStatus({ kind: "accent", label: t("configView.autoSaveSaving") });
     case "saved":
-      return renderSettingsStatus({ kind: "ok", label: t("configView.autoSaveSaved") });
+      return nothing;
     case "error":
       return html`
         ${renderSettingsStatus({ kind: "danger", label: t("configView.autoSaveFailed") })}
