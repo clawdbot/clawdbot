@@ -134,6 +134,9 @@ function setupDeps(params: {
   const runSystemAgentChat = vi.fn<NonNullable<GuidedOnboardingDeps["runSystemAgentChat"]>>(
     params.runSystemAgentChat ?? (async () => {}),
   );
+  const runSetupMemoryImportStep = vi.fn<
+    NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
+  >(params.runSetupMemoryImportStep ?? (async () => ({ status: "skipped", providers: [] })));
   return {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
@@ -155,7 +158,7 @@ function setupDeps(params: {
         lines: ["Workspace: /tmp/work", "Gateway: running"],
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
-    runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
+    runSetupMemoryImportStep,
     runAppRecommendations:
       params.runAppRecommendations ?? vi.fn(async ({ config }) => recommendationOutcome(config)),
     runBrowserHandoff:
@@ -391,11 +394,12 @@ describe("runGuidedOnboarding", () => {
         config: persistedConfig,
       });
     const prompter = createWizardPrompter();
-    const runSetupMemoryImportStep = vi.fn(
-      async ({ prompter: stepPrompter }: { prompter: WizardPrompter }) => {
-        await stepPrompter.note("Codex — /source/codex (1 memories)", "Memories found");
-      },
-    );
+    const runSetupMemoryImportStep = vi.fn<
+      NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
+    >(async ({ prompter: stepPrompter }) => {
+      await stepPrompter.note("Codex — /source/codex (1 memories)", "Memories found");
+      return { status: "completed", providers: [] };
+    });
     const deps = setupDeps({ prompter, runSetupMemoryImportStep });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
@@ -415,7 +419,9 @@ describe("runGuidedOnboarding", () => {
 
   it("shows no memory page when the memory step finds no offers", async () => {
     const prompter = createWizardPrompter();
-    const runSetupMemoryImportStep = vi.fn(async () => undefined);
+    const runSetupMemoryImportStep = vi.fn<
+      NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
+    >(async () => ({ status: "nothing-to-import", providers: [] }));
     const deps = setupDeps({ prompter, runSetupMemoryImportStep });
 
     await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
