@@ -2,15 +2,22 @@
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
+  loadTranscriptEventRowsAfterSeqSync,
   patchSessionEntry,
   publishTranscriptUpdate,
+  readSessionTranscriptWatermark,
   withTranscriptWriteLock,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantDisplayContentBlock } from "./chat-assistant-content.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
+import {
+  sanitizeAssistantDisplayText,
+  type AssistantDisplayContentBlock,
+} from "./chat-assistant-content.js";
 import {
   appendInjectedAssistantMessageToTranscript,
   type GatewayInjectedTtsSupplementMarker,
@@ -30,6 +37,8 @@ type AssistantTranscriptScopeParams = {
   agentId?: string;
 };
 
+type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
+
 export type SourceReplyTranscriptMirrorMetadata = NonNullable<
   ReturnType<typeof getReplyPayloadMetadata>
 >["sourceReplyTranscriptMirror"];
@@ -43,7 +52,7 @@ export type SourceReplyContentState = {
 
 export function assistantTranscriptScope(
   params: AssistantTranscriptScopeParams,
-): SessionTranscriptWriteScope | null {
+): ResolvedAssistantTranscriptScope | null {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey || !params.sessionId.trim()) {
     return null;
@@ -92,6 +101,77 @@ function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
     return null;
   }
   return { messageId, message };
+}
+
+function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+  events: readonly TranscriptEvent[],
+  params: {
+    assistantMessageIndex: number;
+    mediaUrls: readonly string[];
+  },
+): { messageId: string; message: Record<string, unknown> } | null {
+  const expectedMedia = new Set(
+    params.mediaUrls
+      .map((value) => normalizeMediaReferenceForComparison(value))
+      .filter((value) => value.length > 0),
+  );
+  if (
+    expectedMedia.size === 0 ||
+    !Number.isSafeInteger(params.assistantMessageIndex) ||
+    params.assistantMessageIndex < 1
+  ) {
+    return null;
+  }
+  const target = events.filter((event) => transcriptEventMessage(event)?.role === "assistant")[
+    params.assistantMessageIndex - 1
+  ];
+  const message = target ? transcriptEventMessage(target) : undefined;
+  const messageId = target ? transcriptEventId(target) : undefined;
+  const text = message ? extractAssistantTranscriptText(message) : undefined;
+  if (!messageId || !message || !text) {
+    return null;
+  }
+  const actualMedia = new Set(
+    (splitMediaFromOutput(text).mediaUrls ?? [])
+      .map((value) => normalizeMediaReferenceForComparison(value))
+      .filter((value) => value.length > 0),
+  );
+  const exactMediaMatch =
+    actualMedia.size === expectedMedia.size &&
+    [...expectedMedia].every((value) => actualMedia.has(value));
+  return exactMediaMatch ? { messageId, message } : null;
+}
+
+function mergeManagedMediaIntoAssistantContent(params: {
+  message: Record<string, unknown>;
+  replacement: AssistantDisplayContentBlock[];
+}): AssistantDisplayContentBlock[] | null {
+  const original = Array.isArray(params.message.content)
+    ? (params.message.content as AssistantDisplayContentBlock[])
+    : [];
+  const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
+  if (managedBlocks.length === 0) {
+    return null;
+  }
+  let replaced = false;
+  const merged: AssistantDisplayContentBlock[] = [];
+  for (const block of original) {
+    if (block?.type !== "text" || typeof block.text !== "string") {
+      merged.push(block);
+      continue;
+    }
+    const split = splitMediaFromOutput(block.text);
+    const visibleText = sanitizeAssistantDisplayText(split.text, { preserveBoundaries: true });
+    if (visibleText) {
+      const { textSignature: _textSignature, ...rest } = block;
+      merged.push({ ...rest, text: visibleText });
+    }
+    if (split.mediaUrls?.length && !replaced) {
+      merged.push(...managedBlocks);
+      replaced = true;
+    }
+  }
+  return replaced ? merged : null;
 }
 
 function findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
@@ -356,6 +436,58 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
             message: {
               ...target.message,
               content: params.content,
+            },
+          })
+        : event,
+    );
+    await transcript.replaceEvents(rewrittenEvents);
+    return { messageId: target.messageId };
+  });
+}
+
+export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(params: {
+  afterSeq: number;
+  assistantMessageIndex: number;
+  content: AssistantDisplayContentBlock[];
+  expectedGeneration: string | null;
+  mediaUrls: readonly string[];
+  scope: ResolvedAssistantTranscriptScope;
+}): Promise<{ messageId: string } | null> {
+  if (params.content.length === 0 || params.mediaUrls.length === 0) {
+    return null;
+  }
+  return await withTranscriptWriteLock(params.scope, async (transcript) => {
+    const currentWatermark = readSessionTranscriptWatermark(params.scope);
+    if (currentWatermark.generation !== params.expectedGeneration) {
+      return null;
+    }
+    const events = await transcript.readEvents();
+    // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
+    // A generation change invalidates that boundary, so callers fall back without rewriting history.
+    const currentTurnEvents = loadTranscriptEventRowsAfterSeqSync(
+      params.scope,
+      params.afterSeq,
+    ).map((row) => row.event);
+    const target = findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+      currentTurnEvents,
+      params,
+    );
+    if (!target) {
+      return null;
+    }
+    const mergedContent = mergeManagedMediaIntoAssistantContent({
+      message: target.message,
+      replacement: params.content,
+    });
+    if (!mergedContent) {
+      return null;
+    }
+    const rewrittenEvents = events.map((event) =>
+      transcriptEventId(event) === target.messageId
+        ? Object.assign({}, event as Record<string, unknown>, {
+            message: {
+              ...target.message,
+              content: mergedContent,
             },
           })
         : event,
