@@ -739,13 +739,13 @@ export function prepareCompaction(
       break;
     }
   }
+  const prevBoundary = prevBoundaryIndex >= 0 ? pathEntries[prevBoundaryIndex] : undefined;
 
   let previousSummary: string | undefined;
   let effectiveEntries = pathEntries;
   let resetPreludeMessages: AgentMessage[] = [];
   let boundaryStart = 0;
   if (prevBoundaryIndex >= 0) {
-    const prevBoundary = pathEntries[prevBoundaryIndex];
     previousSummary = prevBoundary?.type === "compaction" ? prevBoundary.summary : undefined;
     const firstKeptEntryId =
       prevBoundary?.type === "compaction" || prevBoundary?.type === "reset"
@@ -776,6 +776,14 @@ export function prepareCompaction(
     contextUsage.lastUsageIndex === null
       ? []
       : contextMessages.slice(0, contextUsage.lastUsageIndex + 1);
+  const usageSourceMessage =
+    contextUsage.lastUsageIndex === null
+      ? undefined
+      : contextMessages.at(contextUsage.lastUsageIndex);
+  const usageIsCurrent =
+    !prevBoundary ||
+    (usageSourceMessage?.role === "assistant" &&
+      usageSourceMessage.timestamp > new Date(prevBoundary.timestamp).getTime());
   const estimatedUsageCoveredTokens = usageCoveredMessages.reduce(
     (total, message) => total + estimateTokens(message),
     0,
@@ -783,7 +791,7 @@ export function prepareCompaction(
   // Provider usage and transcript estimates must use compatible units here;
   // otherwise a high usage-to-estimate ratio can make every cut a no-op.
   const usageToEstimateRatio =
-    estimatedUsageCoveredTokens > 0 && Number.isFinite(contextUsage.usageTokens)
+    usageIsCurrent && estimatedUsageCoveredTokens > 0 && Number.isFinite(contextUsage.usageTokens)
       ? Math.max(1, contextUsage.usageTokens / estimatedUsageCoveredTokens)
       : 1;
   const trailingKeepTokens = Math.min(settings.keepRecentTokens, contextUsage.trailingTokens);
