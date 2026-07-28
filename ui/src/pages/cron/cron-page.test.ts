@@ -371,6 +371,61 @@ describe("CronPage editor state sync", () => {
     await waitForCronPage(() => expect(page.cron.cronEditingJobId).toBeNull());
     await waitForCronPage(() => expect(page.cron.cronRunsScope).toBe("all"));
   });
+
+  it("renders read-only controls and rejects a stale admin action after a scope downgrade", async () => {
+    const job = {
+      id: "job-1",
+      name: "Nightly digest",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "digest" },
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "cron.list") {
+        return { jobs: [job], total: 1, offset: 0, hasMore: false };
+      }
+      if (method === "cron.runs") {
+        return { entries: [], total: 0, offset: 0, hasMore: false };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      return {};
+    });
+    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+    const page = createPage(createContext(gateway), { render: true });
+
+    await waitForCronPage(() =>
+      expect(page.querySelector('[data-test-id="cron-row-run-job-1"]')).not.toBeNull(),
+    );
+    const staleRunButton = page.querySelector(
+      '[data-test-id="cron-row-run-job-1"]',
+    ) as HTMLButtonElement;
+
+    gateway.emitSnapshot({
+      hello: { auth: { role: "operator", scopes: ["operator.read"] } } as never,
+    });
+    staleRunButton.click();
+    page.requestUpdate();
+    await page.updateComplete;
+
+    expect(request.mock.calls.some(([method]) => method === "cron.run")).toBe(false);
+    expect(page.textContent).toContain("Browsing only");
+    expect(page.querySelector('[data-test-id="cron-new-task"]')).toBeNull();
+    expect(page.querySelector('[data-test-id="cron-row-run-job-1"]')).toBeNull();
+    expect(page.querySelector('[data-test-id="cron-row-job-1"]')).not.toBeNull();
+
+    (page.querySelector('[data-test-id="cron-row-job-1"]') as HTMLElement).click();
+    await waitForCronPage(() =>
+      expect(page.querySelector(".cron-editor")?.matches(":disabled")).toBe(true),
+    );
+    expect(page.querySelector('[data-test-id="cron-submit"]')).toBeNull();
+    expect(page.querySelector('[data-test-id="cron-detail-tab-history"]')).not.toBeNull();
+  });
 });
 
 describe("CronPage lifecycle", () => {

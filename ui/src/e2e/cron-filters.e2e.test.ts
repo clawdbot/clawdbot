@@ -240,6 +240,70 @@ describeControlUiE2e("Control UI cron mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps read-only operators on Cron browse and history surfaces", async () => {
+    const readOnlyJob = cronJob(
+      "read-only-job",
+      "Read-only nightly digest",
+      { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
+      { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
+    );
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1_280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      operatorScopes: ["operator.read"],
+      methodResponses: {
+        "cron.list": cronListResponse([readOnlyJob]),
+        "cron.runs": cronRunsResponse([
+          {
+            ts: 1,
+            jobId: readOnlyJob.id,
+            jobName: readOnlyJob.name,
+            status: "ok",
+            summary: "Read-only history remains available",
+          },
+        ]),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}cron`);
+      await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
+      await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+
+      await expect.poll(() => page.locator('[data-test-id="cron-new-task"]').count()).toBe(0);
+      await expect
+        .poll(() => page.locator(`[data-test-id="cron-row-run-${readOnlyJob.id}"]`).count())
+        .toBe(0);
+      await expect
+        .poll(() => page.locator(`[data-test-id="cron-row-toggle-${readOnlyJob.id}"]`).count())
+        .toBe(0);
+      await expect.poll(() => page.locator("wa-dropdown.cron-job-menu").count()).toBe(0);
+      await expect.poll(() => page.locator("[data-suggestion]").count()).toBe(0);
+      expect(await page.locator(".cron-filter-popover__trigger").count()).toBe(1);
+
+      await jobTitle(page, readOnlyJob.name).click();
+      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      await expect.poll(() => page.locator('[data-test-id="cron-run-now"]').count()).toBe(0);
+      await expect.poll(() => page.locator('[data-test-id="cron-submit"]').count()).toBe(0);
+      await expect.poll(() => page.locator(".cron-editor-actions").count()).toBe(0);
+
+      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+      await page.getByText("Read-only history remains available", { exact: true }).waitFor();
+
+      const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
+      expect(
+        (await gateway.getRequests()).filter((request) => mutationMethods.has(request.method)),
+      ).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("keeps the newest visible overview when an older history search resolves last", async () => {
     const context = await browser.newContext({
       locale: "en-US",
