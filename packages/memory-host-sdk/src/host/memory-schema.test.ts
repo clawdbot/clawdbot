@@ -96,6 +96,32 @@ describe("memory index schema", () => {
           project_key: "github.com/openclaw/openclaw",
         },
       ]);
+      const insertBootstrapCandidate = db.prepare(
+        `INSERT INTO memory_index_chunks
+         (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, project_key)
+         VALUES (?, 'MEMORY.md', ?, ?, ?, 'm', ?, '[]', 2, ?, 'github.com/openclaw/openclaw')`,
+      );
+      for (let index = 0; index < 64; index += 1) {
+        const id = `bootstrap-low-${String(index).padStart(3, "0")}`;
+        insertBootstrapCandidate.run(id, index + 2, index + 2, id, "low", 1);
+      }
+      insertBootstrapCandidate.run(
+        "bootstrap-high",
+        100,
+        100,
+        "bootstrap-high",
+        "high-priority bootstrap fact",
+        10,
+      );
+      expect(readCuratedProjectMemoryCandidates(db, 48, ["github.com/openclaw/openclaw"])).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "bootstrap-high",
+            text: "high-priority bootstrap fact",
+            importance: 10,
+          }),
+        ]),
+      );
       db.prepare(
         `INSERT INTO memory_index_chunks
          (id, path, start_line, end_line, hash, model, text, embedding, updated_at, importance, triggers, project_key)

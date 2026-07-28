@@ -72,7 +72,7 @@ function readCuratedMemoryCandidates(params: {
     ? new Set(params.activeProjectKeys.map((key) => key.trim()).filter(Boolean))
     : undefined;
   const results: ReturnType<typeof readCuratedCandidateBatch> = [];
-  let cursor: { path: string; id: string } | undefined;
+  let cursor: { importance: number | null; path: string; id: string } | undefined;
   const batchSize = Math.max(64, limit);
   // Curated paths are constrained in SQL, while project eligibility is applied
   // across keyset batches before filling the caller's window so foreign rows cannot starve it.
@@ -109,7 +109,7 @@ function readCuratedMemoryCandidates(params: {
     if (!last || rows.length < batchSize) {
       break;
     }
-    cursor = { path: last.path, id: last.id };
+    cursor = { importance: last.importance, path: last.path, id: last.id };
   }
   return results;
 }
@@ -117,7 +117,7 @@ function readCuratedMemoryCandidates(params: {
 function readCuratedCandidateBatch(params: {
   db: DatabaseSync;
   limit: number;
-  cursor?: { path: string; id: string };
+  cursor?: { importance: number | null; path: string; id: string };
   requireProject: boolean;
   requireTriggers: boolean;
 }) {
@@ -144,13 +144,25 @@ function readCuratedCandidateBatch(params: {
   }
   if (params.cursor) {
     const cursor = params.cursor;
-    query = query.where((eb) =>
-      eb.or([
-        eb("path", ">", cursor.path),
-        eb.and([eb("path", "=", cursor.path), eb("id", ">", cursor.id)]),
-      ]),
-    );
+    query = query.where((eb) => {
+      const importance = eb.fn.coalesce("importance", eb.val(0));
+      const cursorImportance = cursor.importance ?? 0;
+      return eb.or([
+        eb(importance, "<", cursorImportance),
+        eb.and([
+          eb(importance, "=", cursorImportance),
+          eb.or([
+            eb("path", ">", cursor.path),
+            eb.and([eb("path", "=", cursor.path), eb("id", ">", cursor.id)]),
+          ]),
+        ]),
+      ]);
+    });
   }
-  query = query.orderBy("path").orderBy("id").limit(params.limit);
+  query = query
+    .orderBy((eb) => eb.fn.coalesce("importance", eb.val(0)), "desc")
+    .orderBy("path")
+    .orderBy("id")
+    .limit(params.limit);
   return executeSqliteQuerySync(params.db, query).rows;
 }

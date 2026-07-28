@@ -39,6 +39,9 @@ async function resolveUncachedProjectKey(repoRoot: string): Promise<string> {
     );
     const source = parseGitUrl(`git:${stdout.trim()}`);
     if (source) {
+      // Userinfo is deliberately folded out so SSH and HTTPS clones converge.
+      // This accepts a rare same-host, same-path collision across distinct SSH
+      // accounts; the tradeoff is relevance bleed within one operator's store.
       // Preserve remote path case so case-sensitive hosts fail closed. Providers
       // with case-insensitive slugs may miss boosts/digests across casing variants,
       // but folding paths could cross-inject memory between distinct repositories.
