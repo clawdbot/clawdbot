@@ -12,6 +12,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import * as deliveryQueueSqlite from "../../infra/delivery-queue-sqlite.js";
+
+const directCronCompletionRetention = {
+  idPrefix: "cron-direct-delivery:v1:",
+  maxAgeMs: 24 * 60 * 60_000,
+  maxEntries: 2_000,
+};
 
 // --- Module mocks (must be hoisted before imports) ---
 
@@ -160,10 +167,6 @@ import {
   dispatchCronDelivery,
   queueCronMessageToolDeliveryAwareness,
 } from "./delivery-dispatch.js";
-import {
-  getCompletedDirectCronDeliveriesCountForTests,
-  resetCompletedDirectCronDeliveriesForTests,
-} from "./delivery-dispatch.test-support.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
@@ -314,7 +317,7 @@ function mockResolvedOutboundRoute(
 describe("dispatchCronDelivery — double-announce guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetCompletedDirectCronDeliveriesForTests();
+    vi.spyOn(deliveryQueueSqlite, "getDeliveryQueueEntryStatus").mockReturnValue(undefined);
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -326,7 +329,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.mocked(enqueueSystemEvent).mockReset();
     vi.mocked(appendAssistantMessageToSessionTranscript).mockResolvedValue({
       ok: true,
-      sessionFile: "session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "test-session-id",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/sessions.json",
+      },
       messageId: "mirror-message",
     });
     loadCronSessionEntryLatestMock.mockReturnValue({
@@ -337,6 +345,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
@@ -375,7 +384,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [{ text: "Parent cron summary is ready." }],
-      skipQueue: true,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
@@ -391,7 +400,297 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [{ text: "Fallback cron summary." }],
-      skipQueue: true,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("uses non-empty summary text when structured direct payloads are textless", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- One task needs attention.";
+    params.outputText = "Pablo Daily Summary\n- One task needs attention.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "   " }, {}] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Pablo Daily Summary\n- One task needs attention." }],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("adds generic fallback text to metadata-only direct payloads", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        text: "   ",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        { text: "Pablo Daily Summary\n- Review the stuck cron." },
+        {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("leaves portable button-only payloads for channel presentation rendering", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary";
+    params.outputText = "Pablo Daily Summary";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+        },
+      },
+    ];
+
+    const state = await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+          },
+        },
+      ],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.delivered).toBe(true);
+  });
+
+  it("leaves channel metadata payload text decisions to the channel adapter", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "👍", replyToId: "123" },
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        { text: "Pablo Daily Summary\n- Review the stuck cron." },
+        {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
+          channelData: {
+            telegram: {
+              reaction: { emoji: "👍", replyToId: "123" },
+            },
+          },
+        },
+      ],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("carries the summary payload index into channel-owned fallback normalization", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "   " },
+      { text: "Pablo Daily Summary\n- Review the stuck cron." },
+      {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "👍", replyToId: "123" },
+          },
+        },
+      },
+      {
+        text: "   ",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        { text: "Pablo Daily Summary\n- Review the stuck cron." },
+        {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
+          channelData: {
+            telegram: {
+              reaction: { emoji: "👍", replyToId: "123" },
+            },
+          },
+        },
+        {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("reuses captioned media as the source for metadata fallback", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary";
+    params.outputText = "Pablo Daily Summary";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Pablo Daily Summary", mediaUrl: "https://example.test/report.png" },
+      {
+        channelData: {
+          telegram: { buttons: [[{ text: "Open task", url: "https://example.test/task" }]] },
+        },
+      },
+    ];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        { text: "Pablo Daily Summary", mediaUrl: "https://example.test/report.png" },
+        {
+          fallbackText: { text: "Pablo Daily Summary", replacesPayloadIndex: 0 },
+          channelData: {
+            telegram: { buttons: [[{ text: "Open task", url: "https://example.test/task" }]] },
+          },
+        },
+      ],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.delivered).toBe(true);
+  });
+
+  it("does not attach fallback hints when the direct summary is silent", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = SILENT_REPLY_TOKEN;
+    params.outputText = SILENT_REPLY_TOKEN;
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        text: SILENT_REPLY_TOKEN,
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+          },
+        },
+      },
+    ] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          channelData: {
+            telegram: {
+              buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
+            },
+          },
+        },
+      ],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("uses summary fallback for non-Telegram direct payloads that normalize away", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.resolvedDelivery = makeResolvedDelivery({
+      channel: "discord",
+      to: "channel-123",
+    }) as never;
+    params.summary = "Pablo Daily Summary\n- Non-Telegram fallback.";
+    params.outputText = "Pablo Daily Summary\n- Non-Telegram fallback.";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [{ text: "   " }] as never;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "discord",
+      to: "channel-123",
+      payloads: [{ text: "Pablo Daily Summary\n- Non-Telegram fallback." }],
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
@@ -777,7 +1076,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [{ text: "Fallback cron summary." }],
-      skipQueue: true,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
@@ -857,7 +1156,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [{ text: "Detailed child result, everything finished successfully." }],
-      skipQueue: true,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
   });
 
@@ -937,11 +1236,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       runStartedAt: 1_000,
     });
     params.cfgWithAgentDefaults = {
-      messages: {
-        tts: {
-          auto: "tagged",
-          provider: "microsoft",
-        },
+      tts: {
+        auto: "tagged",
+        provider: "microsoft",
       },
     } as never;
 
@@ -1796,6 +2093,34 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["structured", "threaded"] as const)(
+    "retries proven-not-sent %s cron delivery without duplicating a message",
+    async (deliveryKind) => {
+      vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+      vi.mocked(deliverOutboundPayloads)
+        .mockRejectedValueOnce(
+          new PlatformMessageNotDispatchedError("upload stopped before final dispatch", {
+            cause: new Error("gateway upload failed"),
+          }),
+        )
+        .mockResolvedValueOnce([{ ok: true } as never]);
+
+      const params = makeBaseParams({ synthesizedText: "Retry without duplicating." });
+      if (deliveryKind === "structured") {
+        params.deliveryPayloadHasStructuredContent = true;
+      } else {
+        params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
+      }
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.result).toBeUndefined();
+      expect(state.deliveryAttempted).toBe(true);
+      expect(state.delivered).toBe(true);
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("does not retry ambiguous direct announce send errors", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
@@ -1939,8 +2264,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("keeps direct announce delivery idempotent across replay for the same cron execution", async () => {
+  it("keeps direct delivery idempotent through its durable completed receipt", async () => {
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("completed");
 
     const params = makeBaseParams({ synthesizedText: "Replay-safe cron update." });
     const first = await dispatchCronDelivery(params);
@@ -1950,6 +2278,260 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.delivered).toBe(true);
     expect(second.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+      completionRetention: directCronCompletionRetention,
+    });
+  });
+
+  it("adopts a receipt completed after the initial cron replay precheck", async () => {
+    vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
+      new Error("Stable delivery intent is already queued"),
+    );
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("completed");
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ synthesizedText: "Concurrent completed cron update." }),
+    );
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("adopts completion when a competing pending owner disappears during lookup", async () => {
+    vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
+      new Error("Stable delivery intent is already queued"),
+    );
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("pending")
+      .mockReturnValueOnce("completed");
+    vi.spyOn(deliveryQueueSqlite, "loadDeliveryQueueEntry").mockReturnValue(null);
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ synthesizedText: "Concurrently completed cron update." }),
+    );
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("waits for an actively claimed cross-process cron delivery to settle", async () => {
+    vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
+      new Error("Stable delivery intent is already queued"),
+    );
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("pending")
+      .mockReturnValueOnce("completed");
+    vi.spyOn(deliveryQueueSqlite, "loadDeliveryQueueEntry").mockReturnValue({
+      id: "cross-process-cron-intent",
+      enqueuedAt: Date.now(),
+      retryCount: 0,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "send_attempt_started",
+    });
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ synthesizedText: "Cross-process completed cron update." }),
+    );
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("fails closed immediately for a stale ambiguous cross-process cron delivery", async () => {
+    vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
+      new Error("Stable delivery intent is already queued"),
+    );
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("pending");
+    vi.spyOn(deliveryQueueSqlite, "loadDeliveryQueueEntry").mockReturnValue({
+      id: "stale-cross-process-cron-intent",
+      enqueuedAt: Date.now() - 60_000,
+      retryCount: 0,
+      platformSendStartedAt: Date.now() - 30_001,
+      recoveryState: "send_attempt_started",
+    });
+
+    const state = await dispatchCronDelivery(
+      makeBaseParams({ synthesizedText: "Stale ambiguous cron update." }),
+    );
+
+    expect(state.delivered).toBe(false);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expect(deliveryQueueSqlite.getDeliveryQueueEntryStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains a bounded receipt for fully successful best-effort delivery", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("completed");
+
+    const params = makeBaseParams({ synthesizedText: "Best-effort replay-safe cron update." });
+    params.deliveryBestEffort = true;
+    const first = await dispatchCronDelivery(params);
+    const second = await dispatchCronDelivery(params);
+
+    expect(first.delivered).toBe(true);
+    expect(second.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expectDeliveryCall(0, {
+      bestEffort: true,
+      completionRetention: directCronCompletionRetention,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+    });
+  });
+
+  it("continues best-effort delivery when the durable receipt store is unavailable", async () => {
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mockImplementationOnce(() => {
+      throw new Error("SQLite receipt store unavailable");
+    });
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const params = makeBaseParams({ synthesizedText: "Best-effort storage outage update." });
+    params.deliveryBestEffort = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    expectDeliveryCall(0, {
+      bestEffort: true,
+      completionRetention: directCronCompletionRetention,
+    });
+  });
+
+  it("fails required delivery closed when the durable receipt store is unavailable", async () => {
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mockImplementationOnce(() => {
+      throw new Error("SQLite receipt store unavailable");
+    });
+
+    await expect(
+      dispatchCronDelivery(makeBaseParams({ synthesizedText: "Required storage outage update." })),
+    ).rejects.toThrow("SQLite receipt store unavailable");
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("keeps regenerated signed media URLs on the same durable cron intent", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("completed");
+
+    const first = makeBaseParams({
+      synthesizedText: "Signed media report.",
+      runStartedAt: 1_000,
+    });
+    first.deliveryPayloadHasStructuredContent = true;
+    first.deliveryPayloads = [
+      { text: "Signed media report.", mediaUrl: "https://example.com/report.png?signature=first" },
+    ] as never;
+    const second = makeBaseParams({
+      synthesizedText: "Signed media report.",
+      runStartedAt: 1_000,
+    });
+    second.deliveryPayloadHasStructuredContent = true;
+    second.deliveryPayloads = [
+      { text: "Signed media report.", mediaUrl: "https://example.com/report.png?signature=second" },
+    ] as never;
+
+    expect((await dispatchCronDelivery(first)).delivered).toBe(true);
+    expect((await dispatchCronDelivery(second)).delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    const firstIntent = vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mock
+      .calls[0]?.[1];
+    const secondIntent = vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mock
+      .calls[1]?.[1];
+    expect(firstIntent).toBe("cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:");
+    expect(secondIntent).toBe(firstIntent);
+  });
+
+  it("keeps colon-bearing account and recipient tuples on distinct durable intents", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const first = makeBaseParams({
+      runStartedAt: 1_000,
+      synthesizedText: "Account-scoped scheduled update.",
+    });
+    first.resolvedDelivery = makeResolvedDelivery({
+      accountId: "a",
+      to: "b:c",
+      threadId: "42",
+    });
+    const second = makeBaseParams({
+      runStartedAt: 1_000,
+      synthesizedText: "Distinct account-scoped scheduled update.",
+    });
+    second.resolvedDelivery = makeResolvedDelivery({
+      accountId: "a:b",
+      to: "c",
+      threadId: "42",
+    });
+
+    expect((await dispatchCronDelivery(first)).delivered).toBe(true);
+    expect((await dispatchCronDelivery(second)).delivered).toBe(true);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+    const firstIntent = outboundDeliveryCall(0).deliveryIntentId;
+    const secondIntent = outboundDeliveryCall(1).deliveryIntentId;
+    expect(firstIntent).toContain(":telegram:a:b%3Ac:42");
+    expect(secondIntent).toContain(":telegram:a%3Ab:c:42");
+    expect(secondIntent).not.toBe(firstIntent);
+  });
+
+  it("keeps reordered regenerated media paths on the same recovered cron intent", async () => {
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+    vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce("completed");
+
+    const first = makeBaseParams({
+      synthesizedText: "Recovered media report.",
+      runStartedAt: 1_000,
+    });
+    first.deliveryPayloadHasStructuredContent = true;
+    first.deliveryPayloads = [
+      {
+        text: "Recovered media report.",
+        mediaUrl: "https://first.example.com/original/report-a.png",
+        mediaUrls: ["https://first.example.com/original/report-b.png"],
+      },
+    ] as never;
+    const second = makeBaseParams({
+      synthesizedText: "Recovered media report.",
+      runStartedAt: 1_000,
+    });
+    second.deliveryPayloadHasStructuredContent = true;
+    second.deliveryPayloads = [
+      {
+        text: "Recovered media report.",
+        mediaUrl: "https://reissued.example.com/staged/report-b.png",
+        mediaUrls: ["https://reissued.example.com/staged/report-a.png"],
+      },
+    ] as never;
+
+    expect((await dispatchCronDelivery(first)).delivered).toBe(true);
+    expect((await dispatchCronDelivery(second)).delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledOnce();
+    const firstIntent = vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mock
+      .calls[0]?.[1];
+    const secondIntent = vi.mocked(deliveryQueueSqlite.getDeliveryQueueEntryStatus).mock
+      .calls[1]?.[1];
+    expect(firstIntent).toBe("cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:");
+    expect(secondIntent).toBe(firstIntent);
   });
 
   it("does not collapse distinct recurring runs for the same job", async () => {
@@ -1979,7 +2561,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("does not cache partial bestEffort delivery replays as delivered", async () => {
+  it("does not mark partial best-effort delivery as durably completed", async () => {
     vi.mocked(deliverOutboundPayloads).mockImplementation(async (params) => {
       const failedPayload = Array.isArray(params.payloads) ? params.payloads[0] : undefined;
       params.onError?.(new Error("payload failed"), failedPayload as never);
@@ -2001,21 +2583,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.deliveryError).toBe("payload failed");
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-  });
-
-  it("prunes the completed-delivery cache back to the entry cap", async () => {
-    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
-
-    for (let i = 0; i < 2003; i += 1) {
-      const params = makeBaseParams({
-        synthesizedText: `Replay-safe cron update ${i}.`,
-        runStartedAt: i,
-      });
-      const state = await dispatchCronDelivery(params);
-      expect(state.delivered).toBe(true);
-    }
-
-    expect(getCompletedDirectCronDeliveriesCountForTests()).toBe(2000);
   });
 
   it("does not retry permanent direct announce failures", async () => {
@@ -2163,7 +2730,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(false);
   });
 
-  it("text delivery always bypasses the write-ahead queue", async () => {
+  it("persists text delivery under a stable bounded write-ahead intent", async () => {
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
     const params = makeBaseParams({ synthesizedText: "Daily digest ready." });
@@ -2177,11 +2744,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [{ text: "Daily digest ready." }],
-      skipQueue: true,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
     });
   });
 
-  it("structured/thread delivery also bypasses the write-ahead queue", async () => {
+  it("persists structured and thread delivery under the same durable contract", async () => {
     vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
 
     const params = makeBaseParams({ synthesizedText: "Report attached." });
@@ -2190,10 +2757,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, { skipQueue: true });
+    expectDeliveryCall(0, {
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
+      completionRetention: directCronCompletionRetention,
+    });
   });
 
-  it("proven-not-sent retry delivers exactly once with skipQueue on both attempts", async () => {
+  it("reuses one stable durable intent for proven-not-sent retries", async () => {
     // First call throws before a recipient-visible send, second call succeeds.
     vi.mocked(deliverOutboundPayloads)
       .mockRejectedValueOnce(
@@ -2216,8 +2786,18 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       // Two calls total: first failed transiently, second succeeded.
       expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
 
-      expectDeliveryCall(0, { skipQueue: true });
-      expectDeliveryCall(1, { skipQueue: true });
+      const deliveryIntentId = outboundDeliveryCall(0).deliveryIntentId;
+      expect(deliveryIntentId).toEqual(expect.stringContaining("cron-direct-delivery:v1:"));
+      expectDeliveryCall(0, {
+        deliveryIntentId,
+        completionRetention: directCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+      });
+      expectDeliveryCall(1, {
+        deliveryIntentId,
+        completionRetention: directCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+      });
     } finally {
       vi.unstubAllEnvs();
     }
@@ -2275,7 +2855,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       accountId: undefined,
       threadId: undefined,
       bestEffort: false,
-      skipQueue: true,
+      deliveryIntentId: expect.stringContaining("cron-direct-delivery:v1:"),
       payloads: [{ text: "hello from cron" }],
     });
   });
@@ -2449,7 +3029,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
-    expect(getCompletedDirectCronDeliveriesCountForTests()).toBe(1);
+    expectDeliveryCall(0, { completionRetention: directCronCompletionRetention });
   });
 
   it("keeps custom session cron delivery mirrors on the custom session", async () => {

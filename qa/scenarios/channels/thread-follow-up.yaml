@@ -5,10 +5,10 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.threads
       - channels.thread-parent-child-placement
+      - channels.native-threads
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify a follow-up sent inside a thread receives one reply in the same thread.
   successCriteria:
     - The transport accepts a normalized threaded inbound message.

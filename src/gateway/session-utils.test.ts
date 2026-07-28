@@ -12,12 +12,14 @@ import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { CronJob } from "../cron/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { registerSessionAutomationSource } from "./session-automation-index.js";
 import { buildGatewaySessionEventFields } from "./session-event-payload.js";
 import { capArrayByJsonBytes } from "./session-transcript-readers.js";
@@ -30,6 +32,7 @@ import {
   listSessionsFromStore,
   listSessionsFromStoreAsync,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
@@ -225,6 +228,18 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("emits a tombstone when a session has no current control owner", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:child-without-owner",
+      entry: {} as SessionEntry,
+    });
+
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).controlOwnerSessionKey).toBeNull();
+  });
+
   test("projects only unexpired agent status", () => {
     const entry = {
       sessionId: "session",
@@ -264,6 +279,7 @@ describe("gateway session utils", () => {
     });
 
     expect(row.observerDigest).toEqual({
+      runId: observerDigest.runId,
       headline: observerDigest.headline,
       health: observerDigest.health,
       updatedAt: observerDigest.updatedAt,
@@ -363,7 +379,7 @@ describe("gateway session utils", () => {
 
   test("session lists separate archived rows and sort pinned sessions first", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
-    const store = {
+    const store: Record<string, SessionEntry> = {
       recent: { sessionId: "recent", updatedAt: 30 },
       pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40, icon: "name:spark" },
       archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
@@ -387,6 +403,14 @@ describe("gateway session utils", () => {
     expect(archived.sessions).toMatchObject([
       { key: "archived", archived: true, archivedAt: 50, pinned: false },
     ]);
+
+    const all = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { archived: "all" },
+    });
+    expect(all.sessions.map((session) => session.key)).toEqual(["pinned", "recent", "archived"]);
   });
 
   test("session lists page from an offset after filtering and sorting", () => {
@@ -420,19 +444,25 @@ describe("gateway session utils", () => {
 
   test("session list search includes direct-session origin display labels", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const store = {
+    const store: Record<string, SessionEntry> = {
       "agent:main:telegram:direct:42": {
+        sessionId: "direct-42",
         chatType: "direct",
-        channel: "telegram",
-        origin: { label: "openclaw-tui" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "42" },
+          origin: { label: "openclaw-tui" },
+        }),
         updatedAt: 2,
-      } as SessionEntry,
+      },
       "agent:main:telegram:direct:99": {
+        sessionId: "direct-99",
         chatType: "direct",
-        channel: "telegram",
-        origin: { label: "other-direct" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "99" },
+          origin: { label: "other-direct" },
+        }),
         updatedAt: 1,
-      } as SessionEntry,
+      },
     };
 
     const listed = listSessionsFromStore({
@@ -1186,11 +1216,15 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow displayName falls through to origin label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "direct-42",
+      updatedAt: 1,
       chatType: "direct",
-      channel: "telegram",
-      origin: { label: "openclaw-tui" },
-    } as SessionEntry;
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "42" },
+        origin: { label: "openclaw-tui" },
+      }),
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1203,11 +1237,12 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow keeps dashboard sender identity out of the session title", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "dashboard-1",
+      updatedAt: 1,
       chatType: "direct",
-      channel: "webchat",
-      origin: { label: "Peter", provider: "webchat", chatType: "direct" },
-    } as SessionEntry;
+      delivery: { kind: "internal" as const },
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1230,12 +1265,16 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow displayName prefers the human chat title for group sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "group-99",
+      updatedAt: 1,
       chatType: "group",
-      channel: "telegram",
       subject: "Engineering",
-      origin: { label: "openclaw-tui" },
-    } as SessionEntry;
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "group:99" },
+        origin: { label: "openclaw-tui" },
+      }),
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1248,12 +1287,14 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow group displayName prefers #channel and falls back to the token", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const channelEntry = {
+    const channelEntry: SessionEntry = {
+      sessionId: "channel-C1",
+      updatedAt: 1,
       chatType: "channel",
-      channel: "slack",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "channel:C1" } }),
       groupChannel: "general",
       space: "Acme",
-    } as SessionEntry;
+    };
     const channelRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1273,7 +1314,12 @@ describe("gateway session utils", () => {
     });
     expect(labeledRow.displayName).toBe("Team room");
 
-    const opaque = { chatType: "group", channel: "telegram" } as SessionEntry;
+    const opaque: SessionEntry = {
+      sessionId: "group-opaque",
+      updatedAt: 1,
+      chatType: "group",
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram", to: "group:99" } }),
+    };
     const opaqueRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1286,7 +1332,7 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow projects worktree and execNode bindings", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
       sessionId: "s1",
       updatedAt: 1,
       spawnedCwd: "/state/worktrees/abc/wt-1234",
@@ -1308,12 +1354,16 @@ describe("gateway session utils", () => {
 
   test("buildGatewaySessionRow prefers entry.label over origin.label for direct sessions", () => {
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
-    const entry = {
+    const entry: SessionEntry = {
+      sessionId: "direct-labeled",
+      updatedAt: 1,
       chatType: "direct",
-      channel: "telegram",
       label: "Alice",
-      origin: { label: "openclaw-tui" },
-    } as SessionEntry;
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "42" },
+        origin: { label: "openclaw-tui" },
+      }),
+    };
     const row = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1349,7 +1399,11 @@ describe("gateway session utils", () => {
         responseUsage: { default: "off", discord: "full", telegram: "tokens" },
       },
     } as OpenClawConfig;
-    const discordEntry = { sessionId: "d1", updatedAt: 1, channel: "discord" } as SessionEntry;
+    const discordEntry: SessionEntry = {
+      sessionId: "d1",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
+    };
     const discordRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1359,7 +1413,11 @@ describe("gateway session utils", () => {
     });
     expect(discordRow.effectiveResponseUsage).toBe("full");
 
-    const telegramEntry = { sessionId: "t1", updatedAt: 1, channel: "telegram" } as SessionEntry;
+    const telegramEntry: SessionEntry = {
+      sessionId: "t1",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "telegram" } }),
+    };
     const telegramRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1370,7 +1428,11 @@ describe("gateway session utils", () => {
     expect(telegramRow.effectiveResponseUsage).toBe("tokens");
 
     // A channel with no entry falls back to the config "default" (off).
-    const slackEntry = { sessionId: "x1", updatedAt: 1, channel: "slack" } as SessionEntry;
+    const slackEntry: SessionEntry = {
+      sessionId: "x1",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context: { channel: "slack" } }),
+    };
     const slackRow = buildGatewaySessionRow({
       cfg,
       storePath: "",
@@ -1536,7 +1598,7 @@ describe("gateway session utils", () => {
       });
       writeAcpSessionMetaForMigration({
         sessionKey: legacyAcpKey,
-        sessionId: "sess-acp-repair",
+        lifecycleRevision: undefined,
         meta: {
           backend: "acpx",
           agent: "claude",
@@ -1777,7 +1839,7 @@ describe("gateway session utils", () => {
     });
   });
 
-  test("resolveGatewaySessionStoreTarget reads a retired legacy store without provisioning SQLite", async () => {
+  test("resolveGatewaySessionStoreTarget ignores a retired legacy store without provisioning SQLite", async () => {
     await withStateDirEnv("session-utils-retired-legacy-", async ({ stateDir }) => {
       const retiredSessionsDir = path.join(stateDir, "agents", "retired", "sessions");
       const retiredStorePath = path.join(retiredSessionsDir, "sessions.json");
@@ -1803,7 +1865,12 @@ describe("gateway session utils", () => {
       });
 
       expect(target.storePath).toBe(retiredStorePath);
-      expect(target.store["agent:retired:main"]?.sessionId).toBe("sess-retired-legacy");
+      expect(target.store).toEqual({});
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath, {
+        agentId: "retired",
+      }).path;
+      expect(sqlitePath).toBeDefined();
+      expect(fs.existsSync(sqlitePath!)).toBe(false);
       expect(fs.readdirSync(retiredSessionsDir)).toEqual(["sessions.json"]);
     });
   });
@@ -1858,7 +1925,34 @@ describe("gateway session utils", () => {
 
         const loaded = loadSessionEntry("agent:main:main", { clone: false });
 
-        expect(loaded.entry).toEqual({ sessionId: "sess-main", updatedAt: 7 });
+        expect(loaded.entry).toEqual({
+          sessionId: "sess-main",
+          updatedAt: 7,
+          delivery: { kind: "none" },
+        });
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntryReadOnly does not materialize a missing configured agent", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-entry-read-only-", async ({ stateDir }) => {
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }, { id: "missing" }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntryReadOnly("agent:missing:main");
+
+        expect(loaded.entry).toBeUndefined();
+        expect(fs.existsSync(path.join(stateDir, "agents", "missing"))).toBe(false);
       });
     } finally {
       resetConfigRuntimeState();

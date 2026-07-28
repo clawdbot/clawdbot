@@ -7,6 +7,8 @@ import ai.openclaw.app.chat.ChatOutboxStatus
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
+import ai.openclaw.app.chat.OUTBOX_BRANCH_CHANGED_ERROR
+import ai.openclaw.app.chat.chatOutboxDisplayError
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeStringResource
@@ -95,6 +97,9 @@ private data class ChatBubbleStyle(
 internal fun ChatMessageBubble(
   message: ChatMessage,
   onReplyMessage: (String) -> Unit = {},
+  sessionActionsEnabled: Boolean = false,
+  onRewindMessage: (String) -> Unit = {},
+  onForkMessage: (String) -> Unit = {},
   speechState: MessageSpeechState? = null,
   onToggleListen: ((String, String) -> Unit)? = null,
 ) {
@@ -125,6 +130,9 @@ internal fun ChatMessageBubble(
   ChatMessageActionHost(
     text = messageText,
     onReply = onReplyMessage,
+    showSessionActions = role == "user" && message.entryId != null && sessionActionsEnabled,
+    onRewind = message.entryId?.let { entryId -> { onRewindMessage(entryId) } },
+    onFork = message.entryId?.let { entryId -> { onForkMessage(entryId) } },
     listenActive = messageSpeech != null,
     onToggleListen = toggleListen,
     modifier = Modifier.fillMaxWidth(),
@@ -452,10 +460,18 @@ fun ChatOutboxBubble(
       ChatOutboxStatus.Sending -> nativeString("Sending…")
       ChatOutboxStatus.Accepted -> nativeString("Sent — confirming delivery…")
       ChatOutboxStatus.Failed ->
-        item.lastError
+        chatOutboxDisplayError(item.lastError)
           ?.trim()
           ?.takeIf { it.isNotEmpty() }
-          ?.let { nativeString("Failed — \$it", it) } ?: nativeString("Failed")
+          ?.let { error ->
+            val localized =
+              if (error == OUTBOX_BRANCH_CHANGED_ERROR) {
+                nativeString("Session branch changed; review and retry this message.")
+              } else {
+                error
+              }
+            nativeString("Failed — \$it", localized)
+          } ?: nativeString("Failed")
     }
 
   ChatBubbleContainer(

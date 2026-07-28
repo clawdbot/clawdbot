@@ -770,6 +770,39 @@ describe("gateway/node-registry", () => {
     expect(getCurrentActiveNodeContext()).toBeNull();
   });
 
+  it("clears presence only for the current connection and selects the next active Mac", () => {
+    const registry = createTestNodeRegistry();
+    registerNodeSession(
+      registry,
+      makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
+      {},
+    );
+    registerNodeSession(
+      registry,
+      makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
+      {},
+    );
+    registry.updatePresenceActivity({
+      nodeId: "node-1",
+      connId: "conn-1",
+      idleSeconds: 10,
+      observedAtMs: 100_000,
+    });
+    registry.updatePresenceActivity({
+      nodeId: "node-2",
+      connId: "conn-2",
+      idleSeconds: 0,
+      observedAtMs: 105_000,
+    });
+
+    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-old" })).toBeNull();
+    expect(registry.getActiveNode()?.nodeId).toBe("node-2");
+    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(true);
+    expect(registry.getActiveNode()?.nodeId).toBe("node-1");
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
+    expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(false);
+  });
+
   it("checks node websocket connectivity with ping/pong", async () => {
     const registry = createTestNodeRegistry();
     registerNodeSession(

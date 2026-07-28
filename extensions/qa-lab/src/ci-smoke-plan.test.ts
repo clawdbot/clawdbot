@@ -46,7 +46,7 @@ describe("createQaSmokeCiPart", () => {
     expect(
       new Set(scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.execution.kind)),
     ).toEqual(new Set(["flow", "playwright", "script"]));
-    expect(scenarioIds).toHaveLength(12);
+    expect(scenarioIds).toHaveLength(11);
     expect(scenarioIds).toContain("control-ui-chat-flow-playwright");
     expect(scenarioIds).toContain("gateway-smoke");
     expect(scenarioIds).toContain("matrix-restart-resume");
@@ -55,6 +55,16 @@ describe("createQaSmokeCiPart", () => {
       scenarioIds.map((scenarioId) => scenarioById.get(scenarioId)?.sourcePath),
     );
     const scorecardReport = readQaScorecardTaxonomyReport([...scenarioById.values()]);
+    const smokeScenarioRefs = new Set(
+      scorecardReport.categories
+        .filter((category) => category.profiles.includes("smoke-ci"))
+        .flatMap((category) => category.scenarioRefs),
+    );
+    expect(
+      [...selectedScenarioPaths].every(
+        (scenarioPath) => scenarioPath !== undefined && smokeScenarioRefs.has(scenarioPath),
+      ),
+    ).toBe(true);
     const uncoveredCategoryIds = scorecardReport.categories
       .filter((category) => category.profiles.includes("smoke-ci"))
       .filter((category) => !category.scenarioRefs.some((ref) => selectedScenarioPaths.has(ref)))

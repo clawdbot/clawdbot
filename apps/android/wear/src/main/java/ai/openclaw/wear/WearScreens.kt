@@ -140,7 +140,9 @@ internal fun OpenClawWearScreens(
   autoSpeak: Boolean,
   notificationsGranted: Boolean,
   initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
   voiceSwipeHintEnabled: Boolean = true,
+  onNavigationRequestHandled: (Int) -> Unit = {},
   onTalk: () -> Unit,
   onType: () -> Unit,
   onRealtimeTalk: () -> Unit,
@@ -178,6 +180,12 @@ internal fun OpenClawWearScreens(
   var showVoiceSwipeHint by remember { mutableStateOf(voiceSwipeHintEnabled) }
   var realtimeStartedAtMillis by remember { mutableLongStateOf(0L) }
   var realtimeElapsedSeconds by remember { mutableLongStateOf(0L) }
+  LaunchedEffect(navigationRequest?.id) {
+    val request = navigationRequest ?: return@LaunchedEffect
+    val destination = wearLaunchPage(request.target, realtimeActive)
+    pagerState.scrollToPage(destination.ordinal)
+    onNavigationRequestHandled(request.id)
+  }
   LaunchedEffect(pagerState.currentPage, showVoiceSwipeHint) {
     if (pagerState.currentPage == WearHomePage.Voice.ordinal && showVoiceSwipeHint) {
       delay(1_800L)
@@ -277,6 +285,11 @@ internal fun OpenClawWearScreens(
     }
   }
 }
+
+internal fun wearLaunchPage(
+  target: WearLaunchTarget,
+  realtimeActive: Boolean,
+): WearHomePage = if (realtimeActive) WearHomePage.Voice else target.initialPage
 
 @Composable
 private fun ChatPage(

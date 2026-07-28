@@ -128,7 +128,7 @@ async function resolveAuthorizedSmsTurn(params: {
     accountSid: "AC123",
   };
   await dispatchSmsInboundEvent({
-    cfg: { commands: { useAccessGroups: true } },
+    cfg: {},
     account: createAccount({ dmPolicy: "allowlist", allowFrom: [SMS_FROM] }),
     channelRuntime: mocks.runtime,
     receivedAt: params.receivedAt ?? 1_700_000_000_123,
@@ -220,18 +220,8 @@ describe("dispatchSmsInboundEvent", () => {
         isTextCommand: true,
       });
 
-    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith(
-      "/status",
-      expect.objectContaining({
-        commands: expect.objectContaining({ useAccessGroups: true }),
-      }),
-    );
-    expect(isControlCommandMessage).toHaveBeenCalledWith(
-      "/status",
-      expect.objectContaining({
-        commands: expect.objectContaining({ useAccessGroups: true }),
-      }),
-    );
+    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("/status", {});
+    expect(isControlCommandMessage).toHaveBeenCalledWith("/status", {});
 
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -266,18 +256,8 @@ describe("dispatchSmsInboundEvent", () => {
         isTextCommand: false,
       });
 
-    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith(
-      "please inspect /tmp/foo",
-      expect.objectContaining({
-        commands: expect.objectContaining({ useAccessGroups: true }),
-      }),
-    );
-    expect(isControlCommandMessage).toHaveBeenCalledWith(
-      "please inspect /tmp/foo",
-      expect.objectContaining({
-        commands: expect.objectContaining({ useAccessGroups: true }),
-      }),
-    );
+    expect(shouldComputeCommandAuthorized).toHaveBeenCalledWith("please inspect /tmp/foo", {});
+    expect(isControlCommandMessage).toHaveBeenCalledWith("please inspect /tmp/foo", {});
 
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({

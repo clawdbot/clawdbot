@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import "../../../test/helpers/session-manager-file-compat.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 
@@ -53,7 +54,7 @@ describe("v1 session migration id assignment", () => {
       "cafef00d-0000-4000-8000-000000000000",
     );
 
-    const sm = SessionManager.open(file, dir);
+    const sm = SessionManager.openFile(file, dir);
 
     const messages = sm
       .getEntries()
@@ -111,7 +112,7 @@ describe("v1 session migration id assignment", () => {
         .join("\n") + "\n",
     );
 
-    const sm = SessionManager.open(file, dir);
+    const sm = SessionManager.openFile(file, dir);
     const kept = sm
       .getEntries()
       .find(

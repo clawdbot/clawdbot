@@ -12,12 +12,17 @@ import {
   finalizeNodePairingCleanupClaim,
   recordPairedNodeConnection,
 } from "../../../infra/node-pairing.js";
+import { listProfiles } from "../../../state/user-profiles.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
-import { listControlUiPluginTabs } from "../../control-ui-plugin-tabs.js";
+import {
+  listControlUiPluginTabs,
+  listControlUiPluginWidgetKinds,
+} from "../../control-ui-plugin-tabs.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
 import { MAX_BUFFERED_BYTES, MAX_PAYLOAD_BYTES, TICK_INTERVAL_MS } from "../../server-constants.js";
 import { formatError } from "../../server-utils.js";
+import { allowedSessionVisibilities } from "../../session-sharing.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { buildGatewaySnapshot, getHealthCache, getHealthVersion } from "../health-state.js";
 import { emitGatewayAuthSecurityEvent } from "./connect-auth-security.js";
@@ -64,6 +69,7 @@ export async function sendGatewayHello(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
+    controlUiDeviceAuthMigrationPending,
   } = state;
   const snapshot = buildGatewaySnapshot({
     includeSensitive: scopes.includes(ADMIN_SCOPE),
@@ -77,6 +83,7 @@ export async function sendGatewayHello(
   const controlUiTabs = listControlUiPluginTabs(helloOkAuthScopes, {
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
+  const controlUiWidgetKinds = listControlUiPluginWidgetKinds(helloOkAuthScopes);
   const helloOk = {
     type: "hello-ok",
     protocol: PROTOCOL_VERSION,
@@ -95,7 +102,11 @@ export async function sendGatewayHello(
     },
     snapshot,
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
+    ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+    ...(controlUiDeviceAuthMigrationPending
+      ? { deviceAuthMigration: { pending: true as const } }
+      : {}),
     auth: {
       role,
       scopes: helloOkAuthScopes,
@@ -113,6 +124,9 @@ export async function sendGatewayHello(
       maxPayload: MAX_PAYLOAD_BYTES,
       maxBufferedBytes: MAX_BUFFERED_BYTES,
       tickIntervalMs: TICK_INTERVAL_MS,
+      allowedSessionVisibilities: allowedSessionVisibilities(context.configSnapshot),
+      hasMultipleSessionSharingIdentities:
+        listProfiles().filter((profile) => !profile.mergedInto).length >= 2,
     },
   };
   advanceHandshakePhase("hello_payload_prepared");

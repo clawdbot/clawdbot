@@ -5,8 +5,6 @@ scenario:
   coverage:
     primary:
       - channels.inbound-media-normalization
-    secondary:
-      - runtime.delivery
   execution:
     profiles: { "matrix:all": 56, "matrix:media": 5 }
     kind: flow

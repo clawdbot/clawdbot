@@ -46,6 +46,48 @@ export function loadSqliteTranscriptEventsSync(
   return loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId);
 }
 
+/** Loads only the first transcript row for header metadata hot paths. */
+export function loadSqliteTranscriptHeaderSync(scope: SessionTranscriptReadScope): unknown {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("seq", "asc")
+      .limit(1),
+  );
+  return row ? (JSON.parse(row.event_json) as TranscriptEvent) : undefined;
+}
+
+/** Loads a bounded newest tail in storage order for hot-path accounting. */
+export function loadSqliteTranscriptTailEventsSync(
+  scope: SessionTranscriptReadScope,
+  maxEvents: number,
+): TranscriptEvent[] {
+  const limit = Number.isFinite(maxEvents) ? Math.max(0, Math.floor(maxEvents)) : 0;
+  if (limit === 0) {
+    return [];
+  }
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", resolved.sessionId)
+      .orderBy("seq", "desc")
+      .limit(limit),
+  )
+    .rows.toReversed()
+    .map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+}
+
 /** Loads additive transcript rows after one durable sequence checkpoint. */
 export function loadSqliteTranscriptEventRowsAfterSeqSync(
   scope: SessionTranscriptReadScope,
@@ -131,6 +173,26 @@ export function readSqliteTranscriptSnapshot(
   };
 }
 
+/** Reads transcript event rows without parsing JSON (tolerant of malformed rows). Used by migrations. */
+export function readSqliteTranscriptEventRows(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): SqliteTranscriptSnapshotRow[] {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(["event_json", "seq"])
+      .where("session_id", "=", sessionId)
+      .orderBy("seq", "asc"),
+  ).rows;
+  return rows.map((row) => ({
+    eventJson: row.event_json,
+    seq: normalizeSqliteNumber(row.seq),
+  }));
+}
+
 function sqliteTranscriptJsonlByteSize() {
   return /* kysely-allow-raw: JSONL size includes event bytes plus newline separators. */ sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
     + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes");
@@ -157,7 +219,7 @@ export function readSqliteTranscriptStatsSync(
   const session = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions")
+      .selectFrom("session_windows")
       .select(["transcript_observed_at", "transcript_updated_at"])
       .where("session_id", "=", resolved.sessionId),
   );

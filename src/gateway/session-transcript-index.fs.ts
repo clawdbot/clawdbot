@@ -206,6 +206,32 @@ function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry
   return entries;
 }
 
+function projectResetBoundary(rawEntries: IndexedRawEntry[]): IndexedRawEntry[] {
+  const boundaryIndex = rawEntries.findLastIndex((entry) => {
+    const type = entry.record.type;
+    return type === "compaction" || type === "reset";
+  });
+  if (boundaryIndex < 0 || rawEntries[boundaryIndex]?.record.type !== "reset") {
+    return rawEntries;
+  }
+  const reset = rawEntries[boundaryIndex]?.record;
+  const firstKeptEntryId = reset?.firstKeptEntryId;
+  const firstKeptIndex =
+    typeof firstKeptEntryId === "string"
+      ? rawEntries.findIndex(
+          (entry, index) => index < boundaryIndex && entry.id === firstKeptEntryId,
+        )
+      : -1;
+  const kept =
+    firstKeptIndex < 0
+      ? []
+      : rawEntries.slice(firstKeptIndex, boundaryIndex).filter((entry) => {
+          const role = (entry.record.message as { role?: unknown } | undefined)?.role;
+          return role === "user" || role === "assistant";
+        });
+  return [...kept, ...rawEntries.slice(boundaryIndex + 1)];
+}
+
 async function buildSessionTranscriptIndex(
   filePath: string,
   stat: fs.Stats,
@@ -255,7 +281,7 @@ async function buildSessionTranscriptIndex(
     size: stat.size,
     hasTreeEntries: tree.hasExplicitLeafUpdate,
     ...(tree.hasExplicitLeafUpdate ? { leafId: tree.leafId } : {}),
-    entries: toIndexedEntries(activeRawEntries),
+    entries: toIndexedEntries(projectResetBoundary(activeRawEntries)),
     allEntries: toIndexedEntries(rawEntries),
   };
 }

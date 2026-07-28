@@ -9,7 +9,7 @@ describe("inspectSlackAccount", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             userToken: "test-user-token",
             appToken: "test-app-token",
           },
@@ -36,7 +36,7 @@ describe("inspectSlackAccount", () => {
       cfg: {
         channels: {
           slack: {
-            identity: "user",
+            postAs: "user",
             mode: "http",
             userToken: "test-user-token",
           },

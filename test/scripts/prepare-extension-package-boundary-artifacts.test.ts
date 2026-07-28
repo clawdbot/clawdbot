@@ -627,7 +627,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     });
 
     expect(productionOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
-    expect(productionOutputs).not.toContain("dist/plugin-sdk/codex-native-task-runtime.d.ts");
     expect(productionOutputs).not.toContain("dist/plugin-sdk/test-fixtures.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/provider-auth-runtime.d.ts");
     expect(privateQaOutputs).toContain("dist/plugin-sdk/test-fixtures.d.ts");

@@ -229,12 +229,10 @@ describe("exportTrajectoryCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("exports SQLite marker sessions without probing a transcript JSONL file", async () => {
+  it("exports SQLite sessions without probing a transcript JSONL file", async () => {
     const runtime = createRuntime();
-    const sessionFile = "sqlite:main:session-1:/tmp/openclaw/sessions.json";
     mocks.loadSessionEntryReadOnly.mockReturnValue({
       sessionId: "session-1",
-      sessionFile,
       updatedAt: 1,
     });
 
@@ -248,9 +246,14 @@ describe("exportTrajectoryCommand", () => {
 
     expect(mocks.exportTrajectoryForCommand).toHaveBeenCalledWith({
       outputPath: undefined,
-      sessionFile,
       sessionId: "session-1",
       sessionKey: "agent:main:telegram:direct:123",
+      sessionTarget: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:telegram:direct:123",
+        storePath: "/tmp/openclaw/sessions.json",
+      },
       workspaceDir: "/tmp/workspace",
     });
     expect(runtime.error).not.toHaveBeenCalled();

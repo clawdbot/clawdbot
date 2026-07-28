@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../model-ref-shared.js";
-import type { ModelManifestNormalizationContext } from "../model-selection-normalize.js";
+import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import {
   buildModelAliasIndex,
   normalizeModelRef,

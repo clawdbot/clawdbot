@@ -45,7 +45,7 @@ const findSchema = Type.Object({
     description: "File glob, e.g. **/*.ts.",
   }),
   path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
-  limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
+  limit: Type.Optional(Type.Integer({ description: "Max results; default 1000." })),
 });
 const DEFAULT_LIMIT = 1000;
 
@@ -192,6 +192,10 @@ export function createFindToolDefinition(
 
         void (async () => {
           try {
+            if (Number.isFinite(limit) && !Number.isInteger(limit)) {
+              settle(() => reject(new Error("Limit must be an integer")));
+              return;
+            }
             const searchPath = resolveToCwd(searchDir || ".", cwd);
             const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             const ops = customOps ?? defaultFindOperations;
@@ -279,13 +283,13 @@ export function createFindToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(child);
+            releaseChildProcessOutputAfterExit(child.nodeChildProcess);
             const rl = createInterface({ input: child.stdout });
             let stderr = "";
             const lines: string[] = [];
 
             stopChild = () => {
-              if (!child.killed) {
+              if (!child.nodeChildProcess.killed) {
                 child.kill();
               }
             };
@@ -318,12 +322,12 @@ export function createFindToolDefinition(
               lines.push(line);
             });
 
-            child.on("error", (error) => {
+            child.nodeChildProcess.on("error", (error) => {
               cleanup();
               settle(() => reject(new Error(`Failed to run fd: ${error.message}`)));
             });
 
-            child.on("close", (code) => {
+            child.nodeChildProcess.on("close", (code) => {
               cleanup();
               if (signal?.aborted) {
                 settle(() => reject(new Error("Operation aborted")));

@@ -29,7 +29,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
 import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -512,8 +512,8 @@ async function loadArtifacts(
   const scopedGlobalAgentId =
     cfg?.session?.scope === "global" && sessionKey === "global" ? resolved.agentId : undefined;
   const { storePath, entry } = scopedGlobalAgentId
-    ? loadSessionEntry(sessionKey, { agentId: scopedGlobalAgentId })
-    : loadSessionEntry(sessionKey);
+    ? loadSessionEntryReadOnly(sessionKey, { agentId: scopedGlobalAgentId })
+    : loadSessionEntryReadOnly(sessionKey);
   const sessionId = entry?.sessionId;
   if (!sessionId || !storePath) {
     return { sessionKey, artifacts: [] };

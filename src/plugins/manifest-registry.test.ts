@@ -2517,6 +2517,46 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("normalizes config hint presentation values at the manifest boundary", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "phone-hints",
+      channels: ["phone-hints"],
+      configSchema: { type: "object" },
+      uiHints: {
+        phone: { label: "Phone", presentation: "phone-number" },
+        legacy: { help: "Keep this hint", presentation: "telephone" },
+        ignored: "not-an-object",
+      },
+      channelConfigs: {
+        "phone-hints": {
+          schema: { type: "object" },
+          uiHints: {
+            phone: { presentation: "phone-number" },
+            legacy: { help: "Keep this channel hint", presentation: "telephone" },
+            ignored: false,
+          },
+        },
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "phone-hints",
+      rootDir: dir,
+      origin: "workspace",
+    });
+    const plugin = registry.plugins[0];
+
+    expect(plugin?.configUiHints).toEqual({
+      phone: { label: "Phone", presentation: "phone-number" },
+      legacy: { help: "Keep this hint" },
+    });
+    expect(plugin?.channelConfigs?.["phone-hints"]?.uiHints).toEqual({
+      phone: { presentation: "phone-number" },
+      legacy: { help: "Keep this channel hint" },
+    });
+  });
+
   it("hydrates bundled channel config metadata onto manifest records", () => {
     const dir = makeTempDir();
     const registry = loadRegistry([

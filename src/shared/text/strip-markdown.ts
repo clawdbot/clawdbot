@@ -1,4 +1,6 @@
 import { findAssistantTranscriptRoleHeaderSpans } from "../../../packages/markdown-core/src/assistant-transcript-headers.js";
+import { applyConstructFallbacks } from "../../../packages/markdown-core/src/construct-fallbacks.js";
+import type { FormatCapabilityProfile } from "../../../packages/markdown-core/src/format-capabilities.js";
 import { markdownToIR, type MarkdownIR } from "../../../packages/markdown-core/src/ir.js";
 
 type StripMarkdownOptions = {
@@ -22,8 +24,7 @@ function collectLinkInsertions(
   options: StripMarkdownOptions,
 ): PlainTextInsertion[] {
   const insertions: PlainTextInsertion[] = [];
-  const linkStyle = options.linkStyle ?? "label-and-url";
-  if (linkStyle === "label-and-url") {
+  if ((options.linkStyle ?? "label-and-url") === "label-and-url") {
     for (const link of ir.links) {
       const href = link.href.trim();
       const label = ir.text.slice(link.start, link.end).trim();
@@ -106,7 +107,11 @@ function cleanSpeechText(text: string): string {
 }
 
 /** Parse Markdown, then protect role headers exposed by the final plain-text projection. */
-export function stripMarkdown(text: string, options: StripMarkdownOptions = {}): string {
+export function stripMarkdown(
+  text: string,
+  options: StripMarkdownOptions = {},
+  profile?: FormatCapabilityProfile,
+): string {
   // The IR parser preserves links when role annotations are enabled so this
   // plain-text projection can still append explicit destinations. Direct rich
   // renderers suppress overlapping active links later at their own boundary.
@@ -114,6 +119,8 @@ export function stripMarkdown(text: string, options: StripMarkdownOptions = {}):
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders,
     autolink: false,
     blockquotePrefix: "",
+    enableHtmlUnderline: profile !== undefined,
+    enableTaskLists: profile !== undefined,
     headingStyle: "none",
     horizontalRuleText: "",
     linkify: false,
@@ -123,9 +130,14 @@ export function stripMarkdown(text: string, options: StripMarkdownOptions = {}):
   // Detect against the exact leading boundary transports receive. String.trim
   // removes Unicode whitespace that the transcript header grammar intentionally
   // does not treat as Markdown indentation.
-  const plainText = applyPlainTextInsertions(ir.text, [
-    ...collectLinkInsertions(ir, options),
-    ...collectParsedAssistantTranscriptRoleInsertions(ir, options),
+  const effectiveProfile =
+    profile && options.linkStyle === "label"
+      ? { ...profile, constructs: { ...profile.constructs, linkLabel: "strip" as const } }
+      : profile;
+  const projectedIr = effectiveProfile ? applyConstructFallbacks(ir, effectiveProfile) : ir;
+  const plainText = applyPlainTextInsertions(projectedIr.text, [
+    ...collectLinkInsertions(projectedIr, options),
+    ...collectParsedAssistantTranscriptRoleInsertions(projectedIr, options),
   ]).trim();
   const projected = applyPlainTextInsertions(
     plainText,

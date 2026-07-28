@@ -765,6 +765,112 @@ describe("openai transport stream", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
+  it("tags narration before toolcall_start reaches consumers", async () => {
+    const model = makeCompletionsModel({
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: false,
+      contextWindow: 131072,
+    });
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+    const stream = { push: (event: unknown) => events.push(event as CapturedStreamEvent) };
+    const chunks = [
+      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
+      makeCompletionsChunk({ content: "Importing ORDER-1234…" }),
+      makeCompletionsChunk(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_import",
+              function: { name: "import_order", arguments: '{"id":"ORDER-1234"}' },
+            },
+          ],
+        },
+        "tool_calls",
+      ),
+    ] as const;
+    async function* mockStream() {
+      for (const chunk of chunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    const toolStart = events.find((event) => event.type === "toolcall_start") as
+      | { partial?: { content?: Array<{ type?: string; textSignature?: string }> } }
+      | undefined;
+    const partialText = toolStart?.partial?.content?.find((block) => block.type === "text");
+    expect(String(partialText?.textSignature)).toContain('"phase":"commentary"');
+  });
+
+  it("rolls back provisional tags when stop strips spurious tool calls", async () => {
+    const model = makeCompletionsModel({
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: false,
+      contextWindow: 131072,
+    });
+    const output = createAssistantOutput(model);
+    const chunks = [
+      makeCompletionsChunk({ role: "assistant" as const, content: "" }),
+      makeCompletionsChunk({ content: "Here is the answer." }),
+      makeCompletionsChunk(
+        {
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_spurious",
+              function: { name: "bash", arguments: '{"cmd":"echo hi"}' },
+            },
+          ],
+        },
+        "stop",
+      ),
+    ] as const;
+    async function* mockStream() {
+      for (const chunk of chunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, { push() {} });
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
+  });
+
+  it("keeps ordinary text unphased when tool_calls is empty", async () => {
+    const model = makeCompletionsModel({
+      id: "grok-4.5",
+      name: "Grok 4.5",
+      provider: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: false,
+      contextWindow: 131072,
+    });
+    const output = createAssistantOutput(model);
+    const chunks = [
+      makeCompletionsChunk({ role: "assistant" as const, content: "Ordinary answer." }),
+      makeCompletionsChunk({ tool_calls: [] }, "stop"),
+    ] as const;
+    async function* mockStream() {
+      for (const chunk of chunks) {
+        yield chunk as never;
+      }
+    }
+
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, { push() {} });
+
+    expect(output.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
+  });
+
   it("leaves content unchanged when no tool calls and finish_reason is stop", async () => {
     const model = makeCompletionsModel({
       id: "llama-3.3-70b",

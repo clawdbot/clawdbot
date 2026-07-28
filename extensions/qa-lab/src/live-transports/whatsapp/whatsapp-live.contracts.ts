@@ -260,11 +260,7 @@ export type WhatsAppQaConfigOverrides = {
   groupPolicy?: "allowlist" | "disabled" | "open";
   inboundDebounceMs?: number;
   replyToMode?: "all" | "batched" | "first" | "off";
-  statusReactions?:
-    | boolean
-    | {
-        removeAckAfterReply?: boolean;
-      };
+  statusReactions?: boolean;
 };
 
 export type WhatsAppQaScenarioDefinition = {

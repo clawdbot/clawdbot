@@ -2,6 +2,7 @@
 // persistence, registry registration, and lifecycle event emission.
 import os from "node:os";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -257,6 +258,36 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
+  it("inherits incognito storage ownership for direct children", async () => {
+    const requesterSessionKey = "agent:main:dashboard:incognito-parent";
+    const sessionPatches: Record<string, unknown>[] = [];
+    const sessionStorePaths: string[] = [];
+    hoisted.updateSessionStoreMock.mockImplementation(
+      async (
+        storePath: string,
+        mutator: (store: Record<string, Record<string, unknown>>) => unknown,
+      ) => {
+        sessionStorePaths.push(storePath);
+        const store: Record<string, Record<string, unknown>> = {};
+        await mutator(store);
+        sessionPatches.push(...Object.values(store));
+        return store;
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      { task: "keep this child in memory" },
+      { agentSessionKey: requesterSessionKey },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:main:subagent:incognito-/u);
+    expect(sessionPatches).toContainEqual(expect.objectContaining({ incognito: true }));
+    expect(sessionStorePaths).toContain(
+      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+    );
+  });
+
   it("defaults collector group id from requester session and requesting run", async () => {
     hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
     const sessionPatches: Record<string, unknown>[] = [];
@@ -370,6 +401,35 @@ describe("spawnSubagentDirect seam flow", () => {
     });
     await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
     expect(requireRecord(gatewayRequest("agent").params).idempotencyKey).toBe(result.runId);
+  });
+
+  it("carries explicit model authorization through a queued collector launch", async () => {
+    hoisted.configOverride = createConfigOverride({ tools: { swarm: true } });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "collect with the requested model",
+        model: "openai/gpt-5.4",
+        collect: true,
+      },
+      { agentSessionKey: "agent:main:main", requesterRunId: "parent-run" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", modelApplied: true });
+    const queuedLaunch = requireRecord(firstRegisteredSubagentRun().queuedLaunch);
+    const queuedRequest = requireRecord(queuedLaunch.request);
+    expect(queuedRequest).not.toHaveProperty("provider");
+    expect(queuedRequest).not.toHaveProperty("model");
+    expect(queuedLaunch).toMatchObject({
+      authorization: {
+        modelOverride: { provider: "openai", model: "gpt-5.4" },
+      },
+    });
+    await vi.waitFor(() => expect(gatewayRequest("agent")).toBeDefined());
+    expect(gatewayRequest("agent")).toMatchObject({
+      scopes: ["operator.admin"],
+      params: { provider: "openai", model: "gpt-5.4" },
+    });
   });
 
   it("aborts a collector cancelled while its gateway launch is in flight", async () => {
@@ -855,7 +915,15 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:main:subagent:/);
 
     const childSessionKey = result.childSessionKey as string;
-    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(3);
+    expect(hoisted.updateSessionStoreMock).toHaveBeenCalledTimes(2);
+    expect(persistedStore?.[childSessionKey]).toMatchObject({
+      spawnedBy: "agent:main:main",
+      completionOwnerSessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: "agent:main:main" },
+      createdAt: expect.any(Number),
+    });
     const registerInput = firstRegisteredSubagentRun();
     const requesterOrigin = requireRecord(registerInput.requesterOrigin);
     expect(registerInput.runId).toBe("run-1");
@@ -892,7 +960,10 @@ describe("spawnSubagentDirect seam flow", () => {
     );
     const agentRequest = gatewayRequest("agent");
     const agentParams = requireRecord(agentRequest.params);
+    expect(agentRequest.scopes).toEqual(["operator.admin"]);
     expect(agentParams.sessionKey).toBe(childSessionKey);
+    expect(agentParams.provider).toBe("openai");
+    expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -928,6 +999,37 @@ describe("spawnSubagentDirect seam flow", () => {
         timeoutMs: expect.any(Number),
       }),
     );
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    const agentParams = requireRecord(agentDispatch?.[1]);
+    const agentOptions = requireRecord(agentDispatch?.[2]);
+    expect(agentParams.provider).toBeUndefined();
+    expect(agentParams.model).toBeUndefined();
+    expect(agentOptions.allowSyntheticModelOverride).toBeUndefined();
+  });
+
+  it("authorizes explicit model overrides for in-process child launches", async () => {
+    hoisted.hasInProcessGatewayContextMock.mockReturnValue(true);
+    hoisted.callGatewayMock.mockRejectedValue(new Error("unexpected websocket gateway call"));
+    hoisted.dispatchGatewayMethodInProcessMock.mockImplementation(async (method: string) => {
+      return method === "agent" ? { runId: "run-in-process-model" } : { ok: true };
+    });
+
+    const result = await spawnSubagentDirect(
+      { task: "spawn on the requested model", model: "openai/gpt-5.4" },
+      { agentSessionKey: "agent:main:main" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", runId: "run-in-process-model" });
+    const agentDispatch = hoisted.dispatchGatewayMethodInProcessMock.mock.calls.find(
+      ([method]) => method === "agent",
+    );
+    expect(agentDispatch?.[1]).toMatchObject({ provider: "openai", model: "gpt-5.4" });
+    expect(agentDispatch?.[2]).toMatchObject({
+      allowSyntheticModelOverride: true,
+      forceSyntheticClient: true,
+    });
   });
 
   it("keeps admin-scoped cleanup on in-process spawn failure", async () => {
@@ -1599,7 +1701,6 @@ describe("spawnSubagentDirect seam flow", () => {
     const result = await spawnSubagentDirect(
       {
         task: "verify per-method scope routing",
-        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",

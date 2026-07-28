@@ -308,7 +308,7 @@ describe("Codex trajectory recorder", () => {
       turnId: "turn-1",
       timedOut: false,
       result: {
-        aborted: false,
+        terminal: { kind: "ok" },
         attemptUsage: usage,
         assistantTexts: ["done"],
         messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({

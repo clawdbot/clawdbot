@@ -213,6 +213,15 @@ export type SessionThreadBindingsConfig = {
   defaultSpawnContext?: "isolated" | "fork";
 };
 
+export type SessionSharingConfig = {
+  /** Allow owners/admins to set sessions read-only. Default: true. */
+  readOnly?: boolean;
+  /** Allow owners/admins to select suggest mode. Default: true. */
+  suggest?: boolean;
+  /** Allow owners/admins to hide draft sessions from other operators. Default: true. */
+  drafts?: boolean;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -220,17 +229,17 @@ export type SessionConfig = {
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
-  idleMinutes?: number;
   reset?: SessionResetConfig;
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
-  typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
+  /** Collaboration modes owners and administrators may select. */
+  sharing?: SessionSharingConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };
@@ -270,11 +279,12 @@ export type LoggingConfig = {
   /** Maximum size of a single log file in bytes before rotation. Default: 100 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-  consoleStyle?: "pretty" | "compact" | "json";
+  consoleStyle?: "pretty" | "json";
   /** Redact sensitive tokens in log sinks and persisted transcript text. Default: "tools". Safety-boundary UI/tool/diagnostic payloads may still redact when this is "off". */
-  redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens from logs and transcripts. */
   redactPatterns?: string[];
+  /** Metadata-only agent activity audit ledger settings. */
+  audit?: AuditConfig;
 };
 
 export type DiagnosticsOtelConfig = {
@@ -295,35 +305,13 @@ export type DiagnosticsOtelConfig = {
   sampleRate?: number;
   /** Metric export interval (ms). */
   flushIntervalMs?: number;
-  /**
-   * Opt-in raw content capture for OTEL span attributes.
-   * Boolean `true` captures non-system message/tool content; the object form
-   * can enable each content class explicitly.
-   */
-  captureContent?:
-    | boolean
-    | {
-        enabled?: boolean;
-        inputMessages?: boolean;
-        outputMessages?: boolean;
-        toolInputs?: boolean;
-        toolOutputs?: boolean;
-        systemPrompt?: boolean;
-        toolDefinitions?: boolean;
-      };
+  /** Opt in to raw non-system message/tool content in OTEL span attributes. */
+  captureContent?: boolean;
 };
 
 export type DiagnosticsCacheTraceConfig = {
   /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
-  /** Optional output path for cache trace artifacts. */
-  filePath?: string;
-  /** Include normalized messages in cache trace output. */
-  includeMessages?: boolean;
-  /** Include prompt payload text in cache trace output. */
-  includePrompt?: boolean;
-  /** Include system-message content in cache trace output. */
-  includeSystem?: boolean;
 };
 
 export type AuditConfig = {
@@ -348,11 +336,6 @@ export type DiagnosticsConfig = {
   flags?: string[];
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
-};
-
-export type WebConfig = {
-  /** If false, do not start the WhatsApp web provider. Default: true. */
-  enabled?: boolean;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

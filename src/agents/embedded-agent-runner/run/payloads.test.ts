@@ -119,11 +119,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Already persisted."],
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
 
     expect(payloads).toHaveLength(1);
     expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
       assistantTranscriptOwned: true,
+      assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
     });
   });
 

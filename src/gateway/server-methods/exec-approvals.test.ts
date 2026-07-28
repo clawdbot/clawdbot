@@ -225,7 +225,7 @@ describe("exec approvals gateway methods", () => {
         baseHash: "base-hash",
       },
       commands: ["system.execApprovals.set"],
-      config: { gateway: { nodes: { denyCommands: ["system.execApprovals.set"] } } },
+      config: { gateway: { nodes: { commands: { deny: ["system.execApprovals.set"] } } } },
     },
   ])("blocks $method outside the effective command policy", async (testCase) => {
     const invoke = vi.fn();

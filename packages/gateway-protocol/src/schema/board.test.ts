@@ -128,6 +128,31 @@ describe("BoardSnapshotSchema", () => {
 });
 
 describe("BoardWidgetPutParamsSchema", () => {
+  it("accepts bounded plugin widget input shapes", () => {
+    const pluginWidget = {
+      sessionKey: "agent:main:main",
+      name: "work-item",
+      content: {
+        kind: "plugin",
+        pluginKind: "workboard:card",
+        props: { cardId: "card-123" },
+      },
+    };
+    expect(Value.Check(BoardWidgetPutParamsSchema, pluginWidget)).toBe(true);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, pluginKind: "missing-separator" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(BoardWidgetPutParamsSchema, {
+        ...pluginWidget,
+        content: { ...pluginWidget.content, props: ["not", "an", "object"] },
+      }),
+    ).toBe(false);
+  });
+
   it("accepts a gateway-resolved canvas document source", () => {
     expect(
       Value.Check(BoardWidgetPutParamsSchema, {

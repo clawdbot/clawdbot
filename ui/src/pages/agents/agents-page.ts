@@ -267,7 +267,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     forceReset: boolean,
     initialBind = false,
   ) {
-    const connectionChanged = this.connected !== snapshot.connected;
+    const connectionChanged = this.connected !== (snapshot.phase === "connected");
     const clientChanged = this.client !== snapshot.client;
     this.syncGatewayState(snapshot);
     if (forceReset || (!initialBind && clientChanged)) {
@@ -280,11 +280,11 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
 
   private syncGatewayState(snapshot: ApplicationGatewaySnapshot) {
     this.client = snapshot.client;
-    this.connected = snapshot.connected;
+    this.connected = snapshot.phase === "connected";
     this.cron = {
       ...this.cron,
       client: snapshot.client,
-      connected: snapshot.connected,
+      connected: snapshot.phase === "connected",
     };
   }
 
@@ -879,6 +879,7 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
           onIdentitySave: () => this.saveIdentityDraft(),
           onChannelsRefresh: () => void this.context.channels.refresh(false),
           onOpenMemoryImport: () => this.context.navigate("memory-import"),
+          onOpenMemorySettings: () => this.context.navigate("memory"),
           onCronRefresh: () => void this.refreshCron(),
           onCronRunNow: (jobId) => this.runCronJobNow(jobId),
           onSkillsFilterChange: (next) => (this.skillsFilter = next),

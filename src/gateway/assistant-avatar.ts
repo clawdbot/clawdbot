@@ -1,7 +1,6 @@
 // Gateway assistant-avatar projection binds the selected value to effective metadata.
 import {
   openLocalAgentAvatarFile,
-  readOpenedLocalAgentAvatarDataUrl,
   type OpenedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
 import type { AgentAvatarResolution } from "../agents/identity-avatar.js";
@@ -14,6 +13,7 @@ import {
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
+import { createGatewayAvatarDataUrlCache } from "./assistant-avatar-cache.js";
 import { DEFAULT_ASSISTANT_IDENTITY } from "./assistant-identity.js";
 import { CONTROL_UI_AVATAR_PREFIX, normalizeControlUiBasePath } from "./control-ui-shared.js";
 
@@ -32,6 +32,8 @@ type OpenGatewayAssistantAvatarProjection = {
   resolution: AgentAvatarResolution | null;
   openedFile?: OpenedLocalAgentAvatarFile;
 };
+
+const gatewayAvatarDataUrlCache = createGatewayAvatarDataUrlCache();
 
 function resolveSameOriginAvatarUrl(cfg: OpenClawConfig, source: string): string | undefined {
   const basePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
@@ -104,7 +106,7 @@ export function resolveGatewayAssistantAvatar(params: {
     return { avatar: source, resolution: opened.resolution };
   }
 
-  const dataUrl = readOpenedLocalAgentAvatarDataUrl(opened.openedFile);
+  const dataUrl = gatewayAvatarDataUrlCache.read(opened.openedFile);
   if (!dataUrl) {
     return {
       avatar: identity.emoji ?? DEFAULT_ASSISTANT_IDENTITY.avatar,

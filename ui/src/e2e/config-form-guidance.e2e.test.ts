@@ -16,8 +16,6 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 
-const globalWarning =
-  "Your config contains fields the form editor can't safely represent. Use Raw mode to edit those entries.";
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiProofArtifactDir = path.join(
   process.cwd(),
@@ -105,7 +103,9 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
       await expect
         .poll(() => page.getByText("Unsupported schema node. Use Raw mode.").count())
         .toBe(0);
-      await expect.poll(() => page.getByText(globalWarning).count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".config-content-callout .callout.info").count())
+        .toBe(0);
 
       if (captureUiProofEnabled) {
         await mkdir(uiProofArtifactDir, { recursive: true });
@@ -118,7 +118,9 @@ describeControlUiE2e("Control UI config form guidance mocked Gateway E2E", () =>
 
       await page.getByRole("button", { name: "Raw", exact: true }).click();
       await expect.poll(() => page.locator(".config-raw-field textarea").count()).toBe(1);
-      await expect.poll(() => page.getByText(globalWarning).count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".config-content-callout .callout.info").count())
+        .toBe(0);
     } finally {
       await context.close();
     }

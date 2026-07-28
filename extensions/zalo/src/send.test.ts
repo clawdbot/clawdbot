@@ -106,6 +106,31 @@ describe("zalo send", () => {
     expect(successful.receipt.parts[0]?.kind).toBe("media");
   });
 
+  it("sends text through the message API when the media URL is whitespace", async () => {
+    sendMessageMock.mockResolvedValueOnce({
+      ok: true,
+      result: { message_id: "z-msg-with-blank-media" },
+    });
+
+    const result = await sendMessageZalo("dm-chat-blank-media", "hello there", {
+      token: "zalo-token",
+      mediaUrl: "   ",
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      "zalo-token",
+      {
+        chat_id: "dm-chat-blank-media",
+        text: "hello there",
+      },
+      undefined,
+    );
+    expect(sendPhotoMock).not.toHaveBeenCalled();
+    expect(requireSuccessfulSend(result, "z-msg-with-blank-media").receipt.parts[0]?.kind).toBe(
+      "text",
+    );
+  });
+
   it("fails fast for missing token or blank photo URLs", async () => {
     const missingToken = await sendMessageZalo("dm-chat-3", "hello", {});
     expectFailedSend(missingToken, "No Zalo bot token configured");

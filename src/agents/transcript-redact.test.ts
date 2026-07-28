@@ -21,12 +21,9 @@ function textMessage(text: string): AgentMessage {
   } as unknown as AgentMessage;
 }
 
-function cfg(mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
+function cfg(_mode: "tools" | "off", patterns?: string[]): OpenClawConfig {
   return {
-    logging: {
-      redactSensitive: mode,
-      ...(patterns ? { redactPatterns: patterns } : {}),
-    },
+    logging: patterns ? { redactPatterns: patterns } : {},
   } satisfies OpenClawConfig;
 }
 
@@ -543,6 +540,27 @@ describe("redactTranscriptMessage", () => {
       expect(block.textSignature).toBe(textSignature);
     },
   );
+
+  it.each([
+    ["openai-completions", "openrouter", "deepseek/deepseek-v4-flash"],
+    ["anthropic-messages", "anthropic", "claude-sonnet-4-6"],
+  ])("preserves commentary phase signatures for %s", (api, provider, model) => {
+    const textSignature = JSON.stringify({ v: 1, id: "commentary-0", phase: "commentary" });
+    const msg = {
+      role: "assistant",
+      api,
+      provider,
+      model,
+      content: [{ type: "text", text: "I will check.", textSignature }],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = expectDefined(
+      (msgContent(result) as Array<{ textSignature: string }>)[0],
+      "commentary text block",
+    );
+    expect(block.textSignature).toBe(textSignature);
+  });
 
   it("preserves Anthropic redacted_thinking data while redacting siblings", () => {
     const msg = {
@@ -1451,13 +1469,14 @@ describe("redactTranscriptMessage", () => {
     expect(text).toContain("ok");
   });
 
-  it("passes through unchanged when redactSensitive is off", () => {
+  it("redacts text even when a caller supplies the retired off spelling", () => {
     const msg = textMessage("key is sk-abcdef1234567890xyz");
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg); // same reference; nothing changed
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(msgContent(result))).not.toContain("sk-abcdef1234567890xyz");
   });
 
-  it("leaves structured tool-call secrets unchanged when redactSensitive is off", () => {
+  it("redacts structured tool-call secrets regardless of retired mode input", () => {
     const msg = {
       role: "assistant",
       content: [
@@ -1470,12 +1489,12 @@ describe("redactTranscriptMessage", () => {
       ],
     } as unknown as AgentMessage;
     const result = redactTranscriptMessage(msg, cfg("off"));
-    expect(result).toBe(msg);
-    expect(JSON.stringify(msgContent(result))).toContain("plainsecretvalue123");
-    expect(JSON.stringify(msgContent(result))).toContain("hunter2");
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(msgContent(result))).not.toContain("plainsecretvalue123");
+    expect(JSON.stringify(msgContent(result))).not.toContain("hunter2");
   });
 
-  it("leaves structured tool-result details unchanged when redactSensitive is off", () => {
+  it("redacts structured tool-result details regardless of retired mode input", () => {
     const msg = {
       role: "toolResult",
       toolCallId: "call_1",
@@ -1486,9 +1505,9 @@ describe("redactTranscriptMessage", () => {
       timestamp: Date.now(),
     } as unknown as AgentMessage;
     const result = redactTranscriptMessage(msg, cfg("off")) as unknown as { details: unknown };
-    expect(result).toBe(msg);
-    expect(JSON.stringify(result.details)).toContain("plainsecretvalue123");
-    expect(JSON.stringify(result.details)).toContain("hunter2");
+    expect(result).not.toBe(msg);
+    expect(JSON.stringify(result.details)).not.toContain("plainsecretvalue123");
+    expect(JSON.stringify(result.details)).not.toContain("hunter2");
   });
 
   it("returns same object reference when nothing matches", () => {
@@ -1497,10 +1516,10 @@ describe("redactTranscriptMessage", () => {
     expect(result).toBe(msg);
   });
 
-  it("passes through signatures unchanged when global redaction is off", () => {
+  it("redacts signature summaries with the fixed global policy", () => {
     const readLoggingConfig = vi
       .spyOn(loggingConfigModule, "readLoggingConfig")
-      .mockReturnValue({ redactSensitive: "off" });
+      .mockReturnValue({});
     const msg = {
       role: "assistant",
       content: [
@@ -1518,7 +1537,7 @@ describe("redactTranscriptMessage", () => {
     } as unknown as AgentMessage;
 
     try {
-      expect(redactTranscriptMessage(msg)).toBe(msg);
+      expect(JSON.stringify(redactTranscriptMessage(msg))).not.toContain("sk-abcdef1234567890xyz");
     } finally {
       readLoggingConfig.mockRestore();
     }

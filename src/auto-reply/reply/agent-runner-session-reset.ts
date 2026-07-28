@@ -1,9 +1,10 @@
+import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
+import { clearAllCliSessions } from "../../agents/cli-session.js";
+import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
 // Handles session reset requests produced during agent runner execution.
 import { transitionMainSessionRecovery } from "../../agents/main-session-recovery-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { persistSessionResetLifecycle } from "../../config/sessions/session-accessor.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -23,6 +24,7 @@ const deps = {
   generateSecureUuid,
   persistSessionResetLifecycle,
   refreshQueuedFollowupSession,
+  resetRegisteredAgentHarnessSessions,
   error: (message: string) => defaultRuntime.error(message),
 };
 
@@ -31,6 +33,7 @@ function setAgentRunnerSessionResetTestDeps(overrides?: Partial<typeof deps>): v
     generateSecureUuid,
     persistSessionResetLifecycle,
     refreshQueuedFollowupSession,
+    resetRegisteredAgentHarnessSessions,
     error: (message: string) => defaultRuntime.error(message),
     ...overrides,
   });
@@ -64,18 +67,15 @@ export async function resetReplyRunSession(params: {
   if (isModelSelectionLocked(prevEntry)) {
     throw new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
   }
-  const prevSessionId = params.options.cleanupTranscripts ? prevEntry.sessionId : undefined;
-  const nextSessionId = deps.generateSecureUuid();
+  const nextSessionId = prevEntry.sessionId;
   const now = Date.now();
   const nextEntry: SessionEntry = {
     ...prevEntry,
     sessionId: nextSessionId,
+    previousSessionId: undefined,
+    lifecycleRevision: deps.generateSecureUuid(),
     updatedAt: now,
     sessionStartedAt: now,
-    usageFamilyKey: prevEntry.usageFamilyKey ?? params.sessionKey,
-    usageFamilySessionIds: Array.from(
-      new Set([...(prevEntry.usageFamilySessionIds ?? []), prevEntry.sessionId, nextSessionId]),
-    ),
     lastInteractionAt: now,
     systemSent: false,
     abortedLastRun: false,
@@ -102,31 +102,39 @@ export async function resetReplyRunSession(params: {
     memoryFlushLastFailedAt: undefined,
     memoryFlushLastFailureError: undefined,
   };
+  clearAllCliSessions(nextEntry);
+  nextEntry.agentHarnessId = undefined;
   transitionMainSessionRecovery(nextEntry, { kind: "clear" });
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const nextSessionFile = formatSqliteSessionFileMarker({
-    agentId,
-    sessionId: nextSessionId,
-    storePath: params.storePath,
-  });
-  nextEntry.sessionFile = nextSessionFile;
+  const agentId = params.followupRun.run.agentId;
+  const nextSessionFile = params.sessionKey;
   params.activeSessionStore[params.sessionKey] = nextEntry;
   try {
     await deps.persistSessionResetLifecycle({
       agentId,
-      cleanupPreviousTranscript: params.options.cleanupTranscripts,
       nextEntry,
       nextSessionFile,
       previousEntry: prevEntry,
-      previousSessionId: prevSessionId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
     });
   } catch (err) {
+    params.activeSessionStore[params.sessionKey] = prevEntry;
     deps.error(
       `Failed to persist session reset after ${params.options.failureLabel} (${params.sessionKey}): ${String(err)}`,
     );
+    throw err;
   }
+  clearBootstrapSnapshotOnSessionBoundary({
+    boundaryAppended: true,
+    sessionKey: params.sessionKey,
+  });
+  await deps.resetRegisteredAgentHarnessSessions({
+    agentId,
+    sessionId: nextSessionId,
+    sessionKey: params.sessionKey,
+    sessionFile: nextSessionFile,
+    reason: "reset",
+  });
   params.followupRun.run.sessionId = nextSessionId;
   params.followupRun.run.sessionFile = nextSessionFile;
   deps.refreshQueuedFollowupSession({

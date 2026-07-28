@@ -4,6 +4,7 @@ import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
+  createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -215,28 +216,17 @@ function normalizeXaiResponsesToolResultPayload(
 }
 
 function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          if (!supportsReasoningControls(model)) {
-            // Only current flagship Grok models advertise configurable effort.
-            delete payloadObj.reasoning;
-            delete payloadObj.reasoningEffort;
-            delete payloadObj.reasoning_effort;
-          }
-          // All reasoning xAI models should still request + later replay encrypted_content.
-          ensureXaiResponsesEncryptedReasoningInclude(payloadObj, model);
-        }
-        return originalOnPayload?.(payload, model);
-      },
-    });
-  };
+  return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
+    normalizeXaiResponsesToolResultPayload(payload, model);
+    if (!supportsReasoningControls(model)) {
+      // Only current flagship Grok models advertise configurable effort.
+      delete payload.reasoning;
+      delete payload.reasoningEffort;
+      delete payload.reasoning_effort;
+    }
+    // All reasoning xAI models should still request + later replay encrypted_content.
+    ensureXaiResponsesEncryptedReasoningInclude(payload, model);
+  });
 }
 
 function createXaiFastModeWrapper(

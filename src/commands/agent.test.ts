@@ -19,13 +19,13 @@ import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntries,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -40,6 +40,10 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import {
+  deliveryContextFromSession,
+  normalizeSessionDeliveryState,
+} from "../utils/delivery-context.shared.js";
 import { getAgentHarnessPluginMocks } from "./agent-command-state.test-mocks.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
@@ -1976,8 +1980,9 @@ describe("agentCommand", () => {
         [sessionKey]: {
           sessionId: "wechat-session",
           updatedAt: Date.now(),
-          lastChannel: "telegram",
-          lastTo: "+1555",
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "telegram", to: "+1555" },
+          }),
         },
       });
       mockConfig(home, store);
@@ -1998,10 +2003,10 @@ describe("agentCommand", () => {
       );
 
       const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
-        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | { opts?: { to?: string }; sessionEntry?: Pick<SessionEntry, "delivery"> }
         | undefined;
       expect(deliveryCall?.opts?.to).toBeUndefined();
-      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
+      expect(deliveryContextFromSession(deliveryCall?.sessionEntry)?.to).toBe("+1555");
     });
   });
 

@@ -43,11 +43,6 @@ export function resolveDiscordProgressTarget(requester?: DiscordProgressRequeste
 
 export function reservedReactionEmojis(config: OpenClawConfig, ackReaction?: string): Set<string> {
   const reserved = new Set<string>(Object.values(DEFAULT_EMOJIS));
-  for (const emoji of Object.values(config.messages?.statusReactions?.emojis ?? {})) {
-    if (emoji?.trim()) {
-      reserved.add(emoji.trim());
-    }
-  }
   for (const emoji of [config.messages?.ackReaction, ackReaction]) {
     if (emoji?.trim()) {
       reserved.add(emoji.trim());

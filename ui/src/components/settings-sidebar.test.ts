@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
+import "./tooltip.ts";
 
 let container: HTMLDivElement;
 
@@ -27,13 +28,15 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
         searchQuery: "",
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -54,7 +57,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
@@ -68,6 +72,7 @@ describe("settings sidebar search", () => {
           },
         ],
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -89,7 +94,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
@@ -109,6 +115,7 @@ describe("settings sidebar search", () => {
           },
         ],
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -139,7 +146,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
@@ -154,6 +162,7 @@ describe("settings sidebar search", () => {
           },
         ],
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate,
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -187,13 +196,15 @@ describe("settings sidebar search", () => {
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "config",
-          connected: true,
+          offline: false,
+          lastError: null,
           version: "",
           updateAvailable: null,
           updateRunning: false,
           onUpdate: vi.fn(),
           searchQuery,
           onExit: vi.fn(),
+          onRetryConnect: vi.fn(),
           onNavigate,
           onSearchQueryChange: (nextQuery) => {
             searchQuery = nextQuery;
@@ -265,13 +276,15 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "",
         updateAvailable: null,
         updateRunning: false,
         onUpdate: vi.fn(),
         searchQuery: "",
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -293,7 +306,8 @@ describe("settings sidebar search", () => {
       renderSettingsSidebar({
         basePath: "",
         activeRouteId: "config",
-        connected: true,
+        offline: false,
+        lastError: null,
         version: "1.0.0",
         updateAvailable: {
           currentVersion: "1.0.0",
@@ -304,6 +318,7 @@ describe("settings sidebar search", () => {
         onUpdate,
         searchQuery: "",
         onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
         onNavigate: vi.fn(),
         onSearchQueryChange: vi.fn(),
         preloadTimers: new Map(),
@@ -318,5 +333,44 @@ describe("settings sidebar search", () => {
     expect(card?.nextElementSibling?.classList.contains("settings-sidebar__footer")).toBe(true);
     card?.querySelector<HTMLButtonElement>(".sidebar-update-card__action")?.click();
     expect(onUpdate).toHaveBeenCalledOnce();
+  });
+
+  it("shows the offline retry action without an online status", () => {
+    const onRetryConnect = vi.fn();
+    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
+      render(
+        renderSettingsSidebar({
+          basePath: "",
+          activeRouteId: "config",
+          offline,
+          queuedOutboxCount,
+          lastError,
+          version: "1.0.0",
+          updateAvailable: null,
+          updateRunning: false,
+          onUpdate: vi.fn(),
+          searchQuery: "",
+          onExit: vi.fn(),
+          onRetryConnect,
+          onNavigate: vi.fn(),
+          onSearchQueryChange: vi.fn(),
+          preloadTimers: new Map(),
+        }),
+        container,
+      );
+
+    renderSidebar(false, null, 3);
+    expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
+
+    renderSidebar(true, "connection refused?token=settings-secret", 3);
+    const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
+    expect(button?.hasAttribute("title")).toBe(false);
+    expect(
+      (button?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
+    ).toBe("connection refused?[redacted-credential]");
+    expect(button?.textContent).toContain("3 queued");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
+    button?.click();
+    expect(onRetryConnect).toHaveBeenCalledOnce();
   });
 });

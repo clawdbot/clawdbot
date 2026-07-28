@@ -246,7 +246,7 @@ final class QuickChatModel {
             return response.status
         },
         permissionStatusProvider: @escaping PermissionStatusProvider = { capabilities in
-            await PermissionManager.status(capabilities)
+            await PermissionManager.grantedStatus(capabilities)
         },
         permissionGrantProvider: @escaping PermissionGrantProvider = { capabilities in
             await PermissionManager.ensure(capabilities, interactive: true)

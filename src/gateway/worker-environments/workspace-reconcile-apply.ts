@@ -65,11 +65,6 @@ export async function applyStagedWorkerWorkspace(params: {
       preserveDirectories,
       includePaths,
     });
-    const finalPreflight = await preflightWorkspaceApply({
-      root,
-      base: params.base,
-      current: params.current,
-    });
     await assertActualWorkspaceManifest({
       root,
       expectedRef: actual.manifestRef,
@@ -77,7 +72,7 @@ export async function applyStagedWorkerWorkspace(params: {
       preserveDirectories,
       includePaths,
     });
-    const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
+    const conflictPaths = retainedConflictPaths(preflight, preflight.applyPaths);
     await params.publishAcceptedManifest?.({ ...actual, conflictPaths });
     params.journal.commit(actual.manifestRef);
     return {

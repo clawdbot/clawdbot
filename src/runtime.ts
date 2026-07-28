@@ -139,3 +139,11 @@ export function writeRuntimeJson(
   }
   runtime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
 }
+
+export function writeRuntimeStdout(runtime: RuntimeEnv | OutputRuntimeEnv, value: string): void {
+  if (hasRuntimeOutputWriter(runtime)) {
+    runtime.writeStdout(value);
+    return;
+  }
+  runtime.log(value);
+}

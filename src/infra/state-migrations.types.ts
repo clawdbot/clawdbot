@@ -4,7 +4,9 @@ import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-regi
 import type { LegacyAuditLogsDetection } from "./state-migrations.audit-logs.types.js";
 import type { LegacyChannelPairingStateDetection } from "./state-migrations.channel-pairing.js";
 import type { LegacyDeviceIdentityDetection } from "./state-migrations.device-identity.types.js";
+import type { LegacyExecApprovalsDetection } from "./state-migrations.exec-approvals.types.js";
 import type { LegacyMcpOAuthDetection } from "./state-migrations.mcp-oauth.types.js";
+import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
 import type { LegacyRestartSentinelDetection } from "./state-migrations.restart-sentinel.types.js";
 import type { LegacyWorkspaceStateDetection } from "./state-migrations.workspace-setup.types.js";
 
@@ -67,6 +69,7 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     preview: string[];
   };
+  worktrees: { hasLegacy: boolean };
   taskStateSidecars: {
     taskRunsPath: string;
     flowRunsPath: string;
@@ -119,8 +122,15 @@ export type LegacyStateDetection = {
     sourcePath: string;
     hasLegacy: boolean;
   };
+  deviceAuth: {
+    sourcePath: string;
+    sourcePresent: boolean;
+    hasLegacy: boolean;
+  };
   deviceIdentity: LegacyDeviceIdentityDetection;
+  execApprovals: LegacyExecApprovalsDetection;
   mcpOauth: LegacyMcpOAuthDetection;
+  meetingTranscripts?: LegacyMeetingTranscriptsDetection;
   restartSentinel?: LegacyRestartSentinelDetection;
   workspace: LegacyWorkspaceStateDetection;
   webPush: {

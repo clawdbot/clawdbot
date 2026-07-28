@@ -216,6 +216,9 @@ struct ChatMarkdownListView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // Grid cells otherwise accept compressed row proposals and ellipsize
+                    // wrapped text. Preserve the item's ideal height while still wrapping.
+                    .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

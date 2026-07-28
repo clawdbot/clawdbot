@@ -4,6 +4,7 @@ import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import {
@@ -21,6 +22,10 @@ const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? descri
 const cardboardProofDir = path.resolve(
   process.cwd(),
   ".artifacts/control-ui-e2e/workboard-cardboard",
+);
+const pluginWidgetsProofDir = path.resolve(
+  process.cwd(),
+  ".artifacts/control-ui-e2e/workboard-plugin-widgets",
 );
 
 let browser: Browser;
@@ -99,6 +104,39 @@ const pinnedMcpAppBoardSnapshot = {
     },
   ],
 };
+const pluginWidgetBoardSnapshot = {
+  sessionKey,
+  revision: 1,
+  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
+  widgets: [
+    {
+      name: "workboard-card",
+      tabId: "main",
+      title: "Priority card",
+      contentKind: "plugin",
+      pluginKind: "workboard:card",
+      props: { cardId: "card-widget-ready" },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    },
+    {
+      name: "workboard-summary",
+      tabId: "main",
+      title: "Platform summary",
+      contentKind: "plugin",
+      pluginKind: "workboard:mini",
+      props: { boardId: "platform", limit: 2 },
+      sizeW: 6,
+      sizeH: 4,
+      position: 1,
+      grantState: "none",
+      revision: 1,
+    },
+  ],
+};
 
 async function showDashboard(page: Page): Promise<void> {
   await page.addInitScript((key) => {
@@ -107,8 +145,17 @@ async function showDashboard(page: Page): Promise<void> {
       string,
       unknown
     >;
+    const boardSessionViews =
+      settings.boardSessionViews && typeof settings.boardSessionViews === "object"
+        ? (settings.boardSessionViews as Record<string, unknown>)
+        : {};
+    const savedView = boardSessionViews[key];
     settings.boardSessionViews = {
-      [key]: { face: "dashboard", activeTabId: "main" },
+      ...boardSessionViews,
+      [key]: {
+        activeTabId: "main",
+        ...(savedView && typeof savedView === "object" ? savedView : {}),
+      },
     };
     localStorage.setItem(settingsKey, JSON.stringify(settings));
   }, sessionKey);
@@ -227,6 +274,16 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
   it("pins Canvas HTML, follows board commands, and persists dock resizing", async () => {
     const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
     const page = await context.newPage();
+    const resizableBoardSnapshot = {
+      ...boardSnapshot,
+      tabs: boardSnapshot.tabs.map((tab) =>
+        tab.tabId === "research" ? { ...tab, chatDock: "bottom" } : tab,
+      ),
+    };
+    const resizablePinnedBoardSnapshot = {
+      ...pinnedBoardSnapshot,
+      tabs: resizableBoardSnapshot.tabs,
+    };
     const gateway = await installMockGateway(page, {
       sessionKey,
       featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
@@ -260,13 +317,13 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
         },
       ],
       methodResponses: {
-        "board.get": boardSnapshot,
-        "board.widget.put": pinnedBoardSnapshot,
+        "board.get": resizableBoardSnapshot,
+        "board.widget.put": resizablePinnedBoardSnapshot,
       },
     });
     await showDashboard(page);
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}dashboard`);
     await expect
       .poll(async () => (await gateway.getRequests("board.get")).length, { timeout: 30_000 })
       .toBeGreaterThan(0);
@@ -286,7 +343,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await expect
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
-    await gateway.setMethodResponse("board.get", pinnedBoardSnapshot);
+    await gateway.setMethodResponse("board.get", resizablePinnedBoardSnapshot);
 
     await gateway.emitGatewayEvent("board.command", {
       sessionKey,
@@ -297,17 +354,23 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
 
     const divider = page.locator(".board-session-surface__divider");
     const dock = page.locator(".board-session-surface__chat");
+    const dockHeight = () => dock.evaluate((element) => getComputedStyle(element).height);
     await divider.focus();
     await page.keyboard.press("End");
-    await expect.poll(() => dock.getAttribute("style")).not.toBe("width: 420px");
-    const persistedStyle = await dock.getAttribute("style");
-    expect(persistedStyle).toMatch(/^width: \d+(?:\.\d+)?px$/u);
+    await expect.poll(dockHeight).not.toBe("320px");
+    const clampedHeight = await dockHeight();
+    // End pins the bottom dock against its clamp, so step back off it: comparing
+    // a clamped height to itself after reload would pass if persistence broke and
+    // the dock merely fell back to its minimum.
+    await page.keyboard.press("ArrowUp");
+    await page.keyboard.press("ArrowUp");
+    await expect.poll(dockHeight).not.toBe(clampedHeight);
+    const persistedHeight = await dockHeight();
+    expect(persistedHeight).toMatch(/^\d+(?:\.\d+)?px$/u);
 
     await page.reload();
-    await page.locator(".board-session-surface__chat").waitFor();
-    expect(await page.locator(".board-session-surface__chat").getAttribute("style")).toBe(
-      persistedStyle,
-    );
+    await dock.waitFor();
+    expect(await dockHeight()).toBe(persistedHeight);
     await expect
       .poll(() =>
         page.locator('.chat-tool-card__preview[data-kind="canvas"] [data-pin-widget]').isDisabled(),
@@ -366,7 +429,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     });
     await showDashboard(page);
 
-    await page.goto(`${server.baseUrl}chat`);
+    await page.goto(`${server.baseUrl}dashboard`);
     await page.locator(".board-session-surface").waitFor();
     const preview = page.locator('.chat-tool-card__preview[data-kind="canvas"]');
     await preview.hover();
@@ -383,6 +446,203 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       .poll(() => preview.getByRole("button", { name: "Pinned" }).isDisabled())
       .toBe(true);
     await context.close();
+  });
+
+  it("renders and updates active Workboard plugin widgets", async () => {
+    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+    if (recordProof) {
+      await mkdir(pluginWidgetsProofDir, { recursive: true });
+    }
+    const context = await browser.newContext({
+      viewport: { height: 900, width: 1280 },
+      ...(recordProof
+        ? { recordVideo: { dir: pluginWidgetsProofDir, size: { height: 900, width: 1280 } } }
+        : {}),
+    });
+    const page = await context.newPage();
+    const readyCard = {
+      id: "card-widget-ready",
+      title: "Rebase plugin widget kinds",
+      status: "ready",
+      priority: "high",
+      labels: ["dashboard"],
+      position: 1_000,
+      createdAt: 1,
+      updatedAt: 2,
+      agentId: "main",
+      metadata: { automation: { boardId: "platform" } },
+    };
+    const runningCard = { ...readyCard, status: "running", position: 2_000, updatedAt: 3 };
+    const gateway = await installMockGateway(page, {
+      sessionKey,
+      controlUiWidgetKinds: [
+        { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+        { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
+      ],
+      featureMethods: [
+        "board.get",
+        "chat.metadata",
+        "chat.startup",
+        "workboard.cards.list",
+        "workboard.cards.move",
+      ],
+      methodResponses: {
+        "board.get": pluginWidgetBoardSnapshot,
+        "workboard.cards.list": {
+          cards: [
+            readyCard,
+            {
+              ...readyCard,
+              id: "card-widget-running",
+              title: "Already running",
+              status: "running",
+              position: 1_000,
+            },
+          ],
+          statuses: ["ready", "running", "done"],
+        },
+        "workboard.cards.move": { card: runningCard },
+      },
+    });
+    await showDashboard(page);
+
+    try {
+      await page.goto(`${server.baseUrl}dashboard`);
+      const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
+      const miniWidget = page.locator('[data-test-id="workboard-mini-widget"]');
+      await cardWidget.waitFor();
+      await miniWidget.waitFor();
+      await expect.poll(() => cardWidget.textContent()).toContain("Rebase plugin widget kinds");
+      await expect.poll(() => miniWidget.textContent()).toContain("Already running");
+      expect(await miniWidget.getByRole("link", { name: "Open board" }).getAttribute("href")).toBe(
+        "/workboard?board=platform",
+      );
+      if (recordProof) {
+        await page.screenshot({
+          path: path.join(pluginWidgetsProofDir, "01-plugin-widgets-ready.png"),
+        });
+      }
+
+      await cardWidget.getByRole("combobox").selectOption("running");
+      const moveRequest = await gateway.waitForRequest("workboard.cards.move");
+      expect(moveRequest.params).toEqual({
+        id: "card-widget-ready",
+        status: "running",
+        position: 2_000,
+      });
+      await expect.poll(() => cardWidget.textContent()).toContain("Running");
+      await gateway.setMethodResponse("workboard.cards.list", {
+        cards: [
+          runningCard,
+          {
+            ...readyCard,
+            id: "card-widget-running",
+            title: "Already running",
+            status: "running",
+            position: 1_000,
+          },
+        ],
+        statuses: ["ready", "running", "done"],
+      });
+      await gateway.emitGatewayEvent("plugin.workboard.changed", {
+        epoch: "plugin-widget-e2e",
+        revision: 2,
+      });
+      await expect
+        .poll(async () =>
+          (await miniWidget.locator('[title="Running"]').textContent())
+            ?.replace(/\s+/gu, " ")
+            .trim(),
+        )
+        .toBe("2 Running");
+      if (recordProof) {
+        await page.screenshot({
+          path: path.join(pluginWidgetsProofDir, "02-plugin-widgets-running.png"),
+        });
+      }
+    } finally {
+      const video = page.video();
+      await context.close();
+      if (recordProof && video) {
+        await video.saveAs(path.join(pluginWidgetsProofDir, "workboard-plugin-widgets.webm"));
+      }
+    }
+  });
+
+  it("keeps a read-only Workboard dashboard card visible without allowing status changes", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const widgetKinds = [
+      { pluginId: "workboard", kind: "workboard:card", label: "Workboard card" },
+      { pluginId: "workboard", kind: "workboard:mini", label: "Workboard summary" },
+    ];
+    const methods = [
+      "board.get",
+      "chat.metadata",
+      "chat.startup",
+      "workboard.cards.list",
+      "workboard.cards.move",
+    ];
+    const card = {
+      id: "card-widget-ready",
+      title: "Read-only dashboard card",
+      status: "ready",
+      priority: "high",
+      labels: ["dashboard"],
+      position: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      agentId: "main",
+      metadata: { automation: { boardId: "platform" } },
+    };
+    const gateway = await installMockGateway(page, {
+      controlUiWidgetKinds: widgetKinds,
+      featureMethods: methods,
+      methodResponses: {
+        connect: {
+          type: "hello-ok",
+          protocol: PROTOCOL_VERSION,
+          server: { connId: "read-only-dashboard-widget", version: "e2e" },
+          auth: {
+            deviceToken: "e2e-read-only-dashboard-device-token",
+            role: "operator",
+            scopes: ["operator.read"],
+          },
+          features: { capabilities: [], events: [], methods },
+          controlUiWidgetKinds: widgetKinds,
+          snapshot: {
+            sessionDefaults: {
+              defaultAgentId: "main",
+              mainKey: "main",
+              mainSessionKey: "main",
+              scope: "agent",
+            },
+          },
+        },
+        "board.get": pluginWidgetBoardSnapshot,
+        "workboard.cards.list": {
+          cards: [card],
+          statuses: ["ready", "running", "done"],
+        },
+      },
+    });
+    await showDashboard(page);
+
+    try {
+      await page.goto(`${server.baseUrl}dashboard`);
+      const cardWidget = page.locator('[data-test-id="workboard-card-widget"]');
+      await cardWidget.waitFor();
+      await expect.poll(() => cardWidget.textContent()).toContain(card.title);
+      const status = cardWidget.getByRole("combobox");
+      await expect.poll(() => status.isDisabled()).toBe(true);
+      await status.evaluate((select) => {
+        (select as HTMLSelectElement).value = "running";
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      expect(await gateway.getRequests("workboard.cards.move")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
   });
 
   it("links a dispatched Workboard card and its live session dashboard in both directions", async () => {
@@ -431,7 +691,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
     await showDashboard(page);
 
     try {
-      await page.goto(`${server.baseUrl}chat`);
+      await page.goto(`${server.baseUrl}dashboard`);
       const chip = page.locator(".board-session-surface__workboard-chip");
       await chip.waitFor();
       await expect.poll(() => chip.textContent()).toContain("Ship dashboard stitch");
@@ -563,7 +823,7 @@ describeControlUiE2e("Control UI session dashboard stitch", () => {
       await showDashboard(page);
 
       try {
-        await page.goto(`${server.baseUrl}chat`);
+        await page.goto(`${server.baseUrl}dashboard`);
         await expect
           .poll(async () => (await gateway.getRequests("board.get")).length)
           .toBeGreaterThan(0);

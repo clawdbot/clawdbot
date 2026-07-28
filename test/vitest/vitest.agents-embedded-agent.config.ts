@@ -6,6 +6,7 @@ export function createAgentsEmbeddedVitestConfig(env?: Record<string, string | u
   return createScopedVitestConfig(agentsEmbeddedTestPatterns, {
     dir: "src/agents",
     env,
+    fileParallelism: false,
     name: "agents-embedded-agent",
   });
 }

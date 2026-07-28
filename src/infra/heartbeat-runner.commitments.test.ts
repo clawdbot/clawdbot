@@ -1,6 +1,4 @@
 // Covers heartbeat commitment checks and runner scheduling behavior.
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { listDueCommitmentSessionKeys } from "../commitments/store.js";
@@ -19,6 +17,7 @@ import {
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   readSessionStoreForTest,
+  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -28,6 +27,22 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "./system-events.js";
+
+vi.mock("../commitments/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commitments/config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
 
 installHeartbeatRunnerTestRuntime();
 
@@ -127,7 +142,6 @@ describe("runHeartbeatOnce commitments", () => {
         ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
@@ -197,8 +211,8 @@ describe("runHeartbeatOnce commitments", () => {
     });
   }
 
-  it("keeps free-form reasons from changing normal heartbeat task priority", async () => {
-    const { result, sendTelegram, sessionStore, store } = await withTempHeartbeatSandbox(
+  it("keeps free-form reasons from changing cron-carried heartbeat task priority", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
@@ -214,17 +228,7 @@ describe("runHeartbeatOnce commitments", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `tasks:
-  - name: deployment-status
-    interval: 5m
-    prompt: Check deployment status with the normal tools
-`,
-          "utf-8",
-        );
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",
           lastProvider: "telegram",
@@ -259,6 +263,15 @@ describe("runHeartbeatOnce commitments", () => {
           cfg,
           agentId: "main",
           reason: "commitment",
+          source: "interval",
+          intent: "task",
+          tasks: [
+            {
+              jobId: "job-deployment-status",
+              name: "deployment-status",
+              prompt: "Check deployment status with the normal tools",
+            },
+          ],
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
@@ -271,9 +284,6 @@ describe("runHeartbeatOnce commitments", () => {
         return {
           result: resultResult,
           sendTelegram: sendTelegramResult,
-          sessionStore: readSessionStoreForTest<{
-            heartbeatTaskState?: Record<string, number>;
-          }>(storePath),
           store: await loadCommitmentStore(),
         };
       },
@@ -281,9 +291,6 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
-    expect(sessionStore["agent:main:telegram:user-155462274"]?.heartbeatTaskState).toEqual({
-      "deployment-status": nowMs,
-    });
     expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "pending",
@@ -308,7 +315,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",
@@ -386,7 +392,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
         },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await saveCommitmentStore(undefined, {
         version: 1,
@@ -434,7 +439,6 @@ describe("runHeartbeatOnce commitments", () => {
           },
         },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await saveCommitmentStore(undefined, {
         version: 1,
@@ -462,6 +466,58 @@ describe("runHeartbeatOnce commitments", () => {
         sessionKey: dueSessionKey,
       });
       expect(runOnce.mock.calls[1]?.[0]).not.toHaveProperty("reason");
+    });
+  });
+
+  it("delivers due commitments on a targeted cron-monitor interval tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const dueSessionKey = "agent:main:telegram:user-155462274";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "5m", target: "last" },
+          },
+        },
+        session: { store: storePath },
+      };
+      await saveCommitmentStore(undefined, {
+        version: 1,
+        commitments: [buildCommitment({ id: "cm_interview", sessionKey: dueSessionKey, to: "1" })],
+      });
+      const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce,
+        stableSchedulerSeed: "commitment-monitor-tick",
+      });
+
+      // Reach the agent's due slot first: scheduled-intent wakes defer with
+      // not-due until the phase boundary passes.
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      // The cron heartbeat monitor pokes with an agentId; that targeted
+      // interval tick must keep the commitment fan-out the broadcast timer had.
+      requestHeartbeat({
+        source: "interval",
+        intent: "scheduled",
+        reason: "interval",
+        agentId: "main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(runOnce).toHaveBeenCalledTimes(2));
+      runner.stop();
+
+      expect(runOnce.mock.calls[0]?.[0]).toMatchObject({ agentId: "main", runScope: "global" });
+      expect(runOnce.mock.calls[1]?.[0]).toMatchObject({
+        agentId: "main",
+        runScope: "commitment-only",
+        sessionKey: dueSessionKey,
+      });
     });
   });
 
@@ -510,7 +566,6 @@ describe("runHeartbeatOnce commitments", () => {
         },
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
-        commitments: { enabled: true },
       };
       await seedSessionStore(storePath, sessionKey, {
         lastChannel: "telegram",
@@ -633,7 +688,7 @@ describe("runHeartbeatOnce commitments", () => {
     });
   });
 
-  it("appends HEARTBEAT.md directives to commitment prompt when tasks are configured but none are due", async () => {
+  it("appends scratch directives to the commitment prompt", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
@@ -650,28 +705,16 @@ describe("runHeartbeatOnce commitments", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
-        // HEARTBEAT.md has a tasks block (task ran recently — NOT due) plus extra prose directives.
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `Do not contact the user unless critical.
-
-tasks:
-  - name: check-deployment
-    interval: 5m
-    prompt: Check deployment status
-`,
-          "utf-8",
-        );
-        // Seed heartbeatTaskState so the task ran at nowMs (well within 5m interval, not due).
+        await seedHeartbeatScratchForTest({
+          content: "Do not contact the user unless critical.\n",
+        });
         await seedSessionStore(storePath, sessionKey, {
           sessionId: "sid",
           updatedAt: nowMs,
           lastChannel: "telegram",
           lastProvider: "telegram",
           lastTo: "155462274",
-          heartbeatTaskState: { "check-deployment": nowMs },
         });
         await saveCommitmentStore(undefined, {
           version: 1,
@@ -687,10 +730,8 @@ tasks:
             // Must contain commitment text
             expect(ctx.Body).toContain("Due inferred follow-up commitments");
             expect(ctx.Body).toContain("How did the interview go?");
-            // Must also contain HEARTBEAT.md directives outside the tasks block
+            // Must also contain the monitor scratch directive.
             expect(ctx.Body).toContain("Do not contact the user unless critical.");
-            // Must NOT contain the task prompt (task is not due)
-            expect(ctx.Body).not.toContain("Check deployment status");
             return { text: "How did the interview go?" };
           },
         );
@@ -742,19 +783,16 @@ tasks:
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
-        await fs.writeFile(
-          path.join(tmpDir, "HEARTBEAT.md"),
-          `Run the global operations audit and surface any unrelated account drift.
+        await seedHeartbeatScratchForTest({
+          content: `Run the global operations audit and surface any unrelated account drift.
 
 tasks:
   - name: global-ops-audit
     interval: 5m
     prompt: Check every dashboard for unrelated account drift
 `,
-          "utf-8",
-        );
+        });
         await seedSessionStore(storePath, sessionKey, {
           sessionId: "sid",
           updatedAt: nowMs,
@@ -794,8 +832,8 @@ tasks:
             expect(ctx.Body).not.toContain("global operations audit");
             expect(ctx.Body).not.toContain("unrelated account drift");
             expect(ctx.Body).not.toContain("Run the following periodic tasks");
-            expect(ctx.Body).not.toContain("Additional context from HEARTBEAT.md");
-            expect(ctx.Body).not.toContain("Read HEARTBEAT.md");
+            expect(ctx.Body).not.toContain("Heartbeat monitor scratch:");
+            expect(ctx.Body).not.toContain("HEARTBEAT.md");
             expect(ctx.OriginatingChannel).toBe("telegram");
             expect(ctx.OriginatingTo).toBe("155462274");
             expect(opts?.disableTools).toBe(true);

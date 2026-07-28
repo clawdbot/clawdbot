@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover translate behavior.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -87,6 +88,7 @@ describe("i18n", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("should return the key if translation is missing", () => {

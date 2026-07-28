@@ -1,3 +1,4 @@
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -97,6 +98,12 @@ export async function finalizeEmbeddedAgentCommand(params: {
 
   try {
     await fallbackTrajectoryRecorder?.flush();
+    const finalVisiblePayload = result.payloads
+      ?.toReversed()
+      .find((payload) => !payload.isError && !payload.isReasoning && payload.text?.trim());
+    const assistantTranscriptOwned =
+      finalVisiblePayload !== undefined &&
+      getReplyPayloadMetadata(finalVisiblePayload)?.assistantTranscriptOwned === true;
     if (params.opts.internalDeliveryMediaUrls !== undefined) {
       result = {
         ...result,
@@ -106,6 +113,14 @@ export async function finalizeEmbeddedAgentCommand(params: {
           params.opts.internalDeliverySuppressText === true,
         ),
       };
+    }
+    const resultErrorPayload = result.payloads?.find((payload) => payload.isError === true);
+    if (resultErrorPayload) {
+      const message =
+        typeof resultErrorPayload.text === "string" && resultErrorPayload.text.trim()
+          ? resultErrorPayload.text
+          : undefined;
+      params.opts.onResultErrorPayload?.(message);
     }
     params.onTerminalDeliveryEvidenceChanged(buildRestartRecoveryTerminalDeliveryEvidence(result));
 
@@ -181,6 +196,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           sessionCwd: effectiveCwd,
           config: cfg,
           embeddedAssistantGapFill,
+          skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
             userTurnTranscriptRecorder.hasPersisted() ||
@@ -272,8 +288,8 @@ export async function finalizeEmbeddedAgentCommand(params: {
     const resolveFreshSessionEntryForDelivery =
       sessionStore && sessionKey && !params.suppressVisibleSessionEffects
         ? async (): Promise<SessionEntry | undefined> => {
-            const { loadSessionEntry } = await loadSessionStoreRuntime();
-            const freshEntry = loadSessionEntry({
+            const { loadSessionEntryReadOnly } = await loadSessionStoreRuntime();
+            const freshEntry = loadSessionEntryReadOnly({
               storePath,
               sessionKey,
               readConsistency: "latest",

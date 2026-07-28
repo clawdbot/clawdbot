@@ -1,3 +1,4 @@
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
@@ -17,6 +18,7 @@ type NavigationItem = {
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
   "workboard",
+  "dashboards",
   "usage",
   "cron",
   "tasks",
@@ -50,11 +52,12 @@ export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 export type SidebarZoneEntry =
   | { type: "route"; route: SidebarNavRoute }
+  | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["usage", "cron", "plugins"].map((route) =>
+export const DEFAULT_SIDEBAR_ENTRIES = ["cron", "plugins"].map((route) =>
   serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
 );
 
@@ -75,11 +78,18 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     const key = value.slice("session:".length).trim();
     return key ? { type: "session", key } : null;
   }
+  if (value.startsWith("workboard:")) {
+    const boardId = value.slice("workboard:".length).trim();
+    return isValidWorkboardBoardId(boardId) ? { type: "workboard", boardId } : null;
+  }
   return null;
 }
 
 export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
-  return entry.type === "route" ? `route:${entry.route}` : `session:${entry.key}`;
+  if (entry.type === "route") {
+    return `route:${entry.route}`;
+  }
+  return entry.type === "workboard" ? `workboard:${entry.boardId}` : `session:${entry.key}`;
 }
 
 /**
@@ -174,7 +184,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "automation"],
+    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "memory", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -214,6 +224,8 @@ const NAVIGATION_ICONS: NavigationItem = {
   "skill-workshop": "wrench",
   nodes: "monitorSmartphone",
   chat: "messageSquare",
+  dashboard: "layoutDashboard",
+  dashboards: "layoutDashboard",
   custodian: "lobster",
   config: "settings",
   profile: "circleUser",
@@ -221,6 +233,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   appearance: "palette",
   automation: "terminal",
   mcp: "wrench",
+  memory: "book",
   infrastructure: "globe",
   labs: "flaskConical",
   about: "fileText",
@@ -314,6 +327,8 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   },
   nodes: { titleKey: "tabs.nodes", subtitleKey: "subtitles.nodes" },
   chat: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboard: { titleKey: "tabs.chat", subtitleKey: "subtitles.chat" },
+  dashboards: { titleKey: "tabs.dashboards", subtitleKey: "subtitles.dashboards" },
   custodian: { titleKey: "tabs.custodian", subtitleKey: "subtitles.custodian" },
   config: { titleKey: "nav.settings", subtitleKey: "subtitles.config" },
   profile: { titleKey: "tabs.profile", subtitleKey: "subtitles.profile" },
@@ -324,6 +339,7 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   appearance: { titleKey: "tabs.appearance", subtitleKey: "subtitles.appearance" },
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
+  memory: { titleKey: "tabs.memory", subtitleKey: "subtitles.memory" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
   labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
@@ -348,6 +364,32 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
 
 export function titleForRoute(routeId: NavigationRouteId): string {
   return t(NAVIGATION_COPY[routeId].titleKey);
+}
+
+/** Window/tab title, markers leftmost because tabs truncate from the right.
+ * Offline replaces the approval count (a stale queue is not actionable) and
+ * carries the pending-outbox total; titles already ending in the brand
+ * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+export function formatDocumentTitle(options: {
+  context: string;
+  attentionCount?: number;
+  offline?: boolean;
+  queuedCount?: number;
+}): string {
+  const base = options.context.endsWith("OpenClaw")
+    ? options.context
+    : `${options.context} — OpenClaw`;
+  if (options.offline) {
+    const queued =
+      options.queuedCount && options.queuedCount > 0
+        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
+        : "";
+    return `(${t("common.offline")}${queued}) ${base}`;
+  }
+  if (options.attentionCount && options.attentionCount > 0) {
+    return `(${options.attentionCount}) ${base}`;
+  }
+  return base;
 }
 
 /**

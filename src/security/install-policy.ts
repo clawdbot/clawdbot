@@ -476,8 +476,7 @@ export async function validateInstallPolicyStatic(
       targetPath: policy.exec.command,
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     issues.push({
@@ -490,8 +489,7 @@ export async function validateInstallPolicyStatic(
       command: policy.exec.command,
       args: policy.exec.args ?? [],
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     issues.push({
@@ -627,8 +625,7 @@ export async function runInstallPolicy(params: {
       targetPath: commandPath,
       label: "security.installPolicy.exec.command",
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));
@@ -638,8 +635,7 @@ export async function runInstallPolicy(params: {
       command: secureCommandPath,
       args: policy.exec.args ?? [],
       trustedDirs: policy.exec.trustedDirs,
-      allowInsecurePath: policy.exec.allowInsecurePath,
-      allowSymlinkPath: policy.exec.allowSymlinkCommand,
+      allowSymlinkPath: false,
     });
   } catch (err) {
     return failClosed(formatErrorMessage(err));

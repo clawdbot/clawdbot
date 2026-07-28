@@ -83,6 +83,87 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it("activates Markdown images only when a chat owner opts in", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenImage?: (item: { src: string; title: string }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenImage = vi.fn();
+    panel.content = { kind: "markdown", content: "![Preview](data:image/png;base64,cG5n)" };
+    panel.onOpenImage = onOpenImage;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "data:image/png;base64,cG5n",
+      title: "Preview",
+    });
+    panel.remove();
+
+    const fallbackPanel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    fallbackPanel.content = {
+      kind: "markdown",
+      content: "![Preview](data:image/png;base64,cG5n)",
+    };
+    document.body.append(fallbackPanel);
+    await fallbackPanel.updateComplete;
+    expect(fallbackPanel.querySelector(".markdown-inline-image-button")).toBeNull();
+    fallbackPanel.remove();
+  });
+
+  it("opens image artifacts through the shared lightbox callback", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenImage?: (item: { src: string; title: string }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenImage = vi.fn();
+    panel.content = {
+      kind: "image",
+      title: "Artifact preview",
+      src: "data:image/png;base64,cG5n",
+    };
+    panel.onOpenImage = onOpenImage;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.querySelector<HTMLButtonElement>(".chat-tool-card__preview-image-button")?.click();
+
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "data:image/png;base64,cG5n",
+      title: "Artifact preview",
+    });
+    panel.remove();
+
+    const fallbackPanel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      updateComplete?: Promise<unknown>;
+    };
+    fallbackPanel.content = {
+      kind: "image",
+      title: "Artifact preview",
+      src: "data:image/png;base64,cG5n",
+    };
+    document.body.append(fallbackPanel);
+    await fallbackPanel.updateComplete;
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    fallbackPanel
+      .querySelector<HTMLButtonElement>(".chat-tool-card__preview-image-button")
+      ?.click();
+    expect(openSpy).toHaveBeenCalledWith(
+      "data:image/png;base64,cG5n",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    openSpy.mockRestore();
+    fallbackPanel.remove();
+  });
+
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

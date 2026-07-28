@@ -10,6 +10,7 @@ import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
   buildAssistantDisplayContentFromReplyPayloads,
+  combineNonStreamingReplyParts,
   extractAssistantDisplayText,
   extractAssistantDisplayTextFromContent,
   hasAssistantDisplayMediaContent,
@@ -117,11 +118,7 @@ function resolveTranscriptMirrorOwner(
 
 function buildChatSendBtwSideResult(deliveredReplies: readonly DeliveredReply[]) {
   const replies = deliveredReplies.map((entry) => entry.payload).filter(isBtwReplyPayload);
-  const text = replies
-    .map((payload) => payload.text.trim())
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
+  const text = combineNonStreamingReplyParts(replies.map((payload) => payload.text));
   if (replies.length === 0 || !text) {
     return undefined;
   }
@@ -320,7 +317,6 @@ export async function finalizeChatSendNonAgentReplies(params: {
       ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
       sessionId,
       storePath: latestStorePath,
-      sessionFile: latestEntry?.sessionFile,
       agentId: transcriptAgentId,
       createIfMissing: true,
       idempotencyKey: clientRunId,

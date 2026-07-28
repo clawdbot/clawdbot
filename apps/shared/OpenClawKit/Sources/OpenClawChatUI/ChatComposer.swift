@@ -639,10 +639,6 @@ struct OpenClawChatComposer: View {
         String(AttributedString(localized: "^[\(count) message](inflect: true)").characters)
     }
 
-    private var messageSessionActionsDisabled: Bool {
-        !self.viewModel.canPerformMessageSessionAction
-    }
-
     @ViewBuilder
     private var attachmentPicker: some View {
         #if os(macOS)

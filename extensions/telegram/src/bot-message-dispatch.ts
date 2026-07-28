@@ -3,6 +3,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDispatchTelegramContext } from "./bot-message-dispatch-context.js";
@@ -165,7 +166,13 @@ async function prepareTelegramSticker(params: {
 }) {
   const { context } = params;
   const sticker = context.ctxPayload.Sticker;
-  if (!sticker?.fileId || !sticker.fileUniqueId || !context.ctxPayload.MediaPath) {
+  const stickerFact = context.ctxPayload.media?.find((media) => media.kind === "sticker");
+  const stickerPath =
+    stickerFact?.path ??
+    (!stickerFact && context.ctxPayload.StickerMediaIncluded
+      ? context.ctxPayload.media?.[0]?.path
+      : undefined);
+  if (!sticker?.fileId || !sticker.fileUniqueId || !stickerPath) {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
@@ -176,7 +183,7 @@ async function prepareTelegramSticker(params: {
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
-      imagePath: context.ctxPayload.MediaPath,
+      imagePath: stickerPath,
       cfg: params.cfg,
       agentDir,
       agentId: context.route.agentId,
@@ -292,7 +299,7 @@ export const dispatchTelegramMessage = async ({
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionEntry = createFreshTelegramSessionEntryLoader({ cfg, telegramDeps });
   const isRoomEvent = dispatchContext.ctxPayload.InboundEventKind === "room_event";
-  const status = createTelegramDispatchStatus({ cfg, context: dispatchContext });
+  const status = createTelegramDispatchStatus({ context: dispatchContext });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -308,11 +315,19 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning =
     resolvedReasoningLevel === "on" && streamMode !== "progress";
   const quote = resolveTelegramQuoteContext({ context: dispatchContext, replyToMode });
+  // Draft messages are provider-visible before final modifiers run. Suppress them when a hook
+  // can rewrite or cancel, or the original payload can flash before the normal delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
   // Pre-adoption abort is drain-owned via turnAdoptionLifecycle.abortSignal.
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const dispatchGeneration = 0;
   const draft = createTelegramDraftController({
     accountId: dispatchContext.route.accountId,
+    allowProviderPreview,
     bot,
     cfg,
     chatId: dispatchContext.chatId,
@@ -462,9 +477,7 @@ export const dispatchTelegramMessage = async ({
   }
   if (dispatchWasSuperseded) {
     if (status.controller) {
-      status.finalizeInBackground({ outcome: "done", hasFinalResponse: true }, "finalize");
-    } else {
-      status.removeAck();
+      status.finalizeInBackground({ outcome: "done" }, "finalize");
     }
     return { kind: "completed" };
   }
@@ -543,7 +556,7 @@ export const dispatchTelegramMessage = async ({
       : null);
 
   if (status.controller && !hasVisibleResponse) {
-    status.finalizeInBackground({ outcome: "error", hasFinalResponse: false }, "error finalize");
+    status.finalizeInBackground({ outcome: "error" }, "error finalize");
   }
   const shouldReturnRetryableDispatchFailure =
     retryDispatchErrors &&
@@ -570,12 +583,9 @@ export const dispatchTelegramMessage = async ({
           !progress.finalAnswerDelivered() && (state.dispatchError != null || sentFallback)
             ? "error"
             : "done",
-        hasFinalResponse: true,
       },
       "finalize",
     );
-  } else {
-    status.removeAck();
   }
   return { kind: "completed" };
 };

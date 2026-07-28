@@ -374,7 +374,7 @@ describe("push APNs send semantics", () => {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
     try {
-      proxyHandle = await startProxy({ enabled: true, proxyUrl: proxy.proxyUrl });
+      proxyHandle = await startProxy({ proxyUrl: proxy.proxyUrl });
       const { registration, auth } = createDirectApnsSendFixture({
         nodeId: "ios-node-proxied-alert",
         environment: "sandbox",
@@ -431,7 +431,7 @@ describe("push APNs send semantics", () => {
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
     try {
-      proxyHandle = await startProxy({ enabled: true, proxyUrl: proxy.proxyUrl });
+      proxyHandle = await startProxy({ proxyUrl: proxy.proxyUrl });
       const { registration, auth } = createDirectApnsSendFixture({
         nodeId: "ios-node-proxied-error-body",
         environment: "sandbox",

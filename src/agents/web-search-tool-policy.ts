@@ -3,6 +3,7 @@ import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveEffectiveToolPolicy, resolveGroupToolPolicy } from "./agent-tools.policy.js";
 import { resolveRequesterToolPolicies } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
 import { isToolAllowedByPolicies } from "./tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "./tool-policy.js";
@@ -26,6 +27,7 @@ export type WebSearchToolPolicyParams = {
   senderE164?: string | null;
   inputProvenance?: InputProvenance;
   trustedInternalHandoff?: boolean;
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
 type WebSearchToolPolicyResolution = {
@@ -61,13 +63,15 @@ export function resolveWebSearchToolPolicy(
   );
   const groupPolicyParams = {
     config: params.config,
-    sessionKey: params.sessionKey,
+    sessionKey: params.scheduledToolPolicy?.ownerSessionKey ?? params.sessionKey,
     spawnedBy: params.spawnedBy,
     messageProvider: params.messageProvider,
     groupId: params.groupId,
     groupChannel: params.groupChannel,
     groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
+    accountId: params.scheduledToolPolicy?.ownerAccountId ?? params.agentAccountId,
+    requireConfiguredAccount: params.scheduledToolPolicy?.mode === "account",
+    senderPolicyMode: params.scheduledToolPolicy ? ("never" as const) : ("always" as const),
   };
   const senderPolicyParams = {
     config: params.config,
@@ -83,13 +87,17 @@ export function resolveWebSearchToolPolicy(
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
+    senderPolicyMode: params.scheduledToolPolicy ? "never" : "always",
+    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
+    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
   });
   const persistentGroupPolicy = requesterPolicies.delegated
     ? undefined
     : resolveGroupToolPolicy(groupPolicyParams);
-  const persistentSenderPolicy = requesterPolicies.delegated
-    ? undefined
-    : resolveSenderToolPolicy(senderPolicyParams);
+  const persistentSenderPolicy =
+    requesterPolicies.delegated || params.scheduledToolPolicy
+      ? undefined
+      : resolveSenderToolPolicy(senderPolicyParams);
   const fixedPolicies = [
     profilePolicy,
     providerProfilePolicy,

@@ -12,7 +12,6 @@ import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-pla
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
-import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
@@ -26,6 +25,7 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../tasks/task-status-access.js";
+import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import type { CronAgentExecutionPhaseUpdate, CronJob } from "../types.js";
 import {
   resolveCronChannelOutputPolicy,
@@ -240,17 +240,7 @@ function createCronPromptExecutor(params: {
   ) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
 }) {
-  const sessionFile =
-    params.cronSession.sessionEntry.sessionFile?.trim() ||
-    formatSqliteSessionFileMarker({
-      agentId: params.agentId,
-      sessionId: params.cronSession.sessionEntry.sessionId,
-      storePath: params.cronSession.storePath,
-    });
-  // Fallback for callers that bypass prepareCronRunContext before persisting retries.
-  if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
-    params.cronSession.sessionEntry.sessionFile = sessionFile;
-  }
+  const sessionFile = params.runSessionKey;
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
     resolveCronFallbacksOverride({
@@ -273,6 +263,11 @@ function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
+  const scheduledToolPolicy = resolveCronScheduledToolPolicy({
+    toolsAllow: params.agentPayload?.toolsAllow,
+    scheduledToolPolicy: params.job.scheduledToolPolicy,
+    owner: params.job.owner,
+  });
   if (!params.sourceDelivery) {
     logWarn(
       `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
@@ -327,6 +322,7 @@ function createCronPromptExecutor(params: {
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
+      requestedRouteResolution: "resolved",
       runId: params.cronSession.sessionEntry.sessionId,
       sessionId: params.cronSession.sessionEntry.sessionId,
       lane: resolveCronAgentLane(params.lane),
@@ -463,6 +459,7 @@ function createCronPromptExecutor(params: {
                   params.agentPayload?.toolsAllow,
                   params.agentPayload?.toolsAllowIsDefault,
                 ),
+                scheduledToolPolicy,
                 abortSignal: params.abortSignal,
                 onExecutionStarted: params.onExecutionStarted,
                 onExecutionPhase: params.onExecutionPhase,
@@ -557,6 +554,7 @@ function createCronPromptExecutor(params: {
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          scheduledToolPolicy,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
                 notifyOnExit: false,
@@ -566,6 +564,12 @@ function createCronPromptExecutor(params: {
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
           allowEmptyAssistantReplyAsSilent,
+          // Cron owns the resolved delivery contract. A valid announce route
+          // still needs a final payload; none, webhook, and invalid routes do not.
+          terminalReplyExpectation:
+            params.deliveryRequested === true && params.resolvedDeliveryOk
+              ? "required"
+              : "optional",
           requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,

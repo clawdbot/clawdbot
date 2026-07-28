@@ -25,7 +25,7 @@ export class GatewayNameDiscovery {
     const snapshot = this.snapshot();
     const client = snapshot?.client;
     if (
-      !snapshot?.connected ||
+      snapshot?.phase !== "connected" ||
       !client ||
       isGatewayMethodAdvertised(snapshot, "system.info") !== true
     ) {

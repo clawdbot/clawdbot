@@ -80,6 +80,12 @@
           - "extensions/workboard/**"
           - "docs/plugins/workboard.md"
           - "docs/plugins/reference/workboard.md"
+"plugin: beam":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/beam/**"
+          - "docs/plugins/beam.md"
+          - "docs/plugins/reference/beam.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -135,6 +141,11 @@
       - any-glob-to-any-file:
           - "extensions/nostr/**"
           - "docs/channels/nostr.md"
+"channel: buzz":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/buzz/**"
+          - "docs/channels/buzz.md"
 "channel: qqbot":
   - changed-files:
       - any-glob-to-any-file:

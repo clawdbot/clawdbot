@@ -179,6 +179,13 @@ export function createCodexAppServerAgentHarness(options: {
         nativeHookRelay: { enabled: true },
       });
     },
+    finalizeSettledTurn: async (params) => {
+      const { runCodexSettledTurnFinalization } =
+        await import("./src/app-server/settled-turn-finalizer.js");
+      return runCodexSettledTurnFinalization(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
+    },
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
@@ -211,18 +218,22 @@ export function createCodexAppServerAgentHarness(options: {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
         });
-        let retired = await options.bindingStore.retireSessionGeneration(identity);
-        if (retired === "conflict") {
+        const resetGeneration =
+          params.reason === "deleted"
+            ? options.bindingStore.retireSessionGeneration.bind(options.bindingStore)
+            : options.bindingStore.resetSessionGeneration.bind(options.bindingStore);
+        let reset = await resetGeneration(identity);
+        if (reset === "conflict") {
           const reclaimed = await reclaimCurrentCodexSessionGeneration({
             bindingStore: options.bindingStore,
             identity,
             config: options.resolveConfig?.(),
           });
           if (reclaimed) {
-            retired = await options.bindingStore.retireSessionGeneration(identity);
+            reset = await resetGeneration(identity);
           }
         }
-        if (retired === "conflict") {
+        if (reset === "conflict") {
           throw new Error(
             `Codex binding generation changed before session ${params.sessionId} could reset`,
           );

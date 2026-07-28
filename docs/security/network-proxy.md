@@ -14,21 +14,19 @@ OpenClaw does not ship, download, start, configure, or certify a proxy. You run 
 
 ```yaml
 proxy:
-  enabled: true
   proxyUrl: http://127.0.0.1:3128
 ```
 
-You can also set the URL through the environment while `proxy.enabled: true` stays in config:
+You can also set the URL through the environment:
 
 ```bash
 OPENCLAW_PROXY_URL=http://127.0.0.1:3128 openclaw gateway run
 ```
 
-`proxy.proxyUrl` takes precedence over `OPENCLAW_PROXY_URL`. If `proxy.enabled` is `true` but no valid URL resolves, protected commands fail startup rather than falling back to direct network access.
+`proxy.proxyUrl` takes precedence over `OPENCLAW_PROXY_URL`. A configured URL activates managed proxy routing; removing both URLs disables it.
 
 | Key                  | Type                                 | Default        | Notes                                                                                                                                 |
 | -------------------- | ------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `proxy.enabled`      | boolean                              | unset          | Must be `true` to activate routing.                                                                                                   |
 | `proxy.proxyUrl`     | string                               | unset          | `http://` or `https://` forward proxy URL. Credentials embedded in the URL are treated as sensitive and redacted from snapshots/logs. |
 | `proxy.tls.caFile`   | string                               | unset          | CA bundle for verifying an `https://` proxy endpoint signed by a private CA.                                                          |
 | `proxy.loopbackMode` | `gateway-only` \| `proxy` \| `block` | `gateway-only` | Controls loopback bypass behavior; see below.                                                                                         |
@@ -36,7 +34,6 @@ OPENCLAW_PROXY_URL=http://127.0.0.1:3128 openclaw gateway run
 For managed gateway services, store the URL in config so it survives reinstall, rather than relying on foreground env:
 
 ```bash
-openclaw config set proxy.enabled true
 openclaw config set proxy.proxyUrl http://127.0.0.1:3128
 openclaw gateway install --force
 openclaw gateway start
@@ -48,7 +45,6 @@ The `OPENCLAW_PROXY_URL` env fallback is best for foreground runs. To use it wit
 
 ```yaml
 proxy:
-  enabled: true
   proxyUrl: https://proxy.corp.example:8443
   tls:
     caFile: /etc/openclaw/proxy-ca.pem
@@ -57,7 +53,6 @@ proxy:
 `proxy.tls.caFile` verifies the proxy endpoint's own TLS certificate. It is not a destination MITM trust setting, a client certificate, or a substitute for the proxy's destination policy. Use `NODE_EXTRA_CA_CERTS` instead only when the entire Node process must trust an additional CA from startup (for example, an enterprise TLS-inspection system re-signing every HTTPS destination certificate) — that variable is process-global and must be set before Node starts, so OpenClaw cannot apply it mid-run the way it applies `proxy.tls.caFile`. Prefer `proxy.tls.caFile` for HTTPS proxy endpoint trust: it is scoped to managed proxy routing instead of the whole process.
 
 ```bash
-openclaw config set proxy.enabled true
 openclaw config set proxy.proxyUrl https://proxy.corp.example:8443
 openclaw config set proxy.tls.caFile /etc/openclaw/proxy-ca.pem
 openclaw gateway run
@@ -65,7 +60,7 @@ openclaw gateway run
 
 ## How routing works
 
-With `proxy.enabled: true` and a valid URL, protected runtime processes (`openclaw gateway run`, `openclaw node run`, `openclaw agent --local`) route normal HTTP and WebSocket egress through the proxy:
+With a valid proxy URL, protected runtime processes (`openclaw gateway run`, `openclaw node run`, `openclaw agent --local`) route normal HTTP and WebSocket egress through the proxy:
 
 ```text
 OpenClaw process
@@ -91,10 +86,13 @@ Local Gateway control-plane clients normally connect to a loopback WebSocket suc
 
 ```yaml
 proxy:
-  enabled: true
   proxyUrl: http://127.0.0.1:3128
   loopbackMode: gateway-only # gateway-only, proxy, or block
 ```
+
+A configured `proxyUrl` or `OPENCLAW_PROXY_URL` enables managed routing. Set
+`proxy.enabled: false` only as an advanced opt-out that keeps the URL stored
+without activating it.
 
 | Mode                     | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -150,7 +148,7 @@ openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-f
 | `--timeout-ms <ms>`      | Per-request timeout.                                                 |
 | `--json`                 | Machine-readable output.                                             |
 
-If `proxy.enabled` is not `true` and no `--proxy-url` is given, the command reports a config problem instead of validating; pass `--proxy-url` for a one-off preflight before changing config.
+If no config, environment, or `--proxy-url` value is available, the command reports a config problem; pass `--proxy-url` for a one-off preflight before changing config.
 
 With no `--allowed-url`/`--denied-url`, the default checks are: `https://example.com/` must succeed, and a temporary loopback canary server the proxy must not reach must be blocked. The loopback check passes on a transport failure, or on a non-2xx response that lacks the canary's per-run token; it fails on a 2xx response missing the token (an unexpected success from something other than the canary) and, especially, on any response carrying the matching token, since that proves the proxy actually forwarded a loopback destination it should have denied. Custom `--denied-url` targets have no such canary token, so they are fail-closed: any HTTP response counts as reachable (fail), and a transport error is reported as inconclusive rather than proven-blocked, because OpenClaw cannot confirm your proxy denied a reachable origin versus something else going wrong. `--apns-reachable` sends an intentionally invalid provider token, so a `403 InvalidProviderToken` response counts as proof the tunnel reached Apple. The command exits `1` on any validation failure; proxy URL credentials are redacted from both text and JSON output.
 
