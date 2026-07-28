@@ -34,6 +34,20 @@ describe("applySharedChannelFieldHelp", () => {
     expect(next["channels.whatsapp.dmPolicy"]?.help).toBe(declared);
   });
 
+  it("keeps shared help neutral when channel enum contracts differ", () => {
+    const next = applySharedChannelFieldHelp({
+      "channels.telegram.reactionNotifications": { advanced: true },
+      "channels.whatsapp.replyToMode": { advanced: true },
+    });
+
+    expect(next["channels.telegram.reactionNotifications"]?.help).toBe(
+      "Which inbound reactions reach the agent.",
+    );
+    expect(next["channels.whatsapp.replyToMode"]?.help).toBe(
+      "When to attach a native reply to the message that triggered the run.",
+    );
+  });
+
   it("treats empty help as a deliberate suppression, not a missing value", () => {
     const next = applySharedChannelFieldHelp({
       "channels.irc.enabled": { advanced: false, help: "" },

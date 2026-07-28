@@ -48,10 +48,8 @@ const SHARED_CHANNEL_FIELD_HELP: Record<string, string> = {
   reactionAllowlist:
     'Sender ids whose reactions reach the agent when reactionNotifications is "allowlist".',
   reactionLevel: "How freely the agent adds its own reactions to messages.",
-  reactionNotifications:
-    'Which inbound reactions reach the agent: "off", "own" (only on the agent\'s messages), "all", or "allowlist".',
-  replyToMode:
-    'When to attach a native reply to the message that triggered the run: "off", "first", or "all".',
+  reactionNotifications: "Which inbound reactions reach the agent.",
+  replyToMode: "When to attach a native reply to the message that triggered the run.",
   replyToModeByChatType: "Per-chat-type override of replyToMode.",
   requireMention: "Only respond in group chats when the agent is mentioned.",
   responsePrefix: "Text prepended to every outbound reply.",
