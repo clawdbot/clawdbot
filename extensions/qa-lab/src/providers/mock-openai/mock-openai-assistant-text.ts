@@ -14,6 +14,7 @@ import {
   QA_TOOL_SEARCH_PROMPT_RE,
   QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   type MockScenarioState,
+  resolveSubagentFanoutPhaseNamespace,
 } from "./mock-openai-contracts.js";
 import {
   extractExactReplyDirective,
@@ -305,8 +306,9 @@ export function buildAssistantText(
     return "FORKED-CONTEXT-ALPHA";
   }
   const fanoutCompleteReply = "subagent-1: ok\nsubagent-2: ok";
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
+  const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
+  if ((scenarioState.subagentFanoutPhaseByNamespace.get(fanoutNamespace) ?? 0) === 2 && prompt) {
+    scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 3);
     return fanoutCompleteReply;
   }
   if (

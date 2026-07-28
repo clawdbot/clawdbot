@@ -3118,6 +3118,41 @@ describe("qa mock openai server", () => {
     expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
   });
 
+  it("keeps subagent fanout phases isolated per scenario session", async () => {
+    const server = await startMockServer();
+    const promptFor = (sessionKey: string) =>
+      `Subagent fanout synthesis check: delegate two bounded subagents sequentially, then report both results together.\nFanout mock phase namespace: ${sessionKey}`;
+    const firstSpawn = async (sessionKey: string) =>
+      await postResponses(server, {
+        stream: true,
+        tools: [SESSIONS_SPAWN_TOOL],
+        input: [makeUserInput(promptFor(sessionKey))],
+      });
+
+    const firstA = await firstSpawn("agent:qa:fanout:1:session-a");
+    expect(await firstA.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const firstB = await firstSpawn("agent:qa:fanout:1:session-b");
+    expect(await firstB.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+
+    const secondA = await postResponses(server, {
+      stream: true,
+      tools: [SESSIONS_SPAWN_TOOL],
+      input: [
+        makeUserInput(promptFor("agent:qa:fanout:1:session-a")),
+        {
+          type: "function_call_output",
+          output:
+            '{"status":"accepted","childSessionKey":"agent:qa:subagent:alpha-a","note":"ALPHA-OK"}',
+        },
+      ],
+    });
+    expect(await secondA.text()).toContain('\\"label\\":\\"qa-fanout-beta\\"');
+
+    const retry = await firstSpawn("agent:qa:fanout:2:session-retry");
+    expect(await retry.text()).toContain('\\"label\\":\\"qa-fanout-alpha\\"');
+  });
+
   it("answers heartbeat prompts without spawning extra subagents", async () => {
     const server = await startMockServer();
 

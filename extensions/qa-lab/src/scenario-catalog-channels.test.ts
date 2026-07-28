@@ -71,26 +71,28 @@ describe("qa scenario catalog channel contracts", () => {
     expect(subagentFanout.execution.suiteIsolation).toBe("isolated");
   });
 
-  it("uses durable subagent completion evidence before accepting fanout", () => {
+  it("uses authoritative parent outbound and durable child evidence before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
-    const completionWait = flow.indexOf('"items":{"expr":"config.expectedChildCompletionMarkers"}');
+    const parentOutboundWait = flow.indexOf('"saveAs":"parentOutbound"');
+    const childCompletionWait = flow.indexOf('"saveAs":"childEvidence"');
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
-    expect(flow).toContain("readSessionTranscriptSummary(env, sessionKey)");
+    expect(flow).not.toContain("readSessionTranscriptSummary(env, sessionKey)");
     expect(flow).not.toContain("waitForAgentHistoryReply");
-    expect(
-      flow.split("String(candidate.text ?? '').trim() === childCompletionMarker").length - 1,
-    ).toBe(1);
     expect(flow).toContain(
-      "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && timeoutSpawnRequests.length >= 2",
+      "Boolean(timeoutParentOutbound) && timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && timeoutSpawnRequests.length >= 2",
     );
     expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
+    expect(flow).toContain("Fanout mock phase namespace: ${sessionKey}");
+    expect(flow).toContain('saveAs":"parentOutbound');
+    expect(flow).toContain('saveAs":"childEvidence');
     expect(flow).toContain('saveAs":"timeoutEvidence');
     expect(flow).toContain("Promise.all([readSessionTranscriptSummary");
-    expect(completionWait).toBeGreaterThan(-1);
+    expect(parentOutboundWait).toBeGreaterThan(-1);
+    expect(childCompletionWait).toBeGreaterThan(parentOutboundWait);
     expect(storeReads).toHaveLength(2);
-    expect(completionWait).toBeLessThan(storeReads[0] ?? -1);
+    expect(parentOutboundWait).toBeLessThan(storeReads[0] ?? -1);
   });
 
   it("keeps channel streaming evidence portable across QA Channel and Crabline Telegram", () => {

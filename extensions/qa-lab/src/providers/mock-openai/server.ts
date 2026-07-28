@@ -66,6 +66,7 @@ import {
   QA_RESTART_RECOVERY_PROMPT_RE,
   QA_MCP_CODE_MODE_API_FILE_PROMPT_RE,
   type MockScenarioState,
+  resolveSubagentFanoutPhaseNamespace,
   sourceDiscoveryReadPathForProvider,
   subagentHandoffTaskForProvider,
   subagentFanoutTaskForProvider,
@@ -1131,16 +1132,18 @@ async function buildResponsesPayload(
     });
   }
   if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(allInputText)) {
-    if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
-      scenarioState.subagentFanoutPhase = 1;
+    const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
+    const fanoutPhase = scenarioState.subagentFanoutPhaseByNamespace.get(fanoutNamespace) ?? 0;
+    if (!toolOutput && fanoutPhase === 0) {
+      scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 1);
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: subagentFanoutTaskForProvider(providerVariant, "alpha"),
         label: "qa-fanout-alpha",
         thread: false,
       });
     }
-    if (toolOutput && scenarioState.subagentFanoutPhase === 1) {
-      scenarioState.subagentFanoutPhase = 2;
+    if (toolOutput && fanoutPhase === 1) {
+      scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 2);
       return buildToolCallEventsWithArgs("sessions_spawn", {
         task: subagentFanoutTaskForProvider(providerVariant, "beta"),
         label: "qa-fanout-beta",
@@ -1148,8 +1151,9 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (scenarioState.subagentFanoutPhase === 2 && prompt) {
-    scenarioState.subagentFanoutPhase = 3;
+  const fanoutNamespace = resolveSubagentFanoutPhaseNamespace(allInputText);
+  if ((scenarioState.subagentFanoutPhaseByNamespace.get(fanoutNamespace) ?? 0) === 2 && prompt) {
+    scenarioState.subagentFanoutPhaseByNamespace.set(fanoutNamespace, 3);
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
@@ -1300,7 +1304,9 @@ export async function startQaMockOpenAiServer(params?: {
   const finalOnlyMarkerPauseMs = params?.finalOnlyMarkerPauseMs ?? 1_500;
   const scenarioState: MockScenarioState = {
     anthropicThinkingErrorScenarioKeys: new Set<string>(),
-    subagentFanoutPhase: 0,
+    // A suite process reuses this server across isolated scenarios. Session-keyed
+    // phases let a retry replay both spawns without corrupting an in-flight peer.
+    subagentFanoutPhaseByNamespace: new Map(),
     subagentHandoffSpawned: false,
     toolLoopReadAttempts: 0,
   };

@@ -279,10 +279,16 @@ export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa ch
 
 export type MockScenarioState = {
   anthropicThinkingErrorScenarioKeys: Set<string>;
-  subagentFanoutPhase: number;
+  subagentFanoutPhaseByNamespace: Map<string, number>;
   subagentHandoffSpawned: boolean;
   toolLoopReadAttempts: number;
 };
+
+const SUBAGENT_FANOUT_PHASE_NAMESPACE_RE = /fanout mock phase namespace:\s*([a-z0-9:_-]+)/i;
+
+export function resolveSubagentFanoutPhaseNamespace(text: string): string {
+  return SUBAGENT_FANOUT_PHASE_NAMESPACE_RE.exec(text)?.[1] ?? "default";
+}
 
 export function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
   return providerVariant === "anthropic"
