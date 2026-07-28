@@ -1,5 +1,7 @@
 /**
  * Test SDK subpath for plugin state stores, ingress queues, and state DB helpers.
+ * The keyed-store aliases are part of the extension boundary dts surface
+ * (extensions/matrix consumes them); keep re-exports in sync with the store.
  */
 export {
   createPluginStateKeyedStore as createPluginStateKeyedStoreForTests,
