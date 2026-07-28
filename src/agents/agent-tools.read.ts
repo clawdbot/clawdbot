@@ -2,6 +2,7 @@
 // Adds workspace-root guards, adaptive read paging, image validation, memory
 // append-only writes, and parameter cleanup around the session file tools.
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
@@ -16,7 +17,6 @@ import {
 } from "../infra/fs-safe.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
-import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
@@ -1098,87 +1098,33 @@ async function resolveHostWriteTarget(filePath: string): Promise<string> {
   return await canonicalPathFromExistingAncestor(filePath);
 }
 
-type HostWriteTargetState = {
-  dev: number;
-  gid: number;
-  ino: number;
-  mode: number;
-  uid: number;
-};
+const HOST_WRITE_RESERVATION_SKIP_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
 
-type HostWritePlan =
-  | { kind: "create" }
-  | { kind: "replace"; target: HostWriteTargetState }
-  | { kind: "in-place" };
-
-class HostOwnershipRestoreError extends Error {}
-
-function hostWriteRaceError(code: string, message: string) {
-  return Object.assign(new Error(message), { code });
+function isHostWriteReservationSkipError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === "string" && HOST_WRITE_RESERVATION_SKIP_CODES.has(code);
 }
 
-async function planHostWrite(targetPath: string): Promise<HostWritePlan> {
-  const stat = await fs.stat(targetPath).catch((error: unknown) => {
-    if (isNotFoundError(error)) {
+async function reserveHostWriteContent(targetDir: string, content: string) {
+  const reservationPath = path.join(
+    targetDir,
+    `.openclaw-host-write.${process.pid}.${randomUUID()}.tmp`,
+  );
+  const handle = await fs.open(reservationPath, "wx", 0o600).catch((error: unknown) => {
+    if (isHostWriteReservationSkipError(error)) {
       return undefined;
     }
     throw error;
   });
-  if (!stat) {
-    return { kind: "create" };
-  }
-  if (!stat.isFile() || stat.nlink > 1) {
-    return { kind: "in-place" };
-  }
-  await fs.access(targetPath, fs.constants.W_OK);
-  return {
-    kind: "replace",
-    target: {
-      dev: stat.dev,
-      gid: stat.gid,
-      ino: stat.ino,
-      mode: stat.mode & 0o7777,
-      uid: stat.uid,
-    },
-  };
-}
-
-async function assertHostWriteTargetUnchanged(
-  targetPath: string,
-  plan: Exclude<HostWritePlan, { kind: "in-place" }>,
-) {
-  if (plan.kind === "create") {
-    const appeared = await fs
-      .lstat(targetPath)
-      .then(() => true)
-      .catch((error: unknown) => {
-        if (isNotFoundError(error)) {
-          return false;
-        }
-        throw error;
-      });
-    if (appeared) {
-      throw hostWriteRaceError(
-        "EEXIST",
-        `Host write target appeared while staging replacement: ${targetPath}`,
-      );
-    }
+  if (!handle) {
     return;
   }
-
-  const current = await planHostWrite(targetPath);
-  if (
-    current.kind !== "replace" ||
-    current.target.dev !== plan.target.dev ||
-    current.target.ino !== plan.target.ino ||
-    current.target.uid !== plan.target.uid ||
-    current.target.gid !== plan.target.gid ||
-    current.target.mode !== plan.target.mode
-  ) {
-    throw hostWriteRaceError(
-      "EBUSY",
-      `Host write target changed while staging replacement: ${targetPath}`,
-    );
+  try {
+    await fs.rm(reservationPath, { force: true });
+    await handle.writeFile(content, "utf-8");
+  } finally {
+    await handle.close().catch(() => undefined);
+    await fs.rm(reservationPath, { force: true }).catch(() => undefined);
   }
 }
 
@@ -1186,41 +1132,16 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const targetPath = await resolveHostWriteTarget(resolved);
-  const plan = await planHostWrite(targetPath);
-  if (plan.kind === "in-place") {
-    await fs.writeFile(targetPath, content, "utf-8");
-    return;
-  }
-  const target = plan.kind === "replace" ? plan.target : undefined;
-  const targetDir = path.dirname(targetPath);
-  await fs.access(targetDir);
-  try {
-    await writeSiblingTempFile({
-      dir: targetDir,
-      chmodDir: false,
-      writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, content, { encoding: "utf-8", mode: target?.mode });
-        if (target && process.platform !== "win32") {
-          await fs.chown(tempPath, target.uid, target.gid).catch((error: unknown) => {
-            throw new HostOwnershipRestoreError(
-              `Unable to restore host write target ownership: ${targetPath}`,
-              { cause: error },
-            );
-          });
-        }
-        if (target) {
-          await fs.chmod(tempPath, target.mode);
-        }
-        await assertHostWriteTargetUnchanged(targetPath, plan);
-      },
-      resolveFinalPath: () => targetPath,
-    });
-  } catch (error) {
-    if (!(error instanceof HostOwnershipRestoreError)) {
-      throw error;
+  const target = await fs.stat(targetPath).catch((error: unknown) => {
+    if (isNotFoundError(error)) {
+      return undefined;
     }
-    await fs.writeFile(targetPath, content, "utf-8");
+    throw error;
+  });
+  if (!target || target.isFile()) {
+    await reserveHostWriteContent(path.dirname(targetPath), content);
   }
+  await fs.writeFile(resolved, content, "utf-8");
 }
 
 async function statHostFile(absolutePath: string) {

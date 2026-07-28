@@ -42,19 +42,40 @@ describe("unrestricted host tool writes", () => {
   ])("keeps the original file when $name cannot finish writing", async ({ createTool, input }) => {
     const originalContent = `original\n${"important content\n".repeat(64)}`;
     const filePath = await createFile(originalContent);
-    const realWriteFile = fs.writeFile.bind(fs);
-    vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
-      if (typeof data !== "string") {
-        throw new TypeError("expected string content");
+    const realOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
+      const handle = await realOpen(target, flags, mode);
+      if (String(target).includes(".openclaw-host-write.")) {
+        handle.writeFile = async () => {
+          throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+        };
       }
-      await realWriteFile(target, data.slice(0, 32), options);
-      throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      return handle;
     });
 
     const tool = createTool(tempDir);
     await expect(tool.execute("call-1", input(filePath))).rejects.toThrow("disk full");
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe(originalContent);
+    await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
+  });
+
+  it.runIf(process.platform !== "win32")("preserves the target inode and its metadata", async () => {
+    const filePath = await createFile("original");
+    await fs.chmod(filePath, 0o640);
+    const before = await fs.stat(filePath);
+
+    const tool = createHostWorkspaceWriteTool(tempDir);
+    await tool.execute("call-1", { path: filePath, content: "replacement" });
+
+    const after = await fs.stat(filePath);
+    expect(after.ino).toBe(before.ino);
+    expect(after.dev).toBe(before.dev);
+    expect(after.mode & 0o777).toBe(0o640);
+    expect(after.uid).toBe(before.uid);
+    expect(after.gid).toBe(before.gid);
+    await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+    await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
   });
 
   it.runIf(process.platform !== "win32")("writes through an existing symlink", async () => {
@@ -69,20 +90,6 @@ describe("unrestricted host tool writes", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("replacement");
   });
 
-  it.runIf(process.platform !== "win32")("preserves the existing file mode", async () => {
-    const filePath = await createFile("original");
-    await fs.chmod(filePath, 0o640);
-    const before = await fs.stat(filePath);
-
-    const tool = createHostWorkspaceWriteTool(tempDir);
-    await tool.execute("call-1", { path: filePath, content: "replacement" });
-
-    const after = await fs.stat(filePath);
-    expect(after.mode & 0o777).toBe(0o640);
-    expect(after.uid).toBe(before.uid);
-    expect(after.gid).toBe(before.gid);
-  });
-
   const asUnprivilegedUser = process.platform !== "win32" && process.getuid?.() !== 0;
 
   it.runIf(asUnprivilegedUser)("rejects a non-writable existing file", async () => {
@@ -95,6 +102,19 @@ describe("unrestricted host tool writes", () => {
     ).rejects.toMatchObject({ code: "EACCES" });
 
     await expect(fs.readFile(filePath, "utf8")).resolves.toBe("original");
+  });
+
+  it.runIf(asUnprivilegedUser)("writes when the directory rejects a staged file", async () => {
+    const filePath = await createFile("original");
+    await fs.chmod(tempDir, 0o500);
+
+    try {
+      const tool = createHostWorkspaceWriteTool(tempDir);
+      await tool.execute("call-1", { path: filePath, content: "replacement" });
+      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
+    } finally {
+      await fs.chmod(tempDir, 0o700);
+    }
   });
 
   it.runIf(process.platform !== "win32")("updates a hard-linked existing file", async () => {
@@ -123,24 +143,7 @@ describe("unrestricted host tool writes", () => {
 
     expect((await fs.lstat(linkPath)).isSymbolicLink()).toBe(true);
     expect((await fs.stat("/dev/null")).isCharacterDevice()).toBe(true);
+    const devEntries = await fs.readdir("/dev");
+    expect(devEntries.filter((entry) => entry.startsWith(".openclaw-host-write."))).toEqual([]);
   });
-
-  it.runIf(process.platform !== "win32")(
-    "updates the existing file when its ownership cannot be restored",
-    async () => {
-      const filePath = await createFile("original");
-      const before = await fs.stat(filePath);
-      vi.spyOn(fs, "chown").mockRejectedValue(
-        Object.assign(new Error("operation not permitted"), { code: "EPERM" }),
-      );
-
-      const tool = createHostWorkspaceWriteTool(tempDir);
-      await tool.execute("call-1", { path: filePath, content: "replacement" });
-
-      const after = await fs.stat(filePath);
-      expect(after.ino).toBe(before.ino);
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe("replacement");
-      await expect(fs.readdir(tempDir)).resolves.toEqual(["important.txt"]);
-    },
-  );
 });
