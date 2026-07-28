@@ -699,6 +699,7 @@ type SharedChatHistoryRegistry = {
 type SharedChatHistoryConsumer = {
   isCurrent: () => boolean;
   owner: object;
+  retryDeadlineMs: number;
 };
 
 const sharedChatHistoryRequests = new WeakMap<GatewayBrowserClient, SharedChatHistoryRegistry>();
@@ -731,8 +732,8 @@ async function requestChatHistory(
   sessionKey: string,
   requestAgentId: string | undefined,
   shouldContinue: () => boolean,
+  shouldRetry: () => boolean,
 ): Promise<ChatHistoryResult> {
-  const startedAt = Date.now();
   for (;;) {
     try {
       return await client.request<ChatHistoryResult>(method, {
@@ -744,8 +745,6 @@ async function requestChatHistory(
       if (!shouldContinue()) {
         throw err;
       }
-      const withinStartupRetryWindow =
-        Date.now() - startedAt < STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
       if (method === "chat.startup" && isUnknownGatewayMethodError(err, method)) {
         return await client.request<ChatHistoryResult>("chat.history", {
           sessionKey,
@@ -753,7 +752,7 @@ async function requestChatHistory(
           limit: CHAT_HISTORY_REQUEST_LIMIT,
         });
       }
-      if (withinStartupRetryWindow && isRetryableStartupUnavailable(err, method)) {
+      if (shouldRetry() && isRetryableStartupUnavailable(err, method)) {
         await sleep(resolveStartupRetryDelayMs(err));
         if (!shouldContinue()) {
           throw err;
@@ -785,16 +784,25 @@ function requestSharedChatHistory(
   const requests = registry.requests;
   let shared = requests.get(requestKey);
   const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
-  const consumer = { isCurrent: isCurrentConsumer, owner: consumerOwner };
+  const consumer = {
+    isCurrent: isCurrentConsumer,
+    owner: consumerOwner,
+    retryDeadlineMs: Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS,
+  };
   if (!shared || existingOwner) {
     const consumers = new Set([consumer]);
     const shouldContinue = () => [...consumers].some((entry) => entry.isCurrent());
+    // A pane joining older shared work still owns a full retry window. Otherwise
+    // it could inherit the first consumer's nearly expired startup deadline.
+    const shouldRetry = () =>
+      [...consumers].some((entry) => entry.isCurrent() && Date.now() < entry.retryDeadlineMs);
     const promise = requestChatHistory(
       client,
       method,
       sessionKey,
       requestAgentId,
       shouldContinue,
+      shouldRetry,
     ).finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);

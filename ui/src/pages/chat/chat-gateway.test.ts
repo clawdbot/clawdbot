@@ -2432,6 +2432,58 @@ describe("loadChatHistory retry handling", () => {
     }
   });
 
+  it("gives a pane joining shared startup work its own retry window", async () => {
+    vi.useFakeTimers();
+    try {
+      const retryableError = new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "chat.history unavailable during gateway startup",
+        details: { method: "chat.history" },
+        retryable: true,
+        retryAfterMs: 250,
+      });
+      const secondAttempt = createDeferred<unknown>();
+      const request = vi
+        .fn()
+        .mockRejectedValueOnce(
+          new GatewayRequestError({
+            code: "UNAVAILABLE",
+            message: "chat.history unavailable during gateway startup",
+            details: { method: "chat.history" },
+            retryable: true,
+            retryAfterMs: 59_000,
+          }),
+        )
+        .mockImplementationOnce(() => secondAttempt.promise)
+        .mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: [{ type: "text", text: "awake" }] }],
+        });
+      const client = { request } as unknown as ChatState["client"];
+      const firstState = createState({ client, connected: true });
+      const secondState = createState({ client, connected: true });
+
+      const firstLoad = loadChatHistory(firstState);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+      await vi.advanceTimersByTimeAsync(59_000);
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+
+      const secondLoad = loadChatHistory(secondState);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1_001);
+      secondAttempt.reject(retryableError);
+      await vi.advanceTimersByTimeAsync(250);
+      await Promise.all([firstLoad, secondLoad]);
+
+      expect(request).toHaveBeenCalledTimes(3);
+      expect(firstState.chatMessages).toEqual([
+        { role: "assistant", content: [{ type: "text", text: "awake" }] },
+      ]);
+      expect(secondState.chatMessages).toEqual(firstState.chatMessages);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters assistant NO_REPLY messages and keeps user NO_REPLY messages", async () => {
     const request = vi.fn().mockResolvedValue({
       messages: [
