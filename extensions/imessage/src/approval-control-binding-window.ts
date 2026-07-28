@@ -25,7 +25,7 @@ function bindingKeys(accountId: string, conversation: IMessageApprovalConversati
 }
 
 /** Marks the send-to-binding interval during which a visible control is not yet resolvable. */
-export function beginIMessageApprovalControlBinding(params: {
+function beginIMessageApprovalControlBinding(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
 }): { close: () => void } {
@@ -61,7 +61,7 @@ export function beginIMessageApprovalControlBinding(params: {
 }
 
 /** Waits for one matching delivery to finish binding; callers recheck until none remain. */
-export async function waitForIMessageApprovalControlBinding(params: {
+async function waitForIMessageApprovalControlBinding(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   abortSignal?: AbortSignal;
@@ -92,7 +92,7 @@ export async function waitForIMessageApprovalControlBinding(params: {
   return true;
 }
 
-export function clearIMessageApprovalControlBindingsForTest(): void {
+function clearIMessageApprovalControlBindingsForTest(): void {
   for (const windows of pendingByConversation.values()) {
     for (const window of windows) {
       window.close();
@@ -100,3 +100,9 @@ export function clearIMessageApprovalControlBindingsForTest(): void {
   }
   pendingByConversation.clear();
 }
+
+export const iMessageApprovalControlBindings = {
+  begin: beginIMessageApprovalControlBinding,
+  wait: waitForIMessageApprovalControlBinding,
+  clearForTest: clearIMessageApprovalControlBindingsForTest,
+};

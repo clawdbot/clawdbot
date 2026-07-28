@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { imessageApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import {
-  clearIMessageApprovalPollTargetsForTest,
+  iMessageApprovalPollTargets,
   maybeResolveIMessageApprovalPollVote,
 } from "./approval-polls.js";
 
@@ -196,7 +196,7 @@ describe("imessageApprovalNativeRuntime", () => {
 
   describe("deliverPending GUID-only binding", () => {
     beforeEach(() => {
-      clearIMessageApprovalPollTargetsForTest();
+      iMessageApprovalPollTargets.clearForTest();
       approvalResolverMock.resolveIMessageApproval.mockReset();
       approvalResolverMock.resolveIMessageApproval.mockResolvedValue({
         applied: true,
@@ -413,7 +413,7 @@ describe("imessageApprovalNativeRuntime", () => {
     };
 
     beforeEach(() => {
-      clearIMessageApprovalPollTargetsForTest();
+      iMessageApprovalPollTargets.clearForTest();
       approvalResolverMock.resolveIMessageApproval.mockReset();
       approvalResolverMock.resolveIMessageApproval.mockResolvedValue({
         applied: true,

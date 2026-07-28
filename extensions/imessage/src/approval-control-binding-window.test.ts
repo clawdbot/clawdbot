@@ -1,21 +1,17 @@
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  beginIMessageApprovalControlBinding,
-  clearIMessageApprovalControlBindingsForTest,
-  waitForIMessageApprovalControlBinding,
-} from "./approval-control-binding-window.js";
+import { iMessageApprovalControlBindings } from "./approval-control-binding-window.js";
 
 afterEach(() => {
-  clearIMessageApprovalControlBindingsForTest();
+  iMessageApprovalControlBindings.clearForTest();
 });
 
 describe("iMessage approval control binding windows", () => {
   it("matches an outbound handle against the richer inbound conversation", async () => {
-    const window = beginIMessageApprovalControlBinding({
+    const window = iMessageApprovalControlBindings.begin({
       accountId: "default",
       conversation: { handle: "+15551230000" },
     });
-    const waited = waitForIMessageApprovalControlBinding({
+    const waited = iMessageApprovalControlBindings.wait({
       accountId: "default",
       conversation: {
         chatGuid: "iMessage;-;+15551230000",
@@ -28,7 +24,7 @@ describe("iMessage approval control binding windows", () => {
 
     await expect(waited).resolves.toBe(true);
     await expect(
-      waitForIMessageApprovalControlBinding({
+      iMessageApprovalControlBindings.wait({
         accountId: "default",
         conversation: { handle: "+15551230000" },
       }),
@@ -36,13 +32,13 @@ describe("iMessage approval control binding windows", () => {
   });
 
   it("does not wait on a different conversation", async () => {
-    beginIMessageApprovalControlBinding({
+    iMessageApprovalControlBindings.begin({
       accountId: "default",
       conversation: { handle: "+15551230000" },
     });
 
     await expect(
-      waitForIMessageApprovalControlBinding({
+      iMessageApprovalControlBindings.wait({
         accountId: "default",
         conversation: { handle: "+15551239999" },
       }),

@@ -48,7 +48,7 @@ import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
-import { waitForIMessageApprovalControlBinding } from "../approval-control-binding-window.js";
+import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
 import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
@@ -1388,7 +1388,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         if (!conversation) {
           return undefined;
         }
-        const waited = await waitForIMessageApprovalControlBinding({
+        const waited = await iMessageApprovalControlBindings.wait({
           accountId: accountInfo.accountId,
           conversation,
           abortSignal: lifecycle.abortSignal,

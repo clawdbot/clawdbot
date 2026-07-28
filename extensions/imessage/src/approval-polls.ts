@@ -154,7 +154,7 @@ export function mapSentPollOptionsToDecisions(params: {
   return seenDecisions.size === params.requested.length ? mapped : [];
 }
 
-export function registerIMessageApprovalPollTarget(params: {
+function registerIMessageApprovalPollTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
@@ -200,7 +200,7 @@ export function registerIMessageApprovalPollTarget(params: {
   return true;
 }
 
-export function unregisterIMessageApprovalPollTarget(params: {
+function unregisterIMessageApprovalPollTarget(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
@@ -226,7 +226,7 @@ export function unregisterIMessageApprovalPollTarget(params: {
  * Consume votes for a poll that was created but could not be safely bound.
  * Messages has no reliable retract primitive for this balloon.
  */
-export function registerIMessageApprovalPollTombstone(params: {
+function registerIMessageApprovalPollTombstone(params: {
   accountId: string;
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
@@ -578,8 +578,15 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   }
 }
 
-export function clearIMessageApprovalPollTargetsForTest(): void {
+function clearIMessageApprovalPollTargetsForTest(): void {
   pollTargets.clearForTest();
   pollTombstones.clearForTest();
   loadApprovalResolver.clear();
 }
+
+export const iMessageApprovalPollTargets = {
+  register: registerIMessageApprovalPollTarget,
+  unregister: unregisterIMessageApprovalPollTarget,
+  registerTombstone: registerIMessageApprovalPollTombstone,
+  clearForTest: clearIMessageApprovalPollTargetsForTest,
+};

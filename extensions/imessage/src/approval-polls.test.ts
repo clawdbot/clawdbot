@@ -3,12 +3,9 @@ import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-rep
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildApprovalPollOptions,
-  clearIMessageApprovalPollTargetsForTest,
+  iMessageApprovalPollTargets,
   mapSentPollOptionsToDecisions,
   maybeResolveIMessageApprovalPollVote,
-  registerIMessageApprovalPollTombstone,
-  registerIMessageApprovalPollTarget,
-  unregisterIMessageApprovalPollTarget,
 } from "./approval-polls.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
@@ -34,7 +31,7 @@ function bind(overrides?: {
   optionDecisions?: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs?: number;
 }): boolean {
-  return registerIMessageApprovalPollTarget({
+  return iMessageApprovalPollTargets.register({
     accountId: "default",
     conversation: { handle: APPROVER },
     pollGuid: POLL_GUID,
@@ -78,7 +75,7 @@ function buildVote(overrides?: {
 }
 
 beforeEach(() => {
-  clearIMessageApprovalPollTargetsForTest();
+  iMessageApprovalPollTargets.clearForTest();
   resolverMocks.resolveIMessageApproval.mockReset();
   resolverMocks.resolveIMessageApproval.mockResolvedValue({ applied: true, approval: {} });
   resolverMocks.isApprovalNotFoundError.mockReset();
@@ -376,7 +373,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("uses the option id when imsg reports the prompt GUID instead of the poll GUID", async () => {
-    registerIMessageApprovalPollTarget({
+    iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { handle: APPROVER },
       pollGuid: "bridge-reported-prompt-guid",
@@ -406,7 +403,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   // keyed by chat, so every member's vote finds it and only allowFrom stops
   // them. In a DM the handle-keyed lookup already scopes to the approver.
   function bindGroup(): void {
-    registerIMessageApprovalPollTarget({
+    iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { chatGuid: GROUP_CHAT_GUID },
       pollGuid: POLL_GUID,
@@ -474,7 +471,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
 
   it("authorizes an email sender when Apple reports another active-account alias", async () => {
     const emailCfg = { channels: { imessage: { allowFrom: ["person@example.com"] } } };
-    registerIMessageApprovalPollTarget({
+    iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { handle: "person@example.com" },
       pollGuid: POLL_GUID,
@@ -629,7 +626,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     try {
       const expiringPollGuid = "poll-guid-natural-expiry";
       expect(
-        registerIMessageApprovalPollTarget({
+        iMessageApprovalPollTargets.register({
           accountId: "default",
           conversation: { handle: APPROVER },
           pollGuid: expiringPollGuid,
@@ -657,7 +654,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   it("swallows votes for a created poll that could not be bound", async () => {
     const orphanPollGuid = "poll-guid-orphaned";
     expect(
-      registerIMessageApprovalPollTombstone({
+      iMessageApprovalPollTargets.registerTombstone({
         accountId: "default",
         conversation: { handle: APPROVER },
         pollGuid: orphanPollGuid,
@@ -712,7 +709,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
     // GUIDs, so only the tests can collide here.
     const expiredPollGuid = "poll-guid-expired";
     expect(
-      registerIMessageApprovalPollTarget({
+      iMessageApprovalPollTargets.register({
         accountId: "default",
         conversation: { handle: APPROVER },
         pollGuid: expiredPollGuid,
@@ -734,7 +731,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
   });
 
   it("matches a vote that arrives keyed by chat guid instead of handle", async () => {
-    registerIMessageApprovalPollTarget({
+    iMessageApprovalPollTargets.register({
       accountId: "default",
       conversation: { chatGuid: "iMessage;-;+15551230000", handle: APPROVER },
       pollGuid: POLL_GUID,
@@ -759,7 +756,7 @@ describe("maybeResolveIMessageApprovalPollVote", () => {
 
   it("stops resolving after the target is unregistered", async () => {
     bind();
-    unregisterIMessageApprovalPollTarget({
+    iMessageApprovalPollTargets.unregister({
       accountId: "default",
       conversation: { handle: APPROVER },
       pollGuid: POLL_GUID,

@@ -20,13 +20,11 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveIMessageAccount } from "./accounts.js";
 import { getIMessageApprovalApprovers } from "./approval-auth.js";
-import { beginIMessageApprovalControlBinding } from "./approval-control-binding-window.js";
+import { iMessageApprovalControlBindings } from "./approval-control-binding-window.js";
 import {
   buildApprovalPollOptions,
+  iMessageApprovalPollTargets,
   mapSentPollOptionsToDecisions,
-  registerIMessageApprovalPollTombstone,
-  registerIMessageApprovalPollTarget,
-  unregisterIMessageApprovalPollTarget,
 } from "./approval-polls.js";
 import {
   buildIMessageApprovalConversationKeyForTarget,
@@ -264,7 +262,7 @@ async function deliverIMessageApprovalPoll(params: {
       // that contract is violated. Leave the unbound poll inert and restore the
       // complete text fallback so delivery is not retried and duplicated.
       log.error("imessage approvals: imsg poll response did not return a complete option mapping");
-      registerIMessageApprovalPollTombstone({
+      iMessageApprovalPollTargets.registerTombstone({
         accountId: resolveIMessageAccount({
           cfg: params.cfg,
           accountId: params.target.accountId,
@@ -280,7 +278,7 @@ async function deliverIMessageApprovalPoll(params: {
       cfg: params.cfg,
       accountId: params.target.accountId,
     }).accountId;
-    const registered = registerIMessageApprovalPollTarget({
+    const registered = iMessageApprovalPollTargets.register({
       accountId,
       conversation: { chatGuid },
       ...(pollGuid ? { pollGuid } : {}),
@@ -290,7 +288,7 @@ async function deliverIMessageApprovalPoll(params: {
       expiresAtMs: params.expiresAtMs,
     });
     if (!registered) {
-      registerIMessageApprovalPollTombstone({
+      iMessageApprovalPollTargets.registerTombstone({
         accountId,
         conversation: { chatGuid },
         ...(pollGuid ? { pollGuid } : {}),
@@ -389,7 +387,7 @@ function clearIMessageApprovalBindings(entry: PendingIMessageApprovalEntry): voi
     }
   }
   if (entry.poll) {
-    unregisterIMessageApprovalPollTarget({
+    iMessageApprovalPollTargets.unregister({
       accountId,
       conversation: entry.conversation,
       pollGuid: entry.poll.pollGuid,
@@ -453,7 +451,7 @@ function bindIMessageApprovalEntry(params: {
           .some(Boolean);
   const pollBound = params.entry.poll
     ? params.pollTargetWasRegisteredDuringDelivery ||
-      registerIMessageApprovalPollTarget({
+      iMessageApprovalPollTargets.register({
         accountId,
         conversation: params.entry.conversation,
         pollGuid: params.entry.poll.pollGuid,
@@ -527,7 +525,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         cfg,
         accountId: preparedTarget.accountId,
       }).accountId;
-      const bindingWindow = beginIMessageApprovalControlBinding({ accountId, conversation });
+      const bindingWindow = iMessageApprovalControlBindings.begin({ accountId, conversation });
       try {
         const targetTransport = expectPoll
           ? classifyIMessageApprovalTargetTransport({ cfg, target: preparedTarget })
