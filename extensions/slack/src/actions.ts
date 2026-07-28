@@ -366,8 +366,9 @@ export async function editSlackMessage(
       `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
     );
   }
+  // buildSlackEditTextPayload owns normalization; do not re-trim an edit that already fits.
   const text =
-    nativeFallbackText === " "
+    countSlackTextUtf8Bytes(nativeFallbackText) <= SLACK_EDIT_TEXT_MAX_BYTES
       ? nativeFallbackText
       : truncateSlackTextByUtf8Bytes(nativeFallbackText, SLACK_EDIT_TEXT_MAX_BYTES);
   const update = {
