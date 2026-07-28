@@ -1,6 +1,9 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
-import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { GetReplyOptions, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
@@ -1097,6 +1100,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     },
   });
 
+  // Hoisted so finally can clear it as the single cleanup owner on every exit path.
+  let pollInterval: ReturnType<typeof setInterval> | undefined;
   try {
     runtime.log?.("[tlon] Subscribing to firehose updates...");
 
@@ -1495,7 +1500,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     runtime.log?.("[tlon] Connected! Firehose subscriptions active");
 
     // Periodically refresh channel discovery
-    const pollInterval = setInterval(
+    pollInterval = setInterval(
       () => {
         void (async () => {
           if (!opts.abortSignal?.aborted) {
@@ -1517,23 +1522,16 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       },
       2 * 60 * 1000,
     );
+    // Do not keep the process alive solely for channel-discovery polling.
+    pollInterval.unref();
 
-    if (opts.abortSignal) {
-      const signal = opts.abortSignal;
-      await new Promise((resolve) => {
-        signal.addEventListener(
-          "abort",
-          () => {
-            clearInterval(pollInterval);
-            resolve(null);
-          },
-          { once: true },
-        );
-      });
-    } else {
-      await new Promise(() => {});
-    }
+    // waitUntilAbort resolves on abort, immediately if already aborted (so finally
+    // cleanup runs), or stays pending forever when no signal is given.
+    await waitUntilAbort(opts.abortSignal);
   } finally {
+    if (pollInterval !== undefined) {
+      clearInterval(pollInterval);
+    }
     api?.stopReceiving();
     await ingress.stop();
     try {
