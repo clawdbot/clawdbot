@@ -550,9 +550,7 @@ private fun VoiceHomeMode(
     )
   var dictatePreview by remember { mutableStateOf(false) }
   val coroutineScope = rememberCoroutineScope()
-  val dictateActionEnabled =
-    inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
-  // This is action availability; realtimeActive above owns the current Live state.
+  val dictateActionEnabled = inputEnabled && !actionBusy && !speaking && !realtimeActive && !dictatePreview
   val liveActionEnabled =
     (realtimeActive || ttsOnly || (inputEnabled && !actionBusy)) && !dictatePreview
   val startDictate: () -> Unit = {
