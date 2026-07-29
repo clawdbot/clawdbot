@@ -3116,7 +3116,8 @@ describe("grouped chat rendering", () => {
     });
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
+    container.dataset.mediaPlayerTestFixture = "";
     const renderMessage = () =>
       renderAssistantMessage(
         container,
@@ -3140,7 +3141,8 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     await flushAssistantAttachmentAvailabilityChecks();
 
-    const audio = expectElement(container, "audio", HTMLAudioElement);
+    const audioPlayer = await requireAudioPlayer(container);
+    const audio = expectElement(audioPlayer, "audio", HTMLAudioElement);
     expect(audio.getAttribute("src")).toBe(
       `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&mediaTicket=ticket-bootstrap-audio`,
     );
@@ -3231,7 +3233,7 @@ describe("grouped chat rendering", () => {
       await vi.waitFor(() => {
         expect(
           container.querySelector(
-            ".chat-assistant-attachment-card--audio .chat-assistant-attachment-card__reason",
+            ".chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__reason",
           )?.textContent,
         ).toContain(reason);
       });
