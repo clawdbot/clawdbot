@@ -603,6 +603,37 @@ describe("Codex app inventory cache", () => {
     expect(cache.read({ key, request, nowMs: 5, suppressRefresh: true }).state).toBe("fresh");
   });
 
+  it("retires stacked scoped invalidations across separate covering refreshes", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
+    const key = "runtime";
+    const apps = [app("calendar-app"), app("drive-app")];
+    const request = vi.fn(async (method, params) =>
+      codexAppInventoryResponse(method, apps, params),
+    );
+
+    await cache.refreshNow({ key, request, nowMs: 0, targetAppIds: [] });
+    cache.invalidate(key, "calendar plugin installed", 1, ["calendar-app"]);
+    cache.invalidate(key, "drive plugin installed", 2, ["drive-app"]);
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 3,
+      forceRefetch: true,
+      targetAppIds: ["calendar-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 4, suppressRefresh: true }).state).toBe("stale");
+
+    await cache.refreshNow({
+      key,
+      request,
+      nowMs: 5,
+      forceRefetch: true,
+      targetAppIds: ["drive-app"],
+    });
+    expect(cache.read({ key, request, nowMs: 6, suppressRefresh: true }).state).toBe("fresh");
+  });
+
   it("keeps an unscoped invalidation until a complete refresh", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1_000 });
     const key = "runtime";

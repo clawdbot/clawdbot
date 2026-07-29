@@ -276,16 +276,13 @@ export class CodexAppInventoryCache {
       if (this.refreshTokens.get(params.key) === refreshToken) {
         const existingEntry = this.entries.get(params.key);
         const published = resolvePublishedInventorySnapshot(existingEntry, snapshot);
-        const invalidated = resolveRemainingInvalidation(existingEntry, snapshot);
+        // An uncovered invalidation keeps its remaining scope and diagnostic
+        // until covering or complete refreshes prove the entry current again.
+        const remaining = resolveRemainingInvalidationScope(existingEntry, snapshot);
         this.entries.set(params.key, {
           ...published,
-          invalidated,
-          // An uncovered invalidation keeps its scope and diagnostic until a
-          // covering or complete refresh proves the entry current again.
-          ...(invalidated && existingEntry?.invalidatedAppIds
-            ? { invalidatedAppIds: existingEntry.invalidatedAppIds }
-            : {}),
-          ...(invalidated && existingEntry?.lastError
+          ...remaining,
+          ...(remaining.invalidated && existingEntry?.lastError
             ? { lastError: existingEntry.lastError }
             : {}),
         });
@@ -373,19 +370,26 @@ function mergeRefreshedRows<Row extends { id: string }>(
 }
 
 /**
- * A refresh only clears invalidation it can prove it re-read: complete
- * refreshes always do; targeted ones only when they cover the invalidated
- * scope. Unscoped invalidations require a complete refresh.
+ * A refresh retires exactly the invalidation scope it re-read: a complete
+ * refresh clears everything; a targeted one subtracts its target ids so
+ * separate covering refreshes accumulate until no scope remains. Unscoped
+ * invalidations require a complete refresh.
  */
-function resolveRemainingInvalidation(
+function resolveRemainingInvalidationScope(
   existing: CacheEntry | undefined,
   snapshot: CodexAppInventorySnapshot,
-): boolean {
+): { invalidated: false } | { invalidated: true; invalidatedAppIds?: readonly string[] } {
   if (!existing?.invalidated || !snapshot.targetAppIds?.length) {
-    return false;
+    return { invalidated: false };
+  }
+  if (!existing.invalidatedAppIds) {
+    return { invalidated: true };
   }
   const refreshedTargetIds = new Set(snapshot.targetAppIds);
-  return !existing.invalidatedAppIds?.every((appId) => refreshedTargetIds.has(appId));
+  const remaining = existing.invalidatedAppIds.filter((appId) => !refreshedTargetIds.has(appId));
+  return remaining.length > 0
+    ? { invalidated: true, invalidatedAppIds: remaining }
+    : { invalidated: false };
 }
 
 function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshParams): boolean {
