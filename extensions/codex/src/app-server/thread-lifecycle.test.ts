@@ -478,6 +478,26 @@ describe("Codex app-server native code mode config", () => {
         dynamicTools: [],
       },
     );
+    const withWrongNamespace = buildDeveloperInstructions(
+      createAttemptParams({ provider: "openai" }),
+      {
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "",
+            tools: [
+              {
+                type: "function",
+                name: "sessions_yield",
+                description: "Different tool with the same leaf name",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        ],
+      },
+    );
 
     expect(withSessionsYield).toContain(
       "end the current turn with `openclaw_direct.sessions_yield`",
@@ -488,6 +508,8 @@ describe("Codex app-server native code mode config", () => {
     expect(withSessionsYield).toContain("Never loop-poll for native child completion.");
     expect(withoutSessionsYield).not.toContain("`openclaw_direct.sessions_yield`");
     expect(withoutSessionsYield).not.toContain("native `wait_agent`");
+    expect(withWrongNamespace).not.toContain("`openclaw_direct.sessions_yield`");
+    expect(withWrongNamespace).not.toContain("native `wait_agent`");
   });
 
   it("summarizes deferred dynamic tool names in developer instructions", () => {

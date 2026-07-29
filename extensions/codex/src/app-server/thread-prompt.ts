@@ -4,7 +4,11 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
-import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
+import {
+  CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+  flattenCodexDynamicToolFunctions,
+  type CodexDynamicToolSpec,
+} from "./protocol.js";
 
 export function buildDeveloperInstructions(
   params: EmbeddedRunAttemptParams,
@@ -33,9 +37,14 @@ export function buildDeveloperInstructions(
 function buildNativeSubagentCompletionInstruction(
   dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
 ): string | undefined {
-  const hasSessionsYield = flattenCodexDynamicToolFunctions(dynamicTools).some(
-    (tool) => tool.name.trim() === "sessions_yield",
+  const directNamespace = dynamicTools?.find(
+    (tool) =>
+      tool.type === "namespace" &&
+      tool.name.trim() === CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   );
+  const hasSessionsYield =
+    directNamespace?.type === "namespace" &&
+    directNamespace.tools.some((tool) => tool.name.trim() === "sessions_yield");
   if (!hasSessionsYield) {
     return undefined;
   }
