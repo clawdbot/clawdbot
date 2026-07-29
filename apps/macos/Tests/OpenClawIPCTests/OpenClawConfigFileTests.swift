@@ -361,8 +361,11 @@ struct OpenClawConfigFileTests {
                 _ = OpenClawConfigFile.loadDict()
                 let afterUnchangedRead = OpenClawConfigFile.testingConfigObservationCount()
 
+                let attributes = try FileManager.default.attributesOfItem(atPath: configPath.path)
+                let currentMode = try #require(
+                    (attributes[.posixPermissions] as? NSNumber)?.intValue)
                 try FileManager().setAttributes(
-                    [.posixPermissions: 0o600],
+                    [.posixPermissions: currentMode ^ 0o100],
                     ofItemAtPath: configPath.path)
                 _ = OpenClawConfigFile.loadDict()
                 let afterMetadataChange = OpenClawConfigFile.testingConfigObservationCount()
