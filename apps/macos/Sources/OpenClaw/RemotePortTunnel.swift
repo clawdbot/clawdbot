@@ -231,9 +231,21 @@ final class RemotePortTunnel: @unchecked Sendable {
 
     private static func terminateAndWait(_ process: Process) {
         guard process.isRunning else { return }
+        let processIdentifier = process.processIdentifier
+        let processGroupIdentifier = getpgid(processIdentifier)
         process.terminate()
-        // waitUntilExit reaps this exact child before its pid can be reused. A
-        // delayed raw kill(pid) could otherwise signal an unrelated process.
+        let gracefulDeadline = Date().addingTimeInterval(0.25)
+        while process.isRunning, Date() < gracefulDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        if process.isRunning {
+            // Foundation normally launches this SSH as its own process-group leader.
+            // Escalate that group so ProxyCommand-style descendants cannot survive.
+            let signalTarget = processGroupIdentifier == processIdentifier
+                ? -processIdentifier
+                : processIdentifier
+            _ = Darwin.kill(signalTarget, SIGKILL)
+        }
         process.waitUntilExit()
     }
 
