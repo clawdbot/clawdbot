@@ -116,6 +116,9 @@ function emitCompactionSessionLifecycleHooks(params: {
       sessionId: params.previousEntry.sessionId,
       sessionKey: params.sessionKey,
       cfg: params.cfg,
+      agentId,
+      workspaceDir: params.previousEntry.spawnedWorkspaceDir,
+      storePath,
       reason: "compaction",
       sessionFile:
         transcript.sessionFile ??
@@ -130,7 +133,7 @@ function emitCompactionSessionLifecycleHooks(params: {
       nextSessionId: params.nextEntry.sessionId,
     });
     void runWithGatewayIndependentRootWorkContinuation(async () => {
-      await hookRunner.runSessionEnd(payload.event, payload.context);
+      await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
     }).catch((err: unknown) => {
       logVerbose(`session_end hook failed: ${String(err)}`);
     });

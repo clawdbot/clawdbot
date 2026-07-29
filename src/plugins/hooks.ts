@@ -7,7 +7,12 @@
 
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
-import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
+import { fireAndForgetHook, formatHookErrorForLog } from "../hooks/fire-and-forget.js";
+import {
+  hasInternalSessionEndListeners,
+  type InternalSessionEndRuntime,
+  triggerInternalSessionEnd,
+} from "../hooks/session-end.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
@@ -1396,8 +1401,18 @@ export function createHookRunner(
   async function runSessionEnd(
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,
+    runtime?: InternalSessionEndRuntime,
   ): Promise<void> {
-    return runVoidHook("session_end", event, ctx);
+    if (runtime) {
+      // Internal lifecycle automation is observation-only. A slow workspace
+      // hook must not delay the replacement session or typed plugin hooks.
+      fireAndForgetHook(
+        triggerInternalSessionEnd(event, ctx, runtime),
+        "session:end internal hook failed",
+        (message) => logger?.warn(message),
+      );
+    }
+    await runVoidHook("session_end", event, ctx);
   }
 
   /**
@@ -1642,7 +1657,10 @@ export function createHookRunner(
   // =========================================================================
 
   function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+    return (
+      registry.typedHooks.some((h) => h.hookName === hookName) ||
+      (hookName === "session_end" && hasInternalSessionEndListeners())
+    );
   }
 
   /**

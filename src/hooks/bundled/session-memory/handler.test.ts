@@ -146,11 +146,11 @@ function createMockSessionContent(
     .join("\n");
 }
 
-async function runNewWithPreviousSessionEntry(params: {
+async function runSessionEndWithEntry(params: {
   tempDir: string;
-  previousSessionEntry: { sessionId: string; sessionFile?: string };
+  sessionEntry: { sessionId: string; sessionFile?: string };
   cfg?: OpenClawConfig;
-  action?: "new" | "reset";
+  reason?: "new" | "reset" | "daily" | "idle";
   sessionKey?: string;
   workspaceDirOverride?: string;
   timestamp?: Date;
@@ -160,7 +160,7 @@ async function runNewWithPreviousSessionEntry(params: {
     ({
       agents: { defaults: { workspace: params.tempDir } },
     } satisfies OpenClawConfig);
-  const legacySessionFile = params.previousSessionEntry.sessionFile;
+  const legacySessionFile = params.sessionEntry.sessionFile;
   const marker = parseSqliteSessionFileMarker(legacySessionFile);
   const storePath =
     marker?.storePath ?? baseConfig.session?.store ?? path.join(params.tempDir, "sessions.json");
@@ -185,7 +185,7 @@ async function runNewWithPreviousSessionEntry(params: {
       await replaceTranscriptEvents(
         {
           agentId: "main",
-          sessionId: params.previousSessionEntry.sessionId,
+          sessionId: params.sessionEntry.sessionId,
           sessionKey: params.sessionKey ?? "agent:main:main",
           storePath,
         },
@@ -197,16 +197,15 @@ async function runNewWithPreviousSessionEntry(params: {
     ...baseConfig,
     session: { ...baseConfig.session, store: storePath },
   } satisfies OpenClawConfig;
-  const event = createHookEvent(
-    "command",
-    params.action ?? "new",
-    params.sessionKey ?? "agent:main:main",
-    {
-      cfg,
-      previousSessionEntry: { sessionId: params.previousSessionEntry.sessionId },
-      ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
+  const event = createHookEvent("session", "end", params.sessionKey ?? "agent:main:main", {
+    cfg,
+    sessionEntry: {
+      sessionId: params.sessionEntry.sessionId,
+      sessionFile: params.sessionEntry.sessionFile,
     },
-  );
+    reason: params.reason ?? "new",
+    ...(params.workspaceDirOverride ? { workspaceDir: params.workspaceDirOverride } : {}),
+  });
   if (params.timestamp) {
     event.timestamp = params.timestamp;
   }
@@ -226,10 +225,10 @@ async function runNewWithPreviousSessionEntry(params: {
   return { files, memoryContent };
 }
 
-async function runNewWithPreviousSession(params: {
+async function runSessionEndWithTranscript(params: {
   sessionContent: string;
   cfg?: (tempDir: string) => OpenClawConfig;
-  action?: "new" | "reset";
+  reason?: "new" | "reset" | "daily" | "idle";
 }): Promise<{ tempDir: string; files: string[]; memoryContent: string }> {
   const tempDir = await createCaseWorkspace("workspace");
   const sessionsDir = path.join(tempDir, "sessions");
@@ -247,11 +246,11 @@ async function runNewWithPreviousSession(params: {
       agents: { defaults: { workspace: tempDir } },
     } satisfies OpenClawConfig);
 
-  const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+  const { files, memoryContent } = await runSessionEndWithEntry({
     tempDir,
     cfg,
-    action: params.action,
-    previousSessionEntry: {
+    reason: params.reason,
+    sessionEntry: {
       sessionId: "test-123",
       sessionFile,
     },
@@ -321,7 +320,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("session-memory hook", () => {
-  it("skips non-command events", async () => {
+  it("skips non-session events", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:main", {
@@ -330,26 +329,24 @@ describe("session-memory hook", () => {
 
     await handler(event);
 
-    // Memory directory should not be created for non-command events
     const memoryDir = path.join(tempDir, "memory");
     await expectPathMissing(memoryDir);
   });
 
-  it("skips commands other than new", async () => {
+  it("skips session events other than end", async () => {
     const tempDir = await createCaseWorkspace("workspace");
 
-    const event = createHookEvent("command", "help", "agent:main:main", {
+    const event = createHookEvent("session", "patch", "agent:main:main", {
       workspaceDir: tempDir,
     });
 
     await handler(event);
 
-    // Memory directory should not be created for other commands
     const memoryDir = path.join(tempDir, "memory");
     await expectPathMissing(memoryDir);
   });
 
-  it("creates memory file with session content on /new command", async () => {
+  it("creates memory file with session content on a new-session rollover", async () => {
     // Create a mock session file with user/assistant messages
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },
@@ -357,7 +354,7 @@ describe("session-memory hook", () => {
       { role: "user", content: "What is 2+2?" },
       { role: "assistant", content: "2+2 equals 4" },
     ]);
-    const { files, memoryContent } = await runNewWithPreviousSession({ sessionContent });
+    const { files, memoryContent } = await runSessionEndWithTranscript({ sessionContent });
     expect(files.length).toBe(1);
 
     // Read the memory file and verify content
@@ -367,7 +364,7 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
   });
 
-  it("creates memory file from SQLite transcript rows on /new command", async () => {
+  it("creates memory file from SQLite transcript rows on session end", async () => {
     const tempDir = await createCaseWorkspace("workspace");
     const sessionsDir = path.join(tempDir, "sessions");
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -406,10 +403,10 @@ describe("session-memory hook", () => {
       },
     ]);
 
-    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+    const { files, memoryContent } = await runSessionEndWithEntry({
       tempDir,
       sessionKey,
-      previousSessionEntry: {
+      sessionEntry: {
         sessionId,
         sessionFile,
       },
@@ -459,7 +456,7 @@ describe("session-memory hook", () => {
     });
     await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, events);
 
-    const { memoryContent } = await runNewWithPreviousSessionEntry({
+    const { memoryContent } = await runSessionEndWithEntry({
       tempDir,
       sessionKey,
       cfg: {
@@ -471,7 +468,7 @@ describe("session-memory hook", () => {
         },
         session: { store: storePath },
       },
-      previousSessionEntry: { sessionId },
+      sessionEntry: { sessionId },
     });
 
     expect(memoryContent).toContain("user: Keep this user context");
@@ -489,7 +486,7 @@ describe("session-memory hook", () => {
       },
       { role: "assistant", content: "NO_REPLY" },
     ]);
-    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+    const { memoryContent } = await runSessionEndWithTranscript({ sessionContent });
 
     expect(memoryContent).toContain(
       "user: <media:image:abc> Review this [REMOVED_SPECIAL_TOKEN]system",
@@ -518,7 +515,7 @@ describe("session-memory hook", () => {
         VITEST: undefined,
       },
       async () => {
-        const { files } = await runNewWithPreviousSession({ sessionContent });
+        const { files } = await runSessionEndWithTranscript({ sessionContent });
         expect(files[0]).toMatch(/^\d{4}-\d{2}-\d{2}-\d{4}\.md$/);
       },
     );
@@ -526,14 +523,14 @@ describe("session-memory hook", () => {
     expect(generateSlug).not.toHaveBeenCalled();
   });
 
-  it("creates memory file with session content on /reset command", async () => {
+  it("creates memory file with session content on a reset rollover", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Please reset and keep notes" },
       { role: "assistant", content: "Captured before reset" },
     ]);
-    const { files, memoryContent } = await runNewWithPreviousSession({
+    const { files, memoryContent } = await runSessionEndWithTranscript({
       sessionContent,
-      action: "reset",
+      reason: "reset",
     });
 
     expect(files.length).toBe(1);
@@ -545,10 +542,10 @@ describe("session-memory hook", () => {
     await withEnvAsync({ TZ: "America/New_York" }, async () => {
       const tempDir = await createCaseWorkspace("workspace");
 
-      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      const { files, memoryContent } = await runSessionEndWithEntry({
         tempDir,
         timestamp: new Date("2026-01-01T04:30:15.000Z"),
-        previousSessionEntry: {
+        sessionEntry: {
           sessionId: "local-time-session",
         },
       });
@@ -564,17 +561,17 @@ describe("session-memory hook", () => {
       const tempDir = await createCaseWorkspace("workspace");
       const timestamp = new Date("2026-01-01T04:30:15.000Z");
 
-      await runNewWithPreviousSessionEntry({
+      await runSessionEndWithEntry({
         tempDir,
         timestamp,
-        previousSessionEntry: {
+        sessionEntry: {
           sessionId: "first-session",
         },
       });
-      await runNewWithPreviousSessionEntry({
+      await runSessionEndWithEntry({
         tempDir,
         timestamp,
-        previousSessionEntry: {
+        sessionEntry: {
           sessionId: "second-session",
         },
       });
@@ -609,7 +606,7 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+    const { files, memoryContent } = await runSessionEndWithEntry({
       tempDir: naviWorkspace,
       cfg: {
         agents: {
@@ -619,7 +616,7 @@ describe("session-memory hook", () => {
       } satisfies OpenClawConfig,
       sessionKey: "agent:main:main",
       workspaceDirOverride: naviWorkspace,
-      previousSessionEntry: {
+      sessionEntry: {
         sessionId: "navi-session",
         sessionFile,
       },
@@ -914,7 +911,7 @@ describe("session-memory hook", () => {
 
   it("handles empty session files gracefully", async () => {
     // Should not throw
-    const { files } = await runNewWithPreviousSession({ sessionContent: "" });
+    const { files } = await runSessionEndWithTranscript({ sessionContent: "" });
     expect(files.length).toBe(1);
   });
 
@@ -938,7 +935,7 @@ describe("session-memory hook", () => {
     // gateway path omitted workspaceDir, causing the handler to fall back to
     // the default workspace via resolveAgentWorkspaceDir — which for a
     // default-agent sessionKey would resolve to the shared default workspace.
-    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+    const { files, memoryContent } = await runSessionEndWithEntry({
       tempDir: customAgentWorkspace,
       cfg: {
         agents: {
@@ -948,7 +945,7 @@ describe("session-memory hook", () => {
       } satisfies OpenClawConfig,
       sessionKey: "agent:main:main",
       workspaceDirOverride: customAgentWorkspace,
-      previousSessionEntry: {
+      sessionEntry: {
         sessionId: "custom-agent-session",
         sessionFile,
       },
@@ -1126,9 +1123,9 @@ describe("session-memory hook", () => {
     await withEnvAsync(
       { HOME: fakeHome, USERPROFILE: fakeHome, OPENCLAW_HOME: undefined },
       async () => {
-        const { files } = await runNewWithPreviousSessionEntry({
+        const { files } = await runSessionEndWithEntry({
           tempDir: siblingWorkspace,
-          previousSessionEntry: { sessionId: "test-123" },
+          sessionEntry: { sessionId: "test-123" },
         });
         expect(loggerMocks.info).toHaveBeenCalledWith(
           `Session context saved to ${path.join(siblingWorkspace, "memory", files[0]!)}`,

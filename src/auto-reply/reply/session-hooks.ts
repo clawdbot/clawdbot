@@ -55,6 +55,9 @@ export function buildSessionEndHookPayload(params: {
   sessionId: string;
   sessionKey: string;
   cfg: OpenClawConfig;
+  agentId?: string;
+  workspaceDir?: string;
+  storePath?: string;
   messageCount?: number;
   durationMs?: number;
   reason?: PluginHookSessionEndReason;
@@ -65,6 +68,12 @@ export function buildSessionEndHookPayload(params: {
 }): {
   event: PluginHookSessionEndEvent;
   context: SessionHookContext;
+  runtime: {
+    config: OpenClawConfig;
+    agentId?: string;
+    workspaceDir?: string;
+    storePath?: string;
+  };
 } {
   return {
     event: {
@@ -83,5 +92,11 @@ export function buildSessionEndHookPayload(params: {
       sessionKey: params.sessionKey,
       cfg: params.cfg,
     }),
+    runtime: {
+      config: params.cfg,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+    },
   };
 }

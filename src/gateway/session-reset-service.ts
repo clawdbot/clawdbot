@@ -130,6 +130,7 @@ export function emitGatewaySessionEndPluginHook(params: {
   storePath: string;
   sessionFile?: string;
   agentId?: string;
+  workspaceDir?: string;
   reason:
     | "new"
     | "reset"
@@ -166,6 +167,9 @@ export function emitGatewaySessionEndPluginHook(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     cfg: params.cfg,
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+    storePath: params.storePath,
     reason: params.reason,
     sessionFile: transcript.sessionFile,
     transcriptArchived: transcript.transcriptArchived,
@@ -173,7 +177,7 @@ export function emitGatewaySessionEndPluginHook(params: {
     nextSessionKey: params.nextSessionKey,
   });
   void runWithGatewayIndependentRootWorkContinuation(async () => {
-    await hookRunner.runSessionEnd(payload.event, payload.context);
+    await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
   }).catch((err: unknown) => {
     logVerbose(`session_end hook failed: ${String(err)}`);
   });
@@ -279,11 +283,13 @@ export async function drainActiveSessionsForShutdown(params: {
           sessionId: entry.sessionId,
           sessionKey: entry.sessionKey,
           cfg: entry.cfg,
+          agentId: entry.agentId,
+          storePath: entry.storePath,
           reason: params.reason,
           sessionFile: transcript.sessionFile,
           transcriptArchived: transcript.transcriptArchived,
         });
-        await hookRunner.runSessionEnd(payload.event, payload.context);
+        await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
       } catch (err) {
         logVerbose(`session_end hook failed during shutdown drain: ${String(err)}`);
       } finally {
@@ -1281,6 +1287,7 @@ export async function performGatewaySessionReset(params: {
           storePath,
           sessionFile: target.canonicalKey,
           agentId: target.agentId,
+          workspaceDir: entry.spawnedWorkspaceDir,
           reason: params.reason,
           archivedTranscripts: [],
         });
@@ -1309,6 +1316,7 @@ export async function performGatewaySessionReset(params: {
       }
       let resetBoundaryAppended = false;
       let resetSkipped = false;
+      let previousWorkspaceDir: string | undefined;
       const lifecyclePromise = resetSessionEntryLifecycle({
         archivePreviousTranscript: false,
         agentId: target.agentId,
@@ -1463,6 +1471,7 @@ export async function performGatewaySessionReset(params: {
           if (resetSkipped) {
             return;
           }
+          previousWorkspaceDir = mutation.previousEntry?.spawnedWorkspaceDir;
           clearBootstrapSnapshotOnSessionBoundary({
             boundaryAppended: resetBoundaryAppended,
             sessionKey: target.canonicalKey ?? params.key,
@@ -1556,6 +1565,7 @@ export async function performGatewaySessionReset(params: {
           storePath,
           sessionFile: oldSessionFile,
           agentId: target.agentId,
+          workspaceDir: previousWorkspaceDir,
           reason: params.reason,
           archivedTranscripts,
           nextSessionId: next.sessionId,

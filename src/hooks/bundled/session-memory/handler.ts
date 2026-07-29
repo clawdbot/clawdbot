@@ -1,7 +1,7 @@
 /**
  * Session memory hook handler
  *
- * Saves session context to memory when /new or /reset command is triggered
+ * Saves session context to memory when a session rollover completes
  * Creates a new dated memory file with a timestamp slug by default
  */
 
@@ -34,6 +34,7 @@ import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { isSessionRolloverEndReason } from "../../session-end.js";
 import { countSessionMemoryMessages, getRecentSessionContentFromEvents } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
@@ -220,9 +221,6 @@ function resolveDisplaySessionKey(params: {
   });
 }
 
-/**
- * Save session context to memory when /new or /reset command is triggered
- */
 const pendingSessionMemoryWrites = new Set<Promise<void>>();
 
 export async function flushSessionMemoryWritesForTest(): Promise<void> {
@@ -234,7 +232,7 @@ async function saveSessionMemoryNow(
   capturedEvents?: TranscriptEvent[],
 ): Promise<void> {
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Session rollover hook triggered", { reason: event.context.reason });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -268,12 +266,8 @@ async function saveSessionMemoryNow(
     const localTimestamp = formatLocalSessionTimestamp(now);
     const dateStr = localTimestamp.date;
 
-    // Generate descriptive slug from session when explicitly enabled
-    // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
+    // Generate descriptive slug from session when explicitly enabled.
+    const sessionEntry = (context.sessionEntry || {}) as Record<string, unknown>;
     const currentSessionId =
       typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
         ? sessionEntry.sessionId.trim()
@@ -342,7 +336,7 @@ async function saveSessionMemoryNow(
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
-    const source = (context.commandSource as string) || "unknown";
+    const reason = (context.reason as string) || "unknown";
 
     // Build Markdown entry
     const entryParts = [
@@ -350,7 +344,7 @@ async function saveSessionMemoryNow(
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
+      `- **Reason**: ${reason}`,
       "",
     ];
 
@@ -383,20 +377,15 @@ async function saveSessionMemoryNow(
 }
 
 const saveSessionToMemory: HookHandler = (event) => {
-  // Only trigger on reset/new commands. This is silent housekeeping, so keep it
-  // off the command reply path.
-  const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
+  const reason = event.context.reason;
+  if (event.type !== "session" || event.action !== "end" || !isSessionRolloverEndReason(reason)) {
     return;
   }
 
   let capturedEvents: TranscriptEvent[] | undefined;
   try {
     const context = event.context || {};
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
+    const sessionEntry = (context.sessionEntry || {}) as Record<string, unknown>;
     const sessionId =
       typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
         ? sessionEntry.sessionId.trim()

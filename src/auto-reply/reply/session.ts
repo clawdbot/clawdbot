@@ -1210,13 +1210,16 @@ async function initSessionStateAttemptLocked(
           sessionId: previousSessionEntry.sessionId,
           sessionKey,
           cfg,
+          agentId,
+          workspaceDir: previousSessionEntry.spawnedWorkspaceDir,
+          storePath,
           reason: previousSessionEndReason,
           sessionFile: previousSessionTranscript.sessionFile,
           transcriptArchived: previousSessionTranscript.transcriptArchived,
           nextSessionId: effectiveSessionId,
         });
         void runWithGatewayIndependentRootWorkContinuation(async () => {
-          await hookRunner.runSessionEnd(payload.event, payload.context);
+          await hookRunner.runSessionEnd(payload.event, payload.context, payload.runtime);
         }).catch(() => {});
       }
     }

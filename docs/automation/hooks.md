@@ -59,6 +59,7 @@ hook that never runs is diagnosable.
 | `command:reset`          | `/reset` command issued                                    |
 | `command:stop`           | `/stop` command issued                                     |
 | `command`                | Any command event (general listener)                       |
+| `session:end`            | A typed session rollover end event is emitted              |
 | `session:compact:before` | Before compaction summarizes history                       |
 | `session:compact:after`  | After compaction completes                                 |
 | `session:patch`          | When session properties are modified                       |
@@ -147,6 +148,8 @@ conversation) and for `session:compact:before` / `session:compact:after`
 
 **Command events** (`command:stop`): `context.sessionEntry`, `context.sessionId`, `context.commandSource`, `context.senderId`.
 
+**Session end events** (`session:end`): emitted for rollover reasons `new`, `reset`, `daily`, and `idle`, with `context.sessionEntry`, `context.reason`, `context.messageCount`, `context.durationMs`, `context.transcriptArchived`, `context.nextSessionId`, `context.nextSessionKey`, `context.agentId`, `context.workspaceDir`, `context.storePath`, and `context.cfg`.
+
 **Message events** (`message:received`): `context.from`, `context.content`, `context.channelId`, `context.media` (ordered staged attachment facts), `context.originalMedia` plus `context.mediaStagingPending` when remote media is not locally staged yet, and `context.metadata` (provider-specific data including `senderId`, `senderName`, `guildId`). `context.content` prefers a nonblank command body for command-like messages, then falls back to the raw inbound body and generic body; it does not include agent-only enrichment such as thread history or link summaries. Legacy media aliases inside `metadata` are deprecated.
 
 **Message events** (`message:sent`): `context.to`, `context.content`, `context.success`, `context.channelId`, plus `context.error` when sending failed.
@@ -222,7 +225,7 @@ Npm specs are registry-only (package name + optional exact version or dist-tag).
 
 | Hook                  | Events                                            | What it does                                                   |
 | --------------------- | ------------------------------------------------- | -------------------------------------------------------------- |
-| session-memory        | `command:new`, `command:reset`                    | Saves session context to `<workspace>/memory/`                 |
+| session-memory        | `session:end`                                     | Saves rollover context to `<workspace>/memory/`                |
 | bootstrap-extra-files | `agent:bootstrap`                                 | Injects additional bootstrap files from glob patterns          |
 | command-logger        | `command`                                         | Logs all commands to `~/.openclaw/logs/commands.log`           |
 | compaction-notifier   | `session:compact:before`, `session:compact:after` | Sends visible chat notices when session compaction starts/ends |
@@ -238,7 +241,7 @@ openclaw hooks enable <hook-name>
 
 ### session-memory details
 
-Extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so `/new` and `/reset` acknowledgements are not delayed by transcript reads or optional slug generation. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
+For session rollovers caused by `/new`, `/reset`, the daily boundary, or idle expiry, extracts the last user/assistant messages (default 15, configurable with `hooks.internal.entries.session-memory.messages`) and saves them to `<workspace>/memory/YYYY-MM-DD-HHMM.md` using the host local date. Memory capture runs in the background so the replacement session is not delayed by transcript reads or optional slug generation. Shutdown, deletion, and compaction lifecycle events do not create memory files. Set `hooks.internal.entries.session-memory.llmSlug: true` to generate descriptive filename slugs, and optionally set `hooks.internal.entries.session-memory.model` to a configured alias such as `sonnet`, a bare model ID on the agent's default provider, or a `provider/model` ref. Slug generation uses the agent's default model when `model` is omitted and falls back to timestamp slugs when unavailable. Requires `workspace.dir` to be configured.
 
 <a id="bootstrap-extra-files"></a>
 

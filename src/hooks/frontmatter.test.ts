@@ -253,14 +253,14 @@ describe("resolveOpenClawMetadata", () => {
     // This is the actual format used in the bundled hooks
     const content = `---
 name: session-memory
-description: "Save session context to memory when /new or /reset command is issued"
+description: "Save session context to memory when a session rolls over"
 homepage: https://docs.openclaw.ai/automation/hooks#session-memory
 metadata:
   {
     "openclaw":
       {
         "emoji": "💾",
-        "events": ["command:new", "command:reset"],
+        "events": ["session:end"],
         "requires": { "config": ["workspace.dir"] },
         "install": [{ "id": "bundled", "kind": "bundled", "label": "Bundled with OpenClaw" }],
       },
@@ -273,12 +273,12 @@ metadata:
     const frontmatter = parseFrontmatter(content);
     expect(frontmatter.name).toBe("session-memory");
     expect(requireString(frontmatter.metadata, "session-memory metadata")).toContain(
-      '"command:reset"',
+      '"session:end"',
     );
 
     const openclaw = requireOpenClawMetadata(resolveOpenClawMetadata(frontmatter));
     expect(openclaw.emoji).toBe("💾");
-    expect(openclaw.events).toEqual(["command:new", "command:reset"]);
+    expect(openclaw.events).toEqual(["session:end"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
     expect(expectDefined(openclaw.install?.[0], "openclaw.install?.[0] test invariant").kind).toBe(
       "bundled",
