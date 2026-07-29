@@ -271,50 +271,71 @@ describe("memory manager FTS-only reindex", () => {
   });
 
   it("uses keyword search when provider construction fails against an existing semantic index", async () => {
-    providerAvailable = true;
-    const firstManager = await createManager();
-    await firstManager.sync({ force: true });
-    await firstManager.close();
-    manager = null;
-    await closeAllMemorySearchManagers();
-    await closeAllMemoryIndexManagers();
-    providerAvailable = false;
-    providerConstructionError = Object.assign(
-      new Error(
-        'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
-      ),
-      {
-        name: "MissingProviderAuthError",
-        code: "missing-api-key",
-        provider: "openai",
-      },
-    );
-    const memoryManager = await createManager();
-    const debug: unknown[] = [];
+    const now = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      providerAvailable = true;
+      const firstManager = await createManager();
+      await firstManager.sync({ force: true });
+      await expect(firstManager.probeVectorAvailability()).resolves.toBe(true);
+      await firstManager.close();
+      manager = null;
+      await closeAllMemorySearchManagers();
+      await closeAllMemoryIndexManagers();
+      providerAvailable = false;
+      providerConstructionError = Object.assign(
+        new Error(
+          'No API key resolved for provider "openai" (auth mode: api-key, checked: OPENAI_API_KEY).',
+        ),
+        {
+          name: "MissingProviderAuthError",
+          code: "missing-api-key",
+          provider: "openai",
+        },
+      );
+      const memoryManager = await createManager();
+      const debug: unknown[] = [];
 
-    await expect(
-      memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
-    ).resolves.toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
-    expect(debug).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          embeddingBootstrap: expect.objectContaining({ degradedTo: "keyword-only" }),
-        }),
-      ]),
-    );
-    expect(
-      memoryManager as unknown as {
-        embeddingBootstrapFailure?: unknown;
-        provider?: { id: string } | null;
-      },
-    ).toMatchObject({
-      embeddingBootstrapFailure: expect.objectContaining({ degradedTo: "keyword-only" }),
-      provider: null,
-    });
-    expect(memoryManager.status()).toMatchObject({
-      provider: "none",
-      custom: { indexIdentity: { status: "valid" }, searchMode: "fts-only" },
-    });
+      await expect(
+        memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
+      ).resolves.toEqual([expect.objectContaining({ path: "MEMORY.md", source: "memory" })]);
+      expect(debug).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            embeddingBootstrap: expect.objectContaining({ degradedTo: "keyword-only" }),
+          }),
+        ]),
+      );
+      expect(
+        memoryManager as unknown as {
+          embeddingBootstrapFailure?: unknown;
+          provider?: { id: string } | null;
+        },
+      ).toMatchObject({
+        embeddingBootstrapFailure: expect.objectContaining({ degradedTo: "keyword-only" }),
+        provider: null,
+      });
+      expect(memoryManager.status()).toMatchObject({
+        provider: "none",
+        vector: { semanticAvailable: false },
+        custom: { indexIdentity: { status: "valid" }, searchMode: "fts-only" },
+      });
+
+      providerConstructionError = null;
+      providerAvailable = true;
+      nowSpy.mockReturnValue(now + 31_000);
+      await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+      await expect(memoryManager.search("Alpha topic")).resolves.toHaveLength(1);
+
+      expect(providerQueryCalls).toBeGreaterThan(0);
+      expect(memoryManager.status()).toMatchObject({
+        provider: "openai",
+        vector: { semanticAvailable: true },
+        custom: { providerState: { mode: "active", providerId: "openai" } },
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("retries expired bootstrap failures through probes and rebuilds the fallback index", async () => {

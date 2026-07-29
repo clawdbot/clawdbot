@@ -800,6 +800,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.refreshIndexIdentityDirty({ providerKeyKnown: true }).status === "valid" &&
       (await this.confirmEmbeddingBootstrapRecovery())
     ) {
+      // A valid existing index skips recovery reindex, so explicitly restore the
+      // semantic readiness flag cleared when bootstrap degradation began.
+      this.vector.semanticAvailable = await this.probeVectorStoreAvailabilityAdmitted();
       this.clearEmbeddingBootstrapFailureAfterRecovery();
       return false;
     }
