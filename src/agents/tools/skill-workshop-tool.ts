@@ -7,6 +7,7 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   applySkillProposal,
+  evaluateSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -55,6 +56,7 @@ const SKILL_WORKSHOP_ACTIONS = [
   "revise",
   "list",
   "inspect",
+  "evaluate",
   "apply",
   "reject",
   "quarantine",
@@ -82,12 +84,12 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
       action: stringEnum(proposalOnly ? proposalActions : SKILL_WORKSHOP_ACTIONS, {
         description: proposalOnly
           ? `create = new skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search).${supportsCompletion ? " complete = durably finish this review after all proposal work." : ""} Live-skill updates and lifecycle actions are unavailable.`
-          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); apply/reject/quarantine are explicit lifecycle actions.",
+          : "create = new skill; update = existing live skill; revise = existing pending proposal; list/inspect discover pending proposals (not filesystem search); evaluate runs plugin evaluators for the exact draft; apply/reject/quarantine are explicit lifecycle actions.",
       }),
       proposal_id: Type.Optional(
         Type.String({
           description:
-            "Existing proposal id for action=inspect, action=revise, action=apply, action=reject, or action=quarantine.",
+            "Existing proposal id for action=inspect, action=revise, action=evaluate, action=apply, action=reject, or action=quarantine.",
         }),
       ),
       name: Type.Optional(
@@ -149,6 +151,18 @@ function buildSkillWorkshopToolSchema(proposalOnly: boolean, supportsCompletion:
           description: "Optional reason for action=apply, action=reject, or action=quarantine.",
         }),
       ),
+      expected_draft_hash: Type.Optional(
+        Type.String({
+          description:
+            "Optional exact proposal draft hash for evaluate/apply/reject/quarantine. The action fails if the draft changed.",
+        }),
+      ),
+      correlation_id: Type.Optional(
+        Type.String({
+          description:
+            "Optional orchestration or experiment correlation id carried into lifecycle events.",
+        }),
+      ),
     },
     { additionalProperties: false },
   );
@@ -172,7 +186,7 @@ function buildSkillWorkshopToolDescription(
   supportsCompletion: boolean,
 ): string {
   if (!proposalOnly) {
-    return `Create/update/revise/list/inspect/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+    return `Create/update/revise/list/inspect/evaluate/apply/reject/quarantine reusable-procedure skill proposals.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const completion = supportsCompletion ? " complete = durably finish this review." : "";
   return `Inspect reusable-procedure skill proposals and create or revise pending proposals.${completion} Live-skill updates and lifecycle actions are unavailable.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
@@ -256,6 +270,31 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         });
       }
 
+      if (action === "evaluate") {
+        const evaluated = await evaluateSkillProposal({
+          workspaceDir: options.workspaceDir,
+          agentId: options.agentId,
+          env: options.env,
+          proposalId: readLifecycleProposalIdParam(params),
+          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Evaluated skill proposal ${evaluated.record.id} with ${evaluated.evaluation.outcomes.length} evaluator result(s).`,
+            },
+          ],
+          details: {
+            id: evaluated.record.id,
+            proposedVersion: evaluated.evaluation.proposedVersion,
+            draftHash: evaluated.evaluation.draftHash,
+            evaluation: evaluated.evaluation,
+          },
+        };
+      }
+
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
@@ -263,6 +302,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(applied.record, {
@@ -277,6 +318,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(rejected, {
@@ -290,6 +333,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           agentId: options.agentId,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
+          expectedDraftHash: readStringParam(params, "expected_draft_hash"),
+          correlationId: readStringParam(params, "correlation_id"),
           reason: readStringParam(params, "reason"),
         });
         return actionResult(quarantined, {
@@ -380,6 +425,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
             config: options.config,
             env: options.env,
             proposalId: pendingProposal.record.id,
+            expectedDraftHash: pendingProposal.record.draftHash,
+            correlationId: readStringParam(params, "correlation_id"),
             content: proposalContent,
             supportFiles,
             description: readStringParam(params, "description"),

@@ -39,12 +39,53 @@ describe("skill_workshop tool", () => {
     expect(schema).toContain("create = new skill");
     expect(schema).toContain("update = existing live skill");
     expect(schema).toContain("revise = existing pending proposal");
+    expect(schema).toContain("evaluate runs plugin evaluators");
     expect(schema).toContain("not filesystem search");
     expect(schema).toContain("when proposal_id is unknown");
     expect(schema).toContain("returns candidates");
     expect(schema).toContain("max 160 bytes");
     expect(schema).toContain("shortens the proposal listing entry");
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
+  });
+
+  it("evaluates an exact pending draft and exposes the persisted result", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-evaluate-");
+    const tool = createSkillWorkshopTool({ workspaceDir, agentId: "main" });
+    const created = await tool.execute("call-create", {
+      action: "create",
+      name: "Evaluated Skill",
+      description: "Exercise the explicit evaluation primitive",
+      proposal_content: "# Evaluated Skill\n",
+    });
+    const details = created.details as { id: string; draftHash: string };
+
+    await expect(
+      tool.execute("call-evaluate", {
+        action: "evaluate",
+        proposal_id: details.id,
+        expected_draft_hash: details.draftHash,
+        correlation_id: "optimization-run-1",
+      }),
+    ).resolves.toMatchObject({
+      details: {
+        id: details.id,
+        draftHash: details.draftHash,
+        evaluation: {
+          trigger: "manual",
+          correlationId: "optimization-run-1",
+          outcomes: [],
+        },
+      },
+    });
+    await expect(
+      tool.execute("call-inspect", { action: "inspect", proposal_id: details.id }),
+    ).resolves.toMatchObject({
+      details: {
+        evaluation: {
+          correlationId: "optimization-run-1",
+        },
+      },
+    });
   });
 
   it("documents that proposal_content must be final skill body content, not a plan or change description", () => {
@@ -148,6 +189,9 @@ describe("skill_workshop tool", () => {
     ).toEqual(["create", "revise", "list", "inspect"]);
     await expect(
       tool.execute("call-apply", { action: "apply", proposal_id: "proposal-1" }),
+    ).rejects.toThrow("only inspect or draft proposals");
+    await expect(
+      tool.execute("call-evaluate", { action: "evaluate", proposal_id: "proposal-1" }),
     ).rejects.toThrow("only inspect or draft proposals");
     await expect(
       tool.execute("call-update", {
