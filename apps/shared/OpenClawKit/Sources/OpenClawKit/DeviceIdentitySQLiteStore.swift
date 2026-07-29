@@ -386,10 +386,43 @@ enum DeviceIdentitySQLiteStore {
                         throw DeviceIdentityStore.storageError(
                             "Legacy device identity source and interrupted native claim both exist")
                     }
-                    // Matching key material means the interrupted import and recreated source are the same identity,
-                    // so dropping the stale claim loses nothing. deviceId is metadata here; the canonical SQLite row
-                    // decides which value survives.
-                    try FileManager.default.removeItem(at: nativeClaimURL)
+                    // Matching keys mean the claim and source are one identity; deviceId is SQLite-owned metadata.
+                    // Delete only after exclusive quarantine and post-rename revalidation, which closes the
+                    // replace-between-compare-and-unlink race.
+                    let quarantineURL = self.claimURL(
+                        nativeClaimURL,
+                        suffix: ".stale-\(UUID().uuidString)")
+                    let acquireResult = nativeClaimURL.path.withCString { claimPath in
+                        quarantineURL.path.withCString { quarantinePath in
+                            renamex_np(claimPath, quarantinePath, UInt32(RENAME_EXCL))
+                        }
+                    }
+                    if acquireResult != 0 {
+                        let acquireError = errno
+                        if acquireError == ENOENT { continue }
+                        throw DeviceIdentityStore.storageError(
+                            "Could not acquire stale native identity claim: " +
+                                String(cString: strerror(acquireError)))
+                    }
+
+                    let acquiredClaim = try? self.readLegacyIdentity(
+                        quarantineURL,
+                        beneath: source.stateDirURL)
+                    guard
+                        let acquiredClaim,
+                        sourceFile.material.identity.publicKey == acquiredClaim.material.identity.publicKey,
+                        sourceFile.material.identity.privateKey == acquiredClaim.material.identity.privateKey
+                    else {
+                        // RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
+                        _ = quarantineURL.path.withCString { quarantinePath in
+                            nativeClaimURL.path.withCString { claimPath in
+                                renamex_np(quarantinePath, claimPath, UInt32(RENAME_EXCL))
+                            }
+                        }
+                        throw DeviceIdentityStore.storageError(
+                            "Legacy device identity source and interrupted native claim both exist")
+                    }
+                    try FileManager.default.removeItem(at: quarantineURL)
                     continue
                 }
                 ownsNativeClaim = true
