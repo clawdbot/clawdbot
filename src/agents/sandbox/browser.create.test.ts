@@ -115,7 +115,7 @@ async function loadFreshBrowserModulesForTest() {
   ({ ensureSandboxBrowser } = await import("./browser.js"));
 }
 
-function buildConfig(enableNoVnc: boolean): SandboxConfig {
+function buildConfig(noVncEnabled: boolean): SandboxConfig {
   return {
     mode: "all",
     backend: "docker",
@@ -147,7 +147,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
       vncPort: 5900,
       noVncPort: 6080,
       headless: false,
-      enableNoVnc,
+      noVncEnabled,
       allowHostControl: false,
       autoStart: true,
       autoStartTimeoutMs: 12_000,
@@ -185,7 +185,7 @@ function computeTestBrowserHash(params: {
       vncPort: params.cfg.browser.vncPort,
       noVncPort: params.cfg.browser.noVncPort,
       headless: params.cfg.browser.headless,
-      enableNoVnc: params.cfg.browser.enableNoVnc,
+      noVncEnabled: params.cfg.browser.noVncEnabled,
       autoStartTimeoutMs: params.cfg.browser.autoStartTimeoutMs,
     },
     securityEpoch: SANDBOX_BROWSER_SECURITY_HASH_EPOCH,
@@ -1004,22 +1004,23 @@ describe("ensureSandboxBrowser create args", () => {
     expect(BROWSER_BRIDGES.get("session:test")).not.toBe(cached);
   });
 
-  it("does not inject a source range for network=none by default", async () => {
+  it("rejects network=none before Docker inspection or browser bridge startup", async () => {
     const cfg = buildConfig(false);
     cfg.browser.network = "none";
 
-    const result = await ensureTestSandboxBrowser({
-      scopeKey: "session:test",
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
-      cfg,
-    });
-
-    requireValue(result, "sandbox browser result");
-    const createArgs = requireDockerCreateArgs();
-    const envEntries = collectDockerFlagValues(createArgs, "-e");
-    expect(envEntries.some((entry) => entry.startsWith("OPENCLAW_BROWSER_CDP_SOURCE_RANGE="))).toBe(
-      false,
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg,
+      }),
+    ).rejects.toThrow(
+      'Sandbox browser network mode "none" is unsupported because browser control requires a host-reachable published CDP port.',
     );
+    expect(dockerMocks.dockerContainerState).not.toHaveBeenCalled();
+    expect(dockerMocks.execDocker).not.toHaveBeenCalled();
+    expect(dockerMocks.readDockerPort).not.toHaveBeenCalled();
+    expect(bridgeMocks.startBrowserBridgeServer).not.toHaveBeenCalled();
   });
 });

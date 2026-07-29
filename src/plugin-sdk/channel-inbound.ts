@@ -5,7 +5,6 @@ import {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  resolveChannelInboundSupplementalContext,
   type BuildChannelInboundEventContextAsyncParams,
   type BuildChannelInboundEventContextParams,
   type BuiltChannelInboundEventContext,
@@ -105,8 +104,6 @@ export {
   filterChannelInboundQuoteContext,
   filterChannelInboundSupplementalContext,
   resolveInboundSupplementalSenderAllowed,
-  // @deprecated Prefer `buildChannelInboundEventContext({ resolveSupplementalMedia: true })`.
-  resolveChannelInboundSupplementalContext,
 };
 export type {
   BuildChannelInboundEventContextAsyncParams,
@@ -191,20 +188,28 @@ export type {
   InboundReplyDispatchResult,
   InboundReplyRecordOptions,
 } from "../channels/message/inbound-reply-dispatch.js";
+export {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+  type ChannelPartialDeliveryError,
+} from "../channels/turn/delivery-result.js";
 
 export {
   toHistoryMediaEntries,
   toInboundMediaFacts,
+  /** @deprecated Pass ordered facts as the context's `media` field. */
   buildChannelInboundMediaPayload,
   formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
-  // @deprecated Prefer `buildChannelInboundMediaPayload`.
+  /** @deprecated Pass ordered facts as the context's `media` field. */
   buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
 } from "../channels/inbound-event/media.js";
 export type {
   ChannelInboundMediaInput,
   ChannelInboundMediaInput as ChannelTurnMediaInput,
+  /** @deprecated Pass ordered `InboundMediaFacts[]` as the context's `media` field. */
   ChannelInboundMediaPayload,
+  /** @deprecated Pass ordered `InboundMediaFacts[]` as the context's `media` field. */
   ChannelInboundMediaPayload as ChannelTurnMediaPayload,
   MediaPlaceholderTextFact,
 } from "../channels/inbound-event/media.js";

@@ -110,6 +110,13 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawChatSessionsChangedEvent.self)
             else { return nil }
             return .sessionsChanged(change)
+        case "session.observer":
+            guard let payload = frame.payload,
+                  let digest = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: SessionObserverDigest.self)
+            else { return nil }
+            return .sessionObserver(digest)
         case "seqGap":
             return .seqGap
         case "health":

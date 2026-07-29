@@ -1,9 +1,9 @@
 // Memory Core plugin module implements session search visibility behavior.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
   loadCombinedSessionStoreForGateway,
@@ -40,10 +40,13 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  const anchorFile = anchor.sessionFile?.trim();
-  const candidateFile = candidate.sessionFile?.trim();
-  return Boolean(
-    anchorFile && candidateFile && path.resolve(anchorFile) === path.resolve(candidateFile),
+  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
+  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
+  return (
+    typeof anchorSessionFile === "string" &&
+    anchorSessionFile.trim().length > 0 &&
+    typeof candidateSessionFile === "string" &&
+    candidateSessionFile.trim() === anchorSessionFile.trim()
   );
 }
 
@@ -56,7 +59,7 @@ function isPrivateConversation(params: {
     return false;
   }
   const key = params.key.trim().toLowerCase();
-  const chatTypes = [params.entry.chatType, params.entry.origin?.chatType].filter(
+  const chatTypes = [params.entry.chatType, sessionDeliveryOrigin(params.entry)?.chatType].filter(
     (chatType): chatType is NonNullable<typeof chatType> => chatType !== undefined,
   );
   if (
@@ -226,7 +229,13 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
 
   const isSessionKeyAllowed = (key: string): boolean => {
     if (!conversationRecall || !anchorSessionKey || !recallAgentId) {
-      return guard?.check(key).allowed === true;
+      // A bare global key is local to the selected agent store. Reattach that
+      // owner before applying visibility or non-default agents look cross-agent.
+      const visibilityKey =
+        scopedAgentId && isGlobalSessionKeyForSharedScope(params.cfg, key)
+          ? `agent:${scopedAgentId}:global`
+          : key;
+      return guard?.check(visibilityKey).allowed === true;
     }
     const candidateEntry = combinedSessionStore[key];
     // Canonical and legacy alias keys can identify one transcript. Exclude the
@@ -248,9 +257,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
 
   const expandRecallAliasKeys = (keys: string[]): string[] => {
-    // Alias resolution by session id can miss a group/channel alias that shares
-    // the same transcript file under a different session id. Recall must judge
-    // every alias, so expand candidates by stored transcript identity.
+    // Recall must judge every store key for the canonical transcript identity,
+    // including group/channel aliases that were not in the initial key set.
     const expanded = new Set(keys);
     for (const key of keys) {
       const entry = combinedSessionStore[key];
@@ -331,6 +339,12 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ) {
       continue;
     }
+    const sameAgentLiveOwnerId =
+      !identity.archived &&
+      normalizedScopedAgentId &&
+      normalizedOwnerAgentId === normalizedScopedAgentId
+        ? normalizedOwnerAgentId
+        : undefined;
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
       ((identity.ownerAgentId &&
@@ -349,20 +363,25 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
           allowQmdSlugFallback: false,
         })
       : [];
+    const resolvedKeys =
+      liveKeys.length > 0
+        ? liveKeys
+        : resolveTranscriptStemToSessionKeys({
+            store: combinedSessionStore,
+            stem: identity.stem,
+            allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
+            ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+          });
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys:
-        liveKeys.length > 0
-          ? liveKeys
-          : resolveTranscriptStemToSessionKeys({
-              store: combinedSessionStore,
-              stem: identity.stem,
-              allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
-              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-            }),
+      keys: resolvedKeys,
     });
     if (keys.length === 0) {
+      const agentWideVisibility = visibility === "agent" || visibility === "all";
+      if (sameAgentLiveOwnerId && agentWideVisibility && !conversationRecall) {
+        next.push(hit);
+      }
       continue;
     }
     const allowed = areSessionKeysAllowed(keys);

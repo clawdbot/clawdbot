@@ -4,6 +4,7 @@
 // shared styles live under .provider-brand-icon in styles/components.css.
 import { html } from "lit";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
+import { takeGraphemes } from "../lib/graphemes.ts";
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
@@ -66,10 +67,13 @@ const PROVIDER_ICON_ALIASES: Readonly<Record<string, string>> = {
   anthropic: "claude",
   "amazon-bedrock": "bedrock",
   "aws-bedrock": "bedrock",
+  "claude-cli": "claude",
   google: "gemini",
   "google-gemini-cli": "gemini",
   "github-copilot": "copilot",
+  // CodexBar names its bundled OpenAI knot asset "codex".
   openai: "codex",
+  moonshot: "kimi",
   "opencode-go": "opencodego",
   "opencode-zen": "opencode",
   xai: "grok",
@@ -83,6 +87,7 @@ const PROVIDER_DISPLAY_LABELS: Readonly<Record<string, string>> = {
   google: "Google",
   "github-copilot": "GitHub",
   openai: "OpenAI",
+  moonshot: "Moonshot AI",
   opencode: "OpenCode",
   openrouter: "OpenRouter",
 };
@@ -108,8 +113,27 @@ function resolveProviderIconName(provider: string): string | null {
   return PROVIDER_ICON_NAMES.has(icon) ? icon : null;
 }
 
+/** Whether a provider identity has a bundled brand mark. */
+export function hasProviderBrandIcon(provider: string): boolean {
+  return resolveProviderIconName(provider) !== null;
+}
+
 function providerIconAssetPath(icon: string): string {
   return inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`);
+}
+
+/** Lettered badge for surfaces that must not infer a provider identity. */
+export function renderProviderFallbackIcon(label: string, options?: { className?: string }) {
+  const surfaceClass = options?.className ? ` ${options.className}` : "";
+  const letter = takeGraphemes(label.trim().toUpperCase(), 1) || "?";
+  return html`
+    <span
+      class="provider-brand-icon provider-brand-icon--fallback${surfaceClass}"
+      aria-hidden="true"
+    >
+      ${letter}
+    </span>
+  `;
 }
 
 /**
@@ -120,15 +144,7 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);
   if (!icon) {
-    const letter = (provider.trim().charAt(0) || "?").toUpperCase();
-    return html`
-      <span
-        class="provider-brand-icon provider-brand-icon--fallback${surfaceClass}"
-        aria-hidden="true"
-      >
-        ${letter}
-      </span>
-    `;
+    return renderProviderFallbackIcon(provider, options);
   }
   return html`
     <span

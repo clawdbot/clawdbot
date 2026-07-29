@@ -1,6 +1,5 @@
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { splitQaModelRef, type QaProviderMode } from "./model-selection.js";
-import { getQaProvider } from "./providers/index.js";
 import type { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
@@ -19,16 +18,16 @@ export function describeQaProviderLaneMismatches(params: {
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const mismatches: string[] = [];
-  const provider = getQaProvider(params.providerMode);
-  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
-    mismatches.push("live provider mode");
-  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     mismatches.push(`providerMode=${requiredProviderMode}`);
   }
   const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
+    mismatches.push(`channelDriver=${requiredChannelDriver}`);
+  }
   const effectiveChannel =
     effectiveChannelDriver === "qa-channel"
       ? "qa-channel"
@@ -36,6 +35,11 @@ export function describeQaProviderLaneMismatches(params: {
   const scenarioChannel = params.scenario.execution.channel?.trim().toLowerCase();
   if (scenarioChannel && effectiveChannel !== scenarioChannel) {
     mismatches.push(`channel=${scenarioChannel}`);
+  }
+  const allowedChannels =
+    params.scenario.execution.kind === "flow" ? params.scenario.execution.channels : undefined;
+  if (allowedChannels && !allowedChannels.includes(effectiveChannel ?? "")) {
+    mismatches.push(`channel=${allowedChannels.join("|")}`);
   }
   const selected = splitQaModelRef(params.primaryModel);
   const requiredProvider = normalizeQaConfigString(config.requiredProvider);

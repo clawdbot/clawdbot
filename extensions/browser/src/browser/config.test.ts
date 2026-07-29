@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { BrowserConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
@@ -13,23 +14,21 @@ import {
 } from "./config.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 
-const OPENCLAW_BROWSER_HEADLESS_ENV = "OPENCLAW_BROWSER_HEADLESS";
+const BROWSER_HEADLESS_ENV_KEY = "OPENCLAW_BROWSER_HEADLESS";
 
 // Isolate the extension relay secret (read from stateDir/credentials) so the
 // extension-token assertions do not pick up a developer's real secret file.
 let isolatedStateDir = "";
-const prevStateDir = process.env.OPENCLAW_STATE_DIR;
-beforeEach(() => {
-  isolatedStateDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cfg-")));
-  process.env.OPENCLAW_STATE_DIR = isolatedStateDir;
+let openClawState: OpenClawTestState;
+beforeEach(async () => {
+  openClawState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-cfg-",
+  });
+  isolatedStateDir = openClawState.stateDir;
 });
-afterEach(() => {
-  if (prevStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = prevStateDir;
-  }
-  fs.rmSync(isolatedStateDir, { recursive: true, force: true });
+afterEach(async () => {
+  await openClawState.cleanup();
 });
 
 /** Write a relay secret into the isolated state dir's credentials directory. */
@@ -344,7 +343,7 @@ describe("browser config", () => {
     const noDisplayEnv = {
       DISPLAY: undefined,
       WAYLAND_DISPLAY: undefined,
-      [OPENCLAW_BROWSER_HEADLESS_ENV]: undefined,
+      [BROWSER_HEADLESS_ENV_KEY]: undefined,
     };
 
     it("falls back to headless for local managed Linux profiles without display", () => {
@@ -415,7 +414,7 @@ describe("browser config", () => {
       expect(
         resolveManagedBrowserHeadlessMode(resolved, profile, {
           platform: "linux",
-          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "1" },
+          env: { ...noDisplayEnv, [BROWSER_HEADLESS_ENV_KEY]: "1" },
         }),
       ).toEqual({ headless: true, source: "env" });
     });
@@ -433,7 +432,7 @@ describe("browser config", () => {
         resolveManagedBrowserHeadlessMode(resolved, profile, {
           headlessOverride: true,
           platform: "linux",
-          env: { ...noDisplayEnv, [OPENCLAW_BROWSER_HEADLESS_ENV]: "0" },
+          env: { ...noDisplayEnv, [BROWSER_HEADLESS_ENV_KEY]: "0" },
         }),
       ).toEqual({ headless: true, source: "request" });
     });
@@ -841,14 +840,12 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
         allowPrivateNetwork: true,
-        allowedHostnames: [" localhost ", ""],
-        hostnameAllowlist: [" *.trusted.example ", " "],
+        allowedHostnames: [" localhost ", " *.trusted.example ", ""],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
       dangerouslyAllowPrivateNetwork: true,
-      allowedHostnames: ["localhost"],
-      hostnameAllowlist: ["*.trusted.example"],
+      allowedHostnames: ["localhost", "*.trusted.example"],
     });
   });
 
@@ -878,13 +875,11 @@ describe("browser config", () => {
   it("keeps allowlist-only browser SSRF policy strict by default", () => {
     const resolved = resolveBrowserConfig({
       ssrfPolicy: {
-        allowedHostnames: ["example.com"],
-        hostnameAllowlist: ["*.example.com"],
+        allowedHostnames: ["example.com", "*.example.com"],
       },
     } as unknown as BrowserConfig);
     expect(resolved.ssrfPolicy).toEqual({
-      allowedHostnames: ["example.com"],
-      hostnameAllowlist: ["*.example.com"],
+      allowedHostnames: ["example.com", "*.example.com"],
     });
   });
 
@@ -906,7 +901,6 @@ describe("browser config", () => {
         "chrome-live": {
           driver: "existing-session",
           attachOnly: true,
-          color: "#00AA00",
         },
       },
     });
@@ -919,7 +913,7 @@ describe("browser config", () => {
       cdpUrl: "",
       cdpHost: "",
       cdpIsLoopback: true,
-      color: "#00AA00",
+      color: "#FF4500",
       executablePath: undefined,
       headless: false,
       headlessSource: "default",

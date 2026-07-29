@@ -1,3 +1,7 @@
+import {
+  reduceSessionProjection,
+  type SessionProjectionScope,
+} from "@openclaw/gateway-client/browser";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { setLastActiveSessionKey } from "../../app/settings.ts";
@@ -22,7 +26,8 @@ import {
   isTerminalFailureChatSendAck,
   type ChatSendAck,
   type TerminalFailureChatSendAck,
-} from "./chat-send-contract.ts";
+} from "./chat-send-ack.ts";
+import { getChatSessionProjection, setChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -37,6 +42,8 @@ type SteerLifecycleHost = ChatQueueScopedSessionHost & {
   connected: boolean;
   chatRunId: string | null;
   chatMessages: unknown[];
+  currentSessionId?: string | null;
+  chatDisplayedLeafEntryId?: string | null;
   chatMessagesBySession?: ChatMessageCache;
   sessionsResult?: SessionsListResult | null;
   lastError?: string | null;
@@ -81,10 +88,18 @@ export function chatMessagesContainQueuedSend(
   item: ChatQueueItem,
   userRoleOnly = false,
 ): boolean {
+  return findQueuedSendMessageIndex(messages, item, userRoleOnly) >= 0;
+}
+
+function findQueuedSendMessageIndex(
+  messages: unknown,
+  item: ChatQueueItem,
+  userRoleOnly = false,
+): number {
   if (!item.sendRunId) {
-    return false;
+    return -1;
   }
-  return (Array.isArray(messages) ? messages : []).some((message) => {
+  return (Array.isArray(messages) ? messages : []).findIndex((message) => {
     if (!message || typeof message !== "object" || Array.isArray(message)) {
       return false;
     }
@@ -142,7 +157,22 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   };
   if (visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
-      state.chatMessages = [...state.chatMessages, userMessage];
+      const scope: SessionProjectionScope = {
+        sessionKey,
+        ...(item.agentId ? { agentId: item.agentId } : {}),
+        ...(state.currentSessionId ? { sessionId: state.currentSessionId } : {}),
+        ...(Object.hasOwn(state, "chatDisplayedLeafEntryId")
+          ? { activeLeafEntryId: state.chatDisplayedLeafEntryId ?? null }
+          : {}),
+      };
+      // Steer retirement and history recovery must retain the same pending
+      // entry; rendering a separate row loses it during a concurrent snapshot.
+      const projection = reduceSessionProjection(
+        getChatSessionProjection(state, state.chatMessages, scope),
+        { type: "sendPending", runId, message: userMessage, scope },
+      );
+      setChatSessionProjection(state, projection);
+      state.chatMessages = [...projection.messages];
     }
     return;
   }
@@ -159,16 +189,25 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
 export function retireSteeredChipsForTerminalRun(
   state: SteerLifecycleHost,
   runId: string | undefined,
-): void {
+): number | undefined {
   if (!runId) {
-    return;
+    return undefined;
   }
+  let firstPersistedSteerIndex: number | undefined;
   for (const item of state.chatQueue) {
     if (isAckedSteeredChip(item) && item.pendingRunId === runId) {
+      const persistedIndex = findQueuedSendMessageIndex(state.chatMessages, item, true);
+      if (
+        persistedIndex >= 0 &&
+        (firstPersistedSteerIndex === undefined || persistedIndex < firstPersistedSteerIndex)
+      ) {
+        firstPersistedSteerIndex = persistedIndex;
+      }
       preserveQueuedUserTurn(state, item);
     }
   }
   clearPendingQueueItemsForRun(state, runId);
+  return firstPersistedSteerIndex;
 }
 
 export function retireHistoryProvenSteeredChips(state: SteerLifecycleHost): void {

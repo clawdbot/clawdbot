@@ -1,4 +1,5 @@
 import { consume } from "@lit/context";
+import { initialState, Task } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -16,6 +17,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { fetchCatalogIconBlobUrl } from "../plugins/icon-loader.ts";
+import type { ModelSetupPrepareOption } from "./prepare-options.ts";
 import { detectModelSetup, verifyModelSetup } from "./rpc.ts";
 import {
   activationTargetId,
@@ -28,8 +30,9 @@ import {
   type ModelSetupVerifyState,
   type ModelSetupWizardState,
 } from "./state.ts";
-import { renderModelSetup } from "./view.ts";
+import { renderModelSetup, resolveSetupBrandIcon } from "./view.ts";
 import { ModelSetupWizardRunner } from "./wizard-runner.ts";
+import type { ModelSetupWizardStartMethod } from "./wizard-runner.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 type AuthOption = NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number];
@@ -47,6 +50,21 @@ function errorMessage(error: unknown): string {
   return typeof error === "string" && error.trim() ? error : t("modelSetup.errors.requestFailed");
 }
 
+type BoundModelResult<T> =
+  | { client: GatewayBrowserClient; value: T }
+  | { client: GatewayBrowserClient; error: unknown };
+
+async function captureModelResult<T>(
+  client: GatewayBrowserClient,
+  load: () => Promise<T>,
+): Promise<BoundModelResult<T>> {
+  try {
+    return { client, value: await load() };
+  } catch (error) {
+    return { client, error };
+  }
+}
+
 export class ModelSetupPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -57,6 +75,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   @state() private activationState: ModelSetupActivationState = { phase: "idle" };
   @state() private verifyState: ModelSetupVerifyState = { phase: "idle" };
   @state() private wizardState: ModelSetupWizardState = { phase: "idle" };
+  @state() private wizardMode: "auth" | "prepare" = "auth";
   @state() private wizardValue: unknown;
   @state() private manualProviderId = "";
   @state() private manualApiKey = "";
@@ -66,12 +85,6 @@ export class ModelSetupPage extends OpenClawLightDomElement {
 
   private observedClient: GatewayBrowserClient | null = null;
   private dataClient: GatewayBrowserClient | null = null;
-  private detectAbort: AbortController | null = null;
-  private activationAbort: AbortController | null = null;
-  private verifyAbort: AbortController | null = null;
-  private detectEpoch = 0;
-  private activationEpoch = 0;
-  private verifyEpoch = 0;
   private readonly iconMisses = new Set<string>();
   private readonly iconRequests = new Map<
     string,
@@ -90,15 +103,102 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         this.wizardValue = initialWizardValue(next.step);
       }
     },
-    onDone: () => void this.handleWizardDone(),
+    onDone: (startMethod) => void this.handleWizardDone(startMethod),
     requestFailedMessage: () => t("modelSetup.errors.requestFailed"),
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
+    sessionExpiredMessage: () => t("modelSetup.wizard.sessionExpired"),
+  });
+
+  private readonly detectTask = new Task<
+    readonly [GatewayBrowserClient | null, object | null],
+    BoundModelResult<SystemAgentSetupDetectResult> & { token: object }
+  >(this, {
+    autoRun: false,
+    args: () => {
+      const client = this.context?.gateway.snapshot.client ?? null;
+      return [this.canUseSetup(client) ? client : null, null] as const;
+    },
+    task: async ([client, token], { signal }) =>
+      client && token
+        ? { ...(await captureModelResult(client, () => detectModelSetup(client, signal))), token }
+        : initialState,
+    onComplete: (outcome) => {
+      if (this.context.gateway.snapshot.client !== outcome.client) {
+        return;
+      }
+      if ("error" in outcome) {
+        this.pageState = { phase: "detect-error", message: errorMessage(outcome.error) };
+        return;
+      }
+      this.pageState = { phase: "ready", result: outcome.value };
+      this.dataClient = outcome.client;
+      this.syncManualProvider(this.pageState);
+    },
+  });
+
+  private readonly activationTask = new Task<
+    readonly [GatewayBrowserClient | null, SystemAgentSetupActivateParams | null],
+    BoundModelResult<SystemAgentSetupActivateResult>
+  >(this, {
+    autoRun: false,
+    args: () => [null, null],
+    task: ([client, params], { signal }) =>
+      client && params
+        ? captureModelResult(client, () =>
+            client.request<SystemAgentSetupActivateResult>("openclaw.setup.activate", params, {
+              timeoutMs: activationTimeoutForKind(params.kind),
+              signal,
+            }),
+          )
+        : initialState,
+    onComplete: (outcome) => {
+      const current = this.activationState;
+      if (current.phase !== "testing" || this.context.gateway.snapshot.client !== outcome.client) {
+        return;
+      }
+      if ("error" in outcome) {
+        this.activationState = {
+          phase: "failure",
+          targetId: current.targetId,
+          status: "unknown",
+          error: errorMessage(outcome.error),
+        };
+        return;
+      }
+      this.activationState = mapActivationResult({
+        result: outcome.value,
+        targetId: current.targetId,
+        fallbackError: t("modelSetup.errors.activationFailed"),
+      });
+      if (this.activationState.phase === "success") {
+        this.manualApiKey = "";
+      }
+    },
+  });
+
+  private readonly verifyTask = new Task<
+    readonly [GatewayBrowserClient | null],
+    BoundModelResult<Awaited<ReturnType<typeof verifyModelSetup>>>
+  >(this, {
+    autoRun: false,
+    args: () => [null],
+    task: ([client], { signal }) =>
+      client ? captureModelResult(client, () => verifyModelSetup(client, signal)) : initialState,
+    onComplete: (outcome) => {
+      if (this.context.gateway.snapshot.client !== outcome.client) {
+        return;
+      }
+      this.verifyState =
+        "error" in outcome
+          ? { phase: "failed", status: "unknown", error: errorMessage(outcome.error) }
+          : mapVerifyResult(outcome.value);
+    },
   });
 
   override disconnectedCallback() {
-    this.detectAbort?.abort();
-    this.activationAbort?.abort();
-    this.verifyAbort?.abort();
+    void this.detectTask.run([null, null]);
+    void this.activationTask.run([null, null]);
+    void this.verifyTask.run([null]);
     this.resetIcons();
     void this.wizard.cancel();
     this.subscriptions.clear();
@@ -121,12 +221,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       return;
     }
     this.observedClient = snapshot.client;
-    this.detectAbort?.abort();
-    this.activationAbort?.abort();
-    this.verifyAbort?.abort();
-    this.resetIcons();
+    void this.detectTask.run([null, null]);
     this.activationState = { phase: "idle" };
+    void this.activationTask.run([null, null]);
     this.verifyState = { phase: "idle" };
+    void this.verifyTask.run([null]);
+    this.resetIcons();
     void this.wizard.cancel();
     if (!snapshot.client || snapshot.client === this.dataClient) {
       return;
@@ -142,7 +242,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     return Boolean(
       client &&
-      snapshot.connected &&
+      snapshot.phase === "connected" &&
       hasOperatorAdminAccess(snapshot.hello?.auth ?? null) &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") === true,
     );
@@ -171,7 +271,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
         ...result.manualProviders,
         ...(result.authOptions ?? []),
         ...(result.recommendedInstalls ?? []),
-      ].flatMap((entry) => (entry.icon ? [entry.icon] : [])),
+      ].flatMap((entry) => (entry.icon && !resolveSetupBrandIcon(entry) ? [entry.icon] : [])),
     );
   }
 
@@ -234,7 +334,7 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       .then((blobUrl) => {
         if (
           this.iconRequests.get(iconUrl) !== request ||
-          !this.context.gateway.snapshot.connected ||
+          this.context.gateway.snapshot.phase !== "connected" ||
           !this.currentIconUrls().has(iconUrl)
         ) {
           if (blobUrl) {
@@ -296,35 +396,12 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client)) {
       return null;
     }
-    const epoch = ++this.detectEpoch;
     this.resetVerify();
-    this.detectAbort?.abort();
-    const abortController = new AbortController();
-    this.detectAbort = abortController;
     this.pageState = { phase: "loading" };
-    try {
-      const result = await detectModelSetup(client, abortController.signal);
-      if (epoch !== this.detectEpoch || this.context.gateway.snapshot.client !== client) {
-        return null;
-      }
-      this.pageState = { phase: "ready", result };
-      this.dataClient = client;
-      this.syncManualProvider(this.pageState);
-      return result;
-    } catch (error) {
-      if (
-        epoch === this.detectEpoch &&
-        this.context.gateway.snapshot.client === client &&
-        !abortController.signal.aborted
-      ) {
-        this.pageState = { phase: "detect-error", message: errorMessage(error) };
-      }
-      return null;
-    } finally {
-      if (this.detectAbort === abortController) {
-        this.detectAbort = null;
-      }
-    }
+    const token = {};
+    await this.detectTask.run([client, token]);
+    const outcome = this.detectTask.value;
+    return outcome?.token === token && "value" in outcome ? outcome.value : null;
   }
 
   private canVerify(client: GatewayBrowserClient | null): client is GatewayBrowserClient {
@@ -336,10 +413,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
   }
 
   private resetVerify(): void {
-    this.verifyEpoch += 1;
-    this.verifyAbort?.abort();
-    this.verifyAbort = null;
     this.verifyState = { phase: "idle" };
+    void this.verifyTask.run([null]);
   }
 
   private async verifyConnection(): Promise<void> {
@@ -347,30 +422,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canVerify(client) || this.actionsDisabled()) {
       return;
     }
-    const epoch = ++this.verifyEpoch;
-    this.verifyAbort?.abort();
-    const abortController = new AbortController();
-    this.verifyAbort = abortController;
     this.verifyState = { phase: "checking" };
-    try {
-      const result = await verifyModelSetup(client, abortController.signal);
-      if (epoch !== this.verifyEpoch || this.context.gateway.snapshot.client !== client) {
-        return;
-      }
-      this.verifyState = mapVerifyResult(result);
-    } catch (error) {
-      if (
-        epoch === this.verifyEpoch &&
-        this.context.gateway.snapshot.client === client &&
-        !abortController.signal.aborted
-      ) {
-        this.verifyState = { phase: "failed", status: "unknown", error: errorMessage(error) };
-      }
-    } finally {
-      if (this.verifyAbort === abortController) {
-        this.verifyAbort = null;
-      }
-    }
+    await this.verifyTask.run([client]);
   }
 
   private async activate(
@@ -382,47 +435,9 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     if (!this.canUseSetup(client) || this.actionsDisabled()) {
       return;
     }
-    const epoch = ++this.activationEpoch;
-    this.activationAbort?.abort();
-    const abortController = new AbortController();
-    this.activationAbort = abortController;
     this.manualError = null;
     this.activationState = { phase: "testing", targetId, modelRef };
-    try {
-      const result = await client.request<SystemAgentSetupActivateResult>(
-        "openclaw.setup.activate",
-        params,
-        { timeoutMs: activationTimeoutForKind(params.kind), signal: abortController.signal },
-      );
-      if (epoch !== this.activationEpoch || this.context.gateway.snapshot.client !== client) {
-        return;
-      }
-      this.activationState = mapActivationResult({
-        result,
-        targetId,
-        fallbackError: t("modelSetup.errors.activationFailed"),
-      });
-      if (this.activationState.phase === "success") {
-        this.manualApiKey = "";
-      }
-    } catch (error) {
-      if (
-        epoch === this.activationEpoch &&
-        this.context.gateway.snapshot.client === client &&
-        !abortController.signal.aborted
-      ) {
-        this.activationState = {
-          phase: "failure",
-          targetId,
-          status: "unknown",
-          error: errorMessage(error),
-        };
-      }
-    } finally {
-      if (this.activationAbort === abortController) {
-        this.activationAbort = null;
-      }
-    }
+    await this.activationTask.run([client, params]);
   }
 
   private activateCandidate(candidate: Candidate): void {
@@ -446,20 +461,22 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     );
   }
 
-  private async handleWizardDone(): Promise<void> {
+  private async handleWizardDone(startMethod: ModelSetupWizardStartMethod): Promise<void> {
     const result = await this.detect();
     if (!result) {
       this.wizard.fail(t("modelSetup.errors.requestFailed"));
       return;
     }
-    if (!result.setupComplete) {
+    if (startMethod === "openclaw.setup.auth.start" && !result.setupComplete) {
       this.wizard.fail(t("modelSetup.wizard.notComplete"));
       return;
     }
-    this.activationState = {
-      phase: "success",
-      modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
-    };
+    if (startMethod === "openclaw.setup.auth.start") {
+      this.activationState = {
+        phase: "success",
+        modelRef: result.configuredModel ?? t("modelSetup.success.configuredModel"),
+      };
+    }
     this.wizard.close();
   }
 
@@ -477,7 +494,8 @@ export class ModelSetupPage extends OpenClawLightDomElement {
     const snapshot = this.context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
-      snapshot.connected && isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
+      snapshot.phase === "connected" &&
+      isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     const canVerify =
       canAdmin &&
       !gatewayTooOld &&
@@ -487,9 +505,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       activation: this.activationState,
       verify: this.verifyState,
       wizard: this.wizardState,
+      wizardMode: this.wizardMode,
       wizardValue: this.wizardValue,
       canAdmin,
       canVerify,
+      canPrepare:
+        canAdmin &&
+        !gatewayTooOld &&
+        isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
       gatewayTooOld,
       actionsDisabled: this.actionsDisabled(),
       manualProviderId: this.manualProviderId,
@@ -500,7 +523,14 @@ export class ModelSetupPage extends OpenClawLightDomElement {
       onDetect: () => void this.detect(),
       onVerify: () => void this.verifyConnection(),
       onActivateCandidate: (candidate) => this.activateCandidate(candidate),
-      onStartAuth: (option: AuthOption) => void this.wizard.start(option.id),
+      onStartAuth: (option: AuthOption) => {
+        this.wizardMode = "auth";
+        void this.wizard.start(option.id);
+      },
+      onStartPrepare: (option: ModelSetupPrepareOption) => {
+        this.wizardMode = "prepare";
+        void this.wizard.start(option.id, "openclaw.setup.prepare.start");
+      },
       onManualProviderChange: (providerId) => {
         this.manualProviderId = providerId;
         this.manualError = null;

@@ -61,6 +61,8 @@ export type CommonChannelMessagingConfig<
   /** Delivery streaming config: chunk mode plus block streaming controls. */
   streaming?: TStreaming;
   /** Heartbeat visibility settings for this channel. */
+  heartbeatVisibility?: ChannelHeartbeatVisibilityConfig;
+  /** @deprecated Doctor-only legacy input. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
   healthMonitor?: ChannelHealthMonitorConfig;

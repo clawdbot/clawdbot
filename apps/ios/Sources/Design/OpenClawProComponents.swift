@@ -5,7 +5,6 @@ enum OpenClawProMetric {
     static let pagePadding: CGFloat = 16
     static let cardRadius: CGFloat = 16
     static let controlRadius: CGFloat = 12
-    static let drawerRadius: CGFloat = 28
     static let compactControlSize: CGFloat = 36
     static let bottomScrollInset: CGFloat = 96
 }
@@ -277,7 +276,7 @@ struct OpenClawSidebarHeaderAction {
     }
 }
 
-struct OpenClawSidebarRevealButton: View {
+struct OpenClawSidebarControlButton: View {
     let headerAction: OpenClawSidebarHeaderAction
 
     init(action: OpenClawSidebarHeaderAction) {
@@ -285,31 +284,38 @@ struct OpenClawSidebarRevealButton: View {
     }
 
     var body: some View {
-        let button = Button(action: headerAction.action) {
-            Image(systemName: self.headerAction.systemName)
-                .font(OpenClawType.subheadSemiBold)
-                .frame(
-                    width: OpenClawProMetric.compactControlSize,
-                    height: OpenClawProMetric.compactControlSize)
-                .contentShape(Rectangle())
+        if #available(iOS 26.0, *) {
+            self.identified(self.button.buttonStyle(.plain))
+        } else {
+            self.identified(self.button.openClawGlassButton(tint: OpenClawBrand.accent))
+        }
+    }
+
+    private var button: some View {
+        Button(action: self.headerAction.action) {
+            self.icon
         }
         .buttonBorderShape(.circle)
+        .frame(width: 44, height: 44)
+        .contentShape(Rectangle())
         .accessibilityLabel(self.headerAction.accessibilityLabel.text)
+    }
 
+    @ViewBuilder
+    private var icon: some View {
+        let icon = Image(systemName: self.headerAction.systemName)
+            .font(OpenClawType.subheadSemiBold)
+            .frame(
+                width: OpenClawProMetric.compactControlSize,
+                height: OpenClawProMetric.compactControlSize)
         if #available(iOS 26.0, *) {
-            self.identified(
-                button
-                    .buttonStyle(.plain)
-                    .foregroundStyle(OpenClawBrand.accent)
-                    .frame(width: 44, height: 44)
-                    .glassEffect(
-                        .regular.interactive(),
-                        in: Circle()))
+            icon
+                .foregroundStyle(OpenClawBrand.accent)
+                .glassEffect(
+                    .regular.interactive(),
+                    in: Circle())
         } else {
-            self.identified(
-                button
-                    .frame(width: 44, height: 44)
-                    .openClawGlassButton(tint: OpenClawBrand.accent))
+            icon
         }
     }
 
@@ -327,8 +333,7 @@ struct OpenClawSidebarHeaderLeadingSlot: View {
     let action: OpenClawSidebarHeaderAction
 
     var body: some View {
-        OpenClawSidebarRevealButton(action: self.action)
-            .frame(width: 44, height: 44, alignment: .center)
+        OpenClawSidebarControlButton(action: self.action)
     }
 }
 
@@ -340,14 +345,14 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
     var body: some ToolbarContent {
         if #available(iOS 26.0, *) {
             ToolbarItem(placement: self.placement) {
-                OpenClawSidebarRevealButton(action: self.action)
+                OpenClawSidebarControlButton(action: self.action)
             }
             // The button owns an explicit circular glass shape; suppress the
             // toolbar's shared pill so it cannot stretch the leading control.
             .sharedBackgroundVisibility(.hidden)
         } else {
             ToolbarItem(placement: self.placement) {
-                OpenClawSidebarRevealButton(action: self.action)
+                OpenClawSidebarControlButton(action: self.action)
             }
         }
     }

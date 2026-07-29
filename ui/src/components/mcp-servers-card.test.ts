@@ -26,8 +26,7 @@ function createGateway(options: { connected?: boolean; admin?: boolean } = {}): 
   const admin = options.admin ?? true;
   const snapshot = {
     client: null,
-    connected,
-    reconnecting: !connected,
+    phase: connected ? "connected" : "reconnecting",
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
@@ -305,6 +304,26 @@ describe("openclaw-mcp-servers-card", () => {
       label: "unterminated stdio quote",
       transport: "stdio" as const,
       target: 'npx some-mcp-server "unfinished',
+    },
+    {
+      label: "HTTP URL without a host",
+      transport: "streamable-http" as const,
+      target: "http://",
+    },
+    {
+      label: "HTTP URL with whitespace in the host",
+      transport: "streamable-http" as const,
+      target: "https://exa mple.com/mcp",
+    },
+    {
+      label: "SSE URL with malformed IPv6",
+      transport: "sse" as const,
+      target: "https://[::1/mcp",
+    },
+    {
+      label: "HTTP URL with a nonnumeric port",
+      transport: "streamable-http" as const,
+      target: "https://example.com:bad",
     },
   ])("rejects a mismatched or malformed $label", async ({ transport, target }) => {
     const { card, harness } = await mountCard();

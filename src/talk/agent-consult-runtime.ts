@@ -4,6 +4,7 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
+import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,6 +15,7 @@ import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admissi
 import {
   deliveryContextFromSession,
   normalizeDeliveryContext,
+  normalizeSessionDeliveryState,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import {
@@ -109,11 +111,7 @@ function resolveDeliverySessionFields(context?: DeliveryContext): Partial<Sessio
     return {};
   }
   return {
-    deliveryContext: normalized,
-    lastChannel: normalized.channel,
-    lastTo: normalized.to,
-    lastAccountId: normalized.accountId,
-    lastThreadId: normalized.threadId,
+    delivery: normalizeSessionDeliveryState({ context: normalized }),
   };
 }
 
@@ -165,6 +163,10 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   const now = Date.now();
   const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
   const requesterSessionKey = params.spawnedBy?.trim();
+  const creationStamp = buildSessionCreationStamp({
+    via: "talk",
+    ...(requesterSessionKey ? { actor: { type: "agent" as const, id: requesterSessionKey } } : {}),
+  });
   const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
   const shouldFork =
     params.contextMode === "fork" &&
@@ -181,6 +183,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       config: params.cfg,
       sessionKey: params.sessionKey,
       fallbackEntry: {
+        ...creationStamp,
         sessionId: "",
         updatedAt: now,
       },
@@ -206,6 +209,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     storePath: params.storePath,
     sessionKey: params.sessionKey,
     fallbackEntry: {
+      ...creationStamp,
       sessionId: "",
       updatedAt: now,
     },
@@ -258,7 +262,9 @@ export async function consultRealtimeVoiceAgent(params: {
   toolsAllow?: string[];
   extraSystemPrompt?: string;
   fallbackText?: string;
+  abortSignal?: AbortSignal;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  params.abortSignal?.throwIfAborted();
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
@@ -306,6 +312,12 @@ export async function consultRealtimeVoiceAgent(params: {
       assertRealtimeVoiceAgentConsultModelSelectionUnlocked(modelLockParams);
     },
   });
+  const abortFromCaller = () => lifecycleAbortController.abort(params.abortSignal?.reason);
+  if (params.abortSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    params.abortSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
 
   try {
     return await sessionWorkAdmission.run(async () => {
@@ -398,6 +410,7 @@ export async function consultRealtimeVoiceAgent(params: {
       return { text };
     });
   } finally {
+    params.abortSignal?.removeEventListener("abort", abortFromCaller);
     sessionWorkAdmission.release();
   }
 }

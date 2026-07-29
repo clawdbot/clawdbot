@@ -34,6 +34,7 @@ import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { buildToolSchemaDirectoryPrompt } from "../../tool-search.js";
+import { prepareWatchedSessionsPrompt } from "../../watched-sessions-prompt.js";
 import { buildEmbeddedMessageActionDiscoveryInput } from "../message-action-discovery-input.js";
 import { buildEmbeddedSandboxInfo, resolveEmbeddedSandboxInfoExecPolicy } from "../sandbox-info.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
@@ -54,7 +55,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   bootstrap: PreparedBootstrap;
   capabilityToolNames: Set<string>;
   defaultAgentId: string;
-  deferredDirectoryToolsCallable: boolean;
   effectiveCwd: string;
   effectiveTools: PromptTools;
   effectiveWorkspace: string;
@@ -66,9 +66,23 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   sandboxSessionKey: string;
   sessionAgentId: string;
   skillsPrompt: string;
+  codeModeActive?: boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  toolSearchDirectoryEnabled: boolean;
+  toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
 }) {
   const { attempt } = params;
+  if (attempt.operation === "settled-tool-finalization") {
+    // Finalization resumes the settled transcript with only the host prompt.
+    // Do not invoke provider/plugin contributors or assemble ambient context.
+    params.markStage("system-prompt");
+    return {
+      runtimeChannel: undefined,
+      runtimeInfo: { model: `${attempt.provider}/${attempt.modelId}` },
+      systemPromptReport: undefined,
+      systemPromptText: "",
+    };
+  }
   const machineName = await getMachineDisplayName();
   const runtimeChannel = normalizeMessageChannel(attempt.messageChannel ?? attempt.messageProvider);
   const runtimeCapabilities = collectRuntimeChannelCapabilities({
@@ -129,10 +143,10 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         accountId: attempt.agentAccountId,
       })
     : undefined;
-  const toolSchemaDirectoryPrompt = params.deferredDirectoryToolsCallable
+  const toolSchemaDirectoryPrompt = params.toolSearchDirectoryEnabled
     ? buildToolSchemaDirectoryPrompt({
         config: attempt.config,
-        runtimeConfig: attempt.config,
+        runtimeConfig: params.toolSearchRuntimeConfig,
         agentId: params.sessionAgentId,
         sessionKey: params.sandboxSessionKey,
         sessionId: attempt.sessionId,
@@ -156,6 +170,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentId: params.sessionAgentId,
     workspaceDir: params.effectiveWorkspace,
     cwd: params.effectiveCwd,
+    ...(attempt.preparedModelRuntime && Object.hasOwn(attempt.preparedModelRuntime, "repoRoot")
+      ? { preparedRepoRoot: attempt.preparedModelRuntime.repoRoot }
+      : {}),
     runtime: {
       sessionKey: attempt.sessionKey,
       sessionId: attempt.sessionId,
@@ -232,6 +249,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     agentSessionKey: runtimeInfo.sessionKey,
     sandboxed: sandboxInfo?.enabled === true,
   });
+  const preparedWatchedSessions = prepareWatchedSessionsPrompt({
+    enabled: effectivePromptMode === "full",
+    config: attempt.config,
+    sessionKey: attempt.sessionKey,
+    sandboxed: sandboxInfo?.enabled === true,
+    toolNames: params.effectiveTools.map((tool) => tool.name),
+    capabilityToolNames: params.capabilityToolNames,
+  });
 
   const attemptSystemPrompt = buildAttemptSystemPrompt({
     isRawModelRun: params.isRawModelRun,
@@ -251,6 +276,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reasoningTagHint,
       heartbeatPrompt,
       skillsPrompt: effectiveSkillsPrompt,
+      codeModeActive: params.codeModeActive,
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       workspaceNotes: params.bootstrap.workspaceNotes.length
@@ -285,6 +311,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       ),
       includeMemorySection,
       preparedMemoryPrompt,
+      preparedWatchedSessions,
       promptContribution,
     },
     providerTransform: {

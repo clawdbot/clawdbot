@@ -6,7 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { runWithImageModelFallback } from "../../agents/model-fallback.js";
+import { runWithImageModelFallback } from "../../agents/model-fallback-image.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import {
@@ -64,6 +64,7 @@ async function runImageGenerate(params: {
   output?: string;
   timeoutMs?: number;
 }) {
+  requireProviderModelOverride(params.model);
   const cfg = await resolveLocalCapabilityRuntimeConfig({
     commandName: `infer ${params.capability}`,
     targetIds: getModelsCommandSecretTargetIds(),
@@ -199,7 +200,7 @@ async function runImageDescribe(params: {
       if (!result.result.text) {
         if (isMissingMediaUnderstandingProvider(result.result)) {
           throw new Error(
-            "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
+            "No image understanding provider is configured or ready. Configure an image-capable tools.media.models entry or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
           );
         }
         throw new Error(`No description returned for image: ${resolvedPath}`);
@@ -411,7 +412,7 @@ export function registerImageCapabilityCommands(capability: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const cfg = getRuntimeConfig();
         const selectedProvider = resolveSelectedProviderFromModelRef(
-          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.imageGenerationModel),
+          resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.image),
         );
         const result = listRuntimeImageGenerationProviders({ config: cfg }).map((provider) => ({
           available: true,

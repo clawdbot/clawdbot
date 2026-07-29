@@ -65,15 +65,15 @@ export function scanPolicyGatewayExposure(
     entries,
     "gateway-control-ui-insecure-auth",
     "controlUi",
-    controlUi.allowInsecureAuth,
-    "oc://openclaw.config/gateway/controlUi/allowInsecureAuth",
+    false,
+    "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
   );
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-device-auth-disabled",
     "controlUi",
-    controlUi.dangerouslyDisableDeviceAuth,
-    "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
+    false,
+    "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
   );
   pushGatewayBooleanEvidence(
     entries,
@@ -201,15 +201,17 @@ function pushGatewayNodeCommandEvidence(
   entries: PolicyGatewayExposureEvidence[],
   nodes: Record<string, unknown>,
 ): void {
+  const commands = isRecord(nodes.commands) ? nodes.commands : null;
+  const denyCommands = commands?.deny;
   const deniedCommands = new Set(
-    Array.isArray(nodes.denyCommands)
-      ? nodes.denyCommands
+    Array.isArray(denyCommands)
+      ? denyCommands
           .filter((command): command is string => typeof command === "string")
           .map((command) => command.trim())
       : [],
   );
-  if (Array.isArray(nodes.denyCommands)) {
-    nodes.denyCommands.forEach((command, index) => {
+  if (Array.isArray(denyCommands)) {
+    denyCommands.forEach((command, index) => {
       if (typeof command !== "string") {
         return;
       }
@@ -220,16 +222,17 @@ function pushGatewayNodeCommandEvidence(
       entries.push({
         id: `gateway-node-deny-command-${normalized}`,
         kind: "nodeDenyCommand",
-        source: `oc://openclaw.config/gateway/nodes/denyCommands/#${index}`,
+        source: `oc://openclaw.config/gateway/nodes/commands/deny/#${index}`,
         value: normalized,
         command: normalized,
       });
     });
   }
-  if (!Array.isArray(nodes.allowCommands)) {
+  const allowCommands = commands?.allow;
+  if (!Array.isArray(allowCommands)) {
     return;
   }
-  nodes.allowCommands.forEach((command, index) => {
+  allowCommands.forEach((command, index) => {
     if (typeof command !== "string") {
       return;
     }
@@ -240,7 +243,7 @@ function pushGatewayNodeCommandEvidence(
     entries.push({
       id: `gateway-node-command-${normalized}`,
       kind: "nodeCommand",
-      source: `oc://openclaw.config/gateway/nodes/allowCommands/#${index}`,
+      source: `oc://openclaw.config/gateway/nodes/commands/allow/#${index}`,
       value: normalized,
       command: normalized,
     });

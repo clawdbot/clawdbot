@@ -49,6 +49,43 @@ describe("Microsoft Teams meeting runtime probes", () => {
     expect(Date.now()).toBe(200);
   });
 
+  it("requires fresh non-silent loopback capture as well as output bytes", async () => {
+    for (const [outputLoopbackSignalBytes, expected] of [
+      [0, false],
+      [4, true],
+    ] as const) {
+      const session = {
+        agentId: "main",
+        chrome: {
+          health: {
+            inCall: true,
+            lastOutputBytes: 4,
+            outputGeneration: 1,
+            outputLoopbackSignalBytes,
+            verifiedOutputGeneration: expected ? 1 : undefined,
+          },
+        },
+        id: `teams-speech-${outputLoopbackSignalBytes}`,
+        mode: "agent",
+        transport: "chrome",
+      } as TeamsMeetingsSession;
+      const context = {
+        config: resolveTeamsMeetingsConfig({}),
+        hasHealthHandle: () => false,
+        isReusable: () => false,
+        join: vi.fn(async () => ({ session, spoken: true })),
+        list: () => [],
+        refreshCaptionHealth: async () => {},
+        refreshHealth: () => {},
+        resolveAgentId: () => "main",
+      } satisfies TeamsMeetingsProbeContext;
+
+      const result = await testTeamsMeetingSpeech(context, { mode: "agent", url: URL });
+
+      expect(result.speechOutputVerified).toBe(expected);
+    }
+  });
+
   it("bounds a blocked caption refresh by the per-request listening timeout", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -102,7 +139,7 @@ describe("Microsoft Teams meeting runtime probes", () => {
         session.chrome!.health = {
           ...session.chrome!.health,
           lastCaptionText: "Caption already waiting",
-          manualActionRequired: true,
+          manualAction: { reason: "teams-admission-required", message: "Waiting" },
           transcriptLines: 1,
         };
       },
@@ -125,7 +162,10 @@ describe("Microsoft Teams meeting runtime probes", () => {
     });
 
     expect(result.listenVerified).toBe(true);
-    expect(result.manualActionRequired).toBe(true);
+    expect(result.manualAction).toEqual({
+      reason: "teams-admission-required",
+      message: "Waiting",
+    });
     expect(refreshCaptionHealth).toHaveBeenCalledTimes(1);
     expect(Date.now()).toBe(0);
     expect(vi.getTimerCount()).toBe(0);

@@ -1,5 +1,8 @@
 // Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
+import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
+import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
+import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
@@ -147,10 +150,8 @@ function applySystemAgentModelSelectionWithModules(
   const nextConfig = structuredClone(params.config);
   const targetAgentId = params.targetAgentId ? normalizeAgentId(params.targetAgentId) : undefined;
   const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
-  if (
-    targetAgentId &&
-    !nextConfig.agents?.list?.some((entry) => normalizeAgentId(entry.id) === targetAgentId)
-  ) {
+  const roster = agentScope.listAgentEntries(nextConfig);
+  if (targetAgentId && !roster.some((entry) => normalizeAgentId(entry.id) === targetAgentId)) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);
   }
   // A targeted selection always lands on the agent entry; the default-route
@@ -160,19 +161,27 @@ function applySystemAgentModelSelectionWithModules(
   );
   nextConfig.agents ??= {};
   nextConfig.agents.defaults ??= {};
+  const agentDefaults = nextConfig.agents.defaults;
   const target = modelConfig.resolveModelTarget({ raw: params.model, cfg: nextConfig });
   const key = modelConfig.upsertCanonicalModelConfigEntry({}, target);
 
-  const configuredVisibleModels = nextConfig.agents.defaults.models;
+  const configuredVisibleModels = agentDefaults.models;
   if (configuredVisibleModels && Object.keys(configuredVisibleModels).length > 0) {
     // An authored global visibility map is restrictive. Extend it for the
     // approved selection; never create one merely to carry runtime metadata.
     const defaultModels = { ...configuredVisibleModels };
     modelConfig.upsertCanonicalModelConfigEntry(defaultModels, target);
-    nextConfig.agents.defaults.models = defaultModels;
+    agentDefaults.models = defaultModels;
   }
 
-  let agent = nextConfig.agents.list?.find((entry) => normalizeAgentId(entry.id) === agentId);
+  const agentEntries = toAgentEntriesRecord(roster);
+  if (writesAgent || params.agentRuntimeId) {
+    const { list: _legacyList, ...agentConfig } = nextConfig.agents;
+    nextConfig.agents = { ...agentConfig, entries: agentEntries };
+  }
+  const agentEntryKey =
+    roster.find((entry) => normalizeAgentId(entry.id) === agentId)?.id ?? agentId;
+  let agent = agentEntries[agentEntryKey];
   if (writesAgent) {
     if (!agent) {
       throw new Error(`Could not resolve configured default agent "${agentId}".`);
@@ -184,8 +193,8 @@ function applySystemAgentModelSelectionWithModules(
 
   if (params.agentRuntimeId) {
     if (!agent) {
-      agent = { id: agentId, default: true };
-      nextConfig.agents.list = [...(nextConfig.agents.list ?? []), agent];
+      agent = { default: true };
+      agentEntries[agentEntryKey] = agent;
     }
     const agentModels = { ...agent.models };
     const agentKey = modelConfig.upsertCanonicalModelConfigEntry(agentModels, target);
@@ -205,9 +214,9 @@ function applySystemAgentModelSelectionWithModules(
       nextModels[modelKey] = entry;
       return nextModels;
     };
-    const defaultModels = nextConfig.agents.defaults.models;
+    const defaultModels = agentDefaults.models;
     if (defaultModels && Object.keys(defaultModels).length > 0) {
-      nextConfig.agents.defaults.models = clearRuntimePin(defaultModels);
+      agentDefaults.models = clearRuntimePin(defaultModels);
     }
     if (agent?.models && Object.keys(agent.models).length > 0) {
       agent.models = clearRuntimePin(agent.models);
@@ -370,10 +379,18 @@ export async function applySystemAgentSetup(
 
   const prompter = createQuickstartNotePrompter(runtime);
   const { configureGatewayForSetup } = await import("../wizard/setup.gateway-config.js");
-  const buildSetupCandidate = async (currentBaseConfig: OpenClawConfig) => {
-    const workspaceConflict = resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
-    const currentHasRoster =
-      Array.isArray(currentBaseConfig.agents?.list) && currentBaseConfig.agents.list.length > 0;
+  const buildSetupCandidate = async (
+    currentBaseConfig: OpenClawConfig,
+    hasAuthoredRosterEntries: boolean,
+  ) => {
+    const roster = listAgentEntries(currentBaseConfig);
+    // Load-time injection and migration may decorate the synthesized main entry.
+    // Authored roster provenance, never the resulting entry shape, establishes a fleet.
+    const isBootstrapRoster = !hasAuthoredRosterEntries;
+    const workspaceConflict = isBootstrapRoster
+      ? undefined
+      : resolveOnboardingWorkspaceConflict(currentBaseConfig, workspace);
+    const currentHasRoster = hasAuthoredRosterEntries && roster.length > 0;
     const allowWorkspaceWrite =
       params.allowWorkspaceChange || (!workspaceConflict && !currentHasRoster);
     let setupBaseConfig = currentBaseConfig;
@@ -388,9 +405,13 @@ export async function applySystemAgentSetup(
       setupBaseConfig = applyMergePatch(setupBaseConfig, configPatch) as OpenClawConfig;
     }
     if (currentHasRoster) {
+      const { list: _legacyList, ...agents } = setupBaseConfig.agents ?? {};
       setupBaseConfig = {
         ...setupBaseConfig,
-        agents: { ...setupBaseConfig.agents, list: currentBaseConfig.agents?.list },
+        agents: {
+          ...agents,
+          entries: toAgentEntriesRecord(roster),
+        },
       };
     }
     const preserveWorkspace =
@@ -409,10 +430,6 @@ export async function applySystemAgentSetup(
       };
     }
 
-    const effectiveWorkspace =
-      workspaceConflict && !params.allowWorkspaceChange
-        ? workspaceConflict.currentWorkspaceDir
-        : workspace;
     let candidate = applyLocalSetupWorkspaceConfig(setupBaseConfig, workspace, {
       allowWorkspaceChange: allowWorkspaceWrite,
       preserveWorkspace,
@@ -441,7 +458,6 @@ export async function applySystemAgentSetup(
         mode: "local",
       }),
       settings: gateway.settings,
-      workspace: effectiveWorkspace,
     };
   };
   const committed = await commit(
@@ -462,7 +478,10 @@ export async function applySystemAgentSetup(
           // Rebuild config and Gateway settings from the same locked snapshot.
           // A retry can preserve unrelated concurrent edits without carrying
           // stale settings from the losing attempt into service setup or probes.
-          const setupCandidate = await buildSetupCandidate(currentConfig);
+          const setupCandidate = await buildSetupCandidate(
+            currentConfig,
+            hasResolvedRosterBeforeMigrations(context.snapshot),
+          );
           const finalizedConfig = finalizeConfig
             ? finalizeConfig(setupCandidate.nextConfig, currentSnapshot.sourceConfig)
             : setupCandidate.nextConfig;
@@ -486,7 +505,6 @@ export async function applySystemAgentSetup(
             nextConfig: finalizedConfig,
             result: {
               settings: setupCandidate.settings,
-              workspace: setupCandidate.workspace,
             },
           };
         },
@@ -498,7 +516,8 @@ export async function applySystemAgentSetup(
   if (!settings) {
     throw new Error("OpenClaw setup committed without resolved Gateway settings.");
   }
-  const effectiveWorkspace = setupResult.workspace;
+  const onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  const effectiveWorkspace = onboardingTarget.workspaceDir;
   if (params.expectedInferenceRoute) {
     const afterRead = await readConfigFileSnapshotWithPluginMetadata();
     const afterSnapshot = afterRead.snapshot;
@@ -552,9 +571,12 @@ export async function applySystemAgentSetup(
     }
   };
 
+  const { resolveDefaultAgentId } = await import("../agents/agent-scope.js");
+  const effectiveAgentId = resolveDefaultAgentId(nextConfig);
   const workspaceResult = await runCommittedFollowUp(
     async () =>
       await onboardHelpers.ensureWorkspaceAndSessions(effectiveWorkspace, runtime, {
+        agentId: effectiveAgentId,
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       }),
@@ -593,7 +615,7 @@ export async function applySystemAgentSetup(
         await refreshPluginRegistryAfterConfigMutation({
           config: nextConfig,
           reason: "source-changed",
-          workspaceDir: effectiveWorkspace,
+          workspaceDir: onboardingTarget.workspaceDir,
           traceCommand: "openclaw-setup",
           logger: {
             warn: (message) => lines.push(message),

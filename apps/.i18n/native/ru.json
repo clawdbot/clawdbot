@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.8a2fec00ed1d71b5",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "Я могу проверить статус Gateway, восстановить конфигурацию, изменить модели или подключить каналы."
+    },
+    {
+      "id": "native.android.53ec61863e575d82",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "Я буду хранить этот разговор отдельно от обычного чата с агентом."
+    },
+    {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
       "translated": "Переводы OpenClaw · $languageTag"
@@ -77,6 +87,21 @@
       "id": "native.android.2cd9aa29e06cf1cc",
       "source": "Command",
       "translated": "Команда"
+    },
+    {
+      "id": "native.android.83c33792ce758e6b",
+      "source": "Timeout ${it}s",
+      "translated": "Тайм-аут: ${it} с"
+    },
+    {
+      "id": "native.android.bb754576303ae39a",
+      "source": "$it tools",
+      "translated": "$it инструментов"
+    },
+    {
+      "id": "native.android.43528ba5a11e44fd",
+      "source": "Script",
+      "translated": "Скрипт"
     },
     {
       "id": "native.android.09e08fc62e2902fc",
@@ -1209,6 +1234,26 @@
       "translated": "OpenClaw: активные"
     },
     {
+      "id": "native.android.2aa3ad1a12683954",
+      "source": "Skip for now",
+      "translated": "Пропустить пока"
+    },
+    {
+      "id": "native.android.9fa262fa4e057a3b",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.android.e1a8681198e91766",
+      "source": "OpenClaw request failed.",
+      "translated": "Запрос OpenClaw не удался."
+    },
+    {
+      "id": "native.android.a71a93ec69cee4d9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Подключение к Gateway изменилось. Перезапустите OpenClaw для повторного подключения."
+    },
+    {
       "id": "native.android.356609f717b92350",
       "source": "$preview…",
       "translated": "$preview…"
@@ -1564,6 +1609,11 @@
       "translated": "${days} дн."
     },
     {
+      "id": "native.android.936714892af1b0f9",
+      "source": ":${uri.port}",
+      "translated": ":${uri.port}"
+    },
+    {
       "id": "native.android.c4a902430c22030c",
       "source": "Delete",
       "translated": "Удалить"
@@ -1839,6 +1889,16 @@
       "translated": "Gateway может изменить этот путь, но не может удалить существующий путь."
     },
     {
+      "id": "native.android.d9c4873f21d6d410",
+      "source": "Script",
+      "translated": "Скрипт"
+    },
+    {
+      "id": "native.android.79ac1e41ef639f65",
+      "source": "Script payloads are preserved unchanged. Use the CLI to edit this script.",
+      "translated": "Содержимое скрипта сохраняется без изменений. Используйте CLI для редактирования этого скрипта."
+    },
+    {
       "id": "native.android.b0de849068a82211",
       "source": "Recent Runs",
       "translated": "Недавние запуски"
@@ -1897,6 +1957,11 @@
       "id": "native.android.09bb59bcf0c7e009",
       "source": "Command",
       "translated": "Команда"
+    },
+    {
+      "id": "native.android.2e2395bd65d3a411",
+      "source": "Script · read-only",
+      "translated": "Скрипт · только для чтения"
     },
     {
       "id": "native.android.54465889774765e9",
@@ -3677,6 +3742,26 @@
       "id": "native.android.4832c0d0e9774283",
       "source": "${tokens / 1_000}k",
       "translated": "${tokens / 1_000}k"
+    },
+    {
+      "id": "native.android.ae8ffaf0304344ff",
+      "source": "Back",
+      "translated": "Назад"
+    },
+    {
+      "id": "native.android.09fa98489fd0881b",
+      "source": "Dashboard",
+      "translated": "Панель управления"
+    },
+    {
+      "id": "native.android.285be3399daf82ee",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "Для панели управления требуется подключение к Gateway"
+    },
+    {
+      "id": "native.android.a1881da010cb4b9f",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "Подключитесь к своему Gateway, чтобы открыть панель управления этого сеанса."
     },
     {
       "id": "native.android.a5845742daecb4ba",
@@ -5504,6 +5589,11 @@
       "translated": "Команда"
     },
     {
+      "id": "native.android.8aed9c94ef7f917f",
+      "source": "Script",
+      "translated": "Скрипт"
+    },
+    {
       "id": "native.android.f36439e78187c554",
       "source": "Payload Text",
       "translated": "Текст полезной нагрузки"
@@ -5572,6 +5662,11 @@
       "id": "native.android.bafe2765892cc6fa",
       "source": "Home",
       "translated": "Главная"
+    },
+    {
+      "id": "native.android.d5b302e1a7695a7a",
+      "source": "Dashboard",
+      "translated": "Панель управления"
     },
     {
       "id": "native.android.30d8b822fa68d6c4",
@@ -5814,11 +5909,6 @@
       "translated": "Мониторинг · $cronJobCount запланированных задач"
     },
     {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.b5ee8fce135f41e6",
       "source": "Connect before chat, voice, and live status.",
       "translated": "Подключитесь, чтобы использовать чат, голосовую связь и статус в реальном времени."
@@ -5882,6 +5972,16 @@
       "id": "native.android.7b1f86aeacad732c",
       "source": "Load from gateway",
       "translated": "Загрузить из Gateway"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.4878165188c0310c",
+      "source": "Setup, status, and repair",
+      "translated": "Настройка, статус и восстановление"
     },
     {
       "id": "native.android.c6997ee4400492f6",
@@ -6839,6 +6939,106 @@
       "translated": "Навык"
     },
     {
+      "id": "native.android.9ee4764599e5979c",
+      "source": "Back",
+      "translated": "Назад"
+    },
+    {
+      "id": "native.android.4b2c29c94377f235",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7a7da7d8f8613d33",
+      "source": "Gateway Required",
+      "translated": "Требуется Gateway"
+    },
+    {
+      "id": "native.android.aebc338b09b0a24d",
+      "source": "Full Access Required",
+      "translated": "Требуется полный доступ"
+    },
+    {
+      "id": "native.android.69e0b2ce76a5ff7a",
+      "source": "Checking Gateway",
+      "translated": "Проверка Gateway"
+    },
+    {
+      "id": "native.android.93c293872c6deb49",
+      "source": "Gateway Update Required",
+      "translated": "Требуется обновление Gateway"
+    },
+    {
+      "id": "native.android.06e5bfbad4b42e3b",
+      "source": "Connect this phone to a Gateway before opening OpenClaw.",
+      "translated": "Подключите этот телефон к Gateway перед открытием OpenClaw."
+    },
+    {
+      "id": "native.android.44cca3625b125c19",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "Подключитесь повторно с доступом operator.admin, чтобы просмотреть и изменить настройки Gateway."
+    },
+    {
+      "id": "native.android.6089cc78ebd95573",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "Проверка того, поддерживает ли этот Gateway ассистент настроек OpenClaw."
+    },
+    {
+      "id": "native.android.3c3a35369bc2f1f9",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "Обновите этот Gateway, чтобы использовать ассистент настроек OpenClaw."
+    },
+    {
+      "id": "native.android.41b7b9cd883e3e81",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw работает…"
+    },
+    {
+      "id": "native.android.072481856dd25c89",
+      "source": "Restart",
+      "translated": "Перезапустить"
+    },
+    {
+      "id": "native.android.25fcaa5f2ef2546e",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw готов продолжить в вашем обычном чате."
+    },
+    {
+      "id": "native.android.88377fbc76395226",
+      "source": "Open Chat",
+      "translated": "Открыть чат"
+    },
+    {
+      "id": "native.android.7d0cd72ff8d9c80c",
+      "source": "$label · $recommendation",
+      "translated": "$label · $recommendation"
+    },
+    {
+      "id": "native.android.3ca44882cf461305",
+      "source": "Recommended",
+      "translated": "Рекомендуется"
+    },
+    {
+      "id": "native.android.56968d3bbeb687f9",
+      "source": "Skip for now",
+      "translated": "Пропустить пока"
+    },
+    {
+      "id": "native.android.6b255d7620170498",
+      "source": "Enter secret…",
+      "translated": "Введите секрет…"
+    },
+    {
+      "id": "native.android.4753194a1f8c6c6b",
+      "source": "Reply to OpenClaw…",
+      "translated": "Ответить OpenClaw…"
+    },
+    {
+      "id": "native.android.07d2609a561a43b0",
+      "source": "Send",
+      "translated": "Отправить"
+    },
+    {
       "id": "native.android.efc938b5cc23e079",
       "source": "Back",
       "translated": "Назад"
@@ -7474,6 +7674,16 @@
       "translated": "Ответить"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "Перемотать сюда"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "Ответвить отсюда"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "Выбрать текст"
@@ -7529,9 +7739,14 @@
       "translated": "Предпросмотр недоступен"
     },
     {
-      "id": "native.android.a50e44d8f380f9ad",
-      "source": "Thinking...",
-      "translated": "Думаем..."
+      "id": "native.android.66aef4de5e07438f",
+      "source": "Working",
+      "translated": "Выполняется"
+    },
+    {
+      "id": "native.android.6e7be1773c946de3",
+      "source": "· $phrase",
+      "translated": "· $phrase"
     },
     {
       "id": "native.android.ff4a092a02bd5d17",
@@ -7569,14 +7784,19 @@
       "translated": "Отправлено — подтверждение доставки…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "Ошибка"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "Ветка сессии изменилась; проверьте и повторите это сообщение."
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "Ошибка — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "Ошибка"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7739,6 +7959,11 @@
       "translated": "Обновить чат"
     },
     {
+      "id": "native.android.6966ae8bbad7347d",
+      "source": "Dashboard",
+      "translated": "Панель управления"
+    },
+    {
       "id": "native.android.b57a1b542cff8f55",
       "source": "Background tasks",
       "translated": "Фоновые задачи"
@@ -7874,6 +8099,16 @@
       "translated": "Говорит…"
     },
     {
+      "id": "native.android.bd78ce1e86e900b3",
+      "source": "Close",
+      "translated": "Закрыть"
+    },
+    {
+      "id": "native.android.b686b1bc61494ee2",
+      "source": "View all",
+      "translated": "Показать все"
+    },
+    {
       "id": "native.android.781f84dfaf7da9d6",
       "source": "Tools running",
       "translated": "Выполняются инструменты"
@@ -7887,16 +8122,6 @@
       "id": "native.android.0fd6b75cadc0ce75",
       "source": "+${toolCalls.size - 4} more",
       "translated": "+${toolCalls.size - 4} еще"
-    },
-    {
-      "id": "native.android.7e0aea1dca378135",
-      "source": "Thinking",
-      "translated": "Думаю"
-    },
-    {
-      "id": "native.android.98a0d4d5bba788c4",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "OpenClaw готовит ответ."
     },
     {
       "id": "native.android.22d747642a3887cd",
@@ -7922,6 +8147,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "Остановить"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "Переключить ветку"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "Ветка без названия"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "Текущая ветка"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "Сообщений: $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -8092,6 +8342,171 @@
       "id": "native.android.3200f8564c25a1fa",
       "source": "Max",
       "translated": "Максимальный"
+    },
+    {
+      "id": "native.android.0ad9a3b0df19e18c",
+      "source": "Swarm",
+      "translated": "Рой"
+    },
+    {
+      "id": "native.android.21915533b17bafea",
+      "source": "$running Running · $done Done · $failed Failed",
+      "translated": "$running Выполняется · $done Готово · $failed Ошибок"
+    },
+    {
+      "id": "native.android.41ba16bea6545210",
+      "source": "Unphased",
+      "translated": "Без фазы"
+    },
+    {
+      "id": "native.android.38327b46c006c14c",
+      "source": "1 more worker",
+      "translated": "Ещё 1 воркер"
+    },
+    {
+      "id": "native.android.d7afc539a21261eb",
+      "source": "$count more workers",
+      "translated": "Ещё $count воркеров"
+    },
+    {
+      "id": "native.android.c2dc3a65302976c0",
+      "source": "1 token",
+      "translated": "1 токен"
+    },
+    {
+      "id": "native.android.e7059e3a756908c4",
+      "source": "$count tokens",
+      "translated": "$count токенов"
+    },
+    {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "Готово за $duration"
+    },
+    {
+      "id": "native.android.d2797e7488fe5021",
+      "source": "${decimal(count / 1_000_000.0)}M",
+      "translated": "${decimal(count / 1_000_000.0)}M"
+    },
+    {
+      "id": "native.android.4206e3e68c56767a",
+      "source": "${thousands}k",
+      "translated": "${thousands}k"
+    },
+    {
+      "id": "native.android.5e758e9851ded127",
+      "source": "${days}d",
+      "translated": "${days}д"
+    },
+    {
+      "id": "native.android.4fe67b5100cb91b1",
+      "source": "${hours}h",
+      "translated": "${hours}ч"
+    },
+    {
+      "id": "native.android.92a53292eaf7c63e",
+      "source": "${minutes}m",
+      "translated": "${minutes}мин"
+    },
+    {
+      "id": "native.android.6d5683b5537bdbaf",
+      "source": "${seconds}s",
+      "translated": "${seconds}с"
+    },
+    {
+      "id": "native.android.e2f387a31240c8a3",
+      "source": "Shelling",
+      "translated": "Обрастаю панцирем"
+    },
+    {
+      "id": "native.android.70a6de7c24baffb7",
+      "source": "Scuttling",
+      "translated": "Семеню"
+    },
+    {
+      "id": "native.android.0ed1354a65faa07e",
+      "source": "Clawing",
+      "translated": "Орудую клешнями"
+    },
+    {
+      "id": "native.android.42d24b16fc658ed3",
+      "source": "Pinching",
+      "translated": "Щипаю"
+    },
+    {
+      "id": "native.android.69d5b3ca23a7bec3",
+      "source": "Molting",
+      "translated": "Линяю"
+    },
+    {
+      "id": "native.android.80bfb2d6720f8dc5",
+      "source": "Bubbling",
+      "translated": "Пускаю пузыри"
+    },
+    {
+      "id": "native.android.e984f80d309c2d01",
+      "source": "Tiding",
+      "translated": "Плыву по течению"
+    },
+    {
+      "id": "native.android.60bb819ee08cbbc1",
+      "source": "Reefing",
+      "translated": "Исследую риф"
+    },
+    {
+      "id": "native.android.7f465ae2654f0c25",
+      "source": "Cracking",
+      "translated": "Раскалываю"
+    },
+    {
+      "id": "native.android.cfc143346cf262c8",
+      "source": "Sifting",
+      "translated": "Просеиваю"
+    },
+    {
+      "id": "native.android.72b67956ab234898",
+      "source": "Brining",
+      "translated": "Засаливаю"
+    },
+    {
+      "id": "native.android.3ecce1d21d8ab752",
+      "source": "Nautiling",
+      "translated": "Наутилю"
+    },
+    {
+      "id": "native.android.305ed08fbb829753",
+      "source": "Krilling",
+      "translated": "Крилю"
+    },
+    {
+      "id": "native.android.c39933b1ec86d7a9",
+      "source": "Barnacling",
+      "translated": "Обрастание ракушками"
+    },
+    {
+      "id": "native.android.32a8072679db94bb",
+      "source": "Lobstering",
+      "translated": "Ловля омаров"
+    },
+    {
+      "id": "native.android.de205a44a6d159fb",
+      "source": "Tidepooling",
+      "translated": "Исследование приливных луж"
+    },
+    {
+      "id": "native.android.8d97a105339c7a20",
+      "source": "Pearling",
+      "translated": "Добыча жемчуга"
+    },
+    {
+      "id": "native.android.7bdb054d45ca1b23",
+      "source": "Snapping",
+      "translated": "Щёлканье клешнями"
+    },
+    {
+      "id": "native.android.c2210ea40e357fcd",
+      "source": "Surfacing",
+      "translated": "Всплытие"
     },
     {
       "id": "native.android.3df4e24a0fc8810b",
@@ -8319,11 +8734,6 @@
       "translated": "Распознавание речи недоступно"
     },
     {
-      "id": "native.android.47a59f8798682ea0",
-      "source": "Ready",
-      "translated": "Готово"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "Не удалось запустить: $message"
@@ -8379,6 +8789,11 @@
       "translated": "Не удалось начать разговор: $message"
     },
     {
+      "id": "native.android.47a59f8798682ea0",
+      "source": "Ready",
+      "translated": "Готово"
+    },
+    {
       "id": "native.android.bd863d5e8979cd79",
       "source": "Generating voice…",
       "translated": "Создание голоса…"
@@ -8392,11 +8807,6 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "Воспроизведение речи…"
-    },
-    {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "Прослушивание (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -8424,6 +8834,16 @@
       "translated": "Время ожидания сети истекло"
     },
     {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "Прослушивание"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "Прослушивание (PTT)"
+    },
+    {
       "id": "native.android.a445b7696f9b431c",
       "source": "Recognizer busy",
       "translated": "Распознаватель занят"
@@ -8432,11 +8852,6 @@
       "id": "native.android.297438db6f5fe8d7",
       "source": "Server error",
       "translated": "Ошибка сервера"
-    },
-    {
-      "id": "native.android.7b4dacae0686d138",
-      "source": "Listening",
-      "translated": "Прослушивание"
     },
     {
       "id": "native.android.ea5d9621ef0f0482",
@@ -8614,9 +9029,624 @@
       "translated": "Метка времени сборки скопирована"
     },
     {
-      "id": "native.apple.8f741d09cc1d5495",
-      "source": "OpenClaw Activity",
-      "translated": "Активность OpenClaw"
+      "id": "native.android.522a27f673db3ea7",
+      "source": "Observed nodes: $count",
+      "translated": "Обнаружено узлов: $count"
+    },
+    {
+      "id": "native.android.db6c0a629047ec45",
+      "source": "Observing…",
+      "translated": "Наблюдение…"
+    },
+    {
+      "id": "native.android.dae7cd6ba0f54d14",
+      "source": "Observing in ${remaining}s — switch to the target app",
+      "translated": "Наблюдение через ${remaining} с — переключитесь на целевое приложение"
+    },
+    {
+      "id": "native.android.a57da8b7813642c5",
+      "source": "unknown",
+      "translated": "неизвестно"
+    },
+    {
+      "id": "native.android.c3bf7f7fca67def2",
+      "source": "Accessibility executor",
+      "translated": "Исполнитель специальных возможностей"
+    },
+    {
+      "id": "native.android.3be1e4745a17f488",
+      "source": "Service connected",
+      "translated": "Служба подключена"
+    },
+    {
+      "id": "native.android.cc9389562c8b2c59",
+      "source": "Service disabled",
+      "translated": "Служба отключена"
+    },
+    {
+      "id": "native.android.137a6854a7a38355",
+      "source": "Open settings",
+      "translated": "Открыть настройки"
+    },
+    {
+      "id": "native.android.21324b63c1100d44",
+      "source": "Observe",
+      "translated": "Наблюдать"
+    },
+    {
+      "id": "native.android.060ac865b282278b",
+      "source": "Observe in 3s",
+      "translated": "Наблюдать через 3 с"
+    },
+    {
+      "id": "native.android.e2d3ac19479204af",
+      "source": "Back",
+      "translated": "Назад"
+    },
+    {
+      "id": "native.android.d60b8ecd62fc0d80",
+      "source": "Home",
+      "translated": "Домой"
+    },
+    {
+      "id": "native.android.3fce53a0ad295cf0",
+      "source": "Recents",
+      "translated": "Недавние"
+    },
+    {
+      "id": "native.android.6b32ca413d180a5d",
+      "source": "Snapshot: $snapshotLabel",
+      "translated": "Снимок: $snapshotLabel"
+    },
+    {
+      "id": "native.android.8f5985122be4fc64",
+      "source": "Packages: snapshot=$snapshotPackage foreground=$foregroundPackage",
+      "translated": "Пакеты: snapshot=$snapshotPackage foreground=$foregroundPackage"
+    },
+    {
+      "id": "native.android.73c790b2ef43795b",
+      "source": "No action result",
+      "translated": "Нет результата действия"
+    },
+    {
+      "id": "native.android.7cef45c1a4398242",
+      "source": "Selected $reference",
+      "translated": "Выбрано $reference"
+    },
+    {
+      "id": "native.android.080308b933291f72",
+      "source": "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
+      "translated": "Действия с узлами выполняются только когда целевое приложение на переднем плане (проверяется через удалённый путь). Глобальные действия и действия в том же приложении работают здесь."
+    },
+    {
+      "id": "native.android.7904ab3dbc7630d6",
+      "source": "Activate",
+      "translated": "Активировать"
+    },
+    {
+      "id": "native.android.720bad3536516e4c",
+      "source": "Scroll forward",
+      "translated": "Прокрутить вперёд"
+    },
+    {
+      "id": "native.android.a9d246ec2201f652",
+      "source": "Scroll back",
+      "translated": "Прокрутить назад"
+    },
+    {
+      "id": "native.android.d5d6c692bf76ab30",
+      "source": "Text",
+      "translated": "Текст"
+    },
+    {
+      "id": "native.android.b807999e8142fb16",
+      "source": "Set text",
+      "translated": "Задать текст"
+    },
+    {
+      "id": "native.android.234771b574070dbd",
+      "source": "$reference  $role",
+      "translated": "$reference  $role"
+    },
+    {
+      "id": "native.android.08bf43b43713bc39",
+      "source": "text: $value",
+      "translated": "text: $value"
+    },
+    {
+      "id": "native.android.b9b90cd213056618",
+      "source": "description: $value",
+      "translated": "description: $value"
+    },
+    {
+      "id": "native.android.b2932adead8a9404",
+      "source": "bounds: $value",
+      "translated": "bounds: $value"
+    },
+    {
+      "id": "native.android.96941ff341555a3c",
+      "source": "actions: $value",
+      "translated": "actions: $value"
+    },
+    {
+      "id": "native.android.595a568daf3c9686",
+      "source": "none",
+      "translated": "нет"
+    },
+    {
+      "id": "native.android.1bacd6da6858db46",
+      "source": "Control other apps",
+      "translated": "Управлять другими приложениями"
+    },
+    {
+      "id": "native.android.7bb0d8ca016a7496",
+      "source": "Shown in Android Accessibility settings.",
+      "translated": "Отображается в настройках специальных возможностей Android."
+    },
+    {
+      "id": "native.android.499618d59ec50110",
+      "source": "Other apps stay untouched.",
+      "translated": "Другие приложения остаются нетронутыми."
+    },
+    {
+      "id": "native.android.8132ebc5e9beff1a",
+      "source": "Allow control of other apps?",
+      "translated": "Разрешить управление другими приложениями?"
+    },
+    {
+      "id": "native.android.16d2abc828935351",
+      "source": "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
+      "translated": "Включение позволяет OpenClaw наблюдать и управлять экранами других приложений в активном режиме. Требуется доступ к специальным возможностям Android."
+    },
+    {
+      "id": "native.android.2762510a90e577a3",
+      "source": "Enable and Open Settings",
+      "translated": "Включить и открыть настройки"
+    },
+    {
+      "id": "native.android.9f278b579e510dda",
+      "source": "Not Now",
+      "translated": "Не сейчас"
+    },
+    {
+      "id": "native.android.b3cae8c7b0ac2222",
+      "source": "OpenClaw UI control",
+      "translated": "Управление интерфейсом OpenClaw"
+    },
+    {
+      "id": "native.android.d980d910a3466dc2",
+      "source": "Developer UI observation and control",
+      "translated": "Наблюдение и управление интерфейсом для разработчиков"
+    },
+    {
+      "id": "native.android.7f56eb025a774101",
+      "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
+      "translated": "Позволяет стороннической сборке OpenClaw инспектировать и управлять активным приложением во время локальной разработки."
+    },
+    {
+      "id": "native.android.e1c713595c555f5f",
+      "source": "OpenClaw Accessibility Developer",
+      "translated": "Разработчик OpenClaw Accessibility"
+    },
+    {
+      "id": "native.android.342644995c7fa39d",
+      "source": "Chat",
+      "translated": "Чат"
+    },
+    {
+      "id": "native.android.f08059cbbd74d290",
+      "source": "Session",
+      "translated": "Сеанс"
+    },
+    {
+      "id": "native.android.14c9261466ef05af",
+      "source": "Model",
+      "translated": "Модель"
+    },
+    {
+      "id": "native.android.15cab72e6f01fd53",
+      "source": "Previous %1$s",
+      "translated": "Предыдущий %1$s"
+    },
+    {
+      "id": "native.android.3d3306e0ee9e21ee",
+      "source": "Next %1$s",
+      "translated": "Следующий %1$s"
+    },
+    {
+      "id": "native.android.27f269e3449860eb",
+      "source": "Controls",
+      "translated": "Управление"
+    },
+    {
+      "id": "native.android.162045314bf6d856",
+      "source": "Talk",
+      "translated": "Говорить"
+    },
+    {
+      "id": "native.android.1e47fb0c88ffb1bd",
+      "source": "Watch audio failed",
+      "translated": "Сбой аудио на часах"
+    },
+    {
+      "id": "native.android.64e07fdfab3f96c5",
+      "source": "Dictate",
+      "translated": "Диктовать"
+    },
+    {
+      "id": "native.android.aa64f5544405ffed",
+      "source": "Live",
+      "translated": "В прямом эфире"
+    },
+    {
+      "id": "native.android.5d4de99dd6fd6764",
+      "source": "Thread",
+      "translated": "Ветка"
+    },
+    {
+      "id": "native.android.4863e4958bf9a886",
+      "source": "← Swipe →",
+      "translated": "← Проведите пальцем →"
+    },
+    {
+      "id": "native.android.01979a7d84755f0e",
+      "source": "Hold",
+      "translated": "Удерживайте"
+    },
+    {
+      "id": "native.android.149e4509c9152931",
+      "source": "Tap",
+      "translated": "Коснитесь"
+    },
+    {
+      "id": "native.android.9f7fe0147a0b571a",
+      "source": "Double tap",
+      "translated": "Двойное нажатие"
+    },
+    {
+      "id": "native.android.65caac394b5e4871",
+      "source": "Start Live to see the conversation here.",
+      "translated": "Запустите Live, чтобы увидеть здесь переписку."
+    },
+    {
+      "id": "native.android.80256ef5841e2f92",
+      "source": "New",
+      "translated": "Новое"
+    },
+    {
+      "id": "native.android.3091f3e818e51d8a",
+      "source": "Type",
+      "translated": "Введите текст"
+    },
+    {
+      "id": "native.android.d6940b2883503ea3",
+      "source": "Message",
+      "translated": "Сообщение"
+    },
+    {
+      "id": "native.android.e9035dd5aded082a",
+      "source": "Message agent",
+      "translated": "Сообщение агенту"
+    },
+    {
+      "id": "native.android.66f9ad9c9cd1a92c",
+      "source": "Send",
+      "translated": "Отправить"
+    },
+    {
+      "id": "native.android.aed54d9c5e90b843",
+      "source": "Speak to your agent",
+      "translated": "Поговорить с агентом"
+    },
+    {
+      "id": "native.android.30aa9dbcae2ce3c1",
+      "source": "Stop speaking",
+      "translated": "Перестать говорить"
+    },
+    {
+      "id": "native.android.5c8f30c24360b983",
+      "source": "Speak latest reply",
+      "translated": "Озвучить последний ответ"
+    },
+    {
+      "id": "native.android.e283a10e79578d3f",
+      "source": "Speaking",
+      "translated": "Говорит"
+    },
+    {
+      "id": "native.android.0b19cfb5411358fa",
+      "source": "Listening",
+      "translated": "Слушает"
+    },
+    {
+      "id": "native.android.e40bdbd8bfc185e6",
+      "source": "Connecting",
+      "translated": "Подключение"
+    },
+    {
+      "id": "native.android.42ac9ae6e2a24424",
+      "source": "Thinking",
+      "translated": "Обдумывает"
+    },
+    {
+      "id": "native.android.e87b09e74f59ca70",
+      "source": "Typing",
+      "translated": "Печатает"
+    },
+    {
+      "id": "native.android.5357284dcb751316",
+      "source": "Sending",
+      "translated": "Отправка"
+    },
+    {
+      "id": "native.android.df216228910e6a31",
+      "source": "Agent working",
+      "translated": "Агент работает"
+    },
+    {
+      "id": "native.android.0ab95b2723a4b400",
+      "source": "Error",
+      "translated": "Ошибка"
+    },
+    {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "Готово"
+    },
+    {
+      "id": "native.android.40984724c43be3ab",
+      "source": "You",
+      "translated": "Вы"
+    },
+    {
+      "id": "native.android.4aaf8fd6103ce61d",
+      "source": "Agent",
+      "translated": "Агент"
+    },
+    {
+      "id": "native.android.c09b4d37b7750d4a",
+      "source": "System",
+      "translated": "Система"
+    },
+    {
+      "id": "native.android.beff51b9bde563db",
+      "source": "Start a conversation",
+      "translated": "Начать разговор"
+    },
+    {
+      "id": "native.android.b8de3221042b2fd3",
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
+      "translated": "Говорите или вводите текст на часах. Сопряжённый телефон отправит сообщение через аутентифицированный сеанс OpenClaw."
+    },
+    {
+      "id": "native.android.44c6bb3c4c7b61ae",
+      "source": "Current session",
+      "translated": "Текущий сеанс"
+    },
+    {
+      "id": "native.android.29e0ff4871a97d3a",
+      "source": "Appearance",
+      "translated": "Оформление"
+    },
+    {
+      "id": "native.android.f54dda8777a206c0",
+      "source": "Dark",
+      "translated": "Тёмное"
+    },
+    {
+      "id": "native.android.7709ce559ece7079",
+      "source": "Light",
+      "translated": "Светлое"
+    },
+    {
+      "id": "native.android.bad64c6d810dd968",
+      "source": "Speak replies automatically",
+      "translated": "Автоматически озвучивать ответы"
+    },
+    {
+      "id": "native.android.bf13ece69b6f9e6d",
+      "source": "Reply alerts",
+      "translated": "Уведомления об ответах"
+    },
+    {
+      "id": "native.android.ab451b22b15fef6a",
+      "source": "Enable alerts",
+      "translated": "Включить уведомления"
+    },
+    {
+      "id": "native.android.2ac0bfe2c63028e6",
+      "source": "Abort run",
+      "translated": "Прервать выполнение"
+    },
+    {
+      "id": "native.android.1c8ec9bc7a542592",
+      "source": "Open notification settings",
+      "translated": "Открыть настройки уведомлений"
+    },
+    {
+      "id": "native.android.cac22bf83ae5e538",
+      "source": "On",
+      "translated": "Вкл."
+    },
+    {
+      "id": "native.android.8b2c37db3d4bfe78",
+      "source": "Off",
+      "translated": "Выкл."
+    },
+    {
+      "id": "native.android.dcf724e915521154",
+      "source": "Connection",
+      "translated": "Подключение"
+    },
+    {
+      "id": "native.android.d6576b5ea12e6635",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.5af2a90d687d5ded",
+      "source": "Security",
+      "translated": "Безопасность"
+    },
+    {
+      "id": "native.android.bfa2a9759e56e431",
+      "source": "Phone-controlled",
+      "translated": "Управляется телефоном"
+    },
+    {
+      "id": "native.android.9d53b66d3444d63f",
+      "source": "Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer.",
+      "translated": "Учётные данные и идентификационные данные Gateway хранятся на сопряжённом телефоне. Часы используют только Wear Data Layer."
+    },
+    {
+      "id": "native.android.e4e15149f5634729",
+      "source": "Checking phone",
+      "translated": "Проверка телефона"
+    },
+    {
+      "id": "native.android.c1b0408a3b9a7855",
+      "source": "Reading agents, sessions, and chat",
+      "translated": "Чтение агентов, сеансов и чата"
+    },
+    {
+      "id": "native.android.b6cb3ef2de0a91a1",
+      "source": "Phone ready",
+      "translated": "Телефон готов"
+    },
+    {
+      "id": "native.android.71511621861ee1f8",
+      "source": "Gateway connected",
+      "translated": "Gateway подключён"
+    },
+    {
+      "id": "native.android.e8a185d4eb48abe2",
+      "source": "Gateway offline",
+      "translated": "Gateway не в сети"
+    },
+    {
+      "id": "native.android.5d98a2a8a4f1f793",
+      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
+      "translated": "Повторно подключите Gateway в OpenClaw на сопряжённом телефоне."
+    },
+    {
+      "id": "native.android.867011d568b0b0db",
+      "source": "Open OpenClaw on phone",
+      "translated": "Открыть OpenClaw на телефоне"
+    },
+    {
+      "id": "native.android.e70d812f3bc1bb40",
+      "source": "The watch never starts or authenticates the Gateway itself.",
+      "translated": "Часы никогда не запускают и не аутентифицируют Gateway самостоятельно."
+    },
+    {
+      "id": "native.android.be82f33ff358e212",
+      "source": "Phone not reachable",
+      "translated": "Телефон недоступен"
+    },
+    {
+      "id": "native.android.d6c4dc6d15a4eaac",
+      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
+      "translated": "Держите сопряжённый телефон поблизости и установите соответствующее приложение OpenClaw."
+    },
+    {
+      "id": "native.android.bfebf63a2c96e9cd",
+      "source": "Selection no longer available",
+      "translated": "Выбранный элемент больше недоступен"
+    },
+    {
+      "id": "native.android.918aacdecf0e523b",
+      "source": "Action not accepted",
+      "translated": "Действие не принято"
+    },
+    {
+      "id": "native.android.375286e6dbb16606",
+      "source": "Something went wrong",
+      "translated": "Что-то пошло не так"
+    },
+    {
+      "id": "native.android.e0e6d9ff3b7d8970",
+      "source": "Refresh the lists and try again.",
+      "translated": "Обновите списки и повторите попытку."
+    },
+    {
+      "id": "native.android.e9849178994c7414",
+      "source": "Try again from the watch.",
+      "translated": "Повторите попытку с часов."
+    },
+    {
+      "id": "native.android.3d44911564ea1c5a",
+      "source": "Update required",
+      "translated": "Требуется обновление"
+    },
+    {
+      "id": "native.android.ce39278848b1615d",
+      "source": "Update OpenClaw on both phone and watch.",
+      "translated": "Обновите OpenClaw на телефоне и часах."
+    },
+    {
+      "id": "native.android.b5d6a37fb96f38f1",
+      "source": "Refresh",
+      "translated": "Обновить"
+    },
+    {
+      "id": "native.android.a64989382158df47",
+      "source": "Retry",
+      "translated": "Повторить"
+    },
+    {
+      "id": "native.android.6b973e2d4540f1dc",
+      "source": "OpenClaw replies",
+      "translated": "Ответы OpenClaw"
+    },
+    {
+      "id": "native.android.daf75f1939c5048f",
+      "source": "Reply",
+      "translated": "Ответить"
+    },
+    {
+      "id": "native.android.2ab12cfd9399407c",
+      "source": "OpenClaw reply",
+      "translated": "Ответ OpenClaw"
+    },
+    {
+      "id": "native.android.289456e2626dd0f4",
+      "source": "Reply not sent",
+      "translated": "Ответ не отправлен"
+    },
+    {
+      "id": "native.android.bda7ccc6e4728f23",
+      "source": "Phone unavailable. Tap Reply to try again.",
+      "translated": "Телефон недоступен. Нажмите «Ответить», чтобы повторить попытку."
+    },
+    {
+      "id": "native.android.3ec65645eda5ded7",
+      "source": "Open OpenClaw to reply",
+      "translated": "Открыть OpenClaw, чтобы ответить"
+    },
+    {
+      "id": "native.android.7658464805a4b605",
+      "source": "Your preferred phone changed. Open the app to reload the session before replying.",
+      "translated": "Предпочитаемый телефон изменён. Прежде чем отвечать, откройте приложение, чтобы перезагрузить сеанс."
+    },
+    {
+      "id": "native.android.6b2e913641d45f02",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7c74dd9a2bf91d3a",
+      "source": "Open sessions and reply through your paired phone",
+      "translated": "Открывайте сеансы и отвечайте через сопряжённый телефон"
+    },
+    {
+      "id": "native.android.6c2e2515598de209",
+      "source": "OPEN",
+      "translated": "ОТКРЫТЬ"
+    },
+    {
+      "id": "native.android.709aff840be1f167",
+      "source": "PHONE PROXY",
+      "translated": "ПРОКСИ-ТЕЛЕФОН"
     },
     {
       "id": "native.apple.093081590556db7f",
@@ -8694,11 +9724,6 @@
       "translated": "Отключено"
     },
     {
-      "id": "native.apple.9168fcd110c3019a",
-      "source": "OpenClaw Share",
-      "translated": "OpenClaw Share"
-    },
-    {
       "id": "native.apple.382fd936eaf238f7",
       "source": "Just received your iOS share + request, working on it.",
       "translated": "Just received your iOS share + request, working on it."
@@ -8722,6 +9747,26 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "этот запрос"
+    },
+    {
+      "id": "native.apple.91108e396155b531",
+      "source": "Dashboard",
+      "translated": "Панель управления"
+    },
+    {
+      "id": "native.apple.8a315564807ba77d",
+      "source": "Done",
+      "translated": "Готово"
+    },
+    {
+      "id": "native.apple.1a8ef1f77055764f",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "Для панели управления требуется подключение к Gateway"
+    },
+    {
+      "id": "native.apple.0561fc7c6a99da55",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "Подключитесь к Gateway, чтобы открыть панель управления этого сеанса."
     },
     {
       "id": "native.apple.1696cec8c3c6a511",
@@ -10924,6 +11969,11 @@
       "translated": "Сеансы…"
     },
     {
+      "id": "native.apple.38fb02182bd2430c",
+      "source": "Dashboard",
+      "translated": "Панель управления"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "Фоновые задачи"
@@ -12399,26 +13449,6 @@
       "translated": "ОК"
     },
     {
-      "id": "native.apple.32230ecb2fbc2378",
-      "source": "Access Level",
-      "translated": "Уровень доступа"
-    },
-    {
-      "id": "native.apple.7ed27029e9c313cc",
-      "source": "While Using the App",
-      "translated": "При использовании приложения"
-    },
-    {
-      "id": "native.apple.b975064b240c9fd6",
-      "source": "Always",
-      "translated": "Всегда"
-    },
-    {
-      "id": "native.apple.756ff21ca904b2d8",
-      "source": "Choose when OpenClaw may share this iPhone's location with gateway tools.",
-      "translated": "Выберите, когда OpenClaw может передавать местоположение этого iPhone инструментам Gateway."
-    },
-    {
       "id": "native.apple.9515109ce97ec94e",
       "source": "Forget %@?",
       "translated": "Забыть %@?"
@@ -12622,6 +13652,11 @@
       "id": "native.apple.f330bd62f5b05c15",
       "source": "Gateway",
       "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.2d878afa870cd7cc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.b99af99847ac7823",
@@ -12964,6 +13999,11 @@
       "translated": "Подключение"
     },
     {
+      "id": "native.apple.fc49f9b63e160581",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.2c2cdafd79f8ba5b",
       "source": "Permissions",
       "translated": "Разрешения"
@@ -13284,11 +14324,6 @@
       "translated": "OpenClaw благодарит своих партнеров в сообществе open-source."
     },
     {
-      "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.apple.eaa4fe72f3730f3f",
       "source": "Personal AI on your devices",
       "translated": "Персональный ИИ на ваших устройствах"
@@ -13337,6 +14372,16 @@
       "id": "native.apple.72d124648efb5a97",
       "source": "Location Sharing",
       "translated": "Обмен геопозицией"
+    },
+    {
+      "id": "native.apple.29e2ea3e063e4553",
+      "source": "While Using the App",
+      "translated": "При использовании приложения"
+    },
+    {
+      "id": "native.apple.b7e8bf7dae32ab59",
+      "source": "Always",
+      "translated": "Всегда"
     },
     {
       "id": "native.apple.aadb749ebce75251",
@@ -13399,14 +14444,24 @@
       "translated": "Сопряжённые Gateway"
     },
     {
-      "id": "native.apple.9a6bd720a544ec04",
-      "source": "Switch gateways without pairing again.",
-      "translated": "Переключайте gateway без повторного сопряжения."
+      "id": "native.apple.0c5dae9bc264aaa1",
+      "source": "Keep multiple gateways connected and switch which one is in focus.",
+      "translated": "Поддерживайте подключение к нескольким Gateway и переключайтесь между ними."
     },
     {
-      "id": "native.apple.5f33cfe2d21e6dc6",
-      "source": "Active Gateway",
+      "id": "native.apple.a1d2ffbfe64ef4ce",
+      "source": "Focused Gateway",
       "translated": "Активный Gateway"
+    },
+    {
+      "id": "native.apple.f819d2ea384fe6ed",
+      "source": "Disconnect Gateway",
+      "translated": "Отключить Gateway"
+    },
+    {
+      "id": "native.apple.10d41627b8261536",
+      "source": "Keep Gateway Connected",
+      "translated": "Поддерживать подключение к Gateway"
     },
     {
       "id": "native.apple.4e1792b1044ec4a9",
@@ -14174,6 +15229,151 @@
       "translated": "ClawHub не сообщил об устанавливаемой версии этого навыка."
     },
     {
+      "id": "native.apple.0706fbaf1d690c8c",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "Я сохраню этот разговор отдельно от обычного чата с агентом."
+    },
+    {
+      "id": "native.apple.8904786f15a5e8c6",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "Я могу проверить состояние Gateway, восстановить конфигурацию, сменить модели или подключить каналы."
+    },
+    {
+      "id": "native.apple.c541930fceee5dd7",
+      "source": "What should we look at first?",
+      "translated": "С чего начать?"
+    },
+    {
+      "id": "native.apple.5877f7ad2a71eb89",
+      "source": "Check status",
+      "translated": "Проверить статус"
+    },
+    {
+      "id": "native.apple.16a0d6cf12b8dffb",
+      "source": "Review the Gateway and active services.",
+      "translated": "Просмотрите Gateway и активные службы."
+    },
+    {
+      "id": "native.apple.0408526f52d7c028",
+      "source": "Review setup",
+      "translated": "Просмотреть настройку"
+    },
+    {
+      "id": "native.apple.ba578b311be24908",
+      "source": "Inspect models, channels, and configuration.",
+      "translated": "Проверьте модели, каналы и конфигурацию."
+    },
+    {
+      "id": "native.apple.1e1de0223a6380ef",
+      "source": "Gateway is not connected",
+      "translated": "Gateway не подключён"
+    },
+    {
+      "id": "native.apple.3c75d45619e216db",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.apple.8aee90eb1e1061b9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "Подключение к Gateway изменилось. Перезапустите OpenClaw для повторного подключения."
+    },
+    {
+      "id": "native.apple.47bc765cd8464c1e",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.a791a671fb60b5f7",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw работает…"
+    },
+    {
+      "id": "native.apple.bd0e286399723c42",
+      "source": "Gateway Required",
+      "translated": "Требуется Gateway"
+    },
+    {
+      "id": "native.apple.7d707323fc24e456",
+      "source": "Full Access Required",
+      "translated": "Требуется полный доступ"
+    },
+    {
+      "id": "native.apple.d37a3b497fc2b746",
+      "source": "Checking Gateway",
+      "translated": "Проверка Gateway"
+    },
+    {
+      "id": "native.apple.55474e9051b8aabc",
+      "source": "Gateway Update Required",
+      "translated": "Требуется обновление Gateway"
+    },
+    {
+      "id": "native.apple.441f1770a487a055",
+      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
+      "translated": "Подключите этот iPhone к Gateway, прежде чем открывать помощник настроек OpenClaw."
+    },
+    {
+      "id": "native.apple.8e0a20f39742ff98",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "Переподключитесь с доступом operator.admin, чтобы просматривать и изменять настройки Gateway."
+    },
+    {
+      "id": "native.apple.9115f5d67e36fd08",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "Проверка, поддерживает ли этот Gateway помощник настроек OpenClaw."
+    },
+    {
+      "id": "native.apple.3a7955c72e7ab728",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "Обновите этот Gateway, чтобы использовать помощник настроек OpenClaw."
+    },
+    {
+      "id": "native.apple.fd24248c00007ba3",
+      "source": "Restart",
+      "translated": "Перезапустить"
+    },
+    {
+      "id": "native.apple.7ec6b261897ee62c",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw готов продолжить в вашем обычном чате."
+    },
+    {
+      "id": "native.apple.ad820dd76c74e3f8",
+      "source": "Open Chat",
+      "translated": "Открыть чат"
+    },
+    {
+      "id": "native.apple.1cfa800d32483cfd",
+      "source": "Enter secret",
+      "translated": "Введите секрет"
+    },
+    {
+      "id": "native.apple.7efa99fdc895022e",
+      "source": "Enter secret…",
+      "translated": "Введите секрет…"
+    },
+    {
+      "id": "native.apple.e40e721e131e606e",
+      "source": "Reply to OpenClaw…",
+      "translated": "Ответить OpenClaw…"
+    },
+    {
+      "id": "native.apple.5b0adbb8a28011ab",
+      "source": "Send reply",
+      "translated": "Отправить ответ"
+    },
+    {
+      "id": "native.apple.16be123afdcc66c1",
+      "source": "Skip for now",
+      "translated": "Пропустить пока"
+    },
+    {
+      "id": "native.apple.441673bf8bef63c3",
+      "source": "Recommended",
+      "translated": "Рекомендуется"
+    },
+    {
       "id": "native.apple.dc57861a3ac5a08e",
       "source": "Open Settings",
       "translated": "Открыть настройки"
@@ -14387,6 +15587,11 @@
       "id": "native.apple.f21a8e304b607dc8",
       "source": "Copy",
       "translated": "Копировать"
+    },
+    {
+      "id": "native.apple.7896bc893de41eae",
+      "source": "Reconnecting…",
+      "translated": "Повторное подключение…"
     },
     {
       "id": "native.apple.760dbcb0180666e1",
@@ -16034,11 +17239,6 @@
       "translated": "Открыть настройки Gateway"
     },
     {
-      "id": "native.apple.f90c1fb8880c70c0",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
-    },
-    {
       "id": "native.apple.3b21081fb5ce84ba",
       "source": "Not checked",
       "translated": "Не проверено"
@@ -16497,6 +17697,11 @@
       "id": "native.apple.00887489a998411e",
       "source": "%@ permission denied",
       "translated": "В разрешении для %@ отказано"
+    },
+    {
+      "id": "native.apple.944004de80cfc8b7",
+      "source": "[\\(host)]",
+      "translated": "[\\(host)]"
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
@@ -18419,6 +19624,16 @@
       "translated": "Изменить"
     },
     {
+      "id": "native.apple.919c9d3727497989",
+      "source": "Edit automation",
+      "translated": "Редактировать автоматизацию"
+    },
+    {
+      "id": "native.apple.3587c8ad6de422b3",
+      "source": "Command and script payloads are read-only in the macOS app",
+      "translated": "Данные команд и скриптов доступны в приложении macOS только для чтения"
+    },
+    {
       "id": "native.apple.04c710cf31471ebd",
       "source": "Schedule",
       "translated": "Расписание"
@@ -18504,11 +19719,6 @@
       "translated": "думать \\(thinking)"
     },
     {
-      "id": "native.apple.a513a17d658a1aa2",
-      "source": "\\(timeoutSeconds)s",
-      "translated": "\\(timeoutSeconds)s"
-    },
-    {
       "id": "native.apple.41cd997805bd59e3",
       "source": "announce",
       "translated": "объявить"
@@ -18517,6 +19727,56 @@
       "id": "native.apple.6e5597dd202288ee",
       "source": "no delivery",
       "translated": "нет доставки"
+    },
+    {
+      "id": "native.apple.c27e3019dfe8e877",
+      "source": "command · read-only",
+      "translated": "команда · только для чтения"
+    },
+    {
+      "id": "native.apple.5e02b5f297de21b0",
+      "source": "script · read-only",
+      "translated": "скрипт · только для чтения"
+    },
+    {
+      "id": "native.apple.a513a17d658a1aa2",
+      "source": "\\(timeoutSeconds)s",
+      "translated": "\\(timeoutSeconds)s"
+    },
+    {
+      "id": "native.apple.b42d8e457b71b478",
+      "source": "\\(toolBudget) tools",
+      "translated": "Инструментов: \\(toolBudget)"
+    },
+    {
+      "id": "native.apple.905508b749e99f2a",
+      "source": "OpenClaw Not Configured",
+      "translated": "OpenClaw не настроен"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "Удалённый OpenClaw активен"
+    },
+    {
+      "id": "native.apple.a7b0d4e6bf5796c0",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw активен"
+    },
+    {
+      "id": "native.apple.b36a54d8fef80333",
+      "source": "OpenClaw Not Configured — \\(primaryName)",
+      "translated": "OpenClaw не настроен — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.adee4bfd71731d2d",
+      "source": "Remote OpenClaw Active — \\(primaryName)",
+      "translated": "Удалённый OpenClaw активен — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.2be6d3dd1a0d2699",
+      "source": "OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw активен — \\(primaryName)"
     },
     {
       "id": "native.apple.5eea57b14cab3876",
@@ -18542,6 +19802,26 @@
       "id": "native.apple.3ed077c15e06c140",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "translated": "Проверьте Настройки → Подключение или используйте Отладка → Сбросить удалённый туннель, затем повторите попытку."
+    },
+    {
+      "id": "native.apple.224e2db353f3a459",
+      "source": "Could Not Switch Gateway",
+      "translated": "Не удалось переключить Gateway"
+    },
+    {
+      "id": "native.apple.213d824f2205d071",
+      "source": "Could Not Open Gateway Window",
+      "translated": "Не удалось открыть окно Gateway"
+    },
+    {
+      "id": "native.apple.11ffe8832b728acd",
+      "source": "\\(base)-\\(UUID().uuidString)",
+      "translated": "\\(base)-\\(UUID().uuidString)"
+    },
+    {
+      "id": "native.apple.f821306f90ed7692",
+      "source": "Could Not Set Primary Gateway",
+      "translated": "Не удалось назначить основной Gateway"
     },
     {
       "id": "native.apple.226341f8c8b5d459",
@@ -19092,6 +20372,121 @@
       "id": "native.apple.4bd8ea604f3c21fa",
       "source": "unknown error",
       "translated": "unknown error"
+    },
+    {
+      "id": "native.apple.e0b70da297ef8a61",
+      "source": "Remove Gateway?",
+      "translated": "Удалить Gateway?"
+    },
+    {
+      "id": "native.apple.983c58888b89f27f",
+      "source": "Remove",
+      "translated": "Удалить"
+    },
+    {
+      "id": "native.apple.7b53872a9637b308",
+      "source": "\\(profile.name) and its saved credentials will be removed. Its open windows will close.",
+      "translated": "\\(profile.name) и сохранённые учётные данные будут удалены. Открытые окна будут закрыты."
+    },
+    {
+      "id": "native.apple.a4d437ba492adc8b",
+      "source": "Gateway Error",
+      "translated": "Ошибка Gateway"
+    },
+    {
+      "id": "native.apple.33c3c61e0fb62195",
+      "source": "OK",
+      "translated": "ОК"
+    },
+    {
+      "id": "native.apple.bfd13b43b2fd425c",
+      "source": "Gateways",
+      "translated": "Gateways"
+    },
+    {
+      "id": "native.apple.1ff05976802ac6c9",
+      "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
+      "translated": "Сохраняйте подключения к Gateway для окон чата. Основной Gateway в разделе «Подключение» по-прежнему управляет интеграциями Mac и режимом разговора."
+    },
+    {
+      "id": "native.apple.7fdfccfafd3ff368",
+      "source": "Loading Gateways…",
+      "translated": "Загрузка Gateways…"
+    },
+    {
+      "id": "native.apple.593c7f1b06caf821",
+      "source": "No Gateways saved",
+      "translated": "Нет сохранённых Gateways"
+    },
+    {
+      "id": "native.apple.9053ce4456cc06f0",
+      "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
+      "translated": "Добавьте здесь Gateway, а затем используйте «Файл» → «Новое окно Gateway…» (⌘N), когда потребуется открыть для него ещё одно окно."
+    },
+    {
+      "id": "native.apple.5b3b79e66c434e33",
+      "source": "Saved Gateways",
+      "translated": "Сохранённые Gateways"
+    },
+    {
+      "id": "native.apple.c49f6831863c8dae",
+      "source": "Open Window",
+      "translated": "Открыть окно"
+    },
+    {
+      "id": "native.apple.3c90290e04c6dc5f",
+      "source": "Remove \\(profile.name)",
+      "translated": "Удалить \\(profile.name)"
+    },
+    {
+      "id": "native.apple.98935e9c19760b62",
+      "source": "Add Gateway",
+      "translated": "Добавить Gateway"
+    },
+    {
+      "id": "native.apple.fb5076533e3003a3",
+      "source": "Credentials are stored with this profile in your Mac Keychain.",
+      "translated": "Учётные данные хранятся вместе с этим профилем в Связке ключей Mac."
+    },
+    {
+      "id": "native.apple.a7ee8d846fd61525",
+      "source": "Name",
+      "translated": "Название"
+    },
+    {
+      "id": "native.apple.c65e3cdc3d2c9b36",
+      "source": "Studio",
+      "translated": "Студия"
+    },
+    {
+      "id": "native.apple.ce48afbb966a6933",
+      "source": "Gateway URL",
+      "translated": "URL-адрес Gateway"
+    },
+    {
+      "id": "native.apple.aeb21e4c3192125f",
+      "source": "wss://gateway.example.com",
+      "translated": "wss://gateway.example.com"
+    },
+    {
+      "id": "native.apple.f585ed08c1f6a65e",
+      "source": "Token",
+      "translated": "Токен"
+    },
+    {
+      "id": "native.apple.9a090d8a5c8fb7cb",
+      "source": "Password",
+      "translated": "Пароль"
+    },
+    {
+      "id": "native.apple.f3448df352fdd5d4",
+      "source": "Optional",
+      "translated": "Необязательно"
+    },
+    {
+      "id": "native.apple.1f1c9084eb6a2982",
+      "source": "Cancel",
+      "translated": "Отмена"
     },
     {
       "id": "native.apple.7b5eaba753440639",
@@ -19739,6 +21134,11 @@
       "translated": "Критическая"
     },
     {
+      "id": "native.apple.130664b1dd61cbbf",
+      "source": "New Gateway Window…",
+      "translated": "Новое окно Gateway…"
+    },
+    {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
       "translated": "Новая ветка"
@@ -19894,21 +21294,6 @@
       "translated": "Выйти"
     },
     {
-      "id": "native.apple.5021ed413c045620",
-      "source": "OpenClaw Not Configured",
-      "translated": "OpenClaw не настроен"
-    },
-    {
-      "id": "native.apple.4d10ab5feb4add3f",
-      "source": "Remote OpenClaw Active",
-      "translated": "Удаленный OpenClaw активен"
-    },
-    {
-      "id": "native.apple.b49dea5c1fdb3dd3",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw активен"
-    },
-    {
       "id": "native.apple.1df24a30d7963640",
       "source": "Debug",
       "translated": "Отладка"
@@ -20044,6 +21429,31 @@
       "translated": "Отключено (используется системное значение по умолчанию)"
     },
     {
+      "id": "native.apple.ceb653c5fa582beb",
+      "source": "Gateways",
+      "translated": "Gateways"
+    },
+    {
+      "id": "native.apple.cce28f94dfe25e14",
+      "source": "Set \\(gateway.name) as Primary…",
+      "translated": "Сделать \\(gateway.name) основным…"
+    },
+    {
+      "id": "native.apple.86861746f8e1c38c",
+      "source": "\\(name), healthy",
+      "translated": "\\(name), исправен"
+    },
+    {
+      "id": "native.apple.184a5dddee2c5794",
+      "source": "\\(name), health error",
+      "translated": "\\(name), ошибка состояния"
+    },
+    {
+      "id": "native.apple.d34b1a73300c51f2",
+      "source": "\\(name), health unknown",
+      "translated": "\\(name), состояние неизвестно"
+    },
+    {
       "id": "native.apple.5a99e1ae62fe0ab9",
       "source": "Context",
       "translated": "Контекст"
@@ -20152,6 +21562,16 @@
       "id": "native.apple.dca2e9174fec56ce",
       "source": "Next",
       "translated": "Далее"
+    },
+    {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw подготавливает локальную модель."
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw завершает вход у провайдера."
     },
     {
       "id": "native.apple.0f3c1c6f0672bed7",
@@ -20289,6 +21709,21 @@
       "translated": "Проверить снова"
     },
     {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "Настроить локальную модель"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "Загрузите или подготовьте локальную модель на этом Gateway."
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "Настроить / Загрузить модель"
+    },
+    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "Войти через провайдера"
@@ -20319,6 +21754,11 @@
       "translated": "Войти"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "Модель загружена и подготовлена на этом Gateway."
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "Учётные данные остаются на этом Gateway и сохраняются только после успешной проверки в реальном времени."
@@ -20329,9 +21769,19 @@
       "translated": "Открыть страницу входа…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "Запуск настройки локальной модели…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "Запуск безопасного входа…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "Настройка модели не завершена"
     },
     {
       "id": "native.apple.d7519516740bfc93",
@@ -20754,9 +22204,49 @@
       "translated": "Дополнительно…"
     },
     {
-      "id": "native.apple.22947c17e44f76af",
-      "source": "Hide Advanced",
-      "translated": "Скрыть дополнительные настройки"
+      "id": "native.apple.2e11404d7539301e",
+      "source": "Remote connection",
+      "translated": "Удаленное подключение"
+    },
+    {
+      "id": "native.apple.f6332654911cb2e2",
+      "source": "Verify OpenClaw can reach this gateway.",
+      "translated": "Убедитесь, что OpenClaw может подключиться к этому gateway."
+    },
+    {
+      "id": "native.apple.6e5d3a3c3022e8c8",
+      "source": "Check connection",
+      "translated": "Проверить подключение"
+    },
+    {
+      "id": "native.apple.23254b5b9707c581",
+      "source": "Advanced options",
+      "translated": "Расширенные параметры"
+    },
+    {
+      "id": "native.apple.dfc5606a4813ecfc",
+      "source": "Hide advanced options",
+      "translated": "Скрыть расширенные параметры"
+    },
+    {
+      "id": "native.apple.1907a86a6cc2165b",
+      "source": "Gateway token",
+      "translated": "Токен Gateway"
+    },
+    {
+      "id": "native.apple.14a6b8d735579fae",
+      "source": "Paste the token from your gateway",
+      "translated": "Вставьте токен из вашего gateway"
+    },
+    {
+      "id": "native.apple.143603a153dd0100",
+      "source": "Only needed when the gateway requires token auth.",
+      "translated": "Требуется только когда gateway использует авторизацию по токену."
+    },
+    {
+      "id": "native.apple.2a50c3ee94dde35d",
+      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "Текущее значение gateway.remote.token не является обычным текстом. OpenClaw для macOS не может использовать его напрямую; введите здесь токен в виде обычного текста, чтобы заменить его."
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -20827,41 +22317,6 @@
       "id": "native.apple.ab88df30f426b434",
       "source": "Tip: keep Tailscale enabled so your gateway stays reachable.",
       "translated": "Совет: держите Tailscale включенным, чтобы ваш gateway оставался доступен."
-    },
-    {
-      "id": "native.apple.2e11404d7539301e",
-      "source": "Remote connection",
-      "translated": "Удаленное подключение"
-    },
-    {
-      "id": "native.apple.bee162bb681696a3",
-      "source": "Checks the real remote websocket and auth handshake.",
-      "translated": "Проверяет реальный удаленный websocket и handshake аутентификации."
-    },
-    {
-      "id": "native.apple.6e5d3a3c3022e8c8",
-      "source": "Check connection",
-      "translated": "Проверить подключение"
-    },
-    {
-      "id": "native.apple.1907a86a6cc2165b",
-      "source": "Gateway token",
-      "translated": "Токен Gateway"
-    },
-    {
-      "id": "native.apple.014d9fcbd97f6c48",
-      "source": "remote gateway auth token (gateway.remote.token)",
-      "translated": "токен аутентификации удаленного gateway (gateway.remote.token)"
-    },
-    {
-      "id": "native.apple.cc14b91d20cc33ba",
-      "source": "Used when the remote gateway requires token auth.",
-      "translated": "Используется, когда удаленному Gateway требуется аутентификация по токену."
-    },
-    {
-      "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "Текущее значение gateway.remote.token не является обычным текстом. OpenClaw для macOS не может использовать его напрямую; введите здесь токен в виде обычного текста, чтобы заменить его."
     },
     {
       "id": "native.apple.ef011af3c0e22127",
@@ -21169,6 +22624,21 @@
       "translated": "Геолокация"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "Конфиденциальность"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "Определение активного компьютера"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "Делитесь временем простоя этого Mac, чтобы OpenClaw мог определить Mac, который вы использовали последним, и направлять оповещения узла. Никогда не отправляет клавиши, положения указателя, названия приложений или заголовки окон. Требуется Универсальный доступ."
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "Настройка"
@@ -21264,6 +22734,11 @@
       "translated": "Обновить"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "Проверить"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "Предоставить"
@@ -21284,9 +22759,14 @@
       "translated": "Запросить доступ"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "Управление другими приложениями (например, Terminal) для автоматизированных действий"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "Статус недоступен"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "Управлять Terminal для действий автоматизации; другие приложения запрашивают доступ отдельно"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -21304,14 +22784,14 @@
       "translated": "Захват экрана для контекста или снимков экрана"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "Разрешить Voice Wake и запись аудио"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "Разрешить Voice Wake, push-to-talk, Talk Mode и диктовку Quick Chat"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "Расшифровывать триггерные фразы Voice Wake на устройстве"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "Использовать Apple Speech; пассивный Voice Wake остаётся на устройстве"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -21944,14 +23424,14 @@
       "translated": "OpenClaw использует локальную сеть для подключения к вашему удаленному gateway OpenClaw через LAN, Tailnet или SSH."
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw требуется микрофон для тестов Voice Wake и захвата аудио агентом."
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw использует микрофон для Voice Wake, push-to-talk, Talk Mode, диктовки Quick Chat и захвата аудио агентом."
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw использует распознавание речи, чтобы обнаруживать вашу триггерную фразу Voice Wake."
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw использует Apple Speech для Voice Wake, push-to-talk, Talk Mode и диктовки Quick Chat. Voice Wake остаётся на устройстве."
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -22087,6 +23567,11 @@
       "id": "native.apple.2af062df8d3934a4",
       "source": "Connection",
       "translated": "Подключение"
+    },
+    {
+      "id": "native.apple.1d96f676261a5a05",
+      "source": "Gateways",
+      "translated": "Gateway"
     },
     {
       "id": "native.apple.8c2b0262f3a5ebea",
@@ -22604,32 +24089,32 @@
       "translated": "Агенты могут выполнять команды оболочки на этом Mac без проверок по списку разрешённых."
     },
     {
-      "id": "native.apple.c8e6fc08f04b8d9f",
+      "id": "native.apple.5184684dc4a62edb",
       "source": "Block agent shell commands on this Mac.",
       "translated": "Блокировать команды оболочки агента на этом Mac."
     },
     {
-      "id": "native.apple.e9371d48f629b039",
+      "id": "native.apple.bf1e546102919d3f",
       "source": "Allow trusted command patterns and handle misses with prompts.",
-      "translated": "Разрешать доверенные шаблоны команд и обрабатывать несовпадения с помощью запросов подтверждения."
+      "translated": "Разрешать доверенные шаблоны команд, а в остальных случаях запрашивать подтверждение."
     },
     {
-      "id": "native.apple.935c981496e8689b",
+      "id": "native.apple.84214f3fae821163",
       "source": "Allow shell commands without checking the allowlist.",
-      "translated": "Разрешать команды оболочки без проверки по списку разрешённых."
+      "translated": "Разрешать команды оболочки без проверки списка разрешений."
     },
     {
-      "id": "native.apple.c494c0bb6a4182a2",
+      "id": "native.apple.d7404aa083ad6d58",
       "source": "Never show approval prompts.",
-      "translated": "Никогда не показывать запросы на подтверждение."
+      "translated": "Никогда не запрашивать подтверждение."
     },
     {
-      "id": "native.apple.c04df969fed1b2ca",
+      "id": "native.apple.093c3c01af530076",
       "source": "Ask only when a command is not trusted yet.",
-      "translated": "Запрашивать подтверждение только для команды, которая ещё не является доверенной."
+      "translated": "Запрашивать подтверждение, только если команда ещё не является доверенной."
     },
     {
-      "id": "native.apple.19950d3e6e99ee47",
+      "id": "native.apple.a5161a377e784404",
       "source": "Ask before every shell command.",
       "translated": "Запрашивать подтверждение перед каждой командой оболочки."
     },
@@ -22809,9 +24294,14 @@
       "translated": "Включить Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "Ожидать фразу активации перед выполнением голосовых команд. Распознавание полностью выполняется на устройстве."
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "Прослушивать фразу активации перед выполнением голосовых команд. Распознавание фразы активации остаётся на этом Mac."
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "Распознавание на устройстве недоступно для выбранного языка на этом Mac."
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -22974,6 +24464,11 @@
       "translated": "\\(self.friendlyName(for: current)) (Система)"
     },
     {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "Голосовая активация требует распознавания на устройстве для выбранного языка. Режимы «нажми и говори» и «Разговор» остаются доступными."
+    },
+    {
       "id": "native.apple.79db41c7b941a50f",
       "source": "Additional languages",
       "translated": "Дополнительные языки"
@@ -23004,14 +24499,19 @@
       "translated": "Удалить слово-триггер"
     },
     {
-      "id": "native.apple.65b2687f8f16f9b2",
-      "source": "Language \\(self.index + 2)",
-      "translated": "Язык \\(self.index + 2)"
+      "id": "native.apple.dd0278dbfd438cdb",
+      "source": "Language %lld",
+      "translated": "Язык %lld"
     },
     {
       "id": "native.apple.a767de022c4a06db",
       "source": "Fallback recognition language.",
       "translated": "Резервный язык распознавания."
+    },
+    {
+      "id": "native.apple.65b2687f8f16f9b2",
+      "source": "Language \\(self.index + 2)",
+      "translated": "Язык \\(self.index + 2)"
     },
     {
       "id": "native.apple.cfab77826c9ac1d1",
@@ -23067,6 +24567,16 @@
       "id": "native.apple.26960f2b7ebad5f9",
       "source": "Voice wake detected!",
       "translated": "Голосовое пробуждение обнаружено!"
+    },
+    {
+      "id": "native.apple.7dd4d4d2fc36ffce",
+      "source": "Could Not Open Gateway Window",
+      "translated": "Не удалось открыть окно Gateway"
+    },
+    {
+      "id": "native.apple.93ad62dac611bdcd",
+      "source": "Talk mode uses the primary Gateway window",
+      "translated": "Режим разговора использует основное окно Gateway"
     },
     {
       "id": "native.apple.282d11786f2f4c4b",
@@ -23314,6 +24824,21 @@
       "translated": "Ветка"
     },
     {
+      "id": "native.apple.02f0965fdca227b2",
+      "source": "Branches",
+      "translated": "Ветки"
+    },
+    {
+      "id": "native.apple.82ca9989fa432b38",
+      "source": "Untitled branch",
+      "translated": "Ветка без названия"
+    },
+    {
+      "id": "native.apple.8d0ae98818aa39e8",
+      "source": "^[\\(count) message](inflect: true)",
+      "translated": "^[\\(count) сообщение](inflect: true)"
+    },
+    {
       "id": "native.apple.284b2b94c272591d",
       "source": "Add Image",
       "translated": "Добавить изображение"
@@ -23542,6 +25067,26 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "Аватар агента"
+    },
+    {
+      "id": "native.apple.9d4cffc5588d8730",
+      "source": "Show less",
+      "translated": "Показать меньше"
+    },
+    {
+      "id": "native.apple.b0b4af1981ac0818",
+      "source": "Show more",
+      "translated": "Показать больше"
+    },
+    {
+      "id": "native.apple.29122616e14321b1",
+      "source": "Collapsed",
+      "translated": "Свернуто"
+    },
+    {
+      "id": "native.apple.aa75dc50a6ff606c",
+      "source": "Expanded",
+      "translated": "Развернуто"
     },
     {
       "id": "native.apple.6426e369511b043c",
@@ -24289,14 +25834,14 @@
       "translated": "Свернуто"
     },
     {
-      "id": "native.apple.c4e808a2ec8d49f5",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
+      "id": "native.apple.c83fc1ba73fd0776",
+      "source": "'queued', 'sending', 'awaiting_confirmation', 'failed'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation', 'failed'"
     },
     {
-      "id": "native.apple.4e7e29be3f05b828",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'"
+      "id": "native.apple.ee4ea4d701fa5d07",
+      "source": "'queued', 'sending', 'awaiting_confirmation'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation'"
     },
     {
       "id": "native.apple.e743b1178c2fdec8",
@@ -24679,6 +26224,116 @@
       "translated": "Сжать ветку"
     },
     {
+      "id": "native.apple.fb7ba381b79044e1",
+      "source": "Shelling",
+      "translated": "Сбрасываем панцирь"
+    },
+    {
+      "id": "native.apple.27d2c232c46158f8",
+      "source": "Scuttling",
+      "translated": "Семеним"
+    },
+    {
+      "id": "native.apple.146d26a76f1f661d",
+      "source": "Clawing",
+      "translated": "Работаем клешнями"
+    },
+    {
+      "id": "native.apple.9e590066459c45cf",
+      "source": "Pinching",
+      "translated": "Щиплем"
+    },
+    {
+      "id": "native.apple.98bce06ad906ac35",
+      "source": "Molting",
+      "translated": "Линяем"
+    },
+    {
+      "id": "native.apple.0a1991f9ac99e5b2",
+      "source": "Bubbling",
+      "translated": "Пускаем пузыри"
+    },
+    {
+      "id": "native.apple.693de3befb7eaf8a",
+      "source": "Tiding",
+      "translated": "Качаемся на волнах"
+    },
+    {
+      "id": "native.apple.3f77525b4b5bff6e",
+      "source": "Reefing",
+      "translated": "Огибаем рифы"
+    },
+    {
+      "id": "native.apple.e8726dfe7fa3a577",
+      "source": "Cracking",
+      "translated": "Раскалываем"
+    },
+    {
+      "id": "native.apple.c861cd13f466af46",
+      "source": "Sifting",
+      "translated": "Просеиваем"
+    },
+    {
+      "id": "native.apple.c58b34716364e0ef",
+      "source": "Brining",
+      "translated": "Засаливаем"
+    },
+    {
+      "id": "native.apple.f98d6769fad9ef63",
+      "source": "Nautiling",
+      "translated": "Наутилусим"
+    },
+    {
+      "id": "native.apple.40dbb800afe19da8",
+      "source": "Krilling",
+      "translated": "Криллим"
+    },
+    {
+      "id": "native.apple.e92c5bb2e5342ce6",
+      "source": "Barnacling",
+      "translated": "Обрастаем ракушками"
+    },
+    {
+      "id": "native.apple.2f27f7676f6a5406",
+      "source": "Lobstering",
+      "translated": "Ловим омаров"
+    },
+    {
+      "id": "native.apple.089a07837ab1cce7",
+      "source": "Tidepooling",
+      "translated": "Исследуем приливные лужи"
+    },
+    {
+      "id": "native.apple.a17076dab69dac74",
+      "source": "Pearling",
+      "translated": "Ищем жемчуг"
+    },
+    {
+      "id": "native.apple.5715a7bb435c57e8",
+      "source": "Snapping",
+      "translated": "Щёлкаем"
+    },
+    {
+      "id": "native.apple.6fbcf8a03da3315a",
+      "source": "Surfacing",
+      "translated": "Всплываем"
+    },
+    {
+      "id": "native.apple.578503dfeef25502",
+      "source": "Done in %@",
+      "translated": "Готово за %@"
+    },
+    {
+      "id": "native.apple.4fb1ae0d89560d73",
+      "source": "1 token",
+      "translated": "1 токен"
+    },
+    {
+      "id": "native.apple.3f968fd475a91bb1",
+      "source": "%@ tokens",
+      "translated": "%@ токенов"
+    },
+    {
       "id": "native.apple.fa10740f9e272e83",
       "source": "Voice note",
       "translated": "Голосовое сообщение"
@@ -24742,6 +26397,51 @@
       "id": "native.apple.f74d150ce05205dd",
       "source": "z",
       "translated": "z"
+    },
+    {
+      "id": "native.apple.d093ee119bfd5ab4",
+      "source": "Running",
+      "translated": "Выполняется"
+    },
+    {
+      "id": "native.apple.b8a4e570b04c8a5f",
+      "source": "Queued",
+      "translated": "В очереди"
+    },
+    {
+      "id": "native.apple.caf64b5a59885ec0",
+      "source": "Failed",
+      "translated": "Ошибка"
+    },
+    {
+      "id": "native.apple.4819936ea780db96",
+      "source": "Done",
+      "translated": "Готово"
+    },
+    {
+      "id": "native.apple.1f8ce4f7dc387a62",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.apple.e8b9db6108d47853",
+      "source": "%1$lld Running · %2$lld Done · %3$lld Failed",
+      "translated": "%1$lld выполняется · %2$lld готово · %3$lld с ошибкой"
+    },
+    {
+      "id": "native.apple.966f8d2b0b475f7c",
+      "source": "Unphased",
+      "translated": "Без фазы"
+    },
+    {
+      "id": "native.apple.3b5805940eb33a47",
+      "source": "1 more worker",
+      "translated": "Ещё 1 воркер"
+    },
+    {
+      "id": "native.apple.4278155768134e27",
+      "source": "%1$lld more workers",
+      "translated": "Ещё %1$lld воркеров"
     },
     {
       "id": "native.apple.71e0219d1501de06",
@@ -24827,6 +26527,36 @@
       "id": "native.apple.b737f84578f558eb",
       "source": "This device does not trust the TLS certificate presented by %@.",
       "translated": "Это устройство не доверяет TLS-сертификату, предоставленному %@."
+    },
+    {
+      "id": "native.apple.7bd4905348ab44b0",
+      "source": "Gateway certificate unavailable",
+      "translated": "Сертификат Gateway недоступен"
+    },
+    {
+      "id": "native.apple.7493b8bf5dcaa05f",
+      "source": "OpenClaw could not securely save the TLS certificate pin for %@.",
+      "translated": "OpenClaw не удалось безопасно сохранить пин TLS-сертификата для %@."
+    },
+    {
+      "id": "native.apple.9a4c4bd6b41420ae",
+      "source": "Retry",
+      "translated": "Повторить"
+    },
+    {
+      "id": "native.apple.957ce87193e74f59",
+      "source": "Gateway certificate is not trusted",
+      "translated": "Сертификат Gateway не является доверенным"
+    },
+    {
+      "id": "native.apple.ad21028cb2974851",
+      "source": "The TLS challenge came from a different host or port than the requested Gateway.",
+      "translated": "TLS-запрос поступил с другого хоста или порта, чем запрошенный Gateway."
+    },
+    {
+      "id": "native.apple.2ace7dd34f4ca3a2",
+      "source": "Check certificate",
+      "translated": "Проверить сертификат"
     },
     {
       "id": "native.apple.a825441f646eb195",

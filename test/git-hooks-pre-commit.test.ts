@@ -80,7 +80,6 @@ function installPreCommitFixture(dir: string): string {
   const fakeBinDir = path.join(dir, "bin");
   mkdirSync(fakeBinDir, { recursive: true });
   writeExecutable(fakeBinDir, "node", "#!/usr/bin/env bash\nexit 0\n");
-  writeExecutable(fakeBinDir, "trufflehog", "#!/usr/bin/env bash\nexit 0\n");
   return fakeBinDir;
 }
 
@@ -259,95 +258,6 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(readFormatterLog(logPath)).toEqual([
       "oxfmt --write --no-error-on-unmatched-pattern changed.ts",
     ]);
-  });
-
-  it("scans only staged versions of changed files with TruffleHog", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-trufflehog-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    const fakeBinDir = installPreCommitFixture(dir);
-    const logPath = path.join(dir, "trufflehog.log");
-    writeExecutable(
-      fakeBinDir,
-      "trufflehog",
-      `#!/usr/bin/env bash
-printf 'env=%s\n' "\${TRUFFLEHOG_PRE_COMMIT:-}" > ${JSON.stringify(logPath)}
-printf 'args=%s\n' "$*" >> ${JSON.stringify(logPath)}
-`,
-    );
-
-    writeFileSync(path.join(dir, "base.txt"), "base\n", "utf8");
-    run(dir, "git", ["add", "--", "base.txt"]);
-    run(dir, "git", [
-      "-c",
-      "user.name=Test User",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-q",
-      "-m",
-      "base",
-    ]);
-    writeFileSync(path.join(dir, "changed.txt"), "safe staged content\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.txt"]);
-
-    run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-    });
-
-    const log = readFileSync(logPath, "utf8");
-    expect(log).toContain("env=\n");
-    expect(log).toContain(
-      "args=--no-update --no-color --results=verified,unknown --fail --fail-on-scan-errors filesystem ",
-    );
-  });
-
-  it("scans the staged index snapshot before the first commit", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-first-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    const fakeBinDir = installPreCommitFixture(dir);
-    const logPath = path.join(dir, "trufflehog.log");
-    writeExecutable(
-      fakeBinDir,
-      "trufflehog",
-      `#!/usr/bin/env bash
-printf 'env=%s\n' "\${TRUFFLEHOG_PRE_COMMIT:-}" > ${JSON.stringify(logPath)}
-printf 'args=%s\n' "$*" >> ${JSON.stringify(logPath)}
-`,
-    );
-
-    writeFileSync(path.join(dir, "changed.txt"), "safe staged content\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.txt"]);
-
-    run(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-    });
-
-    const log = readFileSync(logPath, "utf8");
-    expect(log).toContain("env=\n");
-    expect(log).toContain(
-      "args=--no-update --no-color --results=verified,unknown --fail --fail-on-scan-errors filesystem ",
-    );
-  });
-
-  it("blocks with install guidance when TruffleHog is missing", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-trufflehog-");
-    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
-    const fakeBinDir = installPreCommitFixture(dir);
-    run(dir, "rm", ["-f", path.join(fakeBinDir, "trufflehog")]);
-
-    writeFileSync(path.join(dir, "changed.txt"), "safe staged content\n", "utf8");
-    run(dir, "git", ["add", "--", "changed.txt"]);
-
-    const failure = runFailure(dir, "bash", ["git-hooks/pre-commit"], {
-      PATH: `${fakeBinDir}:/usr/bin:/bin`,
-    });
-
-    expect(failure.status).toBe(1);
-    expect(failure.stderr).toContain(
-      "OpenClaw requires TruffleHog for pre-commit secret scanning.",
-    );
-    expect(failure.stderr).toContain("brew install trufflehog");
-    expect(failure.stderr).toContain("https://github.com/trufflesecurity/trufflehog#installation");
   });
 
   it("does not run the changed-scope check for non-doc staged changes", () => {

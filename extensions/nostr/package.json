@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "2.23.9",
+    "nostr-tools": "2.23.12",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -44,16 +44,13 @@
       "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
       "order": 55,
       "quickstartAllowFrom": true,
-      "cliAddOptions": [
-        {
-          "flags": "--private-key <key>",
-          "description": "Nostr private key (nsec... or hex)"
-        },
-        {
-          "flags": "--relay-urls <list>",
-          "description": "Nostr relay URLs (comma-separated)"
-        }
-      ]
+      "setup": {
+        "fields": [
+          { "key": "privateKey", "kind": "string", "sensitive": true, "cli": { "flags": "--private-key <key>", "description": "Nostr private key" } },
+          { "key": "relayUrls", "kind": "string", "cli": { "flags": "--relay-urls <urls>", "description": "Nostr relay URLs" } },
+          { "key": "useEnv", "kind": "boolean", "cli": { "flags": "--use-env", "description": "Use NOSTR_PRIVATE_KEY" } }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/nostr",

@@ -1885,6 +1885,44 @@ describe("Codex plugin thread config", () => {
     await pending;
   });
 
+  it("allows a long-running app server to use its full plugin startup budget", async () => {
+    const request = vi.fn(
+      async (
+        _method: string,
+        _params: unknown,
+        _options: { timeoutMs: number; signal: AbortSignal },
+      ) => pluginList([]),
+    );
+
+    await createCodexPluginThreadConfigStartupProvider({
+      inputFingerprint: undefined,
+      enabledPluginConfigKeys: undefined,
+      policy: undefined,
+      requestTimeoutMs: 240_000,
+      signal: new AbortController().signal,
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            calendar: {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "calendar",
+            },
+          },
+        },
+      },
+      appCache: new CodexAppInventoryCache(),
+      appCacheKey: "runtime-long-startup",
+      metadataCache: new CodexPluginMetadataCache(),
+      client: { request },
+    }).build();
+
+    expect(request).toHaveBeenCalled();
+    const timeoutMs = request.mock.calls[0]?.[2]?.timeoutMs;
+    expect(timeoutMs).toBeGreaterThan(55_000);
+    expect(timeoutMs).toBeLessThanOrEqual(60_000);
+  });
+
   it("propagates an outer abort while waiting on coalesced metadata", async () => {
     const metadataCache = new CodexPluginMetadataCache();
     let release: ((response: v2.PluginListResponse) => void) | undefined;

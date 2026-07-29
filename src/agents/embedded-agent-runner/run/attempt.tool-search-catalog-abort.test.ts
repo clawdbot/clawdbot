@@ -88,4 +88,53 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
 
     expect(toolSearchTesting.sessionCatalogs.has(`run:${runId}`)).toBe(false);
   });
+
+  it.each([
+    {
+      mode: "code-mode",
+      tools: { codeMode: { enabled: true } },
+    },
+    {
+      mode: "tool-search-tools",
+      tools: { toolSearch: { enabled: true, mode: "tools" } },
+    },
+    {
+      mode: "tool-search-directory",
+      tools: { toolSearch: { enabled: true, mode: "directory" } },
+    },
+  ] as const)(
+    "clears the $mode run catalog when diagnostics throw during preparation",
+    async ({ mode, tools }) => {
+      const runId = `run-catalog-diagnostics-${mode}`;
+      const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
+      let catalogRegisteredBeforeFailure = false;
+      const logDiagnostics = vi.fn(() => {
+        catalogRegisteredBeforeFailure = toolSearchTesting.sessionCatalogs.has(`run:${runId}`);
+        throw diagnosticsError;
+      });
+      hoisted.createOpenClawCodingToolsMock.mockImplementation(() => catalogProbeTools());
+
+      const attempt = createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:telegram:direct:123",
+        tempPaths,
+        attemptOverrides: {
+          runId,
+          disableTools: false,
+          config: { tools },
+          runtimePlan: {
+            tools: {
+              normalize: (normalizedTools: unknown[]) => normalizedTools,
+              logDiagnostics,
+            },
+          } as never,
+        },
+      });
+
+      await expect(attempt).rejects.toBe(diagnosticsError);
+      expect(logDiagnostics).toHaveBeenCalledOnce();
+      expect(catalogRegisteredBeforeFailure).toBe(true);
+      expect(toolSearchTesting.sessionCatalogs.has(`run:${runId}`)).toBe(false);
+    },
+  );
 });

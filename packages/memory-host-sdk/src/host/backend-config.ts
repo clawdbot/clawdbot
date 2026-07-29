@@ -12,7 +12,6 @@ import {
   type MemoryCitationsMode,
   type MemoryQmdConfig,
   type MemoryQmdIndexPath,
-  type MemoryQmdMcporterConfig,
   type MemoryQmdSearchMode,
   type MemoryQmdStartupMode,
   type OpenClawConfig,
@@ -253,10 +252,6 @@ function resolveDebounceMs(raw: number | undefined): number {
   return DEFAULT_QMD_DEBOUNCE_MS;
 }
 
-function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
-  return resolvePositiveIntegerConfig(raw, fallback);
-}
-
 function resolvePositiveIntegerConfig(raw: number | undefined, fallback: number): number;
 function resolvePositiveIntegerConfig(raw: number | undefined): number | undefined;
 function resolvePositiveIntegerConfig(
@@ -267,14 +262,6 @@ function resolvePositiveIntegerConfig(
     return fallback;
   }
   return Math.max(1, Math.floor(raw));
-}
-
-function resolveStartupMode(raw: MemoryQmdConfig["update"]): MemoryQmdStartupMode {
-  const value = raw?.startup;
-  if (value === "idle" || value === "immediate" || value === "off") {
-    return value;
-  }
-  return DEFAULT_QMD_STARTUP;
 }
 
 function resolveStartupDelayMs(raw: number | undefined): number {
@@ -391,27 +378,6 @@ function resolveCustomPaths(
   return collections;
 }
 
-function resolveMcporterConfig(raw?: MemoryQmdMcporterConfig): ResolvedQmdMcporterConfig {
-  const parsed: ResolvedQmdMcporterConfig = { ...DEFAULT_QMD_MCPORTER };
-  if (!raw) {
-    return parsed;
-  }
-  if (raw.enabled !== undefined) {
-    parsed.enabled = raw.enabled;
-  }
-  if (typeof raw.serverName === "string" && raw.serverName.trim()) {
-    parsed.serverName = raw.serverName.trim();
-  }
-  if (raw.startDaemon !== undefined) {
-    parsed.startDaemon = raw.startDaemon;
-  }
-  // When enabled, default startDaemon to true.
-  if (parsed.enabled && raw.startDaemon === undefined) {
-    parsed.startDaemon = true;
-  }
-  return parsed;
-}
-
 function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
@@ -454,8 +420,8 @@ export function resolveMemoryBackendConfig(params: {
   );
   const mergedExtraPaths = normalizeStringEntries(
     [
-      ...(params.cfg.agents?.defaults?.memorySearch?.extraPaths ?? []),
-      ...(agentEntry?.memorySearch?.extraPaths ?? []),
+      ...(params.cfg.memory?.search?.extraPaths ?? []),
+      ...(agentEntry?.memory?.search?.extraPaths ?? []),
     ].filter((value): value is string => typeof value === "string"),
   );
   const dedupedExtraPaths = uniqueStrings(mergedExtraPaths);
@@ -463,8 +429,8 @@ export function resolveMemoryBackendConfig(params: {
     (pathValue): { path: string; pattern?: string; name?: string } => ({ path: pathValue }),
   );
   const mergedExtraCollections = [
-    ...(params.cfg.agents?.defaults?.memorySearch?.qmd?.extraCollections ?? []),
-    ...(agentEntry?.memorySearch?.qmd?.extraCollections ?? []),
+    ...(params.cfg.memory?.search?.qmd?.extraCollections ?? []),
+    ...(agentEntry?.memory?.search?.qmd?.extraCollections ?? []),
   ].filter(
     (value): value is MemoryQmdIndexPath =>
       value !== null && typeof value === "object" && typeof value.path === "string",
@@ -486,7 +452,7 @@ export function resolveMemoryBackendConfig(params: {
   const command = resolveQmdCommand(rawCommand);
   const resolved: ResolvedQmdConfig = {
     command,
-    mcporter: resolveMcporterConfig(qmdCfg?.mcporter),
+    mcporter: { ...DEFAULT_QMD_MCPORTER },
     searchMode: resolveSearchMode(qmdCfg?.searchMode),
     rerank: qmdCfg?.rerank,
     searchTool: resolveSearchTool(qmdCfg?.searchTool),
@@ -503,25 +469,16 @@ export function resolveMemoryBackendConfig(params: {
       { explicit: qmdCfg?.sessions?.enabled === true },
     ),
     update: {
-      intervalMs: resolveIntervalMs(qmdCfg?.update?.interval),
-      debounceMs: resolveDebounceMs(qmdCfg?.update?.debounceMs),
-      onBoot: qmdCfg?.update?.onBoot !== false,
-      startup: resolveStartupMode(qmdCfg?.update),
-      startupDelayMs: resolveStartupDelayMs(qmdCfg?.update?.startupDelayMs),
-      waitForBootSync: qmdCfg?.update?.waitForBootSync === true,
-      embedIntervalMs: resolveEmbedIntervalMs(qmdCfg?.update?.embedInterval),
-      commandTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.commandTimeoutMs,
-        DEFAULT_QMD_COMMAND_TIMEOUT_MS,
-      ),
-      updateTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.updateTimeoutMs,
-        DEFAULT_QMD_UPDATE_TIMEOUT_MS,
-      ),
-      embedTimeoutMs: resolveTimeoutMs(
-        qmdCfg?.update?.embedTimeoutMs,
-        DEFAULT_QMD_EMBED_TIMEOUT_MS,
-      ),
+      intervalMs: resolveIntervalMs(undefined),
+      debounceMs: resolveDebounceMs(undefined),
+      onBoot: true,
+      startup: DEFAULT_QMD_STARTUP,
+      startupDelayMs: resolveStartupDelayMs(undefined),
+      waitForBootSync: false,
+      embedIntervalMs: resolveEmbedIntervalMs(undefined),
+      commandTimeoutMs: DEFAULT_QMD_COMMAND_TIMEOUT_MS,
+      updateTimeoutMs: DEFAULT_QMD_UPDATE_TIMEOUT_MS,
+      embedTimeoutMs: DEFAULT_QMD_EMBED_TIMEOUT_MS,
     },
     limits: resolveLimits(qmdCfg?.limits),
     scope: qmdCfg?.scope ?? DEFAULT_QMD_SCOPE,

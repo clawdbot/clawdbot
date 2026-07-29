@@ -5,6 +5,7 @@ const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
   () => import("./get-reply-from-config.runtime.js"),
 );
 const abortRuntimeLoader = createLazyImportLoader(() => import("./abort.runtime.js"));
+const fastApproveRuntimeLoader = createLazyImportLoader(() => import("./fast-approve.runtime.js"));
 const runtimePluginsLoader = createLazyImportLoader(
   () => import("../../plugins/runtime-plugins.runtime.js"),
 );
@@ -22,6 +23,10 @@ export function loadGetReplyFromConfigRuntime() {
 
 export function loadAbortRuntime() {
   return abortRuntimeLoader.load();
+}
+
+export function loadFastApproveRuntime() {
+  return fastApproveRuntimeLoader.load();
 }
 
 export function loadRuntimePlugins() {

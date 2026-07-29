@@ -77,6 +77,38 @@ export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachme
   }
 }
 
+export function generateAttachmentId(): string {
+  return `att-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+// Same admission contract as the Swift/Android restore paths: only well-formed,
+// size-bounded inline images come back; a corrupt transcript entry is skipped,
+// never fatal. 5 MiB decoded matches the gateway media cap (MEDIA_MAX_BYTES).
+const RESTORED_IMAGE_MIME = /^image\/[\w.+-]+$/u;
+const BASE64_PAYLOAD = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const RESTORED_ATTACHMENT_MAX_BASE64_CHARS = Math.ceil((5 * 1024 * 1024) / 3) * 4;
+
+export function replaceChatAttachmentsFromEditor(
+  current: readonly ChatAttachment[],
+  restored: readonly { mimeType: string; data: string }[] = [],
+): ChatAttachment[] {
+  releaseChatAttachmentPayloads(current);
+  return restored.flatMap(({ mimeType, data }) =>
+    RESTORED_IMAGE_MIME.test(mimeType) &&
+    data.length > 0 &&
+    data.length <= RESTORED_ATTACHMENT_MAX_BASE64_CHARS &&
+    BASE64_PAYLOAD.test(data)
+      ? [
+          {
+            id: generateAttachmentId(),
+            mimeType,
+            dataUrl: `data:${mimeType};base64,${data}`,
+          },
+        ]
+      : [],
+  );
+}
+
 function discardChatAttachmentDataUrl(id: string): void {
   const payload = payloads.get(id);
   if (!payload) {

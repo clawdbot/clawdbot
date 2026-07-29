@@ -316,6 +316,10 @@ export function reconcileOrphanedRestoredRuns(params: {
   const now = Date.now();
   let changed = false;
   for (const [runId, entry] of params.runs.entries()) {
+    if (entry.collect && entry.collectorCompletion) {
+      // Waitable collector tombstones intentionally outlive delete-mode sessions.
+      continue;
+    }
     if (entry.requesterSettleWake) {
       // Requester-settle outbox rows can intentionally outlive delete-mode
       // child sessions. Restore replays the obligation before retiring them.
@@ -351,7 +355,7 @@ export function reconcileOrphanedRestoredRuns(params: {
 }
 
 /** Resolves the completed subagent archive delay from config. */
-export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
+function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const config = cfg ?? getRuntimeConfig();
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
@@ -363,4 +367,52 @@ export function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
     return undefined;
   }
   return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+/** Resolves the archive deadline for one newly registered run. */
+export function resolveSubagentArchiveAtMs(params: {
+  cfg?: OpenClawConfig;
+  now: number;
+  spawnMode: "run" | "session";
+  cleanup: "keep" | "delete";
+  collect?: boolean;
+}): number | undefined {
+  if (params.spawnMode === "session" || params.collect || params.cleanup === "keep") {
+    return undefined;
+  }
+  const archiveAfterMs = resolveArchiveAfterMs(params.cfg);
+  return archiveAfterMs ? params.now + archiveAfterMs : undefined;
+}
+
+/** Backfills the retention deadline added after collector groups first shipped. */
+export function backfillCollectorArchiveAtMs(
+  entry: SubagentRunRecord,
+  cfg?: OpenClawConfig,
+): boolean {
+  if (!entry.collect) {
+    return false;
+  }
+  const endedAt =
+    typeof entry.endedAt === "number" && Number.isFinite(entry.endedAt) ? entry.endedAt : undefined;
+  const capturedAt =
+    endedAt === undefined && !entry.collectorCompletion
+      ? undefined
+      : typeof entry.completion?.capturedAt === "number" &&
+          Number.isFinite(entry.completion.capturedAt)
+        ? entry.completion.capturedAt
+        : endedAt;
+  const archiveAfterMs = entry.spawnMode === "session" ? undefined : resolveArchiveAfterMs(cfg);
+  const expectedArchiveAt =
+    capturedAt !== undefined && archiveAfterMs !== undefined
+      ? capturedAt + archiveAfterMs
+      : undefined;
+  if (entry.archiveAtMs === expectedArchiveAt) {
+    return false;
+  }
+  if (expectedArchiveAt === undefined) {
+    delete entry.archiveAtMs;
+  } else {
+    entry.archiveAtMs = expectedArchiveAt;
+  }
+  return true;
 }

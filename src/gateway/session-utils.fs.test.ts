@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  createFileBackedSessionManagerForTest,
+  openFileBackedSessionManagerForTest,
+} from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -16,7 +20,7 @@ import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
-  readSessionMessages,
+  readSessionMessagesPageWithStatsAsync,
   readSessionTitleFieldsFromTranscript,
   readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
@@ -132,7 +136,10 @@ function appendBlockedUserMessageWithSessionManager(params: {
   pluginId: string;
   idempotencyKey?: string;
 }): string {
-  const sessionManager = SessionManager.open(params.sessionFile, path.dirname(params.sessionFile));
+  const sessionManager = openFileBackedSessionManagerForTest(
+    params.sessionFile,
+    path.dirname(params.sessionFile),
+  );
   return appendBlockedUserMessage(sessionManager, params);
 }
 
@@ -348,7 +355,7 @@ describe("readSessionMessages", () => {
     storePath = nextStorePath;
   });
 
-  test("includes synthetic compaction markers for compaction entries", () => {
+  test("includes synthetic compaction markers for compaction entries", async () => {
     const sessionId = "test-session-compaction";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -366,7 +373,10 @@ describe("readSessionMessages", () => {
     ];
     fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
 
-    const out = readSessionMessages(sessionId, storePath);
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test",
+    });
     expect(out).toHaveLength(3);
     const marker = out[1] as {
       role: string;
@@ -632,6 +642,57 @@ describe("readSessionMessages", () => {
     ]);
   });
 
+  test("applies reset kept-tail projection to file-backed history", async () => {
+    const sessionId = "test-session-reset-boundary";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
+      {
+        type: "message",
+        id: "kept-user",
+        parentId: "old",
+        message: { role: "user", content: "kept question" },
+      },
+      {
+        type: "message",
+        id: "kept-tool",
+        parentId: "kept-user",
+        message: { role: "toolResult", content: "hidden tool" },
+      },
+      {
+        type: "message",
+        id: "kept-assistant",
+        parentId: "kept-tool",
+        message: { role: "assistant", content: "kept answer" },
+      },
+      {
+        type: "reset",
+        id: "reset-boundary",
+        parentId: "kept-assistant",
+        timestamp: "2026-07-22T00:00:00.000Z",
+        reason: "new",
+        firstKeptEntryId: "kept-user",
+      },
+      {
+        type: "message",
+        id: "post-reset",
+        parentId: "reset-boundary",
+        message: { role: "user", content: "new turn" },
+      },
+    ]);
+
+    const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test reset boundary",
+    });
+
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "kept question",
+      "kept answer",
+      "new turn",
+    ]);
+  });
+
   test("keeps parentless linear history after a leaf control", async () => {
     const sessionId = "test-linear-with-opaque-link";
     writeTranscript(tmpDir, sessionId, [
@@ -713,6 +774,7 @@ describe("readSessionMessages", () => {
       maxBytes: 2048,
       allowResetArchiveFallback: true,
     });
+    expect(recent.transcriptSource).toBe("reset-archive");
     expect(recent.totalMessages).toBe(2);
     expect(recent.messages).toHaveLength(1);
     expectMessageFields(recent.messages[0], {
@@ -1081,7 +1143,7 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("reads only the active branch when transcript rewrites abandon older entries", () => {
+  test("reads only the active branch when transcript rewrites abandon older entries", async () => {
     const sessionId = "test-session-active-branch";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -1099,7 +1161,7 @@ describe("readSessionMessages", () => {
         timestamp: "2026-04-27T00:00:01.000Z",
         message: {
           role: "user",
-          content: "Sender (untrusted metadata): webchat\n\noriginal wrapped prompt",
+          content: "Sender: webchat\n\noriginal wrapped prompt",
           timestamp: 1,
         },
       },
@@ -1148,7 +1210,10 @@ describe("readSessionMessages", () => {
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
 
     try {
-      const out = readSessionMessages(sessionId, storePath, sessionFile);
+      const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+        mode: "full",
+        reason: "test",
+      });
       expect(out).toHaveLength(2);
       expect(out).toHaveLength(2);
       expectMessageFields(out[0], { role: "user", content: "clean prompt", openclaw: { seq: 1 } });
@@ -1165,7 +1230,7 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("keeps legacy messages when a mixed transcript lacks a complete branch tree", () => {
+  test("keeps legacy messages when a mixed transcript lacks a complete branch tree", async () => {
     const sessionId = "mixed-legacy-tree-session";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -1180,7 +1245,10 @@ describe("readSessionMessages", () => {
     ];
     fs.writeFileSync(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
 
-    const out = readSessionMessages(sessionId, storePath);
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test",
+    });
 
     expect(out.map((message) => (message as { content?: unknown }).content)).toEqual([
       "legacy hello",
@@ -1203,7 +1271,7 @@ describe("readSessionMessages", () => {
     },
   ] as const)(
     "reads cross-agent absolute sessionFile across store-root layouts for $sessionId",
-    ({ sessionId, sessionFileParts, wrongStorePathParts, message }) => {
+    async ({ sessionId, sessionFileParts, wrongStorePathParts, message }) => {
       const sessionFile = path.join(tmpDir, ...sessionFileParts);
       const wrongStorePath = path.join(tmpDir, ...wrongStorePathParts);
       fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
@@ -1216,17 +1284,20 @@ describe("readSessionMessages", () => {
         "utf-8",
       );
 
-      const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
+      const out = await readSessionMessagesAsync(sessionId, wrongStorePath, sessionFile, {
+        mode: "full",
+        reason: "test",
+      });
       expect(out).toHaveLength(1);
       expectMessageFields(out[0], message);
       expect((out[0] as { __openclaw?: { seq?: number } })["__openclaw"]?.seq).toBe(1);
     },
   );
 
-  test("reads only the active SessionManager branch after a transcript rewrite", () => {
+  test("reads only the active SessionManager branch after a transcript rewrite", async () => {
     const sessionId = "branched-session";
-    const sessionManager = SessionManager.create(tmpDir, tmpDir);
-    const decoratedPrompt = 'Sender (untrusted metadata):\n```json\n{"label":"ui"}\n```\n\nhello';
+    const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
+    const decoratedPrompt = 'Sender:\n```json\n{"label":"ui"}\n```\n\nhello';
     const visiblePrompt = "hello";
     sessionManager.appendMessage({
       role: "user",
@@ -1256,7 +1327,10 @@ describe("readSessionMessages", () => {
       throw new Error("expected SessionManager to expose a session file");
     }
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+      mode: "full",
+      reason: "test",
+    });
 
     expect(
       out.map((message) => ({
@@ -1269,7 +1343,7 @@ describe("readSessionMessages", () => {
     ]);
   });
 
-  test("keeps compaction markers when reading only the active SessionManager branch", () => {
+  test("keeps compaction markers when reading only the active SessionManager branch", async () => {
     const sessionId = "branched-session-with-compaction";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
     const lines = [
@@ -1311,7 +1385,10 @@ describe("readSessionMessages", () => {
     ];
     fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+      mode: "full",
+      reason: "test",
+    });
 
     expect(
       out.map((message) => ({
@@ -1326,7 +1403,69 @@ describe("readSessionMessages", () => {
     ]);
   });
 
-  test("keeps blocked hook messages on the current active branch", () => {
+  test("keeps active-branch compaction markers reachable through pagination", async () => {
+    const sessionId = "paginated-branch-with-compaction";
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "old-user",
+        parentId: null,
+        message: { role: "user", content: "old prompt" },
+      },
+      {
+        type: "message",
+        id: "old-assistant",
+        parentId: "old-user",
+        message: { role: "assistant", content: "old answer" },
+      },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+        summary: "Compacted history",
+      },
+      {
+        type: "message",
+        id: "active-user",
+        parentId: null,
+        message: { role: "user", content: "active prompt" },
+      },
+      {
+        type: "message",
+        id: "active-assistant",
+        parentId: "active-user",
+        message: { role: "assistant", content: "active answer" },
+      },
+      {
+        type: "message",
+        id: "side-branch",
+        parentId: "active-assistant",
+        message: { role: "assistant", content: "side branch" },
+      },
+      { type: "leaf", id: "active-leaf", parentId: "side-branch", targetId: "active-assistant" },
+    ]);
+    const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 0,
+      maxMessages: 2,
+    });
+    const oldest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
+      offset: 2,
+      maxMessages: 1,
+    });
+
+    expect(newest.totalMessages).toBe(3);
+    expectMessageFields(newest.messages[0], { content: "active prompt", openclaw: { seq: 2 } });
+    expectMessageFields(newest.messages[1], { content: "active answer", openclaw: { seq: 3 } });
+    expect(oldest.totalMessages).toBe(3);
+    expectMessageFields(oldest.messages[0], {
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      openclaw: { kind: "compaction", id: "comp-1", seq: 1 },
+    });
+  });
+
+  test("keeps blocked hook messages on the current active branch", async () => {
     const sessionId = "blocked-hook-branch-session";
     const sessionKey = "agent:main:explicit:blocked-hook-branch";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1372,7 +1511,10 @@ describe("readSessionMessages", () => {
 
     expect(messageId).toBeTypeOf("string");
     expect(messageId.length).toBeGreaterThan(0);
-    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+      mode: "full",
+      reason: "test",
+    });
     expect(
       out.map((message) => ({
         role: (message as { role?: string }).role,
@@ -1387,13 +1529,13 @@ describe("readSessionMessages", () => {
     expect(JSON.stringify(out)).not.toContain("matched original");
   });
 
-  test("keeps repeated blocked hook messages together in a new session", () => {
+  test("keeps repeated blocked hook messages together in a new session", async () => {
     const sessionKey = "agent:main:explicit:repeated-blocked-hook";
-    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
     const sessionId = sessionManager.getSessionId();
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) {
-      throw new Error("expected SessionManager.create to return a session file");
+      throw new Error("expected a file-backed session manager");
     }
     fs.writeFileSync(
       storePath,
@@ -1418,7 +1560,10 @@ describe("readSessionMessages", () => {
       pluginId: "hitl-test-hooks",
     });
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile);
+    const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
+      mode: "full",
+      reason: "test",
+    });
     expect(
       out.map((message) => ({
         role: (message as { role?: string }).role,

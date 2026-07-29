@@ -17,7 +17,6 @@ import java.util.UUID
 
 internal data class WearProxyStatus(
   val connected: Boolean,
-  val detail: String,
   val activeAgentId: String?,
   val activeSessionKey: String?,
   val selectedModelRef: String?,
@@ -43,7 +42,7 @@ internal data class WearAgentList(
 
 internal data class WearSession(
   val key: String,
-  val title: String,
+  val title: String?,
   val updatedAt: Long?,
   val hasActiveRun: Boolean,
   val phoneNodeId: String,
@@ -149,7 +148,6 @@ internal class WearGatewayRepository(
     val result = response.payload.asObject("proxy.status")
     return WearProxyStatus(
       connected = result.boolean("connected") ?: false,
-      detail = result.string("status") ?: "Phone gateway unavailable",
       activeAgentId = result.string("activeAgentId"),
       activeSessionKey = result.string("activeSessionKey"),
       selectedModelRef = result.string("selectedModelRef"),
@@ -272,7 +270,6 @@ internal class WearGatewayRepository(
     val result = response.payload.asObject(if (enabled) "gateway.connect" else "gateway.disconnect")
     return WearProxyStatus(
       connected = result.boolean("connected") ?: false,
-      detail = result.string("status") ?: if (enabled) "Connecting" else "Offline",
       activeAgentId = result.string("activeAgentId"),
       activeSessionKey = result.string("activeSessionKey"),
       selectedModelRef = result.string("selectedModelRef"),

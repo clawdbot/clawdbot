@@ -3,7 +3,6 @@
  *
  * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
  */
-import type { ChildProcess } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -160,7 +159,12 @@ export function createGrepToolDefinition(
         // Keep cancellation live from the first await through async result formatting.
         // Settlement owns listener cleanup; spawned children stop without waiting for close.
         let settled = false;
-        let child: ChildProcess | undefined;
+        let child:
+          | {
+              nodeChildProcess: { killed: boolean };
+              kill: () => void;
+            }
+          | undefined;
         let childClosed = false;
         let rl: ReturnType<typeof createInterface> | undefined;
         let killedDueToLimit = false;
@@ -178,7 +182,7 @@ export function createGrepToolDefinition(
           return true;
         };
         const stopChild = (dueToLimit = false) => {
-          if (child && !childClosed && !child.killed) {
+          if (child && !childClosed && !child.nodeChildProcess.killed) {
             killedDueToLimit = dueToLimit;
             child.kill();
           }
@@ -267,7 +271,7 @@ export function createGrepToolDefinition(
               reject: false,
               stdio: ["ignore", "pipe", "pipe"],
             });
-            releaseChildProcessOutputAfterExit(spawnedChild);
+            releaseChildProcessOutputAfterExit(spawnedChild.nodeChildProcess);
             child = spawnedChild;
             rl = createInterface({ input: spawnedChild.stdout });
             let stderr = "";
@@ -276,7 +280,10 @@ export function createGrepToolDefinition(
             let linesTruncated = false;
             const outputLines: string[] = [];
 
-            spawnedChild.stderr?.on("data", (chunk) => {
+            // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
+            // cannot split multibyte characters into U+FFFD replacement noise.
+            spawnedChild.stderr?.setEncoding("utf8");
+            spawnedChild.stderr?.on("data", (chunk: string) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             const onStreamError = (stream: "stdout" | "stderr", error: Error) => {
@@ -355,11 +362,11 @@ export function createGrepToolDefinition(
               }
             });
 
-            spawnedChild.on("error", (error) => {
+            spawnedChild.nodeChildProcess.on("error", (error) => {
               childClosed = true;
               settle(() => reject(new Error(`Failed to run ripgrep: ${error.message}`)));
             });
-            spawnedChild.on("close", (code) => {
+            spawnedChild.nodeChildProcess.on("close", (code) => {
               childClosed = true;
               void (async () => {
                 if (settled) {

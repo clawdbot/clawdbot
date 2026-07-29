@@ -7,8 +7,23 @@ import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
+import { canonicalizeMediaGenerationTestConfig } from "./media-generation-config.test-support.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
-import { createMusicGenerateTool } from "./music-generate-tool.js";
+import { createMusicGenerateTool as createMusicGenerateToolImpl } from "./music-generate-tool.js";
+
+function createMusicGenerateTool(
+  params: Parameters<typeof createMusicGenerateToolImpl>[0],
+): ReturnType<typeof createMusicGenerateToolImpl> {
+  const options = params ?? {};
+  return createMusicGenerateToolImpl({
+    ...options,
+    config: canonicalizeMediaGenerationTestConfig(
+      options.config ?? {},
+      "music",
+      "musicGenerationModel",
+    ),
+  });
+}
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {

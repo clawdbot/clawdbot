@@ -85,9 +85,9 @@ describe("nostr outbound cfg threading", () => {
     mocks.startNostrBus.mockReset();
   });
 
-  it("uses resolved cfg when converting markdown tables before send", async () => {
+  it("converts tables before projecting markdown to Nostr plain text", async () => {
     const { resolveMarkdownTableMode, convertMarkdownTables } = installOutboundRuntime(
-      vi.fn((text: string) => `converted:${text}`),
+      vi.fn((text: string) => (text === "***" ? text : "**Table:** [docs](https://example.com)")),
     );
     const { cleanup, sendDm } = await startOutboundAccount();
 
@@ -106,7 +106,15 @@ describe("nostr outbound cfg threading", () => {
     });
     expect(convertMarkdownTables).toHaveBeenCalledWith("|a|b|", "off");
     expect(mocks.normalizePubkey).toHaveBeenCalledWith("NPUB123");
-    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "converted:|a|b|");
+    expect(sendDm).toHaveBeenCalledWith("normalized-npub123", "Table: docs (https://example.com)");
+    await expect(
+      nostrOutboundAdapter.sendText({
+        cfg: cfg as OpenClawConfig,
+        to: "NPUB123",
+        text: "***",
+        accountId: "default",
+      }),
+    ).rejects.toThrow("requires non-empty text");
 
     await cleanup.stop();
   });

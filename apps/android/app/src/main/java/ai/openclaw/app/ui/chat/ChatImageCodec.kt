@@ -171,11 +171,18 @@ internal fun decodeBase64Bitmap(
   maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
 ): Bitmap? {
   if (base64.length > CHAT_IMAGE_MAX_BASE64_CHARS) return null
-  val cacheKey = "$maxDimension:${base64.length}:${base64.hashCode()}"
-  decodedBitmapCache.get(cacheKey)?.let { return it }
-
   val bytes = Base64.decode(base64, Base64.DEFAULT)
-  if (bytes.isEmpty()) return null
+  return decodeImageBytes(bytes, maxDimension)
+}
+
+/** Decodes already-authorized image bytes without base64 expansion. */
+internal fun decodeImageBytes(
+  bytes: ByteArray,
+  maxDimension: Int = CHAT_DECODE_MAX_DIMENSION,
+): Bitmap? {
+  if (bytes.isEmpty() || bytes.size > 12 * 1024 * 1024) return null
+  val cacheKey = "$maxDimension:${bytes.size}:${bytes.contentHashCode()}"
+  decodedBitmapCache.get(cacheKey)?.let { return it }
 
   val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
   BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)

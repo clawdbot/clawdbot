@@ -43,7 +43,9 @@ export type ApplicationNavigationPreferences = {
   subscribe: (listener: (snapshot: ApplicationNavigationPreferencesSnapshot) => void) => () => void;
 };
 
-export type ApplicationNavigationOptions = Partial<Pick<RouteLocation, "search" | "hash">>;
+export type ApplicationNavigationOptions = Partial<
+  Pick<RouteLocation, "pathname" | "search" | "hash">
+>;
 
 type SkillWorkshopRevisionHandoff = {
   sessionKey: string;
@@ -62,10 +64,12 @@ export type ApplicationInitialUserMessage = {
   role: "user";
   content: unknown[];
   timestamp: number;
+  __openclaw?: { idempotencyKey?: string; seq?: number };
 };
 
 type InitialUserMessageHandoff = {
   message: ApplicationInitialUserMessage;
+  /** Logical Gateway client; per-transport hello objects rotate on reconnect. */
   owner: object;
   sessionKey: string;
 };

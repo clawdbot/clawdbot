@@ -125,9 +125,6 @@
       "openclaw/plugin-sdk/codex-mcp-projection": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/codex-mcp-projection.d.ts"
       ],
-      "openclaw/plugin-sdk/codex-native-task-runtime": [
-        "../packages/plugin-sdk/dist/src/plugin-sdk/codex-native-task-runtime.d.ts"
-      ],
       "openclaw/plugin-sdk/agent-harness-task-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-task-runtime.d.ts"
       ],
@@ -208,6 +205,9 @@
       ],
       "openclaw/plugin-sdk/test-node-mocks": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/test-node-mocks.d.ts"
+      ],
+      "openclaw/plugin-sdk/test-state": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/test-state.d.ts"
       ],
       "openclaw/plugin-sdk/time-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/time-runtime.d.ts"
@@ -295,6 +295,9 @@
       ],
       "openclaw/plugin-sdk/session-catalog": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog.d.ts"
+      ],
+      "openclaw/plugin-sdk/session-catalog-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/session-catalog-runtime.d.ts"
       ],
       "openclaw/plugin-sdk/session-key-runtime": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/session-key-runtime.d.ts"
@@ -581,14 +584,29 @@
       "@openclaw/ai/providers": [
         "../dist/plugin-sdk/packages/ai/src/providers.d.ts"
       ],
+      "@openclaw/ai/transports": [
+        "../dist/plugin-sdk/packages/ai/src/transports.d.ts"
+      ],
       "@openclaw/ai/types": [
         "../dist/plugin-sdk/packages/ai/src/types.d.ts"
       ],
       "@openclaw/ai/validation": [
         "../dist/plugin-sdk/packages/ai/src/validation.d.ts"
       ],
-      "@openclaw/ai/internal/*": [
-        "../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"
+      "@openclaw/ai/internal/anthropic": [
+        "../dist/plugin-sdk/packages/ai/src/internal/anthropic.d.ts"
+      ],
+      "@openclaw/ai/internal/openai": [
+        "../dist/plugin-sdk/packages/ai/src/internal/openai.d.ts"
+      ],
+      "@openclaw/ai/internal/retry-after": [
+        "../dist/plugin-sdk/packages/ai/src/internal/retry-after.d.ts"
+      ],
+      "@openclaw/ai/internal/runtime": [
+        "../dist/plugin-sdk/packages/ai/src/internal/runtime.d.ts"
+      ],
+      "@openclaw/ai/internal/shared": [
+        "../dist/plugin-sdk/packages/ai/src/internal/shared.d.ts"
       ],
       "@openclaw/llm-core": [
         "../dist/plugin-sdk/packages/llm-core/src/index.d.ts"
@@ -734,17 +752,8 @@
       "@openclaw/acp-core": [
         "../dist/plugin-sdk/packages/acp-core/src/index.d.ts"
       ],
-      "@openclaw/acp-core/normalize-text": [
-        "../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts"
-      ],
       "@openclaw/acp-core/meta": [
         "../dist/plugin-sdk/packages/acp-core/src/meta.d.ts"
-      ],
-      "@openclaw/acp-core/numeric-options": [
-        "../dist/plugin-sdk/packages/acp-core/src/numeric-options.d.ts"
-      ],
-      "@openclaw/acp-core/record-shared": [
-        "../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts"
       ],
       "@openclaw/acp-core/session": [
         "../dist/plugin-sdk/packages/acp-core/src/session.d.ts"

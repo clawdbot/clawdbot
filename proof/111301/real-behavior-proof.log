@@ -1,8 +1,0 @@
- [32m✓[39m [30m[45m auto-reply [49m[39m ../../src/auto-reply/reply/get-reply-run.media-only.test.ts [2m([22m[2m101 tests[22m[2m)[22m[33m 87059[2mms[22m[39m
-     [33m[2m✓[22m[39m passes approved elevated defaults to the runner [33m 555[2mms[22m[39m
-     [33m[2m✓[22m[39m hydrates runtime thinking metadata before trusting static provider support [33m 434[2mms[22m[39m
-     [33m[2m✓[22m[39m still skips metadata-only turns when inbound context adds chat_id [33m 891[2mms[22m[39m
-     [33m[2m✓[22m[39m hydrates current image MediaPaths by extension when MediaTypes are missing [33m 4125[2mms[22m[39m
-     [33m[2m✓[22m[39m does not send a standalone reset notice for reply-producing /new turns [33m 782[2mms[22m[39m
-[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
-[2m      Tests [22m [1m[32m101 passed[39m[22m[90m (101)[39m

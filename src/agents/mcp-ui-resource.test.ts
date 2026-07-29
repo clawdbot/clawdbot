@@ -6,6 +6,7 @@ import {
   acquireMcpAppViewRequest,
   fetchMcpAppView,
   getMcpAppViewLease,
+  getMcpAppViewLeaseForSession,
 } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
 
@@ -15,6 +16,7 @@ const MCP_APP_RESOURCE_MAX_BYTES = 2 * 1024 * 1024;
 function runtime(readResource: SessionMcpRuntime["readResource"]): SessionMcpRuntime {
   return {
     sessionId: "session-1",
+    sessionKey: "agent:main:main",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
     createdAt: 0,
@@ -80,6 +82,11 @@ describe("MCP App UI resources", () => {
         runtime(async () => ({ contents: [] })),
       ),
     ).toBeUndefined();
+    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:main:main")).toMatchObject({
+      html: "<html>demo</html>",
+      runtime: sessionRuntime,
+    });
+    expect(getMcpAppViewLeaseForSession(result?.viewId ?? "", "agent:other:main")).toBeUndefined();
   });
 
   it("keeps valid Apps when optional listing metadata fails", async () => {

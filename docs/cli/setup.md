@@ -97,7 +97,8 @@ storage mode.
 creates the config, workspace, and session directories, then exits without
 running onboarding. It accepts `--workspace` and harmless output controls, but
 rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
-silently ignoring them.
+silently ignoring them. If an existing config is invalid, baseline setup preserves
+it and asks you to run `openclaw doctor` before retrying.
 
 ## Examples
 
@@ -115,6 +116,7 @@ openclaw setup --non-interactive --accept-risk --mode remote --remote-url wss://
 
 ## Notes
 
+- Inside the OpenClaw chat, `configure skills` and `configure web search` run the hosted skills and web-search setup flows; `open search wizard` hands off to the masked terminal wizard when a credential is needed. See [`openclaw setup` operations](/cli/openclaw#operations-and-approval).
 - After baseline setup, run `openclaw onboard` for the full guided journey, `openclaw configure` for targeted changes, or `openclaw channels add` to add channel accounts.
 - If Hermes state is detected, interactive onboarding can offer migration automatically. Import onboarding requires a fresh setup; use [Migrate](/cli/migrate) for dry-run plans, backups, and overwrite mode outside onboarding.
 
