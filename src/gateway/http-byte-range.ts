@@ -51,10 +51,11 @@ function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "u
   if (!match || (!match[1] && !match[2])) {
     return "invalid";
   }
+  const [, rangeStart = "", rangeEnd = ""] = match;
 
   const fileSize = BigInt(size);
-  if (!match[1]) {
-    const suffixLength = BigInt(match[2]);
+  if (!rangeStart) {
+    const suffixLength = BigInt(rangeEnd);
     if (suffixLength === 0n || fileSize === 0n) {
       return "unsatisfiable";
     }
@@ -62,11 +63,11 @@ function parseByteRange(value: string, size: number): ByteSlice | "invalid" | "u
     return { start: Number(start), end: size - 1 };
   }
 
-  const start = BigInt(match[1]);
+  const start = BigInt(rangeStart);
   if (start >= fileSize) {
     return "unsatisfiable";
   }
-  const requestedEnd = match[2] ? BigInt(match[2]) : fileSize - 1n;
+  const requestedEnd = rangeEnd ? BigInt(rangeEnd) : fileSize - 1n;
   if (requestedEnd < start) {
     return "unsatisfiable";
   }
