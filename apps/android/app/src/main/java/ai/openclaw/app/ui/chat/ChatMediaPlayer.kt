@@ -47,6 +47,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -74,20 +75,49 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
+internal class ChatMediaPlaybackClaims<T>(
+  private val release: (T) -> Unit,
+) {
+  var active: T? = null
+    private set
+
+  fun claim(value: T) {
+    if (active === value) return
+    val previous = active
+    active = null
+    previous?.let(release)
+    active = value
+  }
+
+  fun releaseIf(predicate: (T) -> Boolean): Boolean {
+    val previous = active?.takeIf(predicate) ?: return false
+    active = null
+    release(previous)
+    return true
+  }
+
+  fun releaseActive() {
+    val previous = active ?: return
+    active = null
+    release(previous)
+  }
+}
+
 private object ChatMediaPlaybackArbiter {
   private data class ActivePlayback(
     val player: ExoPlayer,
     val audioManager: AudioManager,
     val focusRequest: AudioFocusRequest,
+    val onReleased: () -> Unit,
   )
 
   private val mainHandler = Handler(Looper.getMainLooper())
-  private var active: ActivePlayback? = null
+  private val claims = ChatMediaPlaybackClaims<ActivePlayback>(::stopAndRelease)
   private var playbackIntentGeneration = 0L
 
   @Synchronized
-  fun claimPlaybackIntent(): Long {
-    active?.let(::pauseAndAbandon)
+  fun claimPlaybackIntent(preservePlayer: ExoPlayer? = null): Long {
+    if (claims.active?.player !== preservePlayer) claims.releaseActive()
     playbackIntentGeneration += 1L
     return playbackIntentGeneration
   }
@@ -103,7 +133,7 @@ private object ChatMediaPlaybackArbiter {
   @Synchronized
   fun stopAll() {
     playbackIntentGeneration += 1L
-    active?.let(::pauseAndAbandon)
+    claims.releaseActive()
   }
 
   @Synchronized
@@ -111,10 +141,10 @@ private object ChatMediaPlaybackArbiter {
     context: Context,
     player: ExoPlayer,
     intentGeneration: Long,
+    onReleased: () -> Unit,
   ): Boolean {
     if (playbackIntentGeneration != intentGeneration) return false
-    active?.takeIf { it.player !== player }?.let(::pauseAndAbandon)
-    if (active?.player === player) return true
+    if (claims.active?.player === player) return true
 
     val audioManager = context.getSystemService(AudioManager::class.java)
     val focusRequest =
@@ -135,30 +165,28 @@ private object ChatMediaPlaybackArbiter {
     if (audioManager.requestAudioFocus(focusRequest) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
       return false
     }
-    active = ActivePlayback(player = player, audioManager = audioManager, focusRequest = focusRequest)
+    claims.claim(
+      ActivePlayback(
+        player = player,
+        audioManager = audioManager,
+        focusRequest = focusRequest,
+        onReleased = onReleased,
+      ),
+    )
     return true
   }
 
   @Synchronized
-  fun pause(player: ExoPlayer) {
-    val playback = active?.takeIf { it.player === player } ?: return
-    player.pause()
-    abandon(playback)
-  }
+  fun pause(player: ExoPlayer): Boolean = release(player)
 
   @Synchronized
-  fun release(player: ExoPlayer) {
-    active?.takeIf { it.player === player }?.let(::abandon)
-  }
+  fun release(player: ExoPlayer): Boolean = claims.releaseIf { it.player === player }
 
-  private fun pauseAndAbandon(playback: ActivePlayback) {
+  private fun stopAndRelease(playback: ActivePlayback) {
     playback.player.pause()
-    abandon(playback)
-  }
-
-  private fun abandon(playback: ActivePlayback) {
     playback.audioManager.abandonAudioFocusRequest(playback.focusRequest)
-    if (active === playback) active = null
+    playback.player.release()
+    playback.onReleased()
   }
 }
 
@@ -211,37 +239,71 @@ private fun ChatMediaPlayerCard(
   var durationMs by remember(content.artifactId, kind) { mutableLongStateOf(content.durationMs?.coerceAtLeast(0L) ?: 0L) }
   var playbackIntent by remember(content.artifactId, kind) { mutableLongStateOf(0L) }
 
+  fun clearPlayerState(
+    released: ExoPlayer,
+    releasedFile: File?,
+  ) {
+    if (player === released) player = null
+    if (tempFile === releasedFile) tempFile = null
+    releasedFile?.delete()
+    isPlaying = false
+    positionMs = 0L
+  }
+
+  fun disposeUnclaimedPlayer(
+    released: ExoPlayer,
+    releasedFile: File?,
+  ) {
+    released.release()
+    clearPlayerState(released, releasedFile)
+  }
+
+  fun requestPlayback(
+    requested: ExoPlayer,
+    requestedFile: File?,
+    intentGeneration: Long,
+  ): Boolean =
+    ChatMediaPlaybackArbiter.requestPlayback(
+      context = context,
+      player = requested,
+      intentGeneration = intentGeneration,
+      onReleased = { clearPlayerState(requested, requestedFile) },
+    )
+
   fun pause() {
     player?.let(ChatMediaPlaybackArbiter::pause)
   }
 
   fun play() {
     if (playbackBlocked) return
-    val intentGeneration = ChatMediaPlaybackArbiter.claimPlaybackIntent()
-    playbackIntent = intentGeneration
     var existing = player
     if (existing != null && error != null) {
-      ChatMediaPlaybackArbiter.release(existing)
-      existing.release()
-      player = null
-      tempFile?.delete()
-      tempFile = null
+      val existingFile = tempFile
+      if (!ChatMediaPlaybackArbiter.release(existing)) {
+        disposeUnclaimedPlayer(existing, existingFile)
+      }
       existing = null
     }
     if (existing != null) {
-      if (ChatMediaPlaybackArbiter.requestPlayback(context, existing, intentGeneration)) {
+      val intentGeneration = ChatMediaPlaybackArbiter.claimPlaybackIntent(preservePlayer = existing)
+      playbackIntent = intentGeneration
+      if (requestPlayback(existing, tempFile, intentGeneration)) {
         if (existing.playbackState == Player.STATE_ENDED) existing.seekToDefaultPosition()
         existing.play()
       } else {
+        disposeUnclaimedPlayer(existing, tempFile)
         error = nativeString("Audio playback is unavailable")
       }
       return
     }
     val artifactId = content.artifactId?.trim()?.takeIf(String::isNotEmpty)
-    if (artifactId == null || loading) {
+    if (artifactId == null) {
       error = nativeString("Media unavailable")
       return
     }
+    if (loading) return
+    val intentGeneration = ChatMediaPlaybackArbiter.claimPlaybackIntent()
+    playbackIntent = intentGeneration
     loading = true
     error = null
     scope.launch {
@@ -289,34 +351,29 @@ private fun ChatMediaPlayerCard(
             isPlaying = value
           }
 
-          override fun onPlayWhenReadyChanged(
-            playWhenReady: Boolean,
-            reason: Int,
-          ) {
-            if (!playWhenReady) ChatMediaPlaybackArbiter.release(created)
-          }
-
           override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) {
-              created.pause()
               ChatMediaPlaybackArbiter.release(created)
             }
           }
 
           override fun onPlayerError(playbackException: PlaybackException) {
-            ChatMediaPlaybackArbiter.release(created)
+            if (!ChatMediaPlaybackArbiter.release(created)) {
+              disposeUnclaimedPlayer(created, prepared.tempFile)
+            }
             error = nativeString("Media unavailable")
           }
         },
       )
       player = created
       loading = false
-      if (
+      val shouldPlay =
         !currentPlaybackBlocked &&
-        lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) &&
-        ChatMediaPlaybackArbiter.requestPlayback(context, created, intentGeneration)
-      ) {
+          lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+      if (shouldPlay && requestPlayback(created, prepared.tempFile, intentGeneration)) {
         created.play()
+      } else {
+        disposeUnclaimedPlayer(created, prepared.tempFile)
       }
     }
   }
@@ -344,8 +401,11 @@ private fun ChatMediaPlayerCard(
     onDispose {
       ChatMediaPlaybackArbiter.cancelIntent(playbackIntent)
       player?.let { activePlayer ->
-        ChatMediaPlaybackArbiter.release(activePlayer)
-        activePlayer.release()
+        val activeFile = tempFile
+        if (!ChatMediaPlaybackArbiter.release(activePlayer)) {
+          activePlayer.release()
+          activeFile?.delete()
+        }
       }
       tempFile?.delete()
     }
@@ -609,3 +669,38 @@ private data class PreparedMediaSource(
 )
 
 internal fun ChatMessageContent.isVideoAttachment(): Boolean = type == "video" || mimeType?.startsWith("video/") == true
+
+internal fun ChatMessageContent.hasPlayableMediaArtifact(): Boolean = !artifactId.isNullOrBlank()
+
+@Composable
+internal fun ChatMediaAttachmentLabel(content: ChatMessageContent) {
+  val isAudio = content.isAudioAttachment()
+  Row(
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Icon(
+      imageVector = if (isAudio) Icons.Default.Mic else Icons.Default.Videocam,
+      contentDescription = null,
+      modifier = Modifier.size(16.dp),
+      tint = ClawTheme.colors.textMuted,
+    )
+    Text(
+      text =
+        content.fileName?.takeIf(String::isNotBlank)
+          ?: if (isAudio) nativeString("Voice note") else nativeString("Video"),
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+      modifier = Modifier.weight(1f),
+    )
+    content.durationMs?.let { duration ->
+      Text(
+        text = formatVoiceNoteDuration(duration),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
+    }
+  }
+}

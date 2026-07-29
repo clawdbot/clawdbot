@@ -251,18 +251,19 @@ private fun ChatMessageBody(
           val text = part.text ?: continue
           ChatMarkdown(text = text, textColor = textColor)
         }
-        part.isAudioAttachment() ->
+        part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
           ChatAudioPlayerCard(
             content = part,
             playbackBlocked = inlineMediaPlaybackBlocked,
             loadMedia = loadMediaArtifact,
           )
-        part.isVideoAttachment() ->
+        part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
           ChatVideoPlayerCard(
             content = part,
             playbackBlocked = inlineMediaPlaybackBlocked,
             loadMedia = loadMediaArtifact,
           )
+        part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
         part.type == "image" && !part.base64.isNullOrBlank() ->
           ChatBase64Image(base64 = part.base64, mimeType = part.mimeType)
         part.type == "image" && !part.artifactId.isNullOrBlank() ->

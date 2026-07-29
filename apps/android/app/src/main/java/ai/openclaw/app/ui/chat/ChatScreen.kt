@@ -1729,18 +1729,19 @@ private fun ChatBubble(
             when {
               part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
               part.type == "text" -> Unit
-              part.isAudioAttachment() ->
+              part.isAudioAttachment() && part.hasPlayableMediaArtifact() ->
                 ChatAudioPlayerCard(
                   content = part,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
-              part.isVideoAttachment() ->
+              part.isVideoAttachment() && part.hasPlayableMediaArtifact() ->
                 ChatVideoPlayerCard(
                   content = part,
                   playbackBlocked = inlineMediaPlaybackBlocked,
                   loadMedia = loadMediaArtifact,
                 )
+              part.isAudioAttachment() || part.isVideoAttachment() -> ChatMediaAttachmentLabel(content = part)
               part.type == "image" ->
                 if (!part.base64.isNullOrBlank()) {
                   ChatBase64Image(
