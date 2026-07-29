@@ -65,7 +65,13 @@ function resolveHookForToggle(
   hookName: string,
   opts?: { requireEligible?: boolean },
 ): HookStatusEntry {
-  const hook = report.hooks.find((h) => h.name === hookName);
+  const nameMatches = report.hooks.filter((hook) => hook.name === hookName);
+  const matches =
+    nameMatches.length > 0 ? nameMatches : report.hooks.filter((hook) => hook.hookKey === hookName);
+  if (matches.length > 1) {
+    throw new Error(`Hook "${hookName}" is ambiguous; use a unique hook name or hook key`);
+  }
+  const hook = matches[0];
   if (!hook) {
     throw new Error(`Hook "${hookName}" not found`);
   }
@@ -447,7 +453,7 @@ async function enableHook(hookName: string): Promise<void> {
   const hook = resolveHookForToggle(buildHooksReport(config), hookName, { requireEligible: true });
   const nextConfig = buildConfigWithHookEnabled({
     config,
-    hookName,
+    hookName: hook.hookKey,
     enabled: true,
     ensureHooksEnabled: true,
   });
@@ -457,7 +463,7 @@ async function enableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
+    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hook.name)}` : decorativePrefix("🔗", theme.command(hook.name))}`,
   );
 }
 
@@ -465,14 +471,18 @@ async function disableHook(hookName: string): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
   const config = (snapshot.sourceConfig ?? snapshot.config) as OpenClawConfig;
   const hook = resolveHookForToggle(buildHooksReport(config), hookName);
-  const nextConfig = buildConfigWithHookEnabled({ config, hookName, enabled: false });
+  const nextConfig = buildConfigWithHookEnabled({
+    config,
+    hookName: hook.hookKey,
+    enabled: false,
+  });
 
   await replaceConfigFile({
     nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
+    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hook.name)}` : decorativePrefix("🔗", theme.command(hook.name))}`,
   );
 }
 
@@ -509,6 +519,7 @@ export function registerHooksCli(program: Command): void {
         const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
+        return report.hooks.some((hook) => hook.name === name || hook.hookKey === name) ? 0 : 1;
       }),
     );
 

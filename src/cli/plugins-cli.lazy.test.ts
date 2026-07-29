@@ -45,6 +45,47 @@ describe("plugins cli lazy runtime boundary", () => {
     expect(runtimeLoaded).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "plugins",
+      argv: ["plugins"],
+      description: "Manage OpenClaw plugins and extensions",
+    },
+    {
+      name: "plugins marketplace",
+      argv: ["plugins", "marketplace"],
+      description: "Inspect Claude-compatible plugin marketplaces",
+    },
+  ])("renders $name parent help successfully without importing the runtime", async (testCase) => {
+    const runtimeLoaded = vi.fn();
+    vi.doMock("./plugins-cli.runtime.js", () => {
+      runtimeLoaded();
+      return {};
+    });
+
+    const { registerPluginsCli } = await import("./plugins-cli.js");
+    const program = new Command();
+    const helpOutput: string[] = [];
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: (value) => helpOutput.push(value),
+      writeOut: (value) => helpOutput.push(value),
+    });
+    registerPluginsCli(program);
+
+    const originalExitCode = process.exitCode;
+    try {
+      process.exitCode = undefined;
+      await program.parseAsync(testCase.argv, { from: "user" });
+
+      expect(process.exitCode).toBe(0);
+      expect(helpOutput.join("")).toContain(testCase.description);
+      expect(runtimeLoaded).not.toHaveBeenCalled();
+    } finally {
+      process.exitCode = originalExitCode;
+    }
+  });
+
   it("loads the plugins runtime for runtime-backed actions", async () => {
     const runPluginsRegistryCommand = vi.fn().mockResolvedValue(undefined);
     const runtimeLoaded = vi.fn();

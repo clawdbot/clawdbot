@@ -83,6 +83,15 @@ export function registerPairingCli(program: Command) {
         throw new Error(`Channel required (expected one of: ${channelHint}).`);
       }
       const channel = parseChannel(channelRaw, channels);
+      if (opts.channel && channelArg) {
+        const positionalChannel = parseChannel(channelArg, channels);
+        if (channel !== positionalChannel) {
+          throw new Error(
+            `Conflicting pairing channels: "${channel}" and "${positionalChannel}". ` +
+              `Pass the channel either positionally or with --channel.`,
+          );
+        }
+      }
       const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
       const requests = accountId
         ? await listChannelPairingRequests(channel, process.env, accountId)

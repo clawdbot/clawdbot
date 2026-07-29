@@ -89,6 +89,61 @@ describe("models scan command", () => {
     expect(runtime.lines.join("\n")).toContain("skip");
   });
 
+  it("prints metadata-only JSON in the same deterministic ranking as the table", async () => {
+    const runtime = createRuntime();
+    mocks.scanOpenRouterModels.mockResolvedValue([
+      scanResult({
+        id: "zeta/free:free",
+        modelRef: "openrouter/zeta/free:free",
+        contextLength: 128_000,
+      }),
+      scanResult({
+        id: "alpha/free:free",
+        modelRef: "openrouter/alpha/free:free",
+        contextLength: 128_000,
+      }),
+      scanResult({
+        id: "larger/free:free",
+        modelRef: "openrouter/larger/free:free",
+        contextLength: 256_000,
+      }),
+    ]);
+
+    await modelsScanCommand({ probe: false, json: true }, runtime);
+
+    expect(runtime.lines).toHaveLength(1);
+    const results = JSON.parse(runtime.lines[0] ?? "") as ModelScanResult[];
+    expect(results.map((result) => result.modelRef)).toEqual([
+      "openrouter/larger/free:free",
+      "openrouter/alpha/free:free",
+      "openrouter/zeta/free:free",
+    ]);
+    expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
+    expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes provider-controlled model refs and modality in scan tables", async () => {
+    const runtime = createRuntime();
+    mocks.scanOpenRouterModels.mockResolvedValue([
+      scanResult({
+        modelRef: "openrouter/evil\u001b[31m\nmodel:free",
+        modality: "text\u001b[31m\nnext\tvalue\u0007",
+      }),
+    ]);
+
+    await modelsScanCommand({ probe: false }, runtime);
+
+    const row = runtime.lines.find((line) => line.includes("openrouter/evil"));
+    expect(row).toContain("openrouter/evil\\nmodel:free");
+    expect(row).toContain("modality:text\\nnext\\tvalue");
+    expect(
+      Array.from(row ?? "").every((character) => {
+        const code = character.charCodeAt(0);
+        return code > 0x1f && (code < 0x7f || code > 0x9f);
+      }),
+    ).toBe(true);
+  });
+
   it("downgrades to metadata-only scan when no OpenRouter key is configured", async () => {
     await withOpenRouterApiKey(undefined, async () => {
       const runtime = createRuntime();

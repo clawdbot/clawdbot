@@ -1163,7 +1163,17 @@ export async function runDevicesRejectCommand(
   requestId: string,
   opts: DevicesRpcOpts,
 ): Promise<void> {
-  const result = await callGatewayCli("device.pair.reject", opts, { requestId });
+  const normalizedRequestId = normalizeOptionalString(requestId);
+  if (!normalizedRequestId) {
+    defaultRuntime.error(
+      `requestId is required. Run ${formatCliCommand("openclaw devices list")} to choose a pending request.`,
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  const result = await callGatewayCli("device.pair.reject", opts, {
+    requestId: normalizedRequestId,
+  });
   if (opts.json) {
     defaultRuntime.writeJson(result);
     return;

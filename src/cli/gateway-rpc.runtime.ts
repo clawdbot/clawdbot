@@ -41,6 +41,7 @@ export async function callGatewayFromCliRuntime(
       await callGateway({
         url: opts.url,
         token: opts.token,
+        password: opts.password,
         method,
         params,
         deviceIdentity: extra?.deviceIdentity,

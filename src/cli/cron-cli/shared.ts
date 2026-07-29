@@ -205,7 +205,7 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
       storage?: string;
       sqlitePath?: string;
     };
-    if (res?.enabled === true) {
+    if (res?.enabled !== false) {
       return;
     }
     const store =

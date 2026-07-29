@@ -69,6 +69,26 @@ describe("memory-lancedb CLI embedding lifecycle", () => {
     expect(harness.close).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects an invalid limit before generating an embedding", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.program.parseAsync([
+        "node",
+        "openclaw",
+        "ltm",
+        "search",
+        "hello",
+        "--limit",
+        "5items",
+      ]),
+    ).rejects.toThrow("--limit must be a positive integer");
+
+    expect(harness.embed).not.toHaveBeenCalled();
+    expect(harness.search).not.toHaveBeenCalled();
+    expect(harness.close).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves a falsy search rejection over cleanup failure", async () => {
     const harness = createHarness({
       embedError: null,
