@@ -1,8 +1,8 @@
-export const MULAW_SAMPLE_RATE = 8_000;
-export const WHISPER_SAMPLE_RATE = 16_000;
+const MULAW_SAMPLE_RATE = 8_000;
+const WHISPER_SAMPLE_RATE = 16_000;
 
 /** Decode one ITU-T G.711 µ-law byte to signed linear PCM16. */
-export function decodeMulawSample(value: number): number {
+function decodeMulawSample(value: number): number {
   const encoded = ~value & 0xff;
   const sign = encoded & 0x80;
   const exponent = (encoded >> 4) & 0x07;
@@ -14,7 +14,7 @@ export function decodeMulawSample(value: number): number {
   return sign === 0 ? magnitude : -magnitude;
 }
 
-export function mulawToPcm16(input: Buffer): Buffer {
+function mulawToPcm16(input: Buffer): Buffer {
   const output = Buffer.allocUnsafe(input.length * 2);
   for (let index = 0; index < input.length; index += 1) {
     output.writeInt16LE(decodeMulawSample(input[index]!), index * 2);
@@ -29,7 +29,7 @@ export function mulawToPcm16(input: Buffer): Buffer {
  * ratio is exact, so this stateless conversion neither accumulates clock drift
  * nor needs packet-to-packet state.
  */
-export function resamplePcm16(
+function resamplePcm16(
   input: Buffer,
   sourceRate = MULAW_SAMPLE_RATE,
   targetRate = WHISPER_SAMPLE_RATE,
