@@ -1,8 +1,8 @@
+/** Defines unsupported secret-ref surfaces and operator-facing policy messages. */
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { isRecord } from "../utils.js";
 
 const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
-  "commands.ownerDisplaySecret",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
@@ -10,7 +10,6 @@ const CORE_UNSUPPORTED_SECRETREF_SURFACE_PATTERNS = [
 ] as const;
 
 const CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS = [
-  "commands.ownerDisplaySecret",
   "hooks.token",
   "hooks.gmail.pushToken",
   "hooks.mappings[].sessionKey",
@@ -36,6 +35,7 @@ const unsupportedSecretRefSurfacePatterns = [
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
 ];
 
+// Candidate scanning only sees openclaw.json; auth-profile-only surfaces are audited elsewhere.
 const unsupportedSecretRefConfigCandidatePatterns = [
   ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
@@ -92,6 +92,8 @@ function collectPatternCandidates(params: {
 
   if (token.kind === "wildcard") {
     if (Array.isArray(params.current)) {
+      // Wildcards traverse both objects and arrays because plugin/channel configs use both
+      // shapes for owner-defined maps.
       for (const [index, value] of params.current.entries()) {
         collectPatternCandidates({
           ...params,
@@ -128,6 +130,7 @@ function collectPatternCandidates(params: {
     if (!Array.isArray(value)) {
       return;
     }
+    // Array tokens preserve the named field in the reported path, matching config dot-paths.
     for (const [index, entry] of value.entries()) {
       collectPatternCandidates({
         ...params,
@@ -150,16 +153,25 @@ function collectPatternCandidates(params: {
   });
 }
 
-export function getUnsupportedSecretRefSurfacePatterns(): string[] {
+/**
+ * Returns canonical config/auth-profile path patterns that do not support SecretRef values.
+ */
+function listUnsupportedSecretRefSurfacePatterns(): string[] {
   return [...unsupportedSecretRefSurfacePatterns];
 }
 
-export type UnsupportedSecretRefConfigCandidate = {
+/**
+ * Concrete unsupported config value discovered from an openclaw.json-like object.
+ */
+type UnsupportedSecretRefConfigCandidate = {
   path: string;
   value: unknown;
 };
 
-export function collectUnsupportedSecretRefConfigCandidates(
+/**
+ * Finds configured openclaw.json values whose surfaces currently reject SecretRef objects.
+ */
+function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
   if (!isRecord(raw)) {
@@ -178,3 +190,8 @@ export function collectUnsupportedSecretRefConfigCandidates(
   }
   return candidates;
 }
+
+export const unsupportedSecretRefSurfacePolicy = {
+  listPatterns: listUnsupportedSecretRefSurfacePatterns,
+  collectConfigCandidates: collectUnsupportedSecretRefConfigCandidates,
+};

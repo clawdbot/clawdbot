@@ -1,6 +1,6 @@
 ---
 name: taskflow-inbox-triage
-description: Example TaskFlow authoring pattern for inbox triage. Use when messages need different treatment based on intent, with some routes notifying immediately, some waiting on outside answers, and others rolling into a later summary.
+description: "Example TaskFlow pattern for inbox triage, intent routing, waiting on replies, and later summaries."
 metadata: { "openclaw": { "emoji": "📥" } }
 ---
 
@@ -12,9 +12,9 @@ This is a concrete example of how to think about TaskFlow without turning the co
 
 Triage inbox items with one owner flow:
 
-- business → post to Slack and wait for reply
-- personal → notify the owner now
-- everything else → keep for end-of-day summary
+- business -> post to Slack and wait for reply
+- personal -> notify the owner now
+- everything else -> keep for end-of-day summary
 
 ## Pattern
 

@@ -1,3 +1,4 @@
+// Browser tests cover security audit plugin behavior.
 import { describe, expect, it } from "vitest";
 import { collectBrowserSecurityAuditFindings } from "./security-audit.js";
 
@@ -13,6 +14,17 @@ function collectFindings(
   });
 }
 
+function findingByCheckId(
+  findings: ReturnType<typeof collectBrowserSecurityAuditFindings>,
+  checkId: string,
+) {
+  const finding = findings.find((candidate) => candidate.checkId === checkId);
+  if (!finding) {
+    throw new Error(`expected browser security finding ${checkId}`);
+  }
+  return finding;
+}
+
 describe("browser security audit collector", () => {
   it("flags browser control without auth", () => {
     const findings = collectFindings({
@@ -25,14 +37,8 @@ describe("browser security audit collector", () => {
       },
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "browser.control_no_auth",
-          severity: "critical",
-        }),
-      ]),
-    );
+    const finding = findingByCheckId(findings, "browser.control_no_auth");
+    expect(finding.severity).toBe("critical");
   });
 
   it("warns on remote http CDP profiles", () => {
@@ -47,14 +53,8 @@ describe("browser security audit collector", () => {
       },
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "browser.remote_cdp_http",
-          severity: "warn",
-        }),
-      ]),
-    );
+    const finding = findingByCheckId(findings, "browser.remote_cdp_http");
+    expect(finding.severity).toBe("warn");
   });
 
   it("redacts private-host CDP URLs in findings", () => {
@@ -73,14 +73,8 @@ describe("browser security audit collector", () => {
       },
     });
 
-    expect(findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "browser.remote_cdp_private_host",
-          severity: "warn",
-          detail: expect.stringContaining("token=supers…7890"),
-        }),
-      ]),
-    );
+    const finding = findingByCheckId(findings, "browser.remote_cdp_private_host");
+    expect(finding.severity).toBe("warn");
+    expect(finding.detail).toContain("token=supers…7890");
   });
 });

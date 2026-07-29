@@ -1,7 +1,8 @@
+// Matrix plugin module implements storage paths behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function sanitizeMatrixPathSegment(value: string): string {
   const cleaned = normalizeLowercaseStringOrEmpty(value)
@@ -43,23 +44,6 @@ export function resolveMatrixCredentialsPath(params: {
     resolveMatrixCredentialsDir(params.stateDir),
     resolveMatrixCredentialsFilename(params.accountId),
   );
-}
-
-export function resolveMatrixLegacyFlatStoreRoot(stateDir: string): string {
-  return path.join(stateDir, "matrix");
-}
-
-export function resolveMatrixLegacyFlatStoragePaths(stateDir: string): {
-  rootDir: string;
-  storagePath: string;
-  cryptoPath: string;
-} {
-  const rootDir = resolveMatrixLegacyFlatStoreRoot(stateDir);
-  return {
-    rootDir,
-    storagePath: path.join(rootDir, "bot-storage.json"),
-    cryptoPath: path.join(rootDir, "crypto"),
-  };
 }
 
 export function resolveMatrixAccountStorageRoot(params: {

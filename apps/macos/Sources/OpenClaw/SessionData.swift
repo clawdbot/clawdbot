@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import SwiftUI
 
 struct GatewaySessionDefaultsRecord: Codable {
@@ -49,15 +50,6 @@ struct SessionTokenStats {
         return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
     }
 
-    var summary: String {
-        let parts = ["in \(input)", "out \(output)", "total \(total)"]
-        var text = parts.joined(separator: " | ")
-        if let percentUsed {
-            text += " (\(percentUsed)% of \(self.contextTokens))"
-        }
-        return text
-    }
-
     static func formatKTokens(_ value: Int) -> String {
         if value < 1000 { return "\(value)" }
         let thousands = Double(value) / 1000
@@ -103,10 +95,13 @@ struct SessionRow: Identifiable {
 }
 
 enum SessionKind {
-    case direct, group, global, unknown
+    case cron, direct, group, global, unknown
 
     static func from(key: String) -> SessionKind {
         if key == "global" { return .global }
+        let parts = key.lowercased().split(separator: ":").filter { !$0.isEmpty }
+        if parts.first == "cron" { return .cron }
+        if parts.count >= 3, parts[0] == "agent", parts[2] == "cron" { return .cron }
         if key.hasPrefix("group:") { return .group }
         if key.contains(":group:") { return .group }
         if key.contains(":channel:") { return .group }
@@ -116,6 +111,7 @@ enum SessionKind {
 
     var label: String {
         switch self {
+        case .cron: "Cron"
         case .direct: "Direct"
         case .group: "Group"
         case .global: "Global"
@@ -125,6 +121,7 @@ enum SessionKind {
 
     var tint: Color {
         switch self {
+        case .cron: .green
         case .direct: .accentColor
         case .group: .orange
         case .global: .purple
@@ -196,34 +193,6 @@ extension SessionRow {
     }
 }
 
-struct ModelChoice: Identifiable, Hashable, Codable {
-    let id: String
-    let name: String
-    let provider: String
-    let contextWindow: Int?
-}
-
-extension String? {
-    var isNilOrEmpty: Bool {
-        switch self {
-        case .none: true
-        case let .some(value): value.isEmpty
-        }
-    }
-}
-
-extension [String] {
-    fileprivate func dedupedPreserveOrder() -> [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for item in self where !seen.contains(item) {
-            seen.insert(item)
-            result.append(item)
-        }
-        return result
-    }
-}
-
 enum SessionLoadError: LocalizedError {
     case gatewayUnavailable(String)
     case decodeFailed(String)
@@ -260,16 +229,16 @@ enum SessionLoader {
         includeGlobal: Bool = true,
         includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
     {
-        var params: [String: AnyHashable] = [
-            "includeGlobal": AnyHashable(includeGlobal),
-            "includeUnknown": AnyHashable(includeUnknown),
-        ]
-        if let activeMinutes { params["activeMinutes"] = AnyHashable(activeMinutes) }
-        if let limit { params["limit"] = AnyHashable(limit) }
-
         let data: Data
         do {
-            data = try await ControlChannel.shared.request(method: "sessions.list", params: params)
+            let request = OpenClawChatGatewayRequests.sessionsList(
+                limit: limit,
+                search: nil,
+                archived: false,
+                includeGlobal: includeGlobal,
+                includeUnknown: includeUnknown,
+                activeMinutes: activeMinutes)
+            data = try await ControlChannel.shared.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {
@@ -324,18 +293,14 @@ enum SessionLoader {
         return SessionStoreSnapshot(storePath: decoded.path, defaults: defaults, rows: rows)
     }
 
-    static func loadRows() async throws -> [SessionRow] {
-        try await self.loadSnapshot().rows
-    }
-
     private static func standardize(_ path: String) -> String {
         (path as NSString).expandingTildeInPath.replacingOccurrences(of: "//", with: "/")
     }
 }
 
-func relativeAge(from date: Date?) -> String {
+func relativeAge(from date: Date?, now: Date = Date()) -> String {
     guard let date else { return "unknown" }
-    let delta = Date().timeIntervalSince(date)
+    let delta = now.timeIntervalSince(date)
     if delta < 60 { return "just now" }
     let minutes = Int(round(delta / 60))
     if minutes < 60 { return "\(minutes)m ago" }

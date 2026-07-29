@@ -1,3 +1,4 @@
+// Tests safe executable detection for shell command approval.
 import { describe, expect, it } from "vitest";
 import {
   listRiskyConfiguredSafeBins,
@@ -5,6 +6,21 @@ import {
 } from "./exec-safe-bin-semantics.js";
 
 describe("exec safe-bin semantics", () => {
+  it("rejects jq programs even when configured via path-like entries", () => {
+    expect(
+      validateSafeBinSemantics({
+        binName: "jq",
+        positional: [".foo"],
+      }),
+    ).toBe(false);
+    expect(
+      validateSafeBinSemantics({
+        binName: "/usr/local/bin/jq",
+        positional: ["{include: .foo, import : .bar}"],
+      }),
+    ).toBe(false);
+  });
+
   it("rejects awk and sed variants even when configured via path-like entries", () => {
     expect(
       validateSafeBinSemantics({
@@ -63,7 +79,7 @@ describe("exec safe-bin semantics", () => {
       {
         bin: "jq",
         warning:
-          "jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+          "jq can read environment data and load jq code from modules or startup files, so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
       },
       {
         bin: "mawk",

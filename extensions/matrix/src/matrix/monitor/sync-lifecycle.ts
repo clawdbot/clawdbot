@@ -1,3 +1,4 @@
+// Matrix plugin module implements sync lifecycle behavior.
 import type { MatrixClient } from "../sdk.js";
 import { isMatrixTerminalSyncState, type MatrixSyncState } from "../sync-state.js";
 import type { MatrixMonitorStatusController } from "./status.js";
@@ -37,9 +38,9 @@ export function createMatrixMonitorSyncLifecycle(params: {
 
   const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
     if (isMatrixTerminalSyncState(state) && !params.isStopping?.()) {
-      const fatalError = formatSyncLifecycleError(state, error);
-      params.statusController.noteUnexpectedError(fatalError);
-      settleFatal(fatalError);
+      const fatalErrorLocal = formatSyncLifecycleError(state, error);
+      params.statusController.noteUnexpectedError(fatalErrorLocal);
+      settleFatal(fatalErrorLocal);
       return;
     }
     // Fatal sync failures are sticky for telemetry; later SDK state churn during

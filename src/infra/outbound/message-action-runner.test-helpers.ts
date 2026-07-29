@@ -1,3 +1,5 @@
+// Message-action runner test helpers define reusable plugin fixtures, target
+// parsers, and dry-run wrappers.
 import type {
   ChannelDirectoryEntryKind,
   ChannelMessageActionName,
@@ -9,24 +11,38 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
-export const slackConfig = {
+/** Workspace-style config fixture used by message action runner tests. */
+export const workspaceConfig = {
   channels: {
-    slack: {
-      botToken: "xoxb-test",
-      appToken: "xapp-test",
+    workspace: {
+      botToken: "workspace-test",
+      appToken: "workspace-app-test",
     },
   },
 } as OpenClawConfig;
 
-export const whatsappConfig = {
+/** Direct-chat config fixture that allows any sender. */
+export const directChatConfig = {
   channels: {
-    whatsapp: {
+    directchat: {
       allowFrom: ["*"],
     },
   },
 } as OpenClawConfig;
 
-export const directOutbound: ChannelOutboundAdapter = { deliveryMode: "direct" };
+export const directOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  sendText: async () => ({ channel: "test", messageId: "test" }),
+};
+
+// Test plugins model token-gated workspace sends without booting real channel runtimes.
+function hasChannelBotToken(channelConfig: unknown): boolean {
+  if (channelConfig == null || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
+    return false;
+  }
+  const token = (channelConfig as Record<string, unknown>).botToken;
+  return typeof token === "string" && Boolean(token.trim());
+}
 
 export const runDryAction = (params: {
   cfg: OpenClawConfig;
@@ -35,6 +51,7 @@ export const runDryAction = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runMessageAction({
     cfg: params.cfg,
@@ -44,6 +61,7 @@ export const runDryAction = (params: {
     dryRun: true,
     abortSignal: params.abortSignal,
     sandboxRoot: params.sandboxRoot,
+    agentId: params.agentId,
   });
 
 export const runDrySend = (params: {
@@ -52,6 +70,7 @@ export const runDrySend = (params: {
   toolContext?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   sandboxRoot?: string;
+  agentId?: string;
 }) =>
   runDryAction({
     ...params,
@@ -60,7 +79,7 @@ export const runDrySend = (params: {
 
 type ResolvedTestTarget = { to: string; kind: ChannelDirectoryEntryKind };
 
-export function normalizeSlackTarget(raw: string): string {
+function normalizeWorkspaceTarget(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return trimmed;
@@ -81,8 +100,8 @@ export function normalizeSlackTarget(raw: string): string {
   return trimmed;
 }
 
-export function createConfiguredTestPlugin(params: {
-  id: "slack" | "telegram" | "whatsapp";
+function createConfiguredTestPlugin(params: {
+  id: string;
   isConfigured: (cfg: OpenClawConfig) => boolean;
   normalizeTarget: (raw: string) => string | undefined;
   resolveTarget: (input: string) => ResolvedTestTarget | null;
@@ -114,12 +133,12 @@ export function createConfiguredTestPlugin(params: {
   };
 }
 
-export const slackTestPlugin = createConfiguredTestPlugin({
-  id: "slack",
-  isConfigured: (cfg) => Boolean(cfg.channels?.slack?.botToken?.trim()),
-  normalizeTarget: (raw) => normalizeSlackTarget(raw) || undefined,
+export const workspaceTestPlugin = createConfiguredTestPlugin({
+  id: "workspace",
+  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.workspace),
+  normalizeTarget: (raw) => normalizeWorkspaceTarget(raw) || undefined,
   resolveTarget: (input) => {
-    const normalized = normalizeSlackTarget(input);
+    const normalized = normalizeWorkspaceTarget(input);
     if (!normalized) {
       return null;
     }
@@ -131,9 +150,9 @@ export const slackTestPlugin = createConfiguredTestPlugin({
   },
 });
 
-export const telegramTestPlugin = createConfiguredTestPlugin({
-  id: "telegram",
-  isConfigured: (cfg) => Boolean(cfg.channels?.telegram?.botToken?.trim()),
+export const forumTestPlugin = createConfiguredTestPlugin({
+  id: "forum",
+  isConfigured: (cfg) => hasChannelBotToken(cfg.channels?.forum),
   normalizeTarget: (raw) => raw.trim() || undefined,
   resolveTarget: (input) => {
     const normalized = input.trim();
@@ -141,15 +160,15 @@ export const telegramTestPlugin = createConfiguredTestPlugin({
       return null;
     }
     return {
-      to: normalized.replace(/^telegram:/i, ""),
+      to: normalized.replace(/^forum:/i, ""),
       kind: normalized.startsWith("@") ? "user" : "group",
     };
   },
 });
 
-export const whatsappTestPlugin = createConfiguredTestPlugin({
-  id: "whatsapp",
-  isConfigured: (cfg) => Boolean(cfg.channels?.whatsapp),
+export const directChatTestPlugin = createConfiguredTestPlugin({
+  id: "directchat",
+  isConfigured: (cfg) => Boolean(cfg.channels?.directchat),
   normalizeTarget: (raw) => raw.trim() || undefined,
   resolveTarget: (input) => {
     const normalized = input.trim();

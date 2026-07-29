@@ -1,8 +1,8 @@
-export { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
+/** Runtime seams for loading model command config and secret target ids. */
 export { getModelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 export {
   getRuntimeConfig,
-  readSourceConfigSnapshotForWrite,
+  getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../../config/config.js";

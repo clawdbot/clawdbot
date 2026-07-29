@@ -1,7 +1,7 @@
-import {
-  loadBundledPluginPublicArtifactModuleSync,
-  resolveBundledPluginPublicArtifactPath,
-} from "./public-surface-loader.js";
+// Extracts explicit public artifacts from web provider plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "./public-surface-loader.js";
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
@@ -19,10 +19,7 @@ const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-provider.js",
   "web-fetch.js",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+const WEB_FETCH_RUNTIME_ARTIFACT_CANDIDATES = ["web-fetch-provider.js", "web-fetch.js"] as const;
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
@@ -58,8 +55,9 @@ function collectProviderFactories<TProvider>(params: {
   mod: Record<string, unknown>;
   suffix: string;
   isProvider: (value: unknown) => value is TProvider;
-}): TProvider[] {
+}): { providers: TProvider[]; errors: unknown[] } {
   const providers: TProvider[] = [];
+  const errors: unknown[] = [];
   for (const [name, exported] of Object.entries(params.mod).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -71,83 +69,101 @@ function collectProviderFactories<TProvider>(params: {
     ) {
       continue;
     }
-    const candidate = exported();
+    let candidate: unknown;
+    try {
+      candidate = exported();
+    } catch (error) {
+      errors.push(error);
+      continue;
+    }
     if (params.isProvider(candidate)) {
       providers.push(candidate);
     }
   }
-  return providers;
+  return { providers, errors };
 }
 
-function tryLoadBundledPublicArtifactModule(params: {
-  dirName: string;
-  artifactCandidates: readonly string[];
-}): Record<string, unknown> | null {
-  for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
-        dirName: params.dirName,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
-    }
-  }
-  return null;
+function unableToInitializeProviderError(params: {
+  pluginId: string;
+  errors: readonly unknown[];
+}): Error {
+  return new Error(`Unable to initialize web providers for plugin ${params.pluginId}`, {
+    cause: params.errors.length === 1 ? params.errors[0] : new AggregateError(params.errors),
+  });
 }
 
 function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
-  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
+}
+
+function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {
+  dirName: string;
+  pluginId: string;
+  artifactCandidates: readonly string[];
+  suffix: string;
+  isProvider: (value: unknown) => value is TProvider;
+}): Array<TProvider & { pluginId: string }> | null {
+  const mod = loadBundledPluginPublicArtifactModuleFromCandidatesSync<Record<string, unknown>>({
+    dirName: params.dirName,
+    artifactCandidates: params.artifactCandidates,
+  });
+  if (!mod) {
+    return null;
+  }
+  const { providers, errors } = collectProviderFactories({
+    mod,
+    suffix: params.suffix,
+    isProvider: params.isProvider,
+  });
+  if (providers.length === 0) {
+    if (errors.length > 0) {
+      throw unableToInitializeProviderError({
+        pluginId: params.pluginId,
+        errors,
+      });
+    }
+    return null;
+  }
+  return providers.map((provider) => Object.assign({}, provider, { pluginId: params.pluginId }));
 }
 
 export function loadBundledWebSearchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebSearchProviderEntry[] | null {
-  const mod = tryLoadBundledPublicArtifactModule({
+  return loadBundledProviderEntriesFromDir<WebSearchProviderPlugin>({
     dirName: params.dirName,
+    pluginId: params.pluginId,
     artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
-  });
-  if (!mod) {
-    return null;
-  }
-  const providers = collectProviderFactories({
-    mod,
     suffix: "WebSearchProvider",
     isProvider: isWebSearchProviderPlugin,
   });
-  if (providers.length === 0) {
-    return null;
-  }
-  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
 }
 
 export function loadBundledWebFetchProviderEntriesFromDir(params: {
   dirName: string;
   pluginId: string;
 }): PluginWebFetchProviderEntry[] | null {
-  const mod = tryLoadBundledPublicArtifactModule({
+  return loadBundledProviderEntriesFromDir<WebFetchProviderPlugin>({
     dirName: params.dirName,
+    pluginId: params.pluginId,
     artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
-  });
-  if (!mod) {
-    return null;
-  }
-  const providers = collectProviderFactories({
-    mod,
     suffix: "WebFetchProvider",
     isProvider: isWebFetchProviderPlugin,
   });
-  if (providers.length === 0) {
-    return null;
-  }
-  return providers.map((provider) => ({ ...provider, pluginId: params.pluginId }));
+}
+
+function loadBundledRuntimeWebFetchProviderEntriesFromDir(params: {
+  dirName: string;
+  pluginId: string;
+}): PluginWebFetchProviderEntry[] | null {
+  return loadBundledProviderEntriesFromDir<WebFetchProviderPlugin>({
+    dirName: params.dirName,
+    pluginId: params.pluginId,
+    artifactCandidates: WEB_FETCH_RUNTIME_ARTIFACT_CANDIDATES,
+    suffix: "WebFetchProvider",
+    isProvider: isWebFetchProviderPlugin,
+  });
 }
 
 export function resolveBundledExplicitWebSearchProvidersFromPublicArtifacts(params: {
@@ -184,25 +200,19 @@ export function resolveBundledExplicitWebFetchProvidersFromPublicArtifacts(param
   return providers;
 }
 
-function hasBundledPublicArtifactCandidate(params: {
-  dirName: string;
-  artifactCandidates: readonly string[];
-}): boolean {
-  return params.artifactCandidates.some((artifactBasename) =>
-    Boolean(resolveBundledPluginPublicArtifactPath({ dirName: params.dirName, artifactBasename })),
-  );
-}
-
-export function hasBundledWebSearchProviderPublicArtifact(pluginId: string): boolean {
-  return hasBundledPublicArtifactCandidate({
-    dirName: pluginId,
-    artifactCandidates: WEB_SEARCH_ARTIFACT_CANDIDATES,
-  });
-}
-
-export function hasBundledWebFetchProviderPublicArtifact(pluginId: string): boolean {
-  return hasBundledPublicArtifactCandidate({
-    dirName: pluginId,
-    artifactCandidates: WEB_FETCH_ARTIFACT_CANDIDATES,
-  });
+export function resolveBundledExplicitRuntimeWebFetchProvidersFromPublicArtifacts(params: {
+  onlyPluginIds: readonly string[];
+}): PluginWebFetchProviderEntry[] | null {
+  const providers: PluginWebFetchProviderEntry[] = [];
+  for (const pluginId of normalizeExplicitBundledPluginIds(params.onlyPluginIds)) {
+    const loadedProviders = loadBundledRuntimeWebFetchProviderEntriesFromDir({
+      dirName: pluginId,
+      pluginId,
+    });
+    if (!loadedProviders) {
+      return null;
+    }
+    providers.push(...loadedProviders);
+  }
+  return providers;
 }

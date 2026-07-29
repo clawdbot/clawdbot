@@ -1,13 +1,13 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Slack plugin module implements modal metadata behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type SlackModalPrivateMetadata = {
+type SlackModalPrivateMetadata = {
   sessionKey?: string;
   channelId?: string;
   channelType?: string;
   userId?: string;
+  pluginInteractiveData?: string;
 };
-
-const SLACK_PRIVATE_METADATA_MAX = 3000;
 
 export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateMetadata {
   if (typeof raw !== "string" || raw.trim().length === 0) {
@@ -20,24 +20,9 @@ export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateM
       channelId: normalizeOptionalString(parsed.channelId),
       channelType: normalizeOptionalString(parsed.channelType),
       userId: normalizeOptionalString(parsed.userId),
+      pluginInteractiveData: normalizeOptionalString(parsed.pluginInteractiveData),
     };
   } catch {
     return {};
   }
-}
-
-export function encodeSlackModalPrivateMetadata(input: SlackModalPrivateMetadata): string {
-  const payload: SlackModalPrivateMetadata = {
-    ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
-    ...(input.channelId ? { channelId: input.channelId } : {}),
-    ...(input.channelType ? { channelType: input.channelType } : {}),
-    ...(input.userId ? { userId: input.userId } : {}),
-  };
-  const encoded = JSON.stringify(payload);
-  if (encoded.length > SLACK_PRIVATE_METADATA_MAX) {
-    throw new Error(
-      `Slack modal private_metadata cannot exceed ${SLACK_PRIVATE_METADATA_MAX} chars`,
-    );
-  }
-  return encoded;
 }

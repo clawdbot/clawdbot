@@ -1,8 +1,11 @@
+// Bootstraps approval handlers from channel plugin capabilities.
 import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.js";
 import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withGatewayNativeApprovalRuntime } from "./approval-gateway-runtime-context.js";
+import type { GatewayNativeApprovalRuntime } from "./approval-gateway-runtime.types.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createChannelApprovalHandlerFromCapability,
@@ -12,15 +15,40 @@ import {
   getChannelRuntimeContext,
   watchChannelRuntimeContexts,
 } from "./channel-runtime-context.js";
+import { isExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
 
 type ApprovalBootstrapHandler = ChannelApprovalHandler;
 const APPROVAL_HANDLER_BOOTSTRAP_RETRY_MS = 1_000;
 
+function isRetryableApprovalBootstrapStartError(error: unknown): boolean {
+  const message = String(error);
+  return (
+    message.includes("gateway readiness unavailable before approval client start") ||
+    message.includes("gateway approval client start aborted before readiness") ||
+    message.includes("gateway readiness unavailable before exec approval runtime start") ||
+    message.includes("gateway approval runtime start aborted before readiness") ||
+    message.includes("gateway event loop readiness timeout") ||
+    message.includes("gateway starting") ||
+    message.includes("code=1013") ||
+    message.includes("close code 1013")
+  );
+}
+
+function formatRetryableApprovalBootstrapStartError(error: unknown): string {
+  const message = String(error);
+  if (message.includes("gateway event loop readiness timeout")) {
+    return "gateway readiness unavailable before approval handler start";
+  }
+  return message;
+}
+
+/** Starts the native approval handler for a channel runtime context and returns its cleanup hook. */
 export async function startChannelApprovalHandlerBootstrap(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
   accountId: string;
   channelRuntime?: ChannelRuntimeSurface;
+  gatewayRuntime?: GatewayNativeApprovalRuntime;
   logger?: ReturnType<typeof createSubsystemLogger>;
 }): Promise<() => Promise<void>> {
   const capability = resolveChannelApprovalCapability(params.plugin);
@@ -61,26 +89,29 @@ export async function startChannelApprovalHandlerBootstrap(params: {
     if (generation !== activeGeneration) {
       return;
     }
-    const handler = await createChannelApprovalHandlerFromCapability({
-      capability,
-      label: `${params.plugin.id}/native-approvals`,
-      clientDisplayName: `${channelLabel} Native Approvals (${params.accountId})`,
-      channel: params.plugin.id,
-      channelLabel,
-      cfg: params.cfg,
-      accountId: params.accountId,
-      context,
-    });
+    const handler = await withGatewayNativeApprovalRuntime(params.gatewayRuntime, () =>
+      createChannelApprovalHandlerFromCapability({
+        capability,
+        label: `${params.plugin.id}/native-approvals`,
+        clientDisplayName: `${channelLabel} Native Approvals (${params.accountId})`,
+        channel: params.plugin.id,
+        channelLabel,
+        cfg: params.cfg,
+        accountId: params.accountId,
+        context,
+      }),
+    );
     if (!handler) {
       return;
     }
     if (generation !== activeGeneration) {
+      // Runtime contexts can unregister while the handler factory awaits; stop stale handlers.
       await handler.stop().catch(() => {});
       return;
     }
     activeHandler = handler as ApprovalBootstrapHandler;
     try {
-      await handler.start();
+      await withGatewayNativeApprovalRuntime(params.gatewayRuntime, () => handler.start());
     } catch (error) {
       if (activeHandler === handler) {
         activeHandler = null;
@@ -91,7 +122,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   };
 
   const spawn = (label: string, promise: Promise<void>) => {
-    void promise.catch((error) => {
+    void promise.catch((error: unknown) => {
       logger.error(`${label}: ${String(error)}`);
     });
   };
@@ -117,6 +148,17 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       await startHandlerForContext(context, generation);
     } catch (error) {
       if (generation === activeGeneration) {
+        if (isExecApprovalChannelRuntimeTerminalStartError(error)) {
+          logger.error(`native approval handler disabled: ${String(error)}`);
+          return;
+        }
+        if (isRetryableApprovalBootstrapStartError(error)) {
+          logger.warn(
+            `native approval handler deferred until gateway readiness recovers: ${formatRetryableApprovalBootstrapStartError(error)}`,
+          );
+          scheduleRetryForContext(context, generation);
+          return;
+        }
         logger.error(`failed to start native approval handler: ${String(error)}`);
         scheduleRetryForContext(context, generation);
       }
@@ -155,7 +197,11 @@ export async function startChannelApprovalHandlerBootstrap(params: {
   if (existingContext !== undefined) {
     clearRetryTimer();
     invalidateActiveHandler();
-    await startHandlerForContext(existingContext, activeGeneration);
+    const generation = activeGeneration;
+    spawn(
+      "failed to start native approval handler",
+      startHandlerForRegisteredContext(existingContext, generation),
+    );
   }
 
   return async () => {

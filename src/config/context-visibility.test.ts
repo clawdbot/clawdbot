@@ -1,3 +1,4 @@
+// Covers config-controlled context visibility decisions.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "./config.js";
 import {

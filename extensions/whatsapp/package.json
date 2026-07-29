@@ -1,19 +1,23 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.4.12",
-  "description": "OpenClaw WhatsApp channel plugin",
+  "version": "2026.7.2",
+  "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
-    "jimp": "^1.6.1",
-    "qrcode-terminal": "^0.12.0"
+    "audio-decode": "2.2.3",
+    "baileys": "7.0.0-rc13",
+    "typebox": "1.3.8"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.12"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -25,8 +29,16 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true,
+      "legacyStateMigrations": true,
+      "legacySessionSurfaces": true
+    },
     "channel": {
       "id": "whatsapp",
+      "approvalFlags": [
+        "native"
+      ],
       "label": "WhatsApp",
       "selectionLabel": "WhatsApp (QR link)",
       "detailLabel": "WhatsApp Web",
@@ -37,21 +49,31 @@
       "persistedAuthState": {
         "specifier": "./auth-presence",
         "exportName": "hasAnyWhatsAppAuth"
+      },
+      "setup": {
+        "fields": [
+          {
+            "key": "authDir",
+            "kind": "string",
+            "cli": {
+              "flags": "--auth-dir <path>",
+              "description": "WhatsApp auth directory override"
+            }
+          }
+        ]
       }
     },
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/whatsapp",
       "npmSpec": "@openclaw/whatsapp",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "defaultChoice": "clawhub",
+      "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.4.12"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.4.12"
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "publishToClawHub": true,

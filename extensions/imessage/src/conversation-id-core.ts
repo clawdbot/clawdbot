@@ -1,3 +1,4 @@
+// Imessage plugin module implements conversation id core behavior.
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
 
 export function normalizeIMessageAcpConversationId(

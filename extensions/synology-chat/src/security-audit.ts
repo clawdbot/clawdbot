@@ -1,3 +1,4 @@
+// Synology Chat plugin module implements security audit behavior.
 import type { ResolvedSynologyChatAccount } from "./types.js";
 
 export function collectSynologyChatSecurityAuditFindings(params: {

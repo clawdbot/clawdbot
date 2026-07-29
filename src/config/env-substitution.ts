@@ -26,6 +26,7 @@ import { isPlainObject } from "../utils.js";
 
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 
+/** Error thrown when a config value references a missing or empty environment variable. */
 export class MissingEnvVarError extends Error {
   constructor(
     public readonly varName: string,
@@ -50,6 +51,7 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
 
   // Escaped: $${VAR} -> ${VAR}
   if (next === "$" && afterNext === "{") {
+    // Parse escaped placeholders before substitutions so "$${VAR}" never resolves from env.
     const start = index + 3;
     const end = value.indexOf("}", start);
     if (end !== -1) {
@@ -75,12 +77,13 @@ function parseEnvTokenAt(value: string, index: number): EnvToken | null {
   return null;
 }
 
+/** Missing environment variable warning emitted when substitution is configured to continue. */
 export type EnvSubstitutionWarning = {
   varName: string;
   configPath: string;
 };
 
-export type SubstituteOptions = {
+type SubstituteOptions = {
   /** When set, missing vars call this instead of throwing and the original placeholder is preserved. */
   onMissing?: (warning: EnvSubstitutionWarning) => void;
 };
@@ -98,7 +101,7 @@ function substituteString(
   const chunks: string[] = [];
 
   for (let i = 0; i < value.length; i += 1) {
-    const char = value[i];
+    const char = value.charAt(i);
     if (char !== "$") {
       chunks.push(char);
       continue;
@@ -134,6 +137,7 @@ function substituteString(
   return chunks.join("");
 }
 
+/** Detects unescaped `${VAR}` references without treating escaped `$${VAR}` as references. */
 export function containsEnvVarReference(value: string): boolean {
   if (!value.includes("$")) {
     return false;

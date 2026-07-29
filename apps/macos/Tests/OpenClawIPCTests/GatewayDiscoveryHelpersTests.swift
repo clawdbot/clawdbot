@@ -10,7 +10,8 @@ struct GatewayDiscoveryHelpersTests {
         lanHost: String? = "txt-host.local",
         tailnetDns: String? = "txt-host.ts.net",
         sshPort: Int = 22,
-        gatewayPort: Int? = 18789) -> GatewayDiscoveryModel.DiscoveredGateway
+        gatewayPort: Int? = 18789,
+        gatewayTls: Bool = false) -> GatewayDiscoveryModel.DiscoveredGateway
     {
         GatewayDiscoveryModel.DiscoveredGateway(
             displayName: "Gateway",
@@ -20,6 +21,7 @@ struct GatewayDiscoveryHelpersTests {
             tailnetDns: tailnetDns,
             sshPort: sshPort,
             gatewayPort: gatewayPort,
+            gatewayTls: gatewayTls,
             cliPath: "/tmp/openclaw",
             stableID: UUID().uuidString,
             debugID: UUID().uuidString,
@@ -70,18 +72,28 @@ struct GatewayDiscoveryHelpersTests {
     @Test func `direct url uses resolved service endpoint only`() {
         let tlsGateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
-            servicePort: 443)
+            servicePort: 443,
+            gatewayTls: true)
         #expect(GatewayDiscoveryHelpers.directUrl(for: tlsGateway) == "wss://resolved.example.ts.net")
 
         let wsGateway = self.makeGateway(
             serviceHost: "resolved.example.ts.net",
             servicePort: 18789)
-        #expect(GatewayDiscoveryHelpers.directUrl(for: wsGateway) == "wss://resolved.example.ts.net:18789")
+        #expect(GatewayDiscoveryHelpers.directUrl(for: wsGateway) == "ws://resolved.example.ts.net:18789")
 
         let localGateway = self.makeGateway(
             serviceHost: "127.0.0.1",
             servicePort: 18789)
         #expect(GatewayDiscoveryHelpers.directUrl(for: localGateway) == "ws://127.0.0.1:18789")
+    }
+
+    @Test func `direct url rejects public plaintext service endpoint`() {
+        let gateway = self.makeGateway(
+            serviceHost: "gateway.example",
+            servicePort: 18789,
+            gatewayTls: false)
+
+        #expect(GatewayDiscoveryHelpers.directUrl(for: gateway) == nil)
     }
 
     @Test func `direct url rejects txt only fallback`() {

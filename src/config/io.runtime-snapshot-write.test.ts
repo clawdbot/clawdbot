@@ -1,3 +1,4 @@
+// Covers runtime snapshot writes produced by config IO.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   projectConfigOntoRuntimeSourceSnapshot,

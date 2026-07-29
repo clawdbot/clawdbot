@@ -1,10 +1,12 @@
+// Diffs plugin module implements http behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginLogger } from "../api.js";
 import { resolveRequestClientIp } from "../runtime-api.js";
 import type { DiffArtifactStore } from "./store.js";
 import { DIFF_ARTIFACT_ID_PATTERN, DIFF_ARTIFACT_TOKEN_PATTERN } from "./types.js";
-import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
+import { VIEWER_ASSET_PREFIX, VIEWER_RUNTIME_PATH, getServedViewerAsset } from "./viewer-assets.js";
 
 const VIEW_PREFIX = "/plugins/diffs/view/";
 const VIEWER_MAX_FAILURES_PER_WINDOW = 40;
@@ -22,6 +24,7 @@ const VIEWER_CONTENT_SECURITY_POLICY = [
   "frame-ancestors 'self'",
   "object-src 'none'",
 ].join("; ");
+const IMMUTABLE_ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
 
 export function createDiffsHttpHandler(params: {
   store: DiffArtifactStore;
@@ -29,6 +32,11 @@ export function createDiffsHttpHandler(params: {
   allowRemoteViewer?: boolean;
   trustedProxies?: readonly string[];
   allowRealIpFallback?: boolean;
+  resolveAccessConfig?: () => {
+    allowRemoteViewer?: boolean;
+    trustedProxies?: readonly string[];
+    allowRealIpFallback?: boolean;
+  };
 }) {
   const viewerFailureLimiter = new ViewerFailureLimiter();
 
@@ -46,11 +54,16 @@ export function createDiffsHttpHandler(params: {
       return false;
     }
 
-    const access = resolveViewerAccess(req, {
+    const accessConfig = params.resolveAccessConfig?.() ?? {
+      allowRemoteViewer: params.allowRemoteViewer,
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
+    };
+    const access = resolveViewerAccess(req, {
+      trustedProxies: accessConfig.trustedProxies,
+      allowRealIpFallback: accessConfig.allowRealIpFallback,
     });
-    if (!access.localRequest && params.allowRemoteViewer !== true) {
+    if (!access.localRequest && accessConfig.allowRemoteViewer !== true) {
       respondText(res, 404, "Diff not found");
       return true;
     }
@@ -85,23 +98,24 @@ export function createDiffsHttpHandler(params: {
       return true;
     }
 
-    const artifact = await params.store.getArtifact(id, token);
-    if (!artifact) {
-      recordRemoteFailure(viewerFailureLimiter, access);
-      respondText(res, 404, "Diff not found or expired");
-      return true;
-    }
-
     try {
-      const html = await params.store.readHtml(id);
+      // Authorization and payload read share one SQLite row snapshot. Keeping
+      // them together prevents a replacement between token check and response.
+      const viewer = await params.store.readAuthorizedViewer(id, token);
+      if (!viewer) {
+        recordRemoteFailure(viewerFailureLimiter, access);
+        respondText(res, 404, "Diff not found or expired");
+        return true;
+      }
       resetRemoteFailures(viewerFailureLimiter, access);
       res.statusCode = 200;
       setSharedHeaders(res, "text/html; charset=utf-8");
       res.setHeader("content-security-policy", VIEWER_CONTENT_SECURITY_POLICY);
+      res.setHeader("content-length", String(viewer.html.byteLength));
       if (req.method === "HEAD") {
         res.end();
       } else {
-        res.end(html);
+        res.end(Buffer.from(viewer.html));
       }
       return true;
     } catch (error) {
@@ -143,7 +157,11 @@ async function serveAsset(
     }
 
     res.statusCode = 200;
-    setSharedHeaders(res, asset.contentType);
+    setSharedHeaders(
+      res,
+      asset.contentType,
+      pathname === VIEWER_RUNTIME_PATH ? IMMUTABLE_ASSET_CACHE_CONTROL : undefined,
+    );
     if (req.method === "HEAD") {
       res.end();
     } else {
@@ -163,8 +181,12 @@ function respondText(res: ServerResponse, statusCode: number, body: string): voi
   res.end(body);
 }
 
-function setSharedHeaders(res: ServerResponse, contentType: string): void {
-  res.setHeader("cache-control", "no-store, max-age=0");
+function setSharedHeaders(
+  res: ServerResponse,
+  contentType: string,
+  cacheControl = "no-store, max-age=0",
+): void {
+  res.setHeader("cache-control", cacheControl);
   res.setHeader("content-type", contentType);
   res.setHeader("x-content-type-options", "nosniff");
   res.setHeader("referrer-policy", "no-referrer");
@@ -179,7 +201,7 @@ function normalizeRemoteClientKey(remoteAddress: string | undefined): string {
 }
 
 function isLoopbackClientIp(clientIp: string): boolean {
-  return clientIp === "127.0.0.1" || clientIp === "::1";
+  return isLoopbackHost(clientIp);
 }
 
 function hasProxyForwardingHints(req: IncomingMessage): boolean {

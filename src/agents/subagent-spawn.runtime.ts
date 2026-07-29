@@ -1,23 +1,36 @@
-export { formatThinkingLevels, normalizeThinkLevel } from "../auto-reply/thinking.js";
-export { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-export { loadConfig } from "../config/config.js";
-export { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
-export { callGateway } from "../gateway/call.js";
-export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
+/**
+ * Runtime dependency barrel for subagent spawning. Keeping these imports in a
+ * single module lets spawn tests replace runtime seams without loading the
+ * entire gateway/channel stack.
+ */
+export { getRuntimeConfig } from "../config/config.js";
 export {
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "../gateway/session-utils.js";
+  loadSessionEntryReadOnly as loadSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+export { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
+export { ensureContextEnginesInitialized } from "../context-engine/init.js";
+export { resolveContextEngine } from "../context-engine/registry.js";
+export { callGateway } from "../gateway/call.js";
+export {
+  dispatchGatewayMethodInProcess,
+  hasInProcessGatewayContext,
+} from "../gateway/server-plugins.js";
+export {
+  ADMIN_SCOPE,
+  resolveLeastPrivilegeOperatorScopesForMethod,
+} from "../gateway/method-scopes.js";
+export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
+export { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
-export { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+export {
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 export { resolveAgentConfig } from "./agent-scope.js";
 export { AGENT_LANE_SUBAGENT } from "./lanes.js";
-export { resolveSubagentSpawnModelSelection } from "./model-selection.js";
+export { loadPreparedModelCatalog } from "./prepared-model-catalog.js";
 export { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 export { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
-export {
-  resolveDisplaySessionKey,
-  resolveInternalSessionKey,
-  resolveMainSessionAlias,
-} from "./tools/sessions-helpers.js";
+export { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";

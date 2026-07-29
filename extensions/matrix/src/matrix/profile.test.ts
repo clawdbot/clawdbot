@@ -1,3 +1,4 @@
+// Matrix tests cover profile plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   isSupportedMatrixAvatarSource,

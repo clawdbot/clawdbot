@@ -1,15 +1,29 @@
 {
   "id": "litellm",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["litellm"],
-  "providerAuthEnvVars": {
-    "litellm": ["LITELLM_API_KEY"]
+  "modelCatalog": {
+    "discovery": {
+      "litellm": "runtime"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "litellm",
+        "envVars": ["LITELLM_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
       "provider": "litellm",
       "method": "api-key",
       "choiceId": "litellm-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "LiteLLM API key",
       "choiceHint": "Unified gateway for 100+ LLM providers",
       "groupId": "litellm",
@@ -21,6 +35,9 @@
       "cliDescription": "LiteLLM API key"
     }
   ],
+  "contracts": {
+    "imageGenerationProviders": ["litellm"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

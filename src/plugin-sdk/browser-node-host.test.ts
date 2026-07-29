@@ -1,3 +1,6 @@
+/**
+ * Tests browser node-host facade delegation and unavailable facade behavior.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

@@ -1,3 +1,4 @@
+// Browser tests cover browser cli manage.timeout option plugin behavior.
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
@@ -17,9 +18,29 @@ describe("browser manage start timeout option", () => {
     await program.parseAsync(["browser", "--timeout", "60000", "start"], { from: "user" });
 
     const startCall = findBrowserManageCall("/start");
-    expect(startCall).toBeDefined();
-    expect(startCall?.[0]).toMatchObject({ timeout: "60000" });
-    expect(startCall?.[2]).toBeUndefined();
+    if (!startCall) {
+      throw new Error("expected browser /start call");
+    }
+    expect((startCall[0] as { timeout?: string } | undefined)?.timeout).toBe("60000");
+    expect(startCall[2]).toBeUndefined();
+  });
+
+  it("passes headless=true for browser start --headless", async () => {
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "start", "--headless"], { from: "user" });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall?.[1]?.query).toEqual({ headless: true });
+  });
+
+  it("combines browser profile with browser start --headless", async () => {
+    const program = createBrowserManageProgram({ withParentTimeout: true });
+    await program.parseAsync(["browser", "--browser-profile", "work", "start", "--headless"], {
+      from: "user",
+    });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall?.[1]?.query).toEqual({ profile: "work", headless: true });
   });
 
   it("uses a longer built-in timeout for browser status", async () => {

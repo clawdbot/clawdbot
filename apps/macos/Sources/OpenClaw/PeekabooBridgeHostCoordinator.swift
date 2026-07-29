@@ -56,7 +56,8 @@ final class PeekabooBridgeHostCoordinator {
     private func startIfNeeded() async {
         guard self.host == nil else { return }
 
-        var allowlistedTeamIDs: Set = ["Y5PE65HELJ"]
+        // Peekaboo owns release-signer migrations; hosts must accept its current compatibility set.
+        var allowlistedTeamIDs = PeekabooBridgeConstants.trustedReleaseTeamIDs
         if let teamID = Self.currentTeamID() {
             allowlistedTeamIDs.insert(teamID)
         }
@@ -163,6 +164,7 @@ private final class OpenClawPeekabooBridgeServices: PeekabooBridgeServiceProvidi
     let dock: any DockServiceProtocol
     let dialogs: any DialogServiceProtocol
     let snapshots: any SnapshotManagerProtocol
+    let desktopObservation: any DesktopObservationServiceProtocol
 
     init() {
         let logging = LoggingService(subsystem: "ai.openclaw.peekaboo")
@@ -175,19 +177,29 @@ private final class OpenClawPeekabooBridgeServices: PeekabooBridgeServiceProvidi
         let applications = ApplicationService(feedbackClient: feedbackClient)
 
         let screenCapture = ScreenCaptureService(loggingService: logging)
+        let automation = UIAutomationService(
+            snapshotManager: snapshots,
+            loggingService: logging,
+            searchPolicy: .balanced,
+            feedbackClient: feedbackClient)
+        let menu = MenuService(applicationService: applications, feedbackClient: feedbackClient)
+        let screens = ScreenService()
 
         self.permissions = PermissionsService()
         self.snapshots = snapshots
         self.applications = applications
         self.screenCapture = screenCapture
-        self.automation = UIAutomationService(
-            snapshotManager: snapshots,
-            loggingService: logging,
-            searchPolicy: .balanced,
-            feedbackClient: feedbackClient)
+        self.automation = automation
         self.windows = WindowManagementService(applicationService: applications, feedbackClient: feedbackClient)
-        self.menu = MenuService(applicationService: applications, feedbackClient: feedbackClient)
+        self.menu = menu
         self.dock = DockService(feedbackClient: feedbackClient)
         self.dialogs = DialogService(feedbackClient: feedbackClient)
+        self.desktopObservation = DesktopObservationService(
+            screenCapture: screenCapture,
+            automation: automation,
+            applications: applications,
+            menu: menu,
+            screens: screens,
+            snapshotManager: snapshots)
     }
 }

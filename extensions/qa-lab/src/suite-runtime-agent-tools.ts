@@ -1,0 +1,138 @@
+// Qa Lab plugin module implements suite runtime agent tools behavior.
+import fs from "node:fs/promises";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  appendQaChildOutputTail,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+} from "./child-output.js";
+import { extractQaToolPayload } from "./extract-tool-payload.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
+import type {
+  QaRuntimeActionHandlerEnv,
+  QaSkillStatusEntry,
+  QaSuiteRuntimeEnv,
+  QaTransportActionName,
+} from "./suite-runtime-types.js";
+
+const requireFromHere = createRequire(import.meta.url);
+const MCP_STDERR_TAIL_LIMIT = 8_192;
+const MCP_REQUEST_TIMEOUT_MS = 180_000;
+
+function findSkill(skills: QaSkillStatusEntry[], name: string) {
+  return skills.find((skill) => skill.name === name);
+}
+
+function resolveWorkspaceSkillPath(workspaceDir: string, name: string) {
+  const trimmed = name.trim();
+  if (
+    !trimmed ||
+    trimmed !== name ||
+    trimmed === "." ||
+    trimmed === ".." ||
+    trimmed.includes("\0") ||
+    /[\\/]/u.test(trimmed)
+  ) {
+    throw new Error(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+  }
+
+  const skillsDir = path.resolve(workspaceDir, "skills");
+  const skillDir = path.resolve(skillsDir, trimmed);
+  const relative = path.relative(skillsDir, skillDir);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`invalid QA workspace skill name: ${JSON.stringify(name)}`);
+  }
+  return path.join(skillDir, "SKILL.md");
+}
+
+async function writeWorkspaceSkill(params: {
+  env: Pick<QaSuiteRuntimeEnv, "gateway">;
+  name: string;
+  body: string;
+}) {
+  const skillPath = resolveWorkspaceSkillPath(params.env.gateway.workspaceDir, params.name);
+  const skillDir = path.dirname(skillPath);
+  await fs.mkdir(skillDir, { recursive: true });
+  await fs.writeFile(skillPath, `${params.body.trim()}\n`, "utf8");
+  return skillPath;
+}
+
+async function callPluginToolsMcp(params: {
+  env: Pick<QaSuiteRuntimeEnv, "gateway" | "repoRoot">;
+  toolName: string;
+  args: Record<string, unknown>;
+}) {
+  const transportEnv = Object.fromEntries(
+    Object.entries(params.env.gateway.runtimeEnv).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  const nodeExecPath = await resolveQaNodeExecPath();
+  const transport = new StdioClientTransport({
+    command: nodeExecPath,
+    args: [
+      "--import",
+      requireFromHere.resolve("tsx"),
+      path.join(params.env.repoRoot, "src/mcp/plugin-tools-serve.ts"),
+    ],
+    stderr: "pipe",
+    cwd: params.env.repoRoot,
+    env: transportEnv,
+  });
+  const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
+  const stderr = transport.stderr;
+  if (stderr && typeof stderr.on === "function") {
+    stderr.on("data", (chunk: unknown) => {
+      appendQaChildOutputTail(stderrTail, chunk);
+    });
+  }
+  const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
+  try {
+    await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
+    const listed = await client.listTools({}, { timeout: MCP_REQUEST_TIMEOUT_MS });
+    const tool = listed.tools.find((entry) => entry.name === params.toolName);
+    if (!tool) {
+      const availableTools = listed.tools
+        .map((entry) => entry.name)
+        .filter((name): name is string => typeof name === "string" && name.length > 0)
+        .toSorted();
+      throw new Error(
+        `MCP tool missing: ${params.toolName}; available tools: ${availableTools.join(", ") || "<none>"}`,
+      );
+    }
+    return await client.callTool(
+      {
+        name: params.toolName,
+        arguments: params.args,
+      },
+      undefined,
+      { timeout: MCP_REQUEST_TIMEOUT_MS },
+    );
+  } catch (error) {
+    const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();
+    if (!tail || !(error instanceof Error)) {
+      throw error;
+    }
+    throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+async function handleQaAction(params: {
+  env: QaRuntimeActionHandlerEnv;
+  action: QaTransportActionName;
+  args: Record<string, unknown>;
+}) {
+  const result = await params.env.transport.handleAction({
+    action: params.action,
+    args: params.args,
+    cfg: params.env.cfg,
+  });
+  return extractQaToolPayload(result as Parameters<typeof extractQaToolPayload>[0]);
+}
+
+export { callPluginToolsMcp, findSkill, handleQaAction, writeWorkspaceSkill };

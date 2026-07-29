@@ -1,8 +1,16 @@
+/**
+ * Session announcement target resolver.
+ *
+ * Resolves where sessions_send/subagent completion announcements should be delivered.
+ */
+import { normalizeOptionalStringifiedId } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
-import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
-import type { SessionListRow } from "./sessions-helpers.js";
+import {
+  parseSessionDeliveryRoute,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
+import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
 
@@ -26,13 +34,18 @@ export async function resolveAnnounceTarget(params: {
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);
     const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    const route =
+      parseSessionDeliveryRoute(params.sessionKey) ?? parseSessionDeliveryRoute(params.displayKey);
+    // Stored DM delivery context carries the authoritative account and thread;
+    // use the parsed address only when that exact session has no saved route.
+    const isDirectRoute = route?.peerKind === "direct" || route?.peerKind === "dm";
+    if (!isDirectRoute && !plugin?.meta?.preferSessionLookupForAnnounceTarget) {
       return fallback;
     }
   }
 
   try {
-    const list = await callGatewayLazy<{ sessions: Array<SessionListRow> }>({
+    const list = await callGatewayLazy<{ sessions: Array<GatewaySessionListRow> }>({
       method: "sessions.list",
       params: {
         includeGlobal: true,
@@ -45,30 +58,10 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
 
-    const deliveryContext =
-      match?.deliveryContext && typeof match.deliveryContext === "object"
-        ? (match.deliveryContext as Record<string, unknown>)
-        : undefined;
-    const origin =
-      match?.origin && typeof match.origin === "object"
-        ? (match.origin as Record<string, unknown>)
-        : undefined;
-    const channel =
-      (typeof deliveryContext?.channel === "string" ? deliveryContext.channel : undefined) ??
-      (typeof match?.lastChannel === "string" ? match.lastChannel : undefined) ??
-      (typeof origin?.provider === "string" ? origin.provider : undefined);
-    const to =
-      (typeof deliveryContext?.to === "string" ? deliveryContext.to : undefined) ??
-      (typeof match?.lastTo === "string" ? match.lastTo : undefined);
-    const accountId =
-      (typeof deliveryContext?.accountId === "string" ? deliveryContext.accountId : undefined) ??
-      (typeof match?.lastAccountId === "string" ? match.lastAccountId : undefined) ??
-      (typeof origin?.accountId === "string" ? origin.accountId : undefined);
-    const threadId = normalizeOptionalStringifiedId(
-      deliveryContext?.threadId ?? match?.lastThreadId ?? origin?.threadId ?? fallbackThreadId,
-    );
-    if (channel && to) {
-      return { channel, to, accountId, threadId };
+    const context = match?.deliveryContext;
+    const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);
+    if (context?.channel && context.to) {
+      return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };
     }
   } catch {
     // ignore

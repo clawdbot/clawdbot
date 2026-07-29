@@ -1,21 +1,15 @@
-import type { AssistantMessage, StopReason, Usage } from "@mariozechner/pi-ai";
+/**
+ * Assistant stream message builders.
+ *
+ * Centralizes zero-cost usage records and assistant message construction for simple stream transports.
+ */
+import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
-export type StreamModelDescriptor = {
+type StreamModelDescriptor = {
   api: string;
   provider: string;
   id: string;
 };
-
-export function buildZeroUsage(): Usage {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-  };
-}
 
 export function buildUsageWithNoCost(params: {
   input?: number;
@@ -57,7 +51,7 @@ export function buildAssistantMessage(params: {
   };
 }
 
-export function buildAssistantMessageWithZeroUsage(params: {
+function buildAssistantMessageWithZeroUsage(params: {
   model: StreamModelDescriptor;
   content: AssistantMessage["content"];
   stopReason: StopReason;
@@ -67,10 +61,27 @@ export function buildAssistantMessageWithZeroUsage(params: {
     model: params.model,
     content: params.content,
     stopReason: params.stopReason,
-    usage: buildZeroUsage(),
+    usage: buildUsageWithNoCost({}),
     timestamp: params.timestamp,
   });
 }
+
+// Single canonical sentinel placed in the `content` array of any assistant turn
+// that failed before the model produced its own content. AWS Bedrock Converse
+// rejects assistant messages with `content: []` during replay ("The content
+// field in the Message object at messages.N is empty."), which can persist into
+// the session file and trap subsequent turns in a validation-failure loop. The
+// raw provider error text is intentionally NOT placed in `content` because that
+// array is replayed back to the model on the next turn — provider error strings
+// can carry hostnames or upstream metadata, and replaying them as assistant
+// content opens a prompt-injection surface (CWE-200). The detailed error stays
+// in the peer `errorMessage` field, which clients/UIs read directly and
+// providers do not include in their wire payloads.
+//
+// This constant is the single source of truth used by replay normalization and
+// session-file repair as well, so a session repaired offline reads identically
+// to a live stream-error turn (and the repair pass remains idempotent).
+export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
 
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
@@ -80,7 +91,7 @@ export function buildStreamErrorAssistantMessage(params: {
   return {
     ...buildAssistantMessageWithZeroUsage({
       model: params.model,
-      content: [],
+      content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
       stopReason: "error",
       timestamp: params.timestamp,
     }),

@@ -1,12 +1,15 @@
+/** Shared fixtures for secrets runtime matrix tests. */
 import { vi } from "vitest";
-import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
+import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 
-const matrixSecrets = loadBundledChannelSecretContractApi("matrix");
+/** Test-only bootstrap registry mock for Matrix secret surface tests. */
+const matrixSecrets = loadChannelSecretContractApi({ channelId: "matrix", config: {} });
 if (!matrixSecrets?.collectRuntimeConfigAssignments) {
   throw new Error("Missing Matrix secret contract api");
 }
 const matrixAssignments = matrixSecrets.collectRuntimeConfigAssignments;
 
+// Use the real bundled Matrix secret contract while avoiding plugin bootstrap.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) =>
     id === "matrix"

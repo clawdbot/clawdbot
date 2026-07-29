@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Plugin and hook-pack update selectors for id and npm-spec command inputs.
 import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
@@ -6,6 +8,7 @@ import {
   extractInstalledNpmPackageName,
 } from "./plugins-install-records.js";
 
+/** Resolve a plugin update target and optional npm spec override from CLI input. */
 export function resolvePluginUpdateSelection(params: {
   installs: Record<string, PluginInstallRecord>;
   rawId?: string;
@@ -18,11 +21,14 @@ export function resolvePluginUpdateSelection(params: {
     return { pluginIds: [] };
   }
 
-  const parsedSpec = parseRegistryNpmSpec(params.rawId);
-  if (!parsedSpec || parsedSpec.selectorKind === "none") {
+  if (Object.hasOwn(params.installs, params.rawId)) {
     return { pluginIds: [params.rawId] };
   }
 
+  const parsedSpec = parseRegistryNpmSpec(params.rawId);
+  if (!parsedSpec) {
+    return { pluginIds: [params.rawId] };
+  }
   const matches = Object.entries(params.installs).filter(([, install]) => {
     return extractInstalledNpmPackageName(install) === parsedSpec.name;
   });
@@ -30,9 +36,17 @@ export function resolvePluginUpdateSelection(params: {
     return { pluginIds: [params.rawId] };
   }
 
-  const [pluginId] = matches[0];
+  const [pluginId] = expectDefined(matches[0], "matches capture group 0");
   if (!pluginId) {
     return { pluginIds: [params.rawId] };
+  }
+  if (parsedSpec.selectorKind === "none") {
+    return {
+      pluginIds: [pluginId],
+      specOverrides: {
+        [pluginId]: parsedSpec.raw,
+      },
+    };
   }
   return {
     pluginIds: [pluginId],
@@ -42,6 +56,7 @@ export function resolvePluginUpdateSelection(params: {
   };
 }
 
+/** Resolve a hook-pack update target and optional npm spec override from CLI input. */
 export function resolveHookPackUpdateSelection(params: {
   installs: Record<string, HookInstallRecord>;
   rawId?: string;
@@ -53,7 +68,7 @@ export function resolveHookPackUpdateSelection(params: {
   if (!params.rawId) {
     return { hookIds: [] };
   }
-  if (params.rawId in params.installs) {
+  if (Object.hasOwn(params.installs, params.rawId)) {
     return { hookIds: [params.rawId] };
   }
 
@@ -69,7 +84,7 @@ export function resolveHookPackUpdateSelection(params: {
     return { hookIds: [] };
   }
 
-  const [hookId] = matches[0];
+  const [hookId] = expectDefined(matches[0], "matches capture group 0");
   if (!hookId) {
     return { hookIds: [] };
   }

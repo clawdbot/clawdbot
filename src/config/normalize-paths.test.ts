@@ -1,6 +1,7 @@
+// Verifies config path normalization and platform-specific behavior.
 import path from "node:path";
+import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 
 describe("normalizeConfigPaths", () => {

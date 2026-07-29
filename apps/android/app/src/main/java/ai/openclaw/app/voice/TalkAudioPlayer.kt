@@ -12,35 +12,45 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
 
+internal interface TalkAudioPlaying {
+  /** Plays one assistant reply, replacing any active playback. */
+  suspend fun play(audio: TalkSpeakAudio)
+
+  /** Cancels any active assistant reply playback. */
+  fun stop()
+}
+
+/** Android playback adapter for remote talk.speak audio payloads. */
 internal class TalkAudioPlayer(
   private val context: Context,
-) {
+) : TalkAudioPlaying {
   private val lock = Any()
   private var active: ActivePlayback? = null
 
-  suspend fun play(audio: TalkSpeakAudio) {
+  override suspend fun play(audio: TalkSpeakAudio) {
     when (val mode = resolvePlaybackMode(audio)) {
       is TalkPlaybackMode.Pcm -> playPcm(audio.bytes, mode.sampleRate)
       is TalkPlaybackMode.Compressed -> playCompressed(audio.bytes, mode.fileExtension)
     }
   }
 
-  fun stop() {
+  override fun stop() {
     synchronized(lock) {
       active?.cancel()
       active = null
     }
   }
 
-  internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode {
-    return resolvePlaybackMode(
+  /** Resolves playback mode from the metadata carried with a talk.speak response. */
+  internal fun resolvePlaybackMode(audio: TalkSpeakAudio): TalkPlaybackMode =
+    resolvePlaybackMode(
       outputFormat = audio.outputFormat,
       mimeType = audio.mimeType,
       fileExtension = audio.fileExtension,
     )
-  }
 
   companion object {
+    /** Chooses PCM streaming or MediaPlayer-backed playback from provider metadata. */
     internal fun resolvePlaybackMode(
       outputFormat: String?,
       mimeType: String?,
@@ -64,25 +74,26 @@ internal class TalkAudioPlayer(
       throw IllegalStateException("Unsupported talk audio format")
     }
 
-    private fun parsePcmSampleRate(outputFormat: String): Int? {
-      return when (outputFormat) {
+    private fun parsePcmSampleRate(outputFormat: String): Int? =
+      when (outputFormat) {
         "pcm_16000" -> 16_000
         "pcm_22050" -> 22_050
         "pcm_24000" -> 24_000
         "pcm_44100" -> 44_100
         else -> null
       }
-    }
 
-    private fun inferExtension(outputFormat: String?, mimeType: String?): String? {
-      return when {
+    private fun inferExtension(
+      outputFormat: String?,
+      mimeType: String?,
+    ): String? =
+      when {
         outputFormat == "mp3" || outputFormat?.startsWith("mp3_") == true || mimeType == "audio/mpeg" -> ".mp3"
         outputFormat == "opus" || outputFormat?.startsWith("opus_") == true || mimeType == "audio/ogg" -> ".ogg"
         outputFormat?.endsWith("-wav") == true || mimeType == "audio/wav" -> ".wav"
         outputFormat?.endsWith("-webm") == true || mimeType == "audio/webm" -> ".webm"
         else -> null
       }
-    }
 
     private fun normalizeExtension(value: String?): String? {
       val trimmed = value?.trim()?.lowercase().orEmpty()
@@ -91,7 +102,10 @@ internal class TalkAudioPlayer(
     }
   }
 
-  private suspend fun playPcm(bytes: ByteArray, sampleRate: Int) {
+  private suspend fun playPcm(
+    bytes: ByteArray,
+    sampleRate: Int,
+  ) {
     withContext(Dispatchers.IO) {
       val minBufferSize =
         AudioTrack.getMinBufferSize(
@@ -103,21 +117,22 @@ internal class TalkAudioPlayer(
         throw IllegalStateException("AudioTrack buffer unavailable")
       }
       val track =
-        AudioTrack.Builder()
+        AudioTrack
+          .Builder()
           .setAudioAttributes(
-            AudioAttributes.Builder()
+            AudioAttributes
+              .Builder()
               .setUsage(AudioAttributes.USAGE_MEDIA)
               .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
               .build(),
-          )
-          .setAudioFormat(
-            AudioFormat.Builder()
+          ).setAudioFormat(
+            AudioFormat
+              .Builder()
               .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
               .setSampleRate(sampleRate)
               .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
               .build(),
-          )
-          .setTransferMode(AudioTrack.MODE_STATIC)
+          ).setTransferMode(AudioTrack.MODE_STATIC)
           .setBufferSizeInBytes(maxOf(minBufferSize, bytes.size))
           .build()
       val finished = CompletableDeferred<Unit>()
@@ -159,19 +174,26 @@ internal class TalkAudioPlayer(
     }
   }
 
-  private suspend fun playCompressed(bytes: ByteArray, fileExtension: String) {
-    val tempFile = withContext(Dispatchers.IO) {
-      File.createTempFile("talk-audio-", fileExtension, context.cacheDir).apply {
-        writeBytes(bytes)
+  private suspend fun playCompressed(
+    bytes: ByteArray,
+    fileExtension: String,
+  ) {
+    // MediaPlayer needs a seekable data source for several compressed formats,
+    // so cache the response bytes briefly instead of streaming from memory.
+    val tempFile =
+      withContext(Dispatchers.IO) {
+        File.createTempFile("talk-audio-", fileExtension, context.cacheDir).apply {
+          writeBytes(bytes)
+        }
       }
-    }
     try {
       val finished = CompletableDeferred<Unit>()
       val player =
         withContext(Dispatchers.Main) {
           MediaPlayer().apply {
             setAudioAttributes(
-              AudioAttributes.Builder()
+              AudioAttributes
+                .Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build(),
@@ -228,13 +250,18 @@ internal class TalkAudioPlayer(
       }
     }
   }
-
 }
 
 internal sealed interface TalkPlaybackMode {
-  data class Pcm(val sampleRate: Int) : TalkPlaybackMode
+  /** Raw signed 16-bit mono PCM returned by providers that support low-latency output. */
+  data class Pcm(
+    val sampleRate: Int,
+  ) : TalkPlaybackMode
 
-  data class Compressed(val fileExtension: String) : TalkPlaybackMode
+  /** Compressed audio that Android decodes through MediaPlayer. */
+  data class Compressed(
+    val fileExtension: String,
+  ) : TalkPlaybackMode
 }
 
 private class ActivePlayback(

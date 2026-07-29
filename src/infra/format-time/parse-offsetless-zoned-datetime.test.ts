@@ -1,3 +1,5 @@
+// Covers offsetless ISO datetime detection, timezone conversion, DST gaps, and
+// sub-second round trips.
 import { describe, expect, it } from "vitest";
 import {
   isOffsetlessIsoDateTime,
@@ -19,6 +21,11 @@ describe("parseOffsetlessIsoDateTimeInTimeZone", () => {
     ["2026-03-29T02:30:00", "Europe/Oslo", null],
     ["2026-03-23T23:00:00+02:00", "Europe/Oslo", null],
     ["2026-03-23T23:00:00", "Invalid/Timezone", null],
+    // Sub-second precision is accepted by the regex and must round-trip rather
+    // than being silently rejected (the offset must be computed at ms resolution).
+    ["2026-03-23T23:00:00.250", "UTC", "2026-03-23T23:00:00.250Z"],
+    ["2026-03-23T23:00:00.999", "UTC", "2026-03-23T23:00:00.999Z"],
+    ["2026-03-23T23:00:00.123", "Europe/Oslo", "2026-03-23T22:00:00.123Z"],
   ])("parses zoned datetime %s in %s", (input, timezone, expected) => {
     expect(parseOffsetlessIsoDateTimeInTimeZone(input, timezone)).toBe(expected);
   });

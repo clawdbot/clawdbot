@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin entrypoint registers its OpenClaw integration.
 import { defineBundledChannelEntry } from "openclaw/plugin-sdk/channel-entry-contract";
 
 export default defineBundledChannelEntry({
@@ -6,7 +7,7 @@ export default defineBundledChannelEntry({
   description: "Nextcloud Talk channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "nextcloudTalkPlugin",
   },
   secrets: {

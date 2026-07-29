@@ -1,9 +1,15 @@
+// OpenAI-compatible `/v1/models` HTTP route backed by configured OpenClaw agents.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import { getRuntimeConfig } from "../config/io.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendInvalidRequest, sendJson, sendMethodNotAllowed } from "./http-common.js";
+import {
+  sendInvalidRequest,
+  sendJson,
+  sendMethodNotAllowed,
+  sendMissingScopeForbidden,
+} from "./http-common.js";
 import {
   OPENCLAW_DEFAULT_MODEL_ID,
   OPENCLAW_MODEL_ID,
@@ -55,7 +61,7 @@ async function authorizeRequest(
 }
 
 function loadAgentModelIds(): string[] {
-  const cfg = loadConfig();
+  const cfg = getRuntimeConfig();
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const ids = new Set<string>([OPENCLAW_MODEL_ID, OPENCLAW_DEFAULT_MODEL_ID]);
   ids.add(`openclaw/${defaultAgentId}`);
@@ -66,9 +72,10 @@ function loadAgentModelIds(): string[] {
 }
 
 function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`).pathname;
+  return new URL(req.url ?? "/", "http://localhost").pathname;
 }
 
+/** Handle OpenAI-compatible model list/detail requests, returning false for unrelated paths. */
 export async function handleOpenAiModelsHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -92,13 +99,7 @@ export async function handleOpenAiModelsHttpRequest(
   const requestedScopes = resolveOpenAiCompatibleHttpOperatorScopes(req, requestAuth);
   const scopeAuth = authorizeOperatorScopesForMethod("models.list", requestedScopes);
   if (!scopeAuth.allowed) {
-    sendJson(res, 403, {
-      ok: false,
-      error: {
-        type: "forbidden",
-        message: `missing scope: ${scopeAuth.missingScope}`,
-      },
-    });
+    sendMissingScopeForbidden(res, scopeAuth.missingScope);
     return true;
   }
 

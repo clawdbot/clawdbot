@@ -1,5 +1,6 @@
+// Zalo tests cover setup status plugin behavior.
+import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
-import { createPluginSetupWizardStatus } from "../../../test/helpers/plugins/setup-wizard.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { zaloSetupWizard } from "./setup-surface.js";
 

@@ -1,5 +1,11 @@
+// Verifies lazy service module loading and disabled-state handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { startLazyPluginServiceModule } from "./lazy-service-module.js";
+
+type LazyPluginServiceHandle = NonNullable<
+  Awaited<ReturnType<typeof startLazyPluginServiceModule>>
+>;
 
 function createAsyncHookMock() {
   return vi.fn(async () => {});
@@ -38,6 +44,16 @@ async function expectLifecycleStarted(params: {
   });
 }
 
+function expectLazyServiceHandle(
+  handle: Awaited<ReturnType<typeof startLazyPluginServiceModule>>,
+): LazyPluginServiceHandle {
+  if (handle === null) {
+    throw new Error("Expected lazy plugin service handle");
+  }
+  expect(handle.stop).toBeTypeOf("function");
+  return handle;
+}
+
 describe("startLazyPluginServiceModule", () => {
   afterEach(() => {
     delete process.env.OPENCLAW_LAZY_SERVICE_SKIP;
@@ -54,8 +70,7 @@ describe("startLazyPluginServiceModule", () => {
     });
 
     expect(lifecycle.start).toHaveBeenCalledTimes(1);
-    expect(handle).not.toBeNull();
-    await handle?.stop();
+    await expectLazyServiceHandle(handle).stop();
     expect(lifecycle.stop).toHaveBeenCalledTimes(1);
   });
 
@@ -86,6 +101,23 @@ describe("startLazyPluginServiceModule", () => {
     });
 
     expect(loadOverrideModule).toHaveBeenCalledWith("virtual:service");
+    expect(start).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves caller-supplied override loaders responsible for their own specifiers", async () => {
+    process.env.OPENCLAW_LAZY_SERVICE_OVERRIDE = "C:\\Users\\alice\\browser-service.mjs";
+    const start = createAsyncHookMock();
+    const loadOverrideModule = vi.fn(async () => ({ startOverride: start }));
+
+    await withMockedWindowsPlatform(async () => {
+      await expectLifecycleStarted({
+        overrideEnvVar: "OPENCLAW_LAZY_SERVICE_OVERRIDE",
+        loadOverrideModule,
+        startExportNames: ["startOverride"],
+      });
+    });
+
+    expect(loadOverrideModule).toHaveBeenCalledWith("C:\\Users\\alice\\browser-service.mjs");
     expect(start).toHaveBeenCalledTimes(1);
   });
 

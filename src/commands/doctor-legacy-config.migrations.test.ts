@@ -1,27 +1,134 @@
+// Doctor legacy config migration tests cover shipped migration recipes and validation outcomes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
+import { validateConfigObject } from "../config/validation.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
+import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
+import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
+import { collectBlockedLegacyOpenAICodexProviderPlan } from "./doctor/shared/legacy-config-migrations.runtime.models.js";
+import { repairStaleAgentModelRefs } from "./doctor/shared/stale-agent-model-ref-repair.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: () => undefined,
+  resolvePluginSetupRegistry: () => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  }),
   runPluginSetupConfigMigrations: ({ config }: { config: OpenClawConfig }) => ({
     config,
     changes: [],
   }),
 }));
 
-function asLegacyConfig(value: unknown): OpenClawConfig {
+vi.mock("../plugins/manifest-registry.js", () => ({
+  loadPluginManifestRegistry: () => ({
+    diagnostics: [],
+    plugins: [
+      {
+        id: "brave",
+        origin: "bundled",
+        channels: [],
+        contracts: { webSearchProviders: ["brave"] },
+      },
+      {
+        id: "google",
+        origin: "bundled",
+        channels: [],
+        contracts: { webSearchProviders: ["gemini"] },
+      },
+      {
+        id: "firecrawl",
+        origin: "bundled",
+        channels: [],
+        contracts: { webSearchProviders: ["firecrawl"] },
+      },
+    ],
+  }),
+  resolveManifestContractOwnerPluginId: ({ value }: { value: string }): string | undefined => {
+    if (value === "gemini") {
+      return "google";
+    }
+    return value === "brave" || value === "firecrawl" ? value : undefined;
+  },
+}));
+
+function legacyConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function getLegacyProperty(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return (value as Record<string, unknown>)[key];
-}
+vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
+  applyChannelDoctorCompatibilityMigrations: (cfg: OpenClawConfig) => ({
+    next: cfg,
+    changes: [],
+  }),
+}));
+
+vi.mock("../secrets/target-registry.js", () => {
+  const entry = {
+    id: "channels.discord.token",
+    targetType: "channels.discord.token",
+    configFile: "openclaw.json",
+    pathPattern: "channels.discord.token",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  };
+
+  const readRecord = (value: unknown): Record<string, unknown> | null =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+
+  return {
+    discoverConfigSecretTargets: (cfg: OpenClawConfig) => {
+      const targets: Array<{
+        entry: typeof entry;
+        path: string;
+        pathSegments: string[];
+        value: unknown;
+        accountId?: string;
+      }> = [];
+      const channels = readRecord(cfg.channels);
+      const discord = readRecord(channels?.discord);
+      if (!discord) {
+        return targets;
+      }
+      targets.push({
+        entry,
+        path: "channels.discord.token",
+        pathSegments: ["channels", "discord", "token"],
+        value: discord.token,
+      });
+
+      const accounts = readRecord(discord.accounts);
+      for (const [accountId, accountConfig] of Object.entries(accounts ?? {})) {
+        const account = readRecord(accountConfig);
+        if (!account) {
+          continue;
+        }
+        targets.push({
+          entry,
+          path: `channels.discord.accounts.${accountId}.token`,
+          pathSegments: ["channels", "discord", "accounts", accountId, "token"],
+          value: account.token,
+          accountId,
+        });
+      }
+      return targets;
+    },
+  };
+});
+
 describe("normalizeCompatibilityConfigValues", () => {
   let previousOauthDir: string | undefined;
   let tempOauthDir = "";
@@ -37,8 +144,19 @@ describe("normalizeCompatibilityConfigValues", () => {
       messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
     });
     expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   };
+
+  const ollamaModel = (overrides: Record<string, unknown> = {}) => ({
+    id: "llama3.3",
+    name: "Llama 3.3",
+    reasoning: false,
+    input: ["text"] as Array<"text">,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 81920,
+    maxTokens: 8192,
+    ...overrides,
+  });
 
   beforeAll(() => {
     previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
@@ -47,6 +165,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
     fs.mkdirSync(tempOauthDir, { recursive: true });
   });
@@ -60,13 +179,148 @@ describe("normalizeCompatibilityConfigValues", () => {
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
   });
 
+  it("does not materialize a group visible reply default for configured channels", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        discord: {},
+      },
+      messages: {
+        groupChat: {
+          mentionPatterns: ["@openclaw"],
+        },
+      },
+    });
+
+    expect(res.config.messages?.groupChat).toEqual({
+      mentionPatterns: ["@openclaw"],
+    });
+    expect(res.changes.some((change) => change.includes("messages.groupChat.visibleReplies"))).toBe(
+      false,
+    );
+  });
+
+  it("removes null workspace values from agents.list entries", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          { id: "main", workspace: null as unknown as string },
+          { id: "beta", workspace: "/beta" },
+          { id: "gamma" },
+        ],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([
+      { id: "main" },
+      { id: "beta", workspace: "/beta" },
+      { id: "gamma" },
+    ]);
+    expect(res.changes).toContain("Removed null workspace value from agents.list entry.");
+  });
+
+  it("does not alter agents.list when no workspace is null", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "main", workspace: "/main" }, { id: "beta" }],
+      },
+    });
+
+    expect(res.config.agents?.list).toEqual([{ id: "main", workspace: "/main" }, { id: "beta" }]);
+    expect(res.changes.some((change) => change.includes("workspace"))).toBe(false);
+  });
+
+  it("removes bindings for missing configured agents", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "Team Ops" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "team-ops",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-2" } },
+        },
+      ],
+    });
+
+    expect(res.config.bindings).toEqual([
+      {
+        type: "route",
+        agentId: "team-ops",
+        match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+      },
+    ]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("does not prune bindings from malformed agent entries", () => {
+    const config = {
+      agents: {
+        list: [null],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config.bindings).toEqual(config.bindings);
+    expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("does not set group visible replies without channels or when already explicit", () => {
+    expect(
+      normalizeCompatibilityConfigValues({
+        messages: {
+          groupChat: {
+            mentionPatterns: ["@openclaw"],
+          },
+        },
+      }).changes,
+    ).toStrictEqual([]);
+
+    expect(
+      normalizeCompatibilityConfigValues({
+        channels: {
+          discord: {},
+        },
+        messages: {
+          visibleReplies: "automatic",
+        },
+      }).config.messages?.groupChat?.visibleReplies,
+    ).toBeUndefined();
+
+    expect(
+      normalizeCompatibilityConfigValues({
+        channels: {
+          discord: {},
+        },
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
+      }).config.messages?.groupChat?.visibleReplies,
+    ).toBe("automatic");
+  });
+
   it("does not add whatsapp config when missing and no auth exists", () => {
     const res = normalizeCompatibilityConfigValues({
       messages: { ackReaction: "👀" },
     });
 
     expect(res.config.channels?.whatsapp).toBeUndefined();
-    expect(res.changes).toEqual([]);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("does not add whatsapp config when only auth exists (issue #900)", () => {
@@ -90,199 +344,323 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
   });
 
-  it("migrates Slack dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
+  it("migrates legacy secretref-env markers on SecretRef credential paths", () => {
     const res = normalizeCompatibilityConfigValues({
-      channels: {
-        slack: {
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+      secrets: {
+        defaults: {
+          env: "gateway-env",
         },
       },
-    });
-
-    expect(res.config.channels?.slack?.dmPolicy).toBe("open");
-    expect(res.config.channels?.slack?.allowFrom).toEqual(["*"]);
-    expect(res.config.channels?.slack?.dm).toEqual({
-      enabled: true,
-    });
-    expect(res.changes).toEqual([
-      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
-      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
-    ]);
-  });
-
-  it("migrates Discord account dm.policy/dm.allowFrom to dmPolicy/allowFrom aliases", () => {
-    const res = normalizeCompatibilityConfigValues({
       channels: {
         discord: {
+          token: "secretref-env:DISCORD_BOT_TOKEN",
           accounts: {
             work: {
-              dm: { policy: "allowlist", allowFrom: ["123"], groupEnabled: true },
+              token: "__env__:DISCORD_WORK_TOKEN",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.channels?.discord?.token).toBeUndefined();
+    expect(res.config.channels?.discord?.accounts?.default?.token).toEqual({
+      source: "env",
+      provider: "gateway-env",
+      id: "DISCORD_BOT_TOKEN",
+    });
+    expect(res.config.channels?.discord?.accounts?.work?.token).toEqual({
+      source: "env",
+      provider: "gateway-env",
+      id: "DISCORD_WORK_TOKEN",
+    });
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.default.token secretref-env:DISCORD_BOT_TOKEN marker → structured env SecretRef.",
+    );
+    expect(res.changes).toContain(
+      "Moved channels.discord.accounts.work.token __env__:DISCORD_WORK_TOKEN marker → structured env SecretRef.",
+    );
+  });
+
+  it("leaves invalid legacy secretref-env markers unchanged", () => {
+    const res = normalizeCompatibilityConfigValues({
+      messages: {
+        groupChat: {
+          visibleReplies: "message_tool",
+        },
+      },
+      channels: {
+        discord: {
+          token: "secretref-env:not-valid",
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.channels?.discord?.token).toBe("secretref-env:not-valid");
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("preserves inherited WhatsApp access policy when seeding accounts.default", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15550001111"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          accounts: {
+            work: {
+              enabled: true,
+              authDir: "/tmp/wa-work",
             },
           },
         },
       },
     });
 
-    expect(res.config.channels?.discord?.accounts?.work?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.discord?.accounts?.work?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.discord?.accounts?.work?.dm).toEqual({
-      groupEnabled: true,
+    expect(res.config.channels?.whatsapp?.dmPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.allowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupPolicy).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.groupAllowFrom).toBeUndefined();
+    expect(res.config.channels?.whatsapp?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
     });
-    expect(res.changes).toEqual([
-      "Moved channels.discord.accounts.work.dm.policy → channels.discord.accounts.work.dmPolicy.",
-      "Moved channels.discord.accounts.work.dm.allowFrom → channels.discord.accounts.work.allowFrom.",
-    ]);
+    expect(res.config.channels?.whatsapp?.accounts?.work).toEqual({
+      enabled: true,
+      authDir: "/tmp/wa-work",
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+      groupPolicy: "open",
+      groupAllowFrom: [],
+    });
+    expect(res.changes).toContain(
+      "Moved channels.whatsapp single-account top-level values into channels.whatsapp.accounts.default.",
+    );
   });
 
-  it("migrates Discord streaming boolean alias into nested streaming.mode", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
+  it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
+    const config = {
+      channels: {
+        "uninstalled-demo": {
+          dmPolicy: "allowlist",
+          appToken: "covered-legacy-key",
+          customAuth: "keep-at-root",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("promotes the legacy tier when a loaded adapter is undeclared", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "undeclared-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "undeclared-demo", label: "Undeclared Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "undeclared-demo": {
+          dmPolicy: "allowlist",
+          appToken: "legacy-app-token",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["undeclared-demo"] as
+      | { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
+  });
+
+  it("promotes generic and declared keys together after the plugin becomes available", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "late-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "late-demo", label: "Late Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+              singleAccountKeysToMove: ["customAuth"],
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "late-demo": {
+          dmPolicy: "allowlist",
+          customAuth: "move-with-plugin",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["late-demo"] as
+      | { dmPolicy?: string; customAuth?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.customAuth).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      customAuth: "move-with-plugin",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
+  });
+
+  it.each(["discord", "slack", "telegram", "signal", "imessage", "irc"])(
+    "preserves inherited %s access policy when seeding accounts.default",
+    (channelId) => {
+      const res = normalizeCompatibilityConfigValues({
         channels: {
-          discord: {
-            streaming: true,
+          [channelId]: {
+            dmPolicy: "allowlist",
+            allowFrom: ["sender-1"],
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["group-sender-1"],
             accounts: {
               work: {
-                streaming: false,
+                enabled: true,
               },
             },
           },
         },
-      }),
-    );
+      } as unknown as OpenClawConfig);
+      const channel = (
+        res.config.channels as Record<string, { accounts?: Record<string, unknown> }>
+      )?.[channelId];
 
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "partial" });
-    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.config.channels?.discord?.accounts?.work?.streaming).toEqual({ mode: "off" });
-    expect(
-      getLegacyProperty(res.config.channels?.discord?.accounts?.work, "streamMode"),
-    ).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streaming (boolean) → channels.discord.streaming.mode (partial).",
-      "Moved channels.discord.accounts.work.streaming (boolean) → channels.discord.accounts.work.streaming.mode (off).",
-    ]);
-  });
+      expect(channel?.accounts?.default).toEqual({
+        dmPolicy: "allowlist",
+        allowFrom: ["sender-1"],
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group-sender-1"],
+      });
+      expect(channel?.accounts?.work).toEqual({
+        enabled: true,
+        dmPolicy: "allowlist",
+        allowFrom: ["sender-1"],
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["group-sender-1"],
+      });
+    },
+  );
 
-  it("migrates Discord legacy streamMode into nested streaming.mode", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          discord: {
-            streaming: false,
-            streamMode: "block",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.discord?.streaming).toEqual({ mode: "block" });
-    expect(getLegacyProperty(res.config.channels?.discord, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.discord.streamMode → channels.discord.streaming.mode (block).",
-    ]);
-  });
-
-  it("migrates Telegram streamMode into nested streaming.mode", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          telegram: {
-            streamMode: "block",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.telegram?.streaming).toEqual({ mode: "block" });
-    expect(getLegacyProperty(res.config.channels?.telegram, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
-    ]);
-  });
-
-  it("migrates Slack legacy streaming keys into nested streaming config", () => {
-    const res = normalizeCompatibilityConfigValues(
-      asLegacyConfig({
-        channels: {
-          slack: {
-            streaming: false,
-            streamMode: "status_final",
-          },
-        },
-      }),
-    );
-
-    expect(res.config.channels?.slack?.streaming).toEqual({
-      mode: "progress",
-      nativeTransport: false,
-    });
-    expect(getLegacyProperty(res.config.channels?.slack, "streamMode")).toBeUndefined();
-    expect(res.changes).toEqual([
-      "Moved channels.slack.streamMode → channels.slack.streaming.mode (progress).",
-      "Moved channels.slack.streaming (boolean) → channels.slack.streaming.nativeTransport.",
-    ]);
-  });
-
-  it("preserves top-level Telegram allowlist fallback for existing named accounts", () => {
+  it("keeps named-account access policy overrides when seeding accounts.default", () => {
     const res = normalizeCompatibilityConfigValues({
       channels: {
-        telegram: {
-          enabled: true,
+        discord: {
           dmPolicy: "allowlist",
-          allowFrom: ["123"],
+          allowFrom: ["top-dm"],
           groupPolicy: "allowlist",
+          groupAllowFrom: ["top-group"],
           accounts: {
-            bot1: {
-              enabled: true,
-              botToken: "bot-1-token",
+            work: {
+              token: "work-token",
+              allowFrom: ["work-dm"],
+              groupPolicy: "disabled",
             },
-            bot2: {
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.channels?.discord?.accounts?.work).toEqual({
+      token: "work-token",
+      dmPolicy: "allowlist",
+      allowFrom: ["work-dm"],
+      groupPolicy: "disabled",
+      groupAllowFrom: ["top-group"],
+    });
+  });
+
+  it("preserves inherited Mattermost access policy when seeding accounts.default", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        mattermost: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          allowFrom: ["*"],
+          groupAllowFrom: ["*"],
+          accounts: {
+            tony: {
+              name: "Tony",
               enabled: true,
-              botToken: "bot-2-token",
+              botToken: "tony-token",
+              groups: {
+                tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
+              },
+            },
+            research: {
+              name: "Research",
+              enabled: true,
+              botToken: "research-token",
             },
           },
         },
       },
     });
 
-    expect(res.config.channels?.telegram?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.telegram?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
-    expect(res.config.channels?.telegram?.accounts?.bot1?.botToken).toBe("bot-1-token");
-    expect(res.config.channels?.telegram?.accounts?.bot2?.botToken).toBe("bot-2-token");
-    expect(res.changes).not.toContain(
-      "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
-    );
-  });
-
-  it("keeps Telegram policy fallback top-level while still seeding default auth", () => {
-    const res = normalizeCompatibilityConfigValues({
-      channels: {
-        telegram: {
-          enabled: true,
-          botToken: "legacy-token",
-          dmPolicy: "allowlist",
-          allowFrom: ["123"],
-          groupPolicy: "allowlist",
-          accounts: {
-            bot1: {
-              enabled: true,
-              botToken: "bot-1-token",
-            },
-          },
-        },
+    expect(res.config.channels?.mattermost?.dmPolicy).toBeUndefined();
+    expect(res.config.channels?.mattermost?.allowFrom).toBeUndefined();
+    expect(res.config.channels?.mattermost?.groupPolicy).toBeUndefined();
+    expect(res.config.channels?.mattermost?.groupAllowFrom).toBeUndefined();
+    expect(res.config.channels?.mattermost?.accounts?.default).toEqual({
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+    });
+    expect(res.config.channels?.mattermost?.accounts?.tony).toEqual({
+      name: "Tony",
+      enabled: true,
+      botToken: "tony-token",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
+      groups: {
+        tboek5jq9fremk5ecmd6n7f5nw: { requireMention: false },
       },
     });
-
-    expect(res.config.channels?.telegram?.accounts?.default).toMatchObject({
-      botToken: "legacy-token",
+    expect(res.config.channels?.mattermost?.accounts?.research).toEqual({
+      name: "Research",
+      enabled: true,
+      botToken: "research-token",
+      dmPolicy: "open",
+      groupPolicy: "open",
+      allowFrom: ["*"],
+      groupAllowFrom: ["*"],
     });
-    expect(res.config.channels?.telegram?.botToken).toBeUndefined();
-    expect(res.config.channels?.telegram?.dmPolicy).toBe("allowlist");
-    expect(res.config.channels?.telegram?.allowFrom).toEqual(["123"]);
-    expect(res.config.channels?.telegram?.groupPolicy).toBe("allowlist");
-    expect(res.changes).toContain(
-      "Moved channels.telegram single-account top-level values into channels.telegram.accounts.default.",
-    );
   });
 
   it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
@@ -336,7 +714,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "google/gemini-3-pro-image-preview",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
@@ -347,13 +725,876 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
     );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
+    expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.mediaModels.image.primary (google/gemini-3-pro-image-preview).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
+  });
+
+  it("migrates legacy OpenAI provider api values to OpenAI completions", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.ai/api/v1",
+            api: "openai",
+            models: [
+              {
+                id: "openai/gpt-4o-mini",
+                name: "OpenRouter GPT-4o Mini",
+                api: "openai",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128_000,
+                maxTokens: 16_384,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.openrouter?.api).toBe("openai-completions");
+    expect(res.config.models?.providers?.openrouter?.models?.[0]?.api).toBe("openai-completions");
+    expect(res.changes).toContain(
+      'Moved models.providers.openrouter.api "openai" → "openai-completions".',
+    );
+    expect(res.changes).toContain(
+      'Moved models.providers.openrouter.models[0].api "openai" → "openai-completions".',
+    );
+  });
+
+  it("marks legacy untagged /models add OpenAI Codex metadata rows for doctor repair", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 400_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const codexModel = res.config.models?.providers?.["openai-codex"]?.models?.[0];
+    expect(codexModel?.id).toBe("gpt-5.5");
+    expect(codexModel?.metadataSource).toBe("models-add");
+    expect(res.changes).toContain(
+      "Marked models.providers.openai-codex.models.gpt-5.5 as /models add metadata so official OpenAI Codex metadata can override it.",
+    );
+  });
+
+  it("repairs agent model refs whose configured provider was deleted", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        models: {
+          providers: {
+            custom: { baseUrl: "http://localhost:1234", models: [] },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "deleted/default-primary",
+              fallbacks: ["custom/kept", "openai/gpt-5.6-sol", "deleted/default-fallback"],
+            },
+            models: {
+              "custom/kept": { alias: "kept" },
+              "deleted/models-add-row": { alias: "stale" },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              model: "deleted/agent-primary",
+              models: {
+                "plugin-provider/kept": {},
+                "deleted/agent-models-add-row": {},
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(["plugin-provider"]),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: ["custom/kept"],
+    });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "custom/kept": { alias: "kept" },
+      "openai/gpt-5.6-sol": {},
+    });
+    expect(result.config.agents?.list?.[0]).toMatchObject({
+      id: "main",
+      models: { "plugin-provider/kept": {}, "openai/gpt-5.6-sol": {} },
+    });
+    expect(result.config.agents?.list?.[0]?.model).toBeUndefined();
+    expect(result.changes).toEqual([
+      'Replaced stale agents.defaults.model primary "deleted/default-primary" with default "openai/gpt-5.6-sol" (provider "deleted" is unavailable).',
+      'Removed stale agents.defaults.model fallback "deleted/default-fallback" (provider "deleted" is unavailable).',
+      'Removed duplicate agents.defaults.model fallback "openai/gpt-5.6-sol" after selecting it as the default primary.',
+      'Removed stale agents.defaults.models entry "deleted/models-add-row" (provider "deleted" is unavailable).',
+      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+      'Removed stale agents.list.main.model "deleted/agent-primary" so agent "main" inherits the default model (provider "deleted" is unavailable).',
+      'Removed stale agents.list.main.models entry "deleted/agent-models-add-row" (provider "deleted" is unavailable).',
+      'Added agents.list.main.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+    ]);
+  });
+
+  it("preserves plugin-owned CLI providers and agent-local models.json providers", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: {
+            model: "my-cli/model",
+          },
+          list: [
+            { id: "worker", model: "agent-local/model" },
+            { id: "core", model: "anthropic/claude-sonnet-4-6" },
+          ],
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(["anthropic", "my-cli"]),
+        persistedProviderIdsByAgentId: new Map([["worker", new Set(["agent-local"])]]),
+      },
+    );
+
+    expect(result.changes).toEqual([]);
+    expect(result.config.agents?.defaults?.model).toBe("my-cli/model");
+    expect(result.config.agents?.list?.[0]?.model).toBe("agent-local/model");
+    expect(result.config.agents?.list?.[1]?.model).toBe("anthropic/claude-sonnet-4-6");
+  });
+
+  it("does not treat one agent-local provider as globally available", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: { model: "agent-local/model" },
+          list: [{ id: "main" }, { id: "worker" }],
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map([
+          ["main", new Set(["agent-local"])],
+          ["worker", new Set()],
+        ]),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.changes).toEqual([
+      'Replaced stale agents.defaults.model "agent-local/model" with default "openai/gpt-5.6-sol" (provider "agent-local" is unavailable).',
+    ]);
+  });
+
+  it("evaluates and repairs every canonical keyed agent", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: { model: "agent-local/model" },
+          entries: {
+            main: { default: true },
+            worker: { model: "deleted/worker" },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(),
+        persistedProviderIdsByAgentId: new Map([
+          ["main", new Set(["agent-local"])],
+          ["worker", new Set()],
+        ]),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
+    expect(result.config.agents?.entries?.worker?.model).toBeUndefined();
+    expect(result.changes).toContain(
+      'Removed stale agents.entries.worker.model "deleted/worker" so agent "worker" inherits the default model (provider "deleted" is unavailable).',
+    );
+  });
+
+  it("keeps a repaired model allowlist restrictive", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        agents: {
+          defaults: {
+            model: "deleted/main",
+            models: { "deleted/main": {} },
+          },
+        },
+      } as OpenClawConfig,
+      { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+    );
+
+    expect(result.config.agents?.defaults?.models).toEqual({ "openai/gpt-5.6-sol": {} });
+    expect(result.changes).toContain(
+      'Added agents.defaults.models entry "openai/gpt-5.6-sol" to keep the repaired allowlist restrictive.',
+    );
+  });
+
+  it("does not throw on malformed best-effort model config", () => {
+    expect(() =>
+      repairStaleAgentModelRefs(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "deleted/main", fallbacks: 42 },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        { pluginProviderIds: new Set(), persistedProviderIdsByAgentId: new Map() },
+      ),
+    ).not.toThrow();
+  });
+
+  it("uses only explicit providers when models.mode is replace", () => {
+    const result = repairStaleAgentModelRefs(
+      {
+        models: {
+          mode: "replace",
+          providers: {
+            custom: {
+              baseUrl: "http://localhost:1234",
+              models: [{ id: "kept", name: "Kept" }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: {
+              primary: "deleted/main",
+              fallbacks: ["plugin-provider/model", "custom/kept"],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      {
+        pluginProviderIds: new Set(["plugin-provider"]),
+        persistedProviderIdsByAgentId: new Map(),
+      },
+    );
+
+    expect(result.config.agents?.defaults?.model).toEqual({ primary: "custom/kept" });
+    expect(result.changes).toEqual([
+      'Replaced stale agents.defaults.model primary "deleted/main" with default "custom/kept" (provider "deleted" is unavailable).',
+      'Removed stale agents.defaults.model fallback "plugin-provider/model" (provider "plugin-provider" is unavailable).',
+      'Removed duplicate agents.defaults.model fallback "custom/kept" after selecting it as the default primary.',
+    ]);
+  });
+
+  it("does not mark untagged manual OpenAI Codex metadata overrides", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config).toEqual({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "gpt-5.5",
+                name: "gpt-5.5",
+                api: "openai-chatgpt-responses",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 9, output: 99, cacheRead: 0.9, cacheWrite: 0 },
+                contextWindow: 555_555,
+                contextTokens: 111_111,
+                maxTokens: 22_222,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("migrates shipped Codex refs to canonical OpenAI refs with model runtime pins", () => {
+    const normalized = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "auto" },
+          model: {
+            primary: "codex/gpt-5.6-sol",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.6-sol": { alias: "legacy-codex" },
+            "openai/gpt-5.6-sol": { alias: "gpt", params: { temperature: 0.2 } },
+            "codex/gpt-5.4-mini": {},
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            model: "codex/gpt-5.6-sol",
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+    const repaired = maybeRepairCodexRoutes({
+      cfg: normalized.config,
+      shouldRepair: true,
+    });
+
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": {
+        alias: "gpt",
+        params: { temperature: 0.2 },
+        agentRuntime: { id: "codex" },
+      },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    });
+    expect(repaired.cfg.agents?.list?.[0]).toEqual({
+      id: "reviewer",
+      model: "openai/gpt-5.6-sol",
+      models: {
+        "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
+      },
+    });
+    expect(normalized.changes).toContain(
+      "Moved agents.defaults.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+    );
+    expect(normalized.changes).toContain(
+      "Moved agents.defaults.models legacy runtime keys to canonical provider keys.",
+    );
+    expect(normalized.changes).toContain(
+      "Moved agents.list.reviewer.model legacy runtime primary refs to canonical provider refs and selected codex runtime.",
+    );
+  });
+
+  it("migrates fallback-only Codex refs through the complete route repair", () => {
+    const input = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.4-mini": { alias: "legacy-codex" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const repaired = maybeRepairCodexRoutes({
+      cfg: input,
+      shouldRepair: true,
+    });
+
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.4-mini": {
+        alias: "legacy-codex",
+        agentRuntime: { id: "codex" },
+      },
+    });
+    expect(repaired.cfg.agents?.defaults?.models?.["codex/gpt-5.4-mini"]).toBeUndefined();
+  });
+
+  it("keeps the whole provider-conflicted Codex namespace legacy", () => {
+    const migrated = {
+      models: {
+        providers: {
+          openai: {
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+              },
+            ],
+          },
+          codex: {
+            api: "openai-codex-responses",
+            baseUrl: "https://chatgpt.com/backend-api",
+            models: [{ id: "gpt-5.6-sol" }, { id: "gpt-5.4-mini" }],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.6-sol",
+            fallbacks: ["codex/gpt-5.3-mini"],
+          },
+          models: {
+            "codex/gpt-5.6-sol": { alias: "blocked" },
+            "codex/gpt-5.3-mini": { alias: "unlisted" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const migrationChanges: string[] = [];
+    for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+      migration.apply(migrated as unknown as Record<string, unknown>, migrationChanges);
+    }
+
+    const blockedProviderPlan = collectBlockedLegacyOpenAICodexProviderPlan(migrated);
+    const normalized = normalizeCompatibilityConfigValues(migrated, {
+      blockedModelIdentities: new Set(blockedProviderPlan.blockedModelIdentities),
+    });
+    const repaired = maybeRepairCodexRoutes({
+      cfg: normalized.config,
+      shouldRepair: true,
+      blockedProviderPlan,
+    });
+
+    expect(repaired.cfg.models?.providers).toHaveProperty("codex");
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "codex/gpt-5.6-sol",
+      fallbacks: ["codex/gpt-5.3-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "codex/gpt-5.6-sol": { alias: "blocked" },
+      "codex/gpt-5.3-mini": { alias: "unlisted" },
+    });
+    expect(repaired.warnings).toHaveLength(1);
+    expect(repaired.warnings[0]).toContain(
+      "Legacy Codex provider routes require manual reconciliation",
+    );
+    expect(repaired.warnings[0]).toContain(
+      "Doctor retained matching legacy refs in config, sessions, and cron",
+    );
+  });
+
+  it("migrates a 2026.6 wizard-shaped Codex config into gateway-loadable canonical state", () => {
+    const raw = {
+      models: {
+        providers: {
+          codex: {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                name: "GPT-5.6 Sol",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 400_000,
+                maxTokens: 128_000,
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex/gpt-5.6-sol",
+            fallbacks: ["codex/gpt-5.4-mini"],
+          },
+          models: {
+            "codex/gpt-5.6-sol": { alias: "codex" },
+            "codex/gpt-5.4-mini": {},
+          },
+        },
+      },
+      plugins: { entries: { codex: { enabled: true } } },
+    };
+    const migrated = structuredClone(raw) as Record<string, unknown>;
+    const migrationChanges: string[] = [];
+    for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+      migration.apply(migrated, migrationChanges);
+    }
+    const normalized = normalizeCompatibilityConfigValues(migrated as OpenClawConfig);
+    const repaired = maybeRepairCodexRoutes({ cfg: normalized.config, shouldRepair: true });
+
+    expect(repaired.cfg.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.6-sol",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(repaired.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.6-sol": { alias: "codex", agentRuntime: { id: "codex" } },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    });
+    expect(repaired.cfg.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.6-sol",
+      "openai/gpt-5.4-mini",
+    ]);
+    expect(repaired.cfg.models?.providers).not.toHaveProperty("codex");
+    expect(repaired.cfg.models?.providers?.openai?.models?.[0]).toMatchObject({
+      id: "gpt-5.6-sol",
+      agentRuntime: { id: "codex" },
+    });
+    expect(JSON.stringify(repaired.cfg)).not.toContain('"codex/');
+    expect(validateConfigObject(repaired.cfg).ok).toBe(true);
+  });
+
+  it("migrates legacy Claude CLI primary refs to Anthropic refs plus model runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "claude-cli/claude-opus-4-7",
+            fallbacks: ["claude-cli/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-7": { alias: "Anthropic Opus" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "claude-cli/claude-opus-4-7": { alias: "Opus" },
+      "anthropic/claude-opus-4-7": {
+        alias: "Anthropic Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+  });
+
+  it("preserves legacy whole-agent Claude CLI intent for canonical Anthropic defaults", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          agentRuntime: { id: "claude-cli" },
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "anthropic/claude-opus-4-7": {
+        alias: "Opus",
+        agentRuntime: { id: "claude-cli" },
+      },
+      "anthropic/claude-sonnet-4-6": {
+        agentRuntime: { id: "claude-cli" },
+      },
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.agentRuntime.id claude-cli to matching anthropic model runtime policy.",
+    );
+  });
+
+  it("does not overwrite explicit model runtime while preserving legacy whole-agent CLI intent", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [
+          {
+            id: "paige",
+            agentRuntime: { id: "claude-cli" },
+            model: "anthropic/claude-opus-4-7",
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.list?.[0]?.agentRuntime).toEqual({ id: "claude-cli" });
+    expect(res.config.agents?.list?.[0]?.models).toEqual({
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
+    });
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("migrates legacy Codex CLI primary refs to the Codex app-server route", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "codex-cli/gpt-5.5",
+            fallbacks: ["codex-cli/gpt-5.4-mini"],
+          },
+          models: {
+            "codex-cli/gpt-5.5": { alias: "Codex CLI" },
+            "openai/gpt-5.5": { alias: "OpenAI GPT" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4-mini"],
+    });
+    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.5": { alias: "Codex CLI" },
+      "openai/gpt-5.5": { alias: "OpenAI GPT", agentRuntime: { id: "codex" } },
+      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    });
+  });
+
+  it("migrates legacy Codex CLI fallback refs when the primary is already canonical", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["codex-cli/gpt-5.4"],
+          },
+          models: {
+            "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.4"],
+    });
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+      "openai/gpt-5.4": {
+        alias: "Legacy CLI fallback",
+        agentRuntime: { id: "codex" },
+      },
+    });
+  });
+
+  it("migrates standalone legacy Codex CLI allowlist keys", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          models: {
+            "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "codex-cli/gpt-5.4": { alias: "Legacy CLI fallback" },
+      "openai/gpt-5.4": {
+        alias: "Legacy CLI fallback",
+        agentRuntime: { id: "codex" },
+      },
+    });
+  });
+
+  it("pins migrated Codex CLI refs to Codex when OpenAI uses a custom base URL", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: "codex-cli/gpt-5.5",
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+  });
+
+  it("migrates existing Codex CLI runtime pins to the Codex app-server runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": {
+              agentRuntime: { id: "codex-cli", mode: "strict" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "reviewer",
+            models: {
+              "openai/gpt-5.4-mini": {
+                agentRuntime: { id: "codex-cli" },
+              },
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "codex-cli" },
+            models: [
+              {
+                id: "gpt-5.5",
+                agentRuntime: { id: "codex-cli" },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+      mode: "strict",
+    });
+    expect(res.config.agents?.list?.[0]?.models?.["openai/gpt-5.4-mini"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(res.config.models?.providers?.openai?.agentRuntime).toEqual({ id: "codex" });
+    expect(res.config.models?.providers?.openai?.models?.[0]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    expect(res.changes).toContain(
+      "Moved agents.defaults.models.openai/gpt-5.5 agentRuntime.id from codex-cli to codex.",
+    );
+    expect(res.changes).toContain(
+      "Moved agents.list.reviewer.models.openai/gpt-5.4-mini agentRuntime.id from codex-cli to codex.",
+    );
+    expect(res.changes).toContain(
+      "Moved models.providers.openai agentRuntime.id from codex-cli to codex.",
+    );
+    expect(res.changes).toContain(
+      "Moved models.providers.openai.models.gpt-5.5 agentRuntime.id from codex-cli to codex.",
+    );
+  });
+
+  it("migrates provider-scoped Codex CLI runtime pins without agents config", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "codex-cli" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.models?.providers?.openai?.agentRuntime).toEqual({ id: "codex" });
+    expect(res.changes).toContain(
+      "Moved models.providers.openai agentRuntime.id from codex-cli to codex.",
+    );
+  });
+
+  it("migrates legacy Gemini CLI primary refs to Google refs plus model runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "google-gemini-cli/gemini-3-pro-preview",
+            fallbacks: ["google-gemini-cli/gemini-3-flash-preview"],
+          },
+          models: {
+            "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+            "google/gemini-3.1-pro-preview": { alias: "Gemini API" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3-flash-preview"],
+    });
+    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(res.config.agents?.defaults?.models).toEqual({
+      "google-gemini-cli/gemini-3-pro-preview": { alias: "Gemini CLI" },
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini API",
+        agentRuntime: { id: "google-gemini-cli" },
+      },
+      "google/gemini-3-flash-preview": {
+        agentRuntime: { id: "google-gemini-cli" },
+      },
+    });
+  });
+
+  it("preserves legacy runtime fallback-only refs because runtime is container-scoped", () => {
+    const input = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["claude-cli/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-cli/claude-sonnet-4-6": { alias: "CLI fallback" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("prefers legacy nano-banana env.GEMINI_API_KEY over skill apiKey during migration", () => {
@@ -374,7 +1615,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.baseUrl).toBe(
       "https://generativelanguage.googleapis.com/v1beta",
     );
-    expect(res.config.models?.providers?.google?.models).toEqual([]);
+    expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.changes).toContain(
       "Moved skills.entries.nano-banana-pro.env.GEMINI_API_KEY → models.providers.google.apiKey.",
     );
@@ -384,8 +1625,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/fal-ai/flux/dev",
+          mediaModels: {
+            image: { primary: "fal/fal-ai/flux/dev" },
           },
         },
       },
@@ -408,7 +1649,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "fal/fal-ai/flux/dev",
     });
     expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");
@@ -430,25 +1671,27 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("migrates legacy web search provider config to plugin-owned config paths", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-            maxResults: 5,
-            apiKey: "brave-key",
-            gemini: {
-              apiKey: "gemini-key",
-              model: "gemini-2.5-flash",
-            },
-            firecrawl: {
-              apiKey: "firecrawl-key",
-              baseUrl: "https://api.firecrawl.dev",
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              maxResults: 5,
+              apiKey: "brave-key",
+              gemini: {
+                apiKey: "gemini-key",
+                model: "gemini-2.5-flash",
+              },
+              firecrawl: {
+                apiKey: "firecrawl-key",
+                baseUrl: "https://api.firecrawl.dev",
+              },
             },
           },
         },
-      },
-    });
+      }),
+    );
 
     expect(res.config.tools?.web?.search).toEqual({
       provider: "gemini",
@@ -488,32 +1731,34 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   it("merges legacy web search provider config into explicit plugin config without overriding it", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-            gemini: {
-              apiKey: "legacy-gemini-key",
-              model: "legacy-model",
-            },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          google: {
-            enabled: true,
-            config: {
-              webSearch: {
-                model: "explicit-model",
-                baseUrl: "https://generativelanguage.googleapis.com",
+    const res = normalizeCompatibilityConfigValues(
+      legacyConfig({
+        tools: {
+          web: {
+            search: {
+              provider: "gemini",
+              gemini: {
+                apiKey: "legacy-gemini-key",
+                model: "legacy-model",
               },
             },
           },
         },
-      },
-    });
+        plugins: {
+          entries: {
+            google: {
+              enabled: true,
+              config: {
+                webSearch: {
+                  model: "explicit-model",
+                  baseUrl: "https://generativelanguage.googleapis.com",
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
 
     expect(res.config.tools?.web?.search).toEqual({
       provider: "gemini",
@@ -622,108 +1867,268 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues(input);
 
     expect(res.config).toEqual(input);
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("sets native Ollama params.num_ctx from explicit model contextWindow budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            models: [
+              ollamaModel({
+                params: {
+                  temperature: 0.2,
+                },
+              }),
+              ollamaModel({
+                id: "llama3.3-small",
+                contextWindow: 32768,
+                maxTokens: 4096,
+                params: {
+                  num_ctx: 16384,
+                },
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.models?.map((model) => model.params)).toEqual([
+      { temperature: 0.2, num_ctx: 81920 },
+      { num_ctx: 16384 },
+    ]);
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.models[0].params.num_ctx to 81920 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("sets native Ollama params.num_ctx from custom provider maxTokens budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          localOllama: {
+            baseUrl: "http://ollama-box:11434",
+            api: "ollama",
+            models: [
+              ollamaModel({
+                contextWindow: 0,
+                maxTokens: 24576,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.localOllama?.models?.[0]?.params).toEqual({
+      num_ctx: 24576,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.localOllama.models[0].params.num_ctx to 24576 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("prefers provider contextWindow over model maxTokens for native Ollama params.num_ctx", () => {
+    const modelWithoutContextWindow = ollamaModel({
+      contextWindow: undefined,
+      maxTokens: 4096,
+    });
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            models: [modelWithoutContextWindow],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toBeUndefined();
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("sets provider-level native Ollama params.num_ctx when auto-discovered models use provider budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("sets provider-level native Ollama params.num_ctx when explicit model entries also exist", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            models: [
+              ollamaModel({
+                contextWindow: 32768,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 65536,
+    });
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toEqual({
+      num_ctx: 32768,
+    });
+    expect(res.changes).toEqual([
+      "Set models.providers.ollama.params.num_ctx to 65536 for native Ollama compatibility.",
+      "Set models.providers.ollama.models[0].params.num_ctx to 32768 for native Ollama compatibility.",
+    ]);
+  });
+
+  it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
+    const providerParams: Record<string, unknown> = { temperature: 0.2 };
+    Object.defineProperty(providerParams, "__proto__", {
+      enumerable: true,
+      value: { think: "high" },
+    });
+    const modelParams: Record<string, unknown> = { top_p: 0.9 };
+    Object.defineProperty(modelParams, "__proto__", {
+      enumerable: true,
+      value: { keep_alive: "forever" },
+    });
+
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            params: providerParams,
+            models: [
+              ollamaModel({
+                contextWindow: 32768,
+                params: modelParams,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    const nextProviderParams = res.config.models?.providers?.ollama?.params as Record<
+      string,
+      unknown
+    >;
+    const nextModelParams = res.config.models?.providers?.ollama?.models?.[0]?.params as Record<
+      string,
+      unknown
+    >;
+    expect(Object.getPrototypeOf(nextProviderParams)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(nextModelParams)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(nextProviderParams, "__proto__")?.value).toEqual({
+      think: "high",
+    });
+    expect(Object.getOwnPropertyDescriptor(nextModelParams, "__proto__")?.value).toEqual({
+      keep_alive: "forever",
+    });
+    expect(nextProviderParams.think).toBeUndefined();
+    expect(nextModelParams.keep_alive).toBeUndefined();
+    expect(nextProviderParams.num_ctx).toBe(65536);
+    expect(nextModelParams.num_ctx).toBe(32768);
+  });
+
+  it("keeps existing provider-level native Ollama params.num_ctx ahead of inherited provider budgets", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            params: {
+              num_ctx: 32768,
+            },
+            models: [
+              ollamaModel({
+                contextWindow: undefined,
+                maxTokens: undefined,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.ollama?.params).toEqual({
+      num_ctx: 32768,
+    });
+    expect(res.config.models?.providers?.ollama?.models?.[0]?.params).toBeUndefined();
     expect(res.changes).toEqual([]);
   });
 
-  it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        message: {
-          allowCrossContextSend: true,
-          crossContext: {
-            allowWithinProvider: false,
-            allowAcrossProviders: false,
+  it("does not set native Ollama params for OpenAI-compatible Ollama configs", () => {
+    const input = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            api: "openai-completions" as const,
+            models: [ollamaModel()],
           },
         },
       },
-    });
+    };
 
-    expect(res.config.tools?.message).toEqual({
-      crossContext: {
-        allowWithinProvider: true,
-        allowAcrossProviders: true,
-      },
-    });
-    expect(res.changes).toEqual([
-      "Moved tools.message.allowCrossContextSend → tools.message.crossContext.allowWithinProvider/allowAcrossProviders (true).",
-    ]);
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
   });
 
-  it("migrates legacy deepgram media options to providerOptions.deepgram", () => {
-    const res = normalizeCompatibilityConfigValues({
-      tools: {
-        media: {
-          audio: {
-            deepgram: {
-              detectLanguage: true,
-              smartFormat: true,
-            },
-            providerOptions: {
-              deepgram: {
-                punctuate: false,
-              },
-            },
-            models: [
-              {
-                provider: "deepgram",
-                deepgram: {
-                  punctuate: true,
-                },
-              },
-            ],
+  it("does not set native Ollama params for implicit OpenAI-compatible Ollama configs", () => {
+    const input = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434/v1",
+            contextWindow: 65536,
+            models: [ollamaModel()],
           },
-          models: [
-            {
-              provider: "deepgram",
-              deepgram: {
-                smartFormat: false,
-              },
-              providerOptions: {
-                deepgram: {
-                  detect_language: true,
-                },
-              },
-            },
-          ],
         },
       },
-    });
+    };
 
-    expect(res.config.tools?.media?.audio).toEqual({
-      providerOptions: {
-        deepgram: {
-          detect_language: true,
-          smart_format: true,
-          punctuate: false,
-        },
-      },
-      models: [
-        {
-          provider: "deepgram",
-          providerOptions: {
-            deepgram: {
-              punctuate: true,
-            },
-          },
-        },
-      ],
-    });
-    expect(res.config.tools?.media?.models).toEqual([
-      {
-        provider: "deepgram",
-        providerOptions: {
-          deepgram: {
-            smart_format: false,
-            detect_language: true,
-          },
-        },
-      },
-    ]);
-    expect(res.changes).toEqual([
-      "Merged tools.media.audio.deepgram → tools.media.audio.providerOptions.deepgram (filled missing canonical fields from legacy).",
-      "Moved tools.media.audio.models[0].deepgram → tools.media.audio.models[0].providerOptions.deepgram.",
-      "Merged tools.media.models[0].deepgram → tools.media.models[0].providerOptions.deepgram (filled missing canonical fields from legacy).",
-    ]);
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toEqual([]);
   });
 
   it("normalizes persisted mistral model maxTokens that matched the old context-sized defaults", () => {
@@ -758,19 +2163,107 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.models?.providers?.mistral?.models).toEqual([
-      expect.objectContaining({
-        id: "mistral-large-latest",
-        maxTokens: 16384,
-      }),
-      expect.objectContaining({
-        id: "magistral-small",
-        maxTokens: 40000,
-      }),
+    expect(
+      res.config.models?.providers?.mistral?.models?.map((model) => ({
+        id: model.id,
+        maxTokens: model.maxTokens,
+        cacheRead: model.cost.cacheRead,
+      })),
+    ).toEqual([
+      { id: "mistral-large-latest", maxTokens: 16384, cacheRead: 0.05 },
+      { id: "magistral-small", maxTokens: 40000, cacheRead: 0.05 },
     ]);
     expect(res.changes).toEqual([
       "Normalized models.providers.mistral.models[0].maxTokens (262144 → 16384) to avoid Mistral context-window rejects.",
+      "Normalized models.providers.mistral.models[0].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
       "Normalized models.providers.mistral.models[1].maxTokens (128000 → 40000) to avoid Mistral context-window rejects.",
+      "Normalized models.providers.mistral.models[1].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
+    ]);
+  });
+
+  it("caps explicit mistral maxTokens above the named model limit", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0.05, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 17_000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].maxTokens (17000 → 16384) to avoid Mistral context-window rejects.",
+    ]);
+  });
+
+  it("normalizes old zero Mistral cacheRead costs while preserving custom costs", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "codestral-latest",
+                name: "Codestral",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0.3, output: 0.9, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 256000,
+                maxTokens: 32000,
+              },
+              {
+                id: "mistral-medium-3-5",
+                name: "Mistral Medium 3.5 Custom",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1.5, output: 7.5, cacheRead: 0.07, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 32000,
+              },
+              {
+                id: "custom-mistral-model",
+                name: "Custom Mistral",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 128000,
+                maxTokens: 32000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(
+      res.config.models?.providers?.mistral?.models?.map((model) => ({
+        id: model.id,
+        cacheRead: model.cost.cacheRead,
+      })),
+    ).toEqual([
+      { id: "codestral-latest", cacheRead: 0.03 },
+      { id: "mistral-medium-3-5", cacheRead: 0.07 },
+      { id: "custom-mistral-model", cacheRead: 0 },
+    ]);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].cost.cacheRead (0 → 0.03) for Mistral prompt-cache billing.",
     ]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+// Log line parsing tests cover structured log parsing from text lines.
 import { describe, expect, it } from "vitest";
 import { parseLogLine } from "./parse-log-line.js";
 
@@ -15,7 +16,6 @@ describe("parseLogLine", () => {
 
     const parsed = parseLogLine(line);
 
-    expect(parsed).not.toBeNull();
     expect(parsed?.time).toBe("2026-01-09T01:38:41.523Z");
     expect(parsed?.level).toBe("info");
     expect(parsed?.subsystem).toBe("gateway/channels/demo-channel");

@@ -1,3 +1,4 @@
+// Audit Seams tests cover audit seams script behavior.
 import { describe, expect, it } from "vitest";
 import {
   HELP_TEXT,
@@ -9,7 +10,7 @@ describe("audit-seams cron seam classification", () => {
   it("detects cron agent handoff and outbound delivery boundaries", () => {
     const source = `
       import { runCliAgent } from "../../agents/cli-runner.js";
-      import { runWithModelFallback } from "../../agents/model-fallback.js";
+      import { runWithModelFallback } from "../../agents/model-fallback-runner.js";
       import { registerAgentRunContext } from "../../infra/agent-events.js";
       import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
       import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -44,7 +45,9 @@ describe("audit-seams cron seam classification", () => {
       }
     `;
 
-    expect(describeSeamKinds("src/cron/service/ops.ts", source)).toContain("cron-scheduler-state");
+    expect(describeSeamKinds("src/cron/service/ops-lifecycle.ts", source)).toContain(
+      "cron-scheduler-state",
+    );
   });
 });
 
@@ -96,12 +99,17 @@ describe("audit-seams subagent seam classification", () => {
   it("detects parent-stream seams for ACP spawn relays", () => {
     const source = `
       import { onAgentEvent } from "../infra/agent-events.js";
-      import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+      import { requestHeartbeat } from "../infra/heartbeat-wake.js";
       import { enqueueSystemEvent } from "../infra/system-events.js";
 
       export function startAcpSpawnParentStreamRelay() {
         onAgentEvent("agent-output", () => {});
-        requestHeartbeatNow({ sessionKey: "agent:main" });
+        requestHeartbeat({
+          source: "acp-spawn",
+          intent: "event",
+          reason: "acp:spawn:stream",
+          sessionKey: "agent:main",
+        });
         enqueueSystemEvent("progress", { sessionKey: "agent:main", contextKey: "stream" });
         return { streamTo: "parent" };
       }

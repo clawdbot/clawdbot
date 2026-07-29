@@ -1,7 +1,8 @@
+// Google plugin module implements oauth.settings behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type OAuthSettingsFs = {
   existsSync: (path: Parameters<typeof existsSync>[0]) => ReturnType<typeof existsSync>;
@@ -14,6 +15,8 @@ const defaultFs: OAuthSettingsFs = {
   readFileSync,
   homedir,
 };
+
+const OAUTH_SETTINGS_TEST_API_KEY = Symbol.for("openclaw.google.oauthSettingsTestApi");
 
 let oauthSettingsFs: OAuthSettingsFs = defaultFs;
 
@@ -41,11 +44,11 @@ function readSettingsFile(): GeminiCliAuthSettings | null {
   }
 }
 
-export function setOAuthSettingsFsForTest(overrides?: Partial<OAuthSettingsFs>): void {
+function setOAuthSettingsFsForTest(overrides?: Partial<OAuthSettingsFs>): void {
   oauthSettingsFs = overrides ? { ...defaultFs, ...overrides } : defaultFs;
 }
 
-export function resolveGeminiCliSelectedAuthType(): string | undefined {
+function resolveGeminiCliSelectedAuthType(): string | undefined {
   const settings = readSettingsFile();
   if (settings) {
     const security = isRecord(settings.security) ? settings.security : undefined;
@@ -69,4 +72,10 @@ export function resolveGeminiCliSelectedAuthType(): string | undefined {
 
 export function isGeminiCliPersonalOAuth(): boolean {
   return resolveGeminiCliSelectedAuthType() === "oauth-personal";
+}
+
+if (process.env.VITEST) {
+  (globalThis as Record<PropertyKey, unknown>)[OAUTH_SETTINGS_TEST_API_KEY] = {
+    setFs: setOAuthSettingsFsForTest,
+  };
 }

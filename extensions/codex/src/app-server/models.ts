@@ -1,11 +1,19 @@
+/**
+ * Lists and normalizes models exposed by the Codex app-server `model/list`
+ * endpoint, including pagination and shared-client lease handling.
+ */
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type {
+  CodexAppServerAuthRequirement,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
+import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { type JsonObject, type JsonValue } from "./protocol.js";
-import {
-  createIsolatedCodexAppServerClient,
-  getSharedCodexAppServerClient,
-} from "./shared-client.js";
+import { readCodexModelListResponse } from "./protocol-validators.js";
+import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
-export type CodexAppServerModel = {
+/** Normalized model metadata returned by the Codex app-server model listing helper. */
+type CodexAppServerModel = {
   id: string;
   model: string;
   displayName?: string;
@@ -17,67 +25,131 @@ export type CodexAppServerModel = {
   defaultReasoningEffort?: string;
 };
 
+/** One page of Codex app-server model metadata plus optional pagination state. */
 export type CodexAppServerModelListResult = {
   models: CodexAppServerModel[];
   nextCursor?: string;
+  truncated?: boolean;
 };
 
-export type CodexAppServerListModelsOptions = {
+/** Options for querying Codex app-server models through a shared or isolated client. */
+type CodexAppServerListModelsOptions = {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
+  authProfileId?: string;
+  authRequirement?: CodexAppServerAuthRequirement;
+  agentDir?: string;
+  config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sharedClient?: boolean;
 };
 
+/** Lists one Codex app-server model page using the configured auth/client options. */
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
+  return await withCodexAppServerModelClient(options, async ({ client, timeoutMs }) =>
+    requestModelListPage(client, { ...options, timeoutMs }),
+  );
+}
+
+/** Walks Codex app-server model pages until exhaustion or the max-page guard. */
+export async function listAllCodexAppServerModels(
+  options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
+): Promise<CodexAppServerModelListResult> {
+  const maxPages = normalizeMaxPages(options.maxPages);
+  return await withCodexAppServerModelClient(options, async ({ client, timeoutMs }) => {
+    const models: CodexAppServerModel[] = [];
+    let cursor = options.cursor;
+    let nextCursor: string | undefined;
+    for (let page = 0; page < maxPages; page += 1) {
+      const result = await requestModelListPage(client, {
+        ...options,
+        timeoutMs,
+        cursor,
+      });
+      models.push(...result.models);
+      nextCursor = result.nextCursor;
+      if (!nextCursor) {
+        return { models };
+      }
+      cursor = nextCursor;
+    }
+    return { models, nextCursor, truncated: true };
+  });
+}
+
+async function withCodexAppServerModelClient<T>(
+  options: CodexAppServerListModelsOptions,
+  run: (params: { client: CodexAppServerClient; timeoutMs: number }) => Promise<T>,
+): Promise<T> {
   const timeoutMs = options.timeoutMs ?? 2500;
   const useSharedClient = options.sharedClient !== false;
+  const {
+    createIsolatedCodexAppServerClient,
+    getLeasedSharedCodexAppServerClient,
+    releaseLeasedSharedCodexAppServerClient,
+  } = await import("./shared-client.js");
   const client = useSharedClient
-    ? await getSharedCodexAppServerClient({
+    ? await getLeasedSharedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
+        authProfileId: options.authProfileId,
+        authRequirement: options.authRequirement,
+        agentDir: options.agentDir,
+        config: options.config,
       })
     : await createIsolatedCodexAppServerClient({
         startOptions: options.startOptions,
         timeoutMs,
+        authProfileId: options.authProfileId,
+        authRequirement: options.authRequirement,
+        agentDir: options.agentDir,
+        config: options.config,
       });
   try {
-    const response = await client.request<JsonObject>(
-      "model/list",
-      {
-        limit: options.limit ?? null,
-        cursor: options.cursor ?? null,
-        includeHidden: options.includeHidden ?? null,
-      },
-      { timeoutMs },
-    );
-    return readModelListResult(response);
+    return await run({ client, timeoutMs });
   } finally {
-    if (!useSharedClient) {
+    if (useSharedClient) {
+      releaseLeasedSharedCodexAppServerClient(client);
+    } else {
       client.close();
     }
   }
 }
 
-function readModelListResult(value: JsonValue | undefined): CodexAppServerModelListResult {
-  if (!isJsonObjectValue(value) || !Array.isArray(value.data)) {
+async function requestModelListPage(
+  client: CodexAppServerClient,
+  options: CodexAppServerListModelsOptions & { timeoutMs: number },
+): Promise<CodexAppServerModelListResult> {
+  const response = await client.request(
+    "model/list",
+    {
+      limit: options.limit ?? null,
+      cursor: options.cursor ?? null,
+      includeHidden: options.includeHidden ?? null,
+    },
+    { timeoutMs: options.timeoutMs },
+  );
+  return readModelListResult(response);
+}
+
+/** Parses a raw Codex app-server model/list response into OpenClaw's normalized shape. */
+export function readModelListResult(value: unknown): CodexAppServerModelListResult {
+  const response = readCodexModelListResponse(value);
+  if (!response) {
     return { models: [] };
   }
-  const models = value.data
+  const models = response.data
     .map((entry) => readCodexModel(entry))
     .filter((entry): entry is CodexAppServerModel => entry !== undefined);
-  const nextCursor = typeof value.nextCursor === "string" ? value.nextCursor : undefined;
+  const nextCursor = response.nextCursor ?? undefined;
   return { models, ...(nextCursor ? { nextCursor } : {}) };
 }
 
-function readCodexModel(value: unknown): CodexAppServerModel | undefined {
-  if (!isJsonObjectValue(value)) {
-    return undefined;
-  }
+function readCodexModel(value: CodexModel): CodexAppServerModel | undefined {
   const id = readNonEmptyString(value.id);
   const model = readNonEmptyString(value.model) ?? id;
   if (!id || !model) {
@@ -92,9 +164,9 @@ function readCodexModel(value: unknown): CodexAppServerModel | undefined {
     ...(readNonEmptyString(value.description)
       ? { description: readNonEmptyString(value.description) }
       : {}),
-    ...(typeof value.hidden === "boolean" ? { hidden: value.hidden } : {}),
-    ...(typeof value.isDefault === "boolean" ? { isDefault: value.isDefault } : {}),
-    inputModalities: readStringArray(value.inputModalities),
+    hidden: value.hidden,
+    isDefault: value.isDefault,
+    inputModalities: value.inputModalities,
     supportedReasoningEfforts: readReasoningEfforts(value.supportedReasoningEfforts),
     ...(readNonEmptyString(value.defaultReasoningEffort)
       ? { defaultReasoningEffort: readNonEmptyString(value.defaultReasoningEffort) }
@@ -102,32 +174,11 @@ function readCodexModel(value: unknown): CodexAppServerModel | undefined {
   };
 }
 
-function readReasoningEfforts(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
+function readReasoningEfforts(value: CodexReasoningEffortOption[]): string[] {
   const efforts = value
-    .map((entry) => {
-      if (!isJsonObjectValue(entry)) {
-        return undefined;
-      }
-      return readNonEmptyString(entry.reasoningEffort);
-    })
+    .map((entry) => readNonEmptyString(entry.reasoningEffort))
     .filter((entry): entry is string => entry !== undefined);
-  return [...new Set(efforts)];
-}
-
-function readStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return [
-    ...new Set(
-      value
-        .map((entry) => readNonEmptyString(entry))
-        .filter((entry): entry is string => entry !== undefined),
-    ),
-  ];
+  return uniqueStrings(efforts);
 }
 
 function readNonEmptyString(value: unknown): string | undefined {
@@ -138,6 +189,6 @@ function readNonEmptyString(value: unknown): string | undefined {
   return trimmed || undefined;
 }
 
-function isJsonObjectValue(value: unknown): value is JsonObject {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function normalizeMaxPages(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

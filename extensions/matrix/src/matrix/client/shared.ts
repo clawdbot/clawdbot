@@ -1,4 +1,6 @@
+// Matrix plugin module implements shared behavior.
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { LogService } from "../sdk/logger.js";
@@ -6,18 +8,11 @@ import { awaitMatrixStartupWithAbort } from "../startup-abort.js";
 import { resolveMatrixAuth, resolveMatrixAuthContext } from "./config.js";
 import type { MatrixAuth } from "./types.js";
 
-type MatrixCreateClientDeps = {
-  createMatrixClient: typeof import("./create-client.js").createMatrixClient;
-};
-
-let matrixCreateClientDepsPromise: Promise<MatrixCreateClientDeps> | undefined;
-
-async function loadMatrixCreateClientDeps(): Promise<MatrixCreateClientDeps> {
-  matrixCreateClientDepsPromise ??= import("./create-client.js").then((runtime) => ({
+const loadMatrixCreateClientDeps = createLazyRuntimeModule(() =>
+  import("./create-client.js").then((runtime) => ({
     createMatrixClient: runtime.createMatrixClient,
-  }));
-  return await matrixCreateClientDepsPromise;
-}
+  })),
+);
 
 type SharedMatrixClientState = {
   client: MatrixClient;
@@ -155,13 +150,21 @@ async function resolveSharedMatrixClientState(
       `Matrix shared client account mismatch: requested ${requestedAccountId}, auth resolved ${params.auth.accountId}`,
     );
   }
-  const authContext = params.auth
-    ? null
-    : resolveMatrixAuthContext({
-        cfg: params.cfg,
-        env: params.env,
-        accountId: params.accountId,
-      });
+  const authContext = (() => {
+    if (params.auth) {
+      return null;
+    }
+    if (!params.cfg) {
+      throw new Error(
+        "Matrix shared client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+      );
+    }
+    return resolveMatrixAuthContext({
+      cfg: params.cfg,
+      env: params.env,
+      accountId: params.accountId,
+    });
+  })();
   const auth =
     params.auth ??
     (await resolveMatrixAuth({
@@ -286,7 +289,7 @@ export function stopSharedClientInstance(client: MatrixClient): void {
 
 export async function releaseSharedClientInstance(
   client: MatrixClient,
-  mode: "stop" | "persist" = "stop",
+  mode: "stop" | "persist" | "discard" = "stop",
 ): Promise<boolean> {
   const state = findSharedClientStateByInstance(client);
   if (!state) {
@@ -299,6 +302,8 @@ export async function releaseSharedClientInstance(
   deleteSharedClientState(state);
   if (mode === "persist") {
     await client.stopAndPersist();
+  } else if (mode === "discard") {
+    client.stopWithoutPersist();
   } else {
     client.stop();
   }

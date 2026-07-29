@@ -1,23 +1,26 @@
-import type { ButtonInteraction, ComponentData, StringSelectMenuInteraction } from "@buape/carbon";
+// Discord tests cover monitor.agent components plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-runtime";
+import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { peekSystemEvents, resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
-import { expectPairingReplyText } from "../../../../test/helpers/pairing-reply.js";
+import type {
+  ButtonInteraction,
+  ComponentData,
+  StringSelectMenuInteraction,
+} from "../internal/discord.js";
 import {
   enqueueSystemEventMock,
   readAllowFromStoreMock,
   resetDiscordComponentRuntimeMocks,
   upsertPairingRequestMock,
 } from "../test-support/component-runtime.js";
-import { resolveComponentInteractionContext } from "./agent-components-helpers.js";
+import { resolveComponentInteractionContext } from "./agent-components-context.js";
 import {
   createAgentComponentButton,
   createAgentSelectMenu,
-  resolveDiscordComponentOriginatingTo,
-} from "./agent-components.js";
+} from "./agent-components.system-controls.js";
 
 describe("agent components", () => {
   const defaultDmSessionKey = buildAgentSessionKey({
@@ -70,6 +73,22 @@ describe("agent components", () => {
     };
   };
 
+  const firstReplyContent = (reply: ReturnType<typeof vi.fn>): string => {
+    const [call] = reply.mock.calls;
+    if (!call) {
+      throw new Error("expected interaction reply call");
+    }
+    const [payload] = call;
+    if (!payload || typeof payload !== "object" || !("content" in payload)) {
+      throw new Error("expected interaction reply content");
+    }
+    const { content } = payload as { content?: unknown };
+    if (typeof content !== "string") {
+      throw new Error("expected interaction reply content to be a string");
+    }
+    return content;
+  };
+
   const createBaseGroupDmInteraction = (overrides: Record<string, unknown> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
@@ -102,11 +121,13 @@ describe("agent components", () => {
   async function expectSuccessfulDmButtonInteraction(params: {
     dmPolicy: "pairing" | "open";
     expectPairingStoreRead: boolean;
+    allowFrom?: string[];
   }) {
     const button = createAgentComponentButton({
       cfg: createCfg(),
       accountId: "default",
       dmPolicy: params.dmPolicy,
+      allowFrom: params.allowFrom,
     });
     const { interaction, defer, reply } = createDmButtonInteraction();
 
@@ -116,9 +137,10 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:dm-channel:hello:123456789",
+      },
     );
     if (params.expectPairingStoreRead) {
       expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
@@ -144,13 +166,13 @@ describe("agent components", () => {
 
     expect(defer).not.toHaveBeenCalled();
     expect(reply).toHaveBeenCalledTimes(1);
-    const pairingText = String(reply.mock.calls[0]?.[0]?.content ?? "");
+    const pairingText = firstReplyContent(reply);
     const code = expectPairingReplyText(pairingText, {
       channel: "discord",
       idLine: "Your Discord user id: 123456789",
     });
     expect(pairingText).toContain(`openclaw pairing approve discord ${code}`);
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("discord", "default");
   });
 
@@ -169,7 +191,7 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -183,12 +205,16 @@ describe("agent components", () => {
     });
 
     expect(defer).not.toHaveBeenCalled();
-    expect(ctx).toMatchObject({
+    expect(ctx).toEqual({
       channelId: "group-dm-channel",
+      user: { id: "123456789", username: "Alice", discriminator: "1234" },
+      username: "Alice#1234",
+      userId: "123456789",
+      replyOpts: { ephemeral: true },
       isDirectMessage: false,
       isGroupDm: true,
+      memberRoleIds: [],
       rawGuildId: undefined,
-      userId: "123456789",
     });
   });
 
@@ -213,8 +239,8 @@ describe("agent components", () => {
       content: "You are not authorized to use this button.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultGroupDmSessionKey)).toEqual([]);
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultGroupDmSessionKey)).toStrictEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -238,11 +264,12 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultGroupDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:group-dm-channel:hello:123456789",
+      },
     );
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -260,24 +287,8 @@ describe("agent components", () => {
     await expectSuccessfulDmButtonInteraction({
       dmPolicy: "open",
       expectPairingStoreRead: false,
+      allowFrom: ["*"],
     });
-  });
-
-  it("uses user conversation ids for direct-message component originating targets", () => {
-    expect(
-      resolveDiscordComponentOriginatingTo({
-        isDirectMessage: true,
-        userId: "123456789",
-        channelId: "dm-channel",
-      }),
-    ).toBe("user:123456789");
-    expect(
-      resolveDiscordComponentOriginatingTo({
-        isDirectMessage: false,
-        userId: "123456789",
-        channelId: "guild-channel",
-      }),
-    ).toBe("channel:guild-channel");
   });
 
   it("blocks DM component interactions in disabled mode without reading pairing store", async () => {
@@ -296,7 +307,7 @@ describe("agent components", () => {
       content: "DM interactions are disabled.",
       ephemeral: true,
     });
-    expect(peekSystemEvents(defaultDmSessionKey)).toEqual([]);
+    expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
@@ -316,9 +327,10 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord select menu: hello interacted by Alice#1234 (123456789) (selected: alpha)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-select:dm-channel:hello:123456789",
+      },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -338,9 +350,10 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello_cid clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:dm-channel:hello_cid:123456789",
+      },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
@@ -360,9 +373,10 @@ describe("agent components", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "[Discord component: hello%2G clicked by Alice#1234 (123456789)]",
-      expect.objectContaining({
+      {
         sessionKey: defaultDmSessionKey,
-      }),
+        contextKey: "discord:agent-button:dm-channel:hello%2G:123456789",
+      },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });

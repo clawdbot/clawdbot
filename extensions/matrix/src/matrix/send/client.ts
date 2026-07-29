@@ -1,27 +1,22 @@
-import { getMatrixRuntime } from "../../runtime.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Matrix plugin module implements client behavior.
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixClient } from "../sdk.js";
 
-const getCore = () => getMatrixRuntime();
-
-type MatrixSendClientRuntime = Pick<
-  typeof import("../client-bootstrap.js"),
-  "withResolvedRuntimeMatrixClient"
->;
-
-let matrixSendClientRuntimePromise: Promise<MatrixSendClientRuntime> | null = null;
-
-async function loadMatrixSendClientRuntime(): Promise<MatrixSendClientRuntime> {
-  matrixSendClientRuntimePromise ??= import("../client-bootstrap.js");
-  return await matrixSendClientRuntimePromise;
-}
+const loadMatrixSendClientRuntime = createLazyRuntimeModule(() => import("../client-bootstrap.js"));
 
 export function resolveMediaMaxBytes(
   accountId?: string | null,
   cfg?: CoreConfig,
 ): number | undefined {
-  const resolvedCfg = cfg ?? (getCore().config.loadConfig() as CoreConfig);
+  if (!cfg) {
+    throw new Error(
+      "Matrix media limits requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const resolvedCfg = requireRuntimeConfig(cfg, "Matrix media limits") as CoreConfig;
   const matrixCfg = resolveMatrixAccountConfig({ cfg: resolvedCfg, accountId });
   const mediaMaxMb = typeof matrixCfg.mediaMaxMb === "number" ? matrixCfg.mediaMaxMb : undefined;
   if (typeof mediaMaxMb === "number") {

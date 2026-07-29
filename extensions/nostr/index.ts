@@ -1,8 +1,9 @@
+// Nostr plugin entrypoint registers its OpenClaw integration.
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import type { PluginRuntime, ResolvedNostrAccount } from "./api.js";
+import type { OpenClawConfig, PluginRuntime, ResolvedNostrAccount } from "./api.js";
 
 function createNostrProfileHttpHandler() {
   return loadBundledEntryExportSync<
@@ -35,7 +36,7 @@ export default defineBundledChannelEntry({
   description: "Nostr DM channel plugin via NIP-04",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "nostrPlugin",
   },
   runtime: {
@@ -46,31 +47,32 @@ export default defineBundledChannelEntry({
     const httpHandler = createNostrProfileHttpHandler()({
       getConfigProfile: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig();
+        const cfg = runtime.config.current() as OpenClawConfig;
         const account = resolveNostrAccount({ cfg, accountId });
         return account.profile;
       },
-      updateConfigProfile: async (accountId: string, profile: unknown) => {
+      updateConfigProfile: async (_accountId: string, profile: unknown) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig();
 
-        const channels = (cfg.channels ?? {}) as Record<string, unknown>;
-        const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
+        await runtime.config.mutateConfigFile({
+          afterWrite: { mode: "auto" },
+          mutate: (draft) => {
+            const channels = (draft.channels ?? {}) as Record<string, unknown>;
+            const nostrConfig = (channels.nostr ?? {}) as Record<string, unknown>;
 
-        await runtime.config.writeConfigFile({
-          ...cfg,
-          channels: {
-            ...channels,
-            nostr: {
-              ...nostrConfig,
-              profile,
-            },
+            draft.channels = {
+              ...channels,
+              nostr: {
+                ...nostrConfig,
+                profile,
+              },
+            };
           },
         });
       },
       getAccountInfo: (accountId: string) => {
         const runtime = getNostrRuntime();
-        const cfg = runtime.config.loadConfig();
+        const cfg = runtime.config.current() as OpenClawConfig;
         const account = resolveNostrAccount({ cfg, accountId });
         if (!account.configured || !account.publicKey) {
           return null;

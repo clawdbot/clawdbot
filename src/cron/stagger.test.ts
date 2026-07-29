@@ -1,18 +1,35 @@
+// Cron stagger tests cover deterministic schedule spreading across jobs.
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_TOP_OF_HOUR_STAGGER_MS,
-  isRecurringTopOfHourCronExpr,
-  normalizeCronStaggerMs,
-  resolveCronStaggerMs,
-} from "./stagger.js";
+import { normalizeCronStaggerMs, resolveCronStaggerMs } from "./stagger.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 describe("cron stagger helpers", () => {
   it("detects recurring top-of-hour cron expressions for 5-field and 6-field cron", () => {
-    expect(isRecurringTopOfHourCronExpr("0 * * * *")).toBe(true);
-    expect(isRecurringTopOfHourCronExpr("0 */2 * * *")).toBe(true);
-    expect(isRecurringTopOfHourCronExpr("0 0 */3 * * *")).toBe(true);
-    expect(isRecurringTopOfHourCronExpr("0 7 * * *")).toBe(false);
-    expect(isRecurringTopOfHourCronExpr("15 * * * *")).toBe(false);
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 * * * *" })).toBe(
+      DEFAULT_TOP_OF_HOUR_STAGGER_MS,
+    );
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 */2 * * *" })).toBe(
+      DEFAULT_TOP_OF_HOUR_STAGGER_MS,
+    );
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 0 */3 * * *" })).toBe(
+      DEFAULT_TOP_OF_HOUR_STAGGER_MS,
+    );
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 */2,3 * * *" })).toBe(
+      DEFAULT_TOP_OF_HOUR_STAGGER_MS,
+    );
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 */2,? * * *" })).toBe(
+      DEFAULT_TOP_OF_HOUR_STAGGER_MS,
+    );
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 7 * * *" })).toBe(0);
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "15 * * * *" })).toBe(0);
+  });
+
+  it("rejects malformed hour fields that merely contain a wildcard", () => {
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 5* * * *" })).toBe(0);
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 *5 * * *" })).toBe(0);
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 1-*/2 * * *" })).toBe(0);
+    expect(resolveCronStaggerMs({ kind: "cron", expr: "0 0 5* * * *" })).toBe(0);
   });
 
   it("normalizes explicit stagger values", () => {
@@ -21,6 +38,9 @@ describe("cron stagger helpers", () => {
     expect(normalizeCronStaggerMs(-10)).toBe(0);
     expect(normalizeCronStaggerMs("")).toBeUndefined();
     expect(normalizeCronStaggerMs("abc")).toBeUndefined();
+    expect(normalizeCronStaggerMs("1e3")).toBeUndefined();
+    expect(normalizeCronStaggerMs("0x10")).toBeUndefined();
+    expect(normalizeCronStaggerMs(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
   });
 
   it("resolves effective stagger for cron schedules", () => {
@@ -35,9 +55,6 @@ describe("cron stagger helpers", () => {
   });
 
   it("handles missing runtime expr values without throwing", () => {
-    expect(() =>
-      resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
-    ).not.toThrow();
     expect(
       resolveCronStaggerMs({ kind: "cron" } as unknown as { kind: "cron"; expr: string }),
     ).toBe(0);

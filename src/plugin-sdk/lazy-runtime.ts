@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for lazy runtime module and method binding helpers.
+ */
 export {
   createLazyRuntimeModule,
   createLazyRuntimeMethod,

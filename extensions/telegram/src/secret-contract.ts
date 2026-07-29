@@ -1,67 +1,20 @@
+// Telegram plugin module implements secret contract behavior.
 import {
   collectConditionalChannelFieldAssignments,
+  createChannelSecretTargetRegistryEntries,
   getChannelSurface,
   hasConfiguredSecretInputValue,
   hasOwnProperty,
   type ResolverContext,
   type SecretDefaults,
-  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-export const secretTargetRegistryEntries = [
-  {
-    id: "channels.telegram.accounts.*.botToken",
-    targetType: "channels.telegram.accounts.*.botToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.telegram.accounts.*.botToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.telegram.accounts.*.webhookSecret",
-    targetType: "channels.telegram.accounts.*.webhookSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.telegram.accounts.*.webhookSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.telegram.botToken",
-    targetType: "channels.telegram.botToken",
-    configFile: "openclaw.json",
-    pathPattern: "channels.telegram.botToken",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "channels.telegram.webhookSecret",
-    targetType: "channels.telegram.webhookSecret",
-    configFile: "openclaw.json",
-    pathPattern: "channels.telegram.webhookSecret",
-    secretShape: "secret_input",
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-] satisfies SecretTargetRegistryEntry[];
+export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
+  channelKey: "telegram",
+  account: ["botToken", "webhookSecret"],
+  channel: ["botToken", "webhookSecret"],
+});
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };

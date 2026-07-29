@@ -1,9 +1,15 @@
+/**
+ * Shared transport lifecycle helpers for stdio and WebSocket Codex app-server
+ * connections.
+ */
+/** Child-process-like transport shape consumed by the Codex app-server client. */
 export type CodexAppServerTransport = {
   stdin: {
-    write: (data: string) => unknown;
+    write: (data: string | Uint8Array, callback?: (error?: Error | null) => void) => unknown;
     end?: () => unknown;
     destroy?: () => unknown;
     unref?: () => unknown;
+    on?: (event: "error", listener: (error: Error) => void) => unknown;
   };
   stdout: NodeJS.ReadableStream & {
     destroy?: () => unknown;
@@ -20,17 +26,16 @@ export type CodexAppServerTransport = {
   kill?: (signal?: NodeJS.Signals) => unknown;
   unref?: () => unknown;
   once: (event: string, listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: string, listener: (...args: unknown[]) => void) => unknown;
 };
 
+/** Starts graceful transport shutdown and schedules a force kill fallback. */
 export function closeCodexAppServerTransport(
   child: CodexAppServerTransport,
   options: { forceKillDelayMs?: number } = {},
 ): void {
-  child.stdout.destroy?.();
-  child.stderr.destroy?.();
   child.stdin.end?.();
   child.stdin.destroy?.();
-  signalCodexAppServerTransport(child, "SIGTERM");
   const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
   const forceKill = setTimeout(
     () => {
@@ -42,17 +47,64 @@ export function closeCodexAppServerTransport(
     Math.max(1, forceKillDelayMs),
   );
   forceKill.unref?.();
-  child.once("exit", () => clearTimeout(forceKill));
+  child.once("exit", () => {
+    clearTimeout(forceKill);
+    child.stdout.destroy?.();
+    child.stderr.destroy?.();
+  });
   child.unref?.();
   child.stdout.unref?.();
   child.stderr.unref?.();
   child.stdin.unref?.();
 }
 
+/** Closes a transport and waits briefly for an exit event. */
+export async function closeCodexAppServerTransportAndWait(
+  child: CodexAppServerTransport,
+  options: { exitTimeoutMs?: number; forceKillDelayMs?: number } = {},
+): Promise<boolean> {
+  if (!hasCodexAppServerTransportExited(child)) {
+    closeCodexAppServerTransport(child, options);
+  }
+  return await waitForCodexAppServerTransportExit(child, options.exitTimeoutMs ?? 2_000);
+}
+
 function hasCodexAppServerTransportExited(child: CodexAppServerTransport): boolean {
   return child.exitCode !== null && child.exitCode !== undefined
     ? true
     : child.signalCode !== null && child.signalCode !== undefined;
+}
+
+async function waitForCodexAppServerTransportExit(
+  child: CodexAppServerTransport,
+  timeoutMs: number,
+): Promise<boolean> {
+  if (hasCodexAppServerTransportExited(child)) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const onExit = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      resolve(true);
+    };
+    const timeout = setTimeout(
+      () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        child.off?.("exit", onExit);
+        resolve(false);
+      },
+      Math.max(1, timeoutMs),
+    );
+    child.once("exit", onExit);
+  });
 }
 
 function signalCodexAppServerTransport(

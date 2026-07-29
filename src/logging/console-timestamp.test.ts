@@ -1,3 +1,4 @@
+// Console timestamp tests cover timestamp prefixes for console logging.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { formatConsoleTimestamp } from "./console.js";
 

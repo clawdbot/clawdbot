@@ -1,5 +1,9 @@
+// Memory Core tests cover manager session sync state plugin behavior.
 import { describe, expect, it } from "vitest";
-import { resolveMemorySessionSyncPlan } from "./manager-session-sync-state.js";
+import {
+  resolveMemorySessionStartupDirtyFiles,
+  resolveMemorySessionSyncPlan,
+} from "./manager-session-sync-state.js";
 
 describe("memory session sync state", () => {
   it("tracks active paths and bulk hashes for full scans", () => {
@@ -60,5 +64,76 @@ describe("memory session sync state", () => {
 
     expect(plan.indexAll).toBe(false);
     expect(plan.activePaths).toEqual(new Set(["sessions/incremental.jsonl"]));
+  });
+
+  it("marks identity-targeted syncs as session work", async () => {
+    const { shouldSyncSessionsForReindex } = await import("./manager-session-reindex.js");
+
+    expect(
+      shouldSyncSessionsForReindex({
+        hasSessionSource: true,
+        sessionsDirty: false,
+        dirtySessionFileCount: 0,
+        sync: { sessions: [{ agentId: "main", sessionId: "targeted" }] },
+      }),
+    ).toBe(true);
+  });
+
+  it("marks missing and changed startup session files dirty", () => {
+    const dirtyFiles = resolveMemorySessionStartupDirtyFiles({
+      files: [
+        {
+          absPath: "/tmp/sessions/unchanged.jsonl",
+          path: "sessions/unchanged.jsonl",
+          mtimeMs: 100.75,
+          size: 10,
+        },
+        {
+          absPath: "/tmp/sessions/sub-ms-newer.jsonl",
+          path: "sessions/sub-ms-newer.jsonl",
+          mtimeMs: 100.75,
+          size: 10,
+        },
+        {
+          absPath: "/tmp/sessions/invalidated.jsonl",
+          path: "sessions/invalidated.jsonl",
+          mtimeMs: 200,
+          size: 20,
+        },
+        {
+          absPath: "/tmp/sessions/newer.jsonl",
+          path: "sessions/newer.jsonl",
+          mtimeMs: 250,
+          size: 20,
+        },
+        {
+          absPath: "/tmp/sessions/resized.jsonl",
+          path: "sessions/resized.jsonl",
+          mtimeMs: 300,
+          size: 31,
+        },
+        {
+          absPath: "/tmp/sessions/missing.jsonl",
+          path: "sessions/missing.jsonl",
+          mtimeMs: 400,
+          size: 40,
+        },
+      ],
+      existingRows: [
+        { path: "sessions/unchanged.jsonl", hash: "hash-unchanged", mtime: 100.75, size: 10 },
+        { path: "sessions/sub-ms-newer.jsonl", hash: "hash-sub-ms", mtime: 100.25, size: 10 },
+        { path: "sessions/invalidated.jsonl", hash: "", mtime: 200, size: 20 },
+        { path: "sessions/newer.jsonl", hash: "hash-newer", mtime: 200, size: 20 },
+        { path: "sessions/resized.jsonl", hash: "hash-resized", mtime: 300, size: 30 },
+      ],
+    });
+
+    expect(dirtyFiles).toEqual([
+      "/tmp/sessions/sub-ms-newer.jsonl",
+      "/tmp/sessions/invalidated.jsonl",
+      "/tmp/sessions/newer.jsonl",
+      "/tmp/sessions/resized.jsonl",
+      "/tmp/sessions/missing.jsonl",
+    ]);
   });
 });

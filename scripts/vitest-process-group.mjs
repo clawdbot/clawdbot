@@ -1,7 +1,11 @@
+// Shared Vitest child process-group signal forwarding helpers.
 export function shouldUseDetachedVitestProcessGroup(platform = process.platform) {
   return platform !== "win32";
 }
 
+/**
+ * Resolves the PID or process-group target for Vitest signal forwarding.
+ */
 export function resolveVitestProcessGroupSignalTarget(params) {
   const pid = params.childPid;
   if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) {
@@ -10,6 +14,9 @@ export function resolveVitestProcessGroupSignalTarget(params) {
   return shouldUseDetachedVitestProcessGroup(params.platform) ? -pid : pid;
 }
 
+/**
+ * Forwards a signal to the Vitest child or process group.
+ */
 export function forwardSignalToVitestProcessGroup(params) {
   const target = resolveVitestProcessGroupSignalTarget({
     childPid: params.child.pid,
@@ -34,13 +41,50 @@ export function forwardSignalToVitestProcessGroup(params) {
   }
 }
 
+/**
+ * Force-cleans any remaining processes in a Vitest child process group.
+ */
+export function forceKillVitestProcessGroup(child, kill = process.kill.bind(process)) {
+  return forwardSignalToVitestProcessGroup({
+    child,
+    kill,
+    signal: "SIGKILL",
+  });
+}
+
+function ensureProcessListenerCapacity(processObject, eventName, additionalListeners = 1) {
+  if (
+    typeof processObject.getMaxListeners !== "function" ||
+    typeof processObject.setMaxListeners !== "function" ||
+    typeof processObject.listenerCount !== "function"
+  ) {
+    return;
+  }
+
+  const currentLimit = processObject.getMaxListeners();
+  if (currentLimit === 0) {
+    return;
+  }
+
+  const neededLimit = processObject.listenerCount(eventName) + additionalListeners + 1;
+  if (neededLimit > currentLimit) {
+    processObject.setMaxListeners(neededLimit);
+  }
+}
+
+/**
+ * Installs signal/exit cleanup handlers for a Vitest child process group.
+ */
 export function installVitestProcessGroupCleanup(params) {
   const processObject = params.processObject ?? process;
   const platform = params.platform ?? process.platform;
   const kill = params.kill ?? process.kill.bind(process);
   const cleanupSignal = params.cleanupSignal ?? "SIGTERM";
+  const forceSignal = params.forceSignal ?? null;
+  const forceSignalDelayMs = params.forceSignalDelayMs ?? 0;
   const forwardedSignals = params.forwardedSignals ?? ["SIGINT", "SIGTERM"];
   const child = params.child;
+  const onSignal = params.onSignal;
 
   let active = true;
 
@@ -59,15 +103,25 @@ export function installVitestProcessGroupCleanup(params) {
   const signalHandlers = new Map();
   for (const signal of forwardedSignals) {
     const handler = () => {
+      onSignal?.(signal);
       forward(signal);
+      if (forceSignal) {
+        if (forceSignalDelayMs > 0) {
+          setTimeout(() => forward(forceSignal), forceSignalDelayMs).unref?.();
+        } else {
+          queueMicrotask(() => forward(forceSignal));
+        }
+      }
     };
     signalHandlers.set(signal, handler);
+    ensureProcessListenerCapacity(processObject, signal);
     processObject.on(signal, handler);
   }
 
   const exitHandler = () => {
     forward(cleanupSignal);
   };
+  ensureProcessListenerCapacity(processObject, "exit");
   processObject.on("exit", exitHandler);
 
   return () => {

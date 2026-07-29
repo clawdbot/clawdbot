@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.session reindex plugin behavior.
 import { describe, expect, it } from "vitest";
 import { shouldSyncSessionsForReindex } from "./manager-session-reindex.js";
 
@@ -39,5 +40,18 @@ describe("memory manager session reindex gating", () => {
         needsFullReindex: false,
       }),
     ).toBe(false);
+  });
+
+  it("keeps session syncing enabled for failed full-reindex retries without dirty files", () => {
+    expect(
+      shouldSyncSessionsForReindex({
+        hasSessionSource: true,
+        sessionsDirty: true,
+        sessionsFullRetryDirty: true,
+        dirtySessionFileCount: 0,
+        sync: { reason: "interval" },
+        needsFullReindex: false,
+      }),
+    ).toBe(true);
   });
 });

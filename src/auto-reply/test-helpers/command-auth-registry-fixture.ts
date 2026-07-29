@@ -1,24 +1,20 @@
+import { expectDefined } from "@openclaw/normalization-core";
+/** Test registry fixture for command authorization across Discord and phone-based channels. */
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { afterEach, beforeEach } from "vitest";
 import { normalizeE164 } from "../../plugin-sdk/account-resolution.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  lowercasePreservingWhitespace,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function formatDiscordAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => normalizeOptionalString(String(entry)) ?? "")
-    .filter(Boolean)
+  return normalizeStringEntries(allowFrom)
     .map((entry) => entry.replace(/^(discord|user|pk):/i, "").replace(/^<@!?(\d+)>$/, "$1"))
     .map((entry) => lowercasePreservingWhitespace(entry));
 }
 
 function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => normalizeOptionalString(String(entry)) ?? "")
-    .filter((entry): entry is string => Boolean(entry))
+  return normalizeStringEntries(allowFrom)
     .map((entry) => {
       if (entry === "*") {
         return entry;
@@ -29,11 +25,16 @@ function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): stri
       }
       if (/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i);
-        return match ? normalizeE164(match[1]) : null;
+        return match
+          ? normalizeE164(expectDefined(match[1], "command auth registry fixture regex capture 1"))
+          : null;
       }
+      // WhatsApp LID values are numeric identifiers; test fixtures map them like phone ids.
       if (/^(\d+)@lid$/i.test(stripped)) {
         const match = stripped.match(/^(\d+)@lid$/i);
-        return match ? normalizeE164(match[1]) : null;
+        return match
+          ? normalizeE164(expectDefined(match[1], "command auth registry fixture regex capture 1"))
+          : null;
       }
       if (stripped.includes("@")) {
         return null;
@@ -59,7 +60,7 @@ function resolveChannelAllowFrom(
   return Array.isArray(allowFrom) ? allowFrom : undefined;
 }
 
-export const createCommandAuthRegistry = () =>
+const createCommandAuthRegistry = () =>
   createTestRegistry([
     {
       pluginId: "discord",
@@ -91,6 +92,7 @@ export const createCommandAuthRegistry = () =>
     },
   ]);
 
+/** Installs and resets the command-auth registry around each test case. */
 export function installDiscordRegistryHooks() {
   beforeEach(() => {
     setActivePluginRegistry(createCommandAuthRegistry());

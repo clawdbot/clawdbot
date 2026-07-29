@@ -1,3 +1,4 @@
+// Msteams helper module supports graph messages helpers behavior.
 import { beforeEach, vi } from "vitest";
 
 const graphMessagesMockState = vi.hoisted(() => ({
@@ -22,8 +23,8 @@ vi.mock("./graph.js", () => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => ({
     findPreferredDmByUserId: graphMessagesMockState.findPreferredDmByUserId,
   }),
 }));

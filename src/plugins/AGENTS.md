@@ -14,7 +14,10 @@ assembly, and contract enforcement.
   - `src/plugins/types.ts`
   - `src/plugins/runtime/types.ts`
   - `src/plugins/contracts/registry.ts`
-  - `src/plugins/public-artifacts.ts`
+  - `src/plugins/public-surface-loader.ts`
+  - `src/plugins/public-surface-runtime.ts`
+  - `src/plugins/provider-public-artifacts.ts`
+  - `src/plugins/web-provider-public-artifacts.ts`
 
 ## Boundary Rules
 
@@ -24,6 +27,11 @@ assembly, and contract enforcement.
   belongs to runtime resolution.
 - Preserve manifest-first behavior: discovery, config validation, and setup
   should work from metadata before plugin runtime executes.
+- Cache concept: gateway plugin metadata is stable while gateway runs. Reuse
+  current snapshots, install records, discovery, lookup tables, and bounded
+  process caches; avoid per-call stat/read/hash freshness. Plugin metadata
+  changes require restart or explicit plugin owner reload/install/doctor flow.
+  No broad persistent caches; lifecycle-owned facts only, test-clearable.
 - Keep loader behavior aligned with the documented Plugin SDK and manifest
   contracts. Do not create private backdoors that bundled plugins can use but
   external plugins cannot.
@@ -65,6 +73,9 @@ assembly, and contract enforcement.
 - If setup, discovery, or doctor flows need plugin runtime, make that need
   explicit and narrow. Do not let cold control-plane paths quietly import broad
   runtime surfaces.
+- Resolver and public-surface loader tests must use generated tiny plugin
+  fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
+  those tests at real bundled plugin source APIs just to prove path resolution.
 
 ## Verification
 

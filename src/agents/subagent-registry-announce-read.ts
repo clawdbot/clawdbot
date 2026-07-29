@@ -1,9 +1,16 @@
-import { type DeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+/**
+ * Read-side helpers for subagent completion announcements. These wrappers keep
+ * announce delivery code on normalized registry snapshots instead of reaching
+ * into persistence or mutation paths.
+ */
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   countPendingDescendantRunsExcludingRunFromRuns,
   countPendingDescendantRunsFromRuns,
-  findRunIdsByChildSessionKeyFromRuns,
+  hasDescendantRunAwaitingSettleFromRuns,
+  isSubagentSessionRunActiveFromRuns,
   listRunsForRequesterFromRuns,
   resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
@@ -11,6 +18,7 @@ import {
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+/** Resolves the requester session and origin for a child subagent session. */
 export function resolveRequesterForChildSession(childSessionKey: string): {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
@@ -28,21 +36,12 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
+/** True when a subagent session still has an active run record. */
 export function isSubagentSessionRunActive(childSessionKey: string): boolean {
-  const runIds = findRunIdsByChildSessionKeyFromRuns(subagentRuns, childSessionKey);
-  let latest: SubagentRunRecord | undefined;
-  for (const runId of runIds) {
-    const entry = subagentRuns.get(runId);
-    if (!entry) {
-      continue;
-    }
-    if (!latest || entry.createdAt > latest.createdAt) {
-      latest = entry;
-    }
-  }
-  return Boolean(latest && typeof latest.endedAt !== "number");
+  return isSubagentSessionRunActiveFromRuns(subagentRuns, childSessionKey);
 }
 
+/** True when post-completion announce should be skipped for a child session. */
 export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -50,6 +49,7 @@ export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: st
   );
 }
 
+/** Lists subagent runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
   options?: { requesterRunId?: string },
@@ -57,6 +57,7 @@ export function listSubagentRunsForRequester(
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
+/** Counts pending descendant subagent runs below a root session. */
 export function countPendingDescendantRuns(rootSessionKey: string): number {
   return countPendingDescendantRunsFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
@@ -64,11 +65,24 @@ export function countPendingDescendantRuns(rootSessionKey: string): number {
   );
 }
 
+/** Counts pending descendant runs while excluding one run id. */
 export function countPendingDescendantRunsExcludingRun(
   rootSessionKey: string,
   excludeRunId: string,
 ): number {
   return countPendingDescendantRunsExcludingRunFromRuns(
+    getSubagentRunsSnapshotForRead(subagentRuns),
+    rootSessionKey,
+    excludeRunId,
+  );
+}
+
+/** True when any descendant run still awaits terminal settle (suspended delivery counts as settled). */
+export function hasDescendantRunAwaitingSettle(
+  rootSessionKey: string,
+  excludeRunId?: string,
+): boolean {
+  return hasDescendantRunAwaitingSettleFromRuns(
     getSubagentRunsSnapshotForRead(subagentRuns),
     rootSessionKey,
     excludeRunId,

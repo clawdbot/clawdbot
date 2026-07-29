@@ -1,3 +1,4 @@
+// Doctor contract API fast-path tests cover lightweight channel doctor contract loading.
 import { describe, expect, it, vi } from "vitest";
 
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
@@ -13,7 +14,12 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
           ],
         };
       }
-      if (dirName === "telegram" && artifactBasename === "contract-api.js") {
+      if (dirName === "whatsapp" && artifactBasename === "doctor-contract-api.js") {
+        return {
+          legacyConfigRules: [],
+        };
+      }
+      if (dirName === "telegram" && artifactBasename === "doctor-contract-api.js") {
         return {
           legacyConfigRules: [
             {
@@ -52,7 +58,21 @@ describe("channel doctor contract api fast path", () => {
     });
   });
 
-  it("falls back to the generic contract artifact when the doctor artifact is absent", () => {
+  it("treats empty explicit doctor contract rules as authoritative", () => {
+    const api = loadBundledChannelDoctorContractApi("whatsapp");
+
+    expect(api?.legacyConfigRules).toStrictEqual([]);
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "whatsapp",
+      artifactBasename: "doctor-contract-api.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "whatsapp",
+      artifactBasename: "contract-api.js",
+    });
+  });
+
+  it("uses the explicit Telegram doctor contract artifact", () => {
     const api = loadBundledChannelDoctorContractApi("telegram");
 
     expect(api?.legacyConfigRules).toEqual([
@@ -65,8 +85,22 @@ describe("channel doctor contract api fast path", () => {
       dirName: "telegram",
       artifactBasename: "doctor-contract-api.js",
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
       dirName: "telegram",
+      artifactBasename: "contract-api.js",
+    });
+  });
+
+  it("does not fall back to the broad contract-api artifact when the doctor artifact is missing", () => {
+    const api = loadBundledChannelDoctorContractApi("missing");
+
+    expect(api).toBeUndefined();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "doctor-contract-api.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "missing",
       artifactBasename: "contract-api.js",
     });
   });

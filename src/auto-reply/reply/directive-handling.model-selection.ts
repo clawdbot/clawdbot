@@ -1,4 +1,6 @@
+/** Resolves /model directive selections and auth profile overrides. */
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import {
   type ModelAliasIndex,
   modelKey,
@@ -43,6 +45,7 @@ function resolveStoredNumericProfileModelDirective(params: { raw: string; agentD
   return { modelRaw, profileId, profileProvider: profile.provider };
 }
 
+/** Resolves the requested model/profile override from parsed inline directives. */
 export function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -53,6 +56,7 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   provider: string;
+  agentId?: string;
 }): {
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
@@ -66,6 +70,15 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+  if (/^default$/i.test(raw)) {
+    return {
+      modelSelection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
+    };
+  }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
       ? resolveStoredNumericProfileModelDirective({
@@ -80,6 +93,9 @@ export function resolveModelSelectionFromDirective(params: {
         defaultModel: params.defaultModel,
         aliasIndex: params.aliasIndex,
         allowedModelKeys: params.allowedModelKeys,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        rawRuntime: params.directives.rawModelRuntime,
       })
     : null;
   const useStoredNumericProfile =
@@ -112,7 +128,10 @@ export function resolveModelSelectionFromDirective(params: {
   });
   if (explicit) {
     const explicitKey = modelKey(explicit.ref.provider, explicit.ref.model);
-    if (params.allowedModelKeys.size === 0 || params.allowedModelKeys.has(explicitKey)) {
+    if (
+      params.allowedModelKeys.size === 0 ||
+      isModelKeyAllowedBySet(params.allowedModelKeys, explicitKey)
+    ) {
       modelSelection = {
         provider: explicit.ref.provider,
         model: explicit.ref.model,
@@ -131,6 +150,9 @@ export function resolveModelSelectionFromDirective(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys: params.allowedModelKeys,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      rawRuntime: params.directives.rawModelRuntime,
     });
 
     if (resolved.error) {

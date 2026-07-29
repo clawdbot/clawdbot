@@ -1,6 +1,12 @@
-import fs from "node:fs";
 import path from "node:path";
+// Matrix plugin module implements recovery key store behavior.
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
+import {
+  migrateLegacyMatrixRecoveryKeyFilePathToStore,
+  readLegacyMatrixRecoveryKeyFile,
+  readMatrixRecoveryKeyStateForPath,
+  writeMatrixRecoveryKeyStateForPath,
+} from "../crypto-state-store.js";
 import { formatMatrixErrorMessage, formatMatrixErrorReason } from "../errors.js";
 import { LogService } from "./logger.js";
 import type {
@@ -34,9 +40,24 @@ export class MatrixRecoveryKeyStore {
     { key: Uint8Array; keyInfo?: MatrixStoredRecoveryKey["keyInfo"] }
   >();
   private stagedRecoveryKey: MatrixStoredRecoveryKey | null = null;
+  private stagedRecoveryKeyUsed = false;
   private readonly stagedCacheKeyIds = new Set<string>();
+  private readonly storageRootDir?: string;
+  private readonly recoveryKeyPath?: string;
+  private legacyRecoveryKeyPathOnMigrationFailure?: string;
 
-  constructor(private readonly recoveryKeyPath?: string) {}
+  constructor(recoveryKeyPath?: string) {
+    this.recoveryKeyPath = recoveryKeyPath;
+    this.storageRootDir = recoveryKeyPath ? path.dirname(recoveryKeyPath) : undefined;
+    if (this.recoveryKeyPath) {
+      try {
+        migrateLegacyMatrixRecoveryKeyFilePathToStore(this.recoveryKeyPath);
+      } catch (err) {
+        this.legacyRecoveryKeyPathOnMigrationFailure = this.recoveryKeyPath;
+        LogService.warn("MatrixClientLite", "Failed to migrate Matrix recovery key state:", err);
+      }
+    }
+  }
 
   buildCryptoCallbacks(): MatrixCryptoCallbacks {
     return {
@@ -46,26 +67,15 @@ export class MatrixRecoveryKeyStore {
           return null;
         }
 
+        const staged = this.resolveStagedSecretStorageKey(requestedKeyIds);
+        if (staged) {
+          return staged;
+        }
+
         for (const keyId of requestedKeyIds) {
           const cached = this.secretStorageKeyCache.get(keyId);
           if (cached) {
             return [keyId, new Uint8Array(cached.key)];
-          }
-        }
-
-        const staged = this.stagedRecoveryKey;
-        if (staged?.privateKeyBase64) {
-          const privateKey = new Uint8Array(Buffer.from(staged.privateKeyBase64, "base64"));
-          if (privateKey.length > 0) {
-            const stagedKeyId =
-              staged.keyId && requestedKeyIds.includes(staged.keyId)
-                ? staged.keyId
-                : requestedKeyIds[0];
-            if (stagedKeyId) {
-              this.rememberSecretStorageKey(stagedKeyId, privateKey, staged.keyInfo);
-              this.stagedCacheKeyIds.add(stagedKeyId);
-              return [stagedKeyId, privateKey];
-            }
           }
         }
 
@@ -123,6 +133,27 @@ export class MatrixRecoveryKeyStore {
       keyId: stored.keyId,
       createdAt: stored.createdAt,
     };
+  }
+
+  getSecretStorageKeyCandidate(keyId: string): Uint8Array | null {
+    const normalizedKeyId = keyId.trim();
+    if (!normalizedKeyId) {
+      return null;
+    }
+    const staged = this.resolveStagedSecretStorageKey([normalizedKeyId]);
+    if (staged) {
+      return staged[1];
+    }
+    const stored = this.loadStoredRecoveryKey();
+    if (!stored?.privateKeyBase64) {
+      return null;
+    }
+    const privateKey = new Uint8Array(Buffer.from(stored.privateKeyBase64, "base64"));
+    if (privateKey.length === 0) {
+      return null;
+    }
+    this.rememberSecretStorageKey(normalizedKeyId, privateKey, stored.keyInfo);
+    return privateKey;
   }
 
   private resolveEncodedRecoveryKeyInput(params: {
@@ -196,6 +227,10 @@ export class MatrixRecoveryKeyStore {
     };
   }
 
+  hasStagedRecoveryKeyBeenUsed(): boolean {
+    return this.stagedRecoveryKeyUsed;
+  }
+
   commitStagedRecoveryKey(params?: {
     keyId?: string | null;
     keyInfo?: MatrixStoredRecoveryKey["keyInfo"];
@@ -234,6 +269,7 @@ export class MatrixRecoveryKeyStore {
       setupNewKeyBackup?: boolean;
       allowSecretStorageRecreateWithoutRecoveryKey?: boolean;
       forceNewSecretStorage?: boolean;
+      forceNewRecoveryKey?: boolean;
     } = {},
   ): Promise<void> {
     let status: MatrixSecretStorageStatus | null = null;
@@ -253,7 +289,8 @@ export class MatrixRecoveryKeyStore {
     let generatedRecoveryKey = false;
     const storedRecovery = this.loadStoredRecoveryKey();
     const stagedRecovery = this.stagedRecoveryKey;
-    const sourceRecovery = stagedRecovery ?? storedRecovery;
+    const sourceRecovery =
+      options.forceNewRecoveryKey === true ? null : (stagedRecovery ?? storedRecovery);
     let recoveryKey: MatrixGeneratedSecretStorageKey | null = sourceRecovery
       ? {
           keyInfo: sourceRecovery.keyInfo,
@@ -264,19 +301,24 @@ export class MatrixRecoveryKeyStore {
 
     if (recoveryKey && status?.defaultKeyId) {
       const defaultKeyId = status.defaultKeyId;
-      this.rememberSecretStorageKey(defaultKeyId, recoveryKey.privateKey, recoveryKey.keyInfo);
-      if (!stagedRecovery && storedRecovery && storedRecovery.keyId !== defaultKeyId) {
-        this.saveRecoveryKeyToDisk({
-          keyId: defaultKeyId,
-          keyInfo: recoveryKey.keyInfo,
-          privateKey: recoveryKey.privateKey,
-          encodedPrivateKey: recoveryKey.encodedPrivateKey,
-        });
+      if (!stagedRecovery) {
+        this.rememberSecretStorageKey(defaultKeyId, recoveryKey.privateKey, recoveryKey.keyInfo);
+        if (storedRecovery && storedRecovery.keyId !== defaultKeyId) {
+          this.saveRecoveryKeyToDisk({
+            keyId: defaultKeyId,
+            keyInfo: recoveryKey.keyInfo,
+            privateKey: recoveryKey.privateKey,
+            encodedPrivateKey: recoveryKey.encodedPrivateKey,
+          });
+        }
       }
     }
 
     const ensureRecoveryKey = async (): Promise<MatrixGeneratedSecretStorageKey> => {
       if (recoveryKey) {
+        if (stagedRecovery) {
+          this.stagedRecoveryKeyUsed = true;
+        }
         return recoveryKey;
       }
       if (typeof crypto.createRecoveryKeyFromPassphrase !== "function") {
@@ -337,17 +379,46 @@ export class MatrixRecoveryKeyStore {
       });
     }
 
-    if (generatedRecoveryKey && this.recoveryKeyPath) {
+    if (generatedRecoveryKey && this.storageRootDir) {
       LogService.warn(
         "MatrixClientLite",
-        `Generated Matrix recovery key and saved it to ${this.recoveryKeyPath}. Keep this file secure.`,
+        "Generated Matrix recovery key and saved it to Matrix SQLite state. Keep the displayed recovery key secure.",
       );
     }
   }
 
   private clearStagedRecoveryKeyTracking(): void {
     this.stagedRecoveryKey = null;
+    this.stagedRecoveryKeyUsed = false;
     this.stagedCacheKeyIds.clear();
+  }
+
+  private resolveStagedSecretStorageKey(requestedKeyIds: string[]): [string, Uint8Array] | null {
+    const staged = this.stagedRecoveryKey;
+    if (!staged?.privateKeyBase64) {
+      return null;
+    }
+    const privateKey = new Uint8Array(Buffer.from(staged.privateKeyBase64, "base64"));
+    if (privateKey.length === 0) {
+      return null;
+    }
+    const keyId =
+      staged.keyId && requestedKeyIds.includes(staged.keyId) ? staged.keyId : requestedKeyIds[0];
+    if (!keyId) {
+      return null;
+    }
+    this.rememberStagedSecretStorageKey(keyId, privateKey, staged.keyInfo);
+    this.stagedCacheKeyIds.add(keyId);
+    return [keyId, privateKey];
+  }
+
+  private rememberStagedSecretStorageKey(
+    keyId: string,
+    key: Uint8Array,
+    keyInfo?: MatrixStoredRecoveryKey["keyInfo"],
+  ): void {
+    this.stagedRecoveryKeyUsed = true;
+    this.rememberSecretStorageKey(keyId, key, keyInfo);
   }
 
   private rememberSecretStorageKey(
@@ -369,37 +440,18 @@ export class MatrixRecoveryKeyStore {
       return null;
     }
     try {
-      if (!fs.existsSync(this.recoveryKeyPath)) {
-        return null;
+      const stored = readMatrixRecoveryKeyStateForPath(this.recoveryKeyPath);
+      if (stored) {
+        return stored;
       }
-      const raw = fs.readFileSync(this.recoveryKeyPath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<MatrixStoredRecoveryKey>;
-      if (
-        parsed.version !== 1 ||
-        typeof parsed.createdAt !== "string" ||
-        typeof parsed.privateKeyBase64 !== "string" || // pragma: allowlist secret
-        !parsed.privateKeyBase64.trim()
-      ) {
-        return null;
-      }
-      return {
-        version: 1,
-        createdAt: parsed.createdAt,
-        keyId: typeof parsed.keyId === "string" ? parsed.keyId : null,
-        encodedPrivateKey:
-          typeof parsed.encodedPrivateKey === "string" ? parsed.encodedPrivateKey : undefined,
-        privateKeyBase64: parsed.privateKeyBase64,
-        keyInfo:
-          parsed.keyInfo && typeof parsed.keyInfo === "object"
-            ? {
-                passphrase: parsed.keyInfo.passphrase,
-                name: typeof parsed.keyInfo.name === "string" ? parsed.keyInfo.name : undefined,
-              }
-            : undefined,
-      };
     } catch {
-      return null;
+      // If the SQLite migration failed during construction, keep the readable
+      // legacy file usable for this run and leave it unarchived for retry.
     }
+    if (this.legacyRecoveryKeyPathOnMigrationFailure) {
+      return readLegacyMatrixRecoveryKeyFile(this.legacyRecoveryKeyPathOnMigrationFailure);
+    }
+    return null;
   }
 
   private saveRecoveryKeyToDisk(params: MatrixGeneratedSecretStorageKey): void {
@@ -420,9 +472,10 @@ export class MatrixRecoveryKeyStore {
             }
           : undefined,
       };
-      fs.mkdirSync(path.dirname(this.recoveryKeyPath), { recursive: true });
-      fs.writeFileSync(this.recoveryKeyPath, JSON.stringify(payload, null, 2), "utf8");
-      fs.chmodSync(this.recoveryKeyPath, 0o600);
+      writeMatrixRecoveryKeyStateForPath({
+        recoveryKeyPath: this.recoveryKeyPath,
+        payload,
+      });
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to persist recovery key:", err);
     }

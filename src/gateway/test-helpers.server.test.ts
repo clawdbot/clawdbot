@@ -1,3 +1,6 @@
+/**
+ * Gateway server test-helper coverage.
+ */
 import { describe, expect, it } from "vitest";
 import { testOnlyResolveAuthTokenForSignature } from "./test-helpers.server.js";
 

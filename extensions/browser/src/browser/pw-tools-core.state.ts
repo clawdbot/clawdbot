@@ -1,8 +1,14 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { devices as playwrightDevices } from "playwright-core";
+/**
+ * Browser context and emulation state helpers for Playwright-backed tools.
+ */
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { playwrightCore } from "./playwright-core.runtime.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
 import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
 
+const { devices: playwrightDevices } = playwrightCore;
+
+/** Toggles offline mode for the target page context. */
 export async function setOfflineViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -13,6 +19,7 @@ export async function setOfflineViaPlaywright(opts: {
   await page.context().setOffline(opts.offline);
 }
 
+/** Replaces extra HTTP headers for the target page context. */
 export async function setExtraHTTPHeadersViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -23,6 +30,7 @@ export async function setExtraHTTPHeadersViaPlaywright(opts: {
   await page.context().setExtraHTTPHeaders(opts.headers);
 }
 
+/** Sets or clears HTTP basic-auth credentials for the target page context. */
 export async function setHttpCredentialsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -44,6 +52,7 @@ export async function setHttpCredentialsViaPlaywright(opts: {
   await page.context().setHTTPCredentials({ username, password });
 }
 
+/** Sets or clears geolocation and grants page-origin geolocation permission. */
 export async function setGeolocationViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -83,6 +92,7 @@ export async function setGeolocationViaPlaywright(opts: {
   }
 }
 
+/** Emulates the requested media color scheme on the target page. */
 export async function emulateMediaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -93,6 +103,7 @@ export async function emulateMediaViaPlaywright(opts: {
   await page.emulateMedia({ colorScheme: opts.colorScheme });
 }
 
+/** Applies a locale override through page-scoped CDP. */
 export async function setLocaleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -121,6 +132,7 @@ export async function setLocaleViaPlaywright(opts: {
   });
 }
 
+/** Applies a timezone override through page-scoped CDP. */
 export async function setTimezoneViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -153,6 +165,7 @@ export async function setTimezoneViaPlaywright(opts: {
   });
 }
 
+/** Applies a Playwright device descriptor to viewport, user agent, and touch state. */
 export async function setDeviceViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

@@ -1,3 +1,8 @@
+/**
+ * Workspace template directory discovery.
+ * Resolves source, docs, package, and fallback template locations with a small
+ * cache so setup flows can find templates in dev and packaged installs.
+ */
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -5,13 +10,18 @@ import { pathExists } from "../utils.js";
 
 const FALLBACK_TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
+  "../../src/agents/templates",
+);
+const FALLBACK_DOCS_TEMPLATE_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
   "../../docs/reference/templates",
 );
 
 let cachedTemplateDir: string | undefined;
 let resolvingTemplateDir: Promise<string> | undefined;
 
-export async function resolveWorkspaceTemplateDir(opts?: {
+/** Resolves the primary workspace-template directory from package, cwd, or fallback paths. */
+async function resolveWorkspaceTemplateDir(opts?: {
   cwd?: string;
   argv1?: string;
   moduleUrl?: string;
@@ -29,11 +39,12 @@ export async function resolveWorkspaceTemplateDir(opts?: {
     const cwd = opts?.cwd ?? process.cwd();
 
     const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
-    const candidates = [
-      packageRoot ? path.join(packageRoot, "docs", "reference", "templates") : null,
-      cwd ? path.resolve(cwd, "docs", "reference", "templates") : null,
-      FALLBACK_TEMPLATE_DIR,
-    ].filter(Boolean) as string[];
+    const candidates = buildTemplateDirCandidates({
+      packageRoot,
+      cwd,
+      relativeDir: path.join("src", "agents", "templates"),
+      fallbackDir: FALLBACK_TEMPLATE_DIR,
+    });
 
     for (const candidate of candidates) {
       if (await pathExists(candidate)) {
@@ -53,7 +64,50 @@ export async function resolveWorkspaceTemplateDir(opts?: {
   }
 }
 
-export function resetWorkspaceTemplateDirCache() {
-  cachedTemplateDir = undefined;
-  resolvingTemplateDir = undefined;
+function buildTemplateDirCandidates(params: {
+  packageRoot?: string | null;
+  cwd?: string;
+  relativeDir: string;
+  fallbackDir: string;
+}): string[] {
+  return [
+    params.packageRoot ? path.join(params.packageRoot, params.relativeDir) : null,
+    params.cwd ? path.resolve(params.cwd, params.relativeDir) : null,
+    params.fallbackDir,
+  ].filter(Boolean) as string[];
+}
+
+async function resolveExistingTemplateDirs(candidates: readonly string[]): Promise<string[]> {
+  const dirs: string[] = [];
+  for (const candidate of candidates) {
+    if (dirs.includes(candidate)) {
+      continue;
+    }
+    if (await pathExists(candidate)) {
+      dirs.push(candidate);
+    }
+  }
+  return dirs;
+}
+
+/** Resolves all existing workspace-template search directories, including docs templates. */
+export async function resolveWorkspaceTemplateSearchDirs(opts?: {
+  cwd?: string;
+  argv1?: string;
+  moduleUrl?: string;
+}): Promise<string[]> {
+  const moduleUrl = opts?.moduleUrl ?? import.meta.url;
+  const argv1 = opts?.argv1 ?? process.argv[1];
+  const cwd = opts?.cwd ?? process.cwd();
+
+  const packageRoot = await resolveOpenClawPackageRoot({ moduleUrl, argv1, cwd });
+  const primary = await resolveWorkspaceTemplateDir(opts);
+  const docsCandidates = buildTemplateDirCandidates({
+    packageRoot,
+    cwd,
+    relativeDir: path.join("docs", "reference", "templates"),
+    fallbackDir: FALLBACK_DOCS_TEMPLATE_DIR,
+  });
+  const docsDirs = await resolveExistingTemplateDirs(docsCandidates);
+  return [primary, ...docsDirs.filter((candidate) => candidate !== primary)];
 }

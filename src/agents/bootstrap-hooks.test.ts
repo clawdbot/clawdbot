@@ -1,3 +1,4 @@
+/** Tests internal hook overrides for agent bootstrap file lists. */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearInternalHooks,

@@ -1,11 +1,18 @@
+/**
+ * Fast OpenClaw sessions-tool mocks.
+ *
+ * Stubs unrelated tool factories so sessions/subagent registration tests import cheaply.
+ */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { stubTool } from "./fast-tool-stubs.js";
 
-// Sessions-tool tests only exercise sessions/subagent registrations.
-// Stub the unrelated tool factories so importing openclaw-tools stays cheap.
 vi.mock("../tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => stubTool("agents_list"),
+}));
+
+vi.mock("../tools/computer-tool.js", () => ({
+  createComputerTool: () => stubTool("computer"),
 }));
 
 vi.mock("../tools/cron-tool.js", () => ({
@@ -64,6 +71,18 @@ vi.mock("../../channels/plugins/session-conversation.js", () => ({
       kind: match.groups.kind,
       id: match.groups.id,
       threadId: match.groups.threadId,
+    };
+  },
+  resolveSessionThreadInfo: (sessionKey: string | undefined | null) => {
+    const trimmed = sessionKey?.trim();
+    const topicMarker = ":topic:";
+    const topicIndex = trimmed?.lastIndexOf(topicMarker) ?? -1;
+    if (!trimmed || topicIndex < 0) {
+      return { baseSessionKey: trimmed, threadId: undefined };
+    }
+    return {
+      baseSessionKey: trimmed.slice(0, topicIndex),
+      threadId: trimmed.slice(topicIndex + topicMarker.length) || undefined,
     };
   },
 }));

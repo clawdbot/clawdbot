@@ -1,3 +1,4 @@
+// Tlon tests cover settings helpers plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { TlonResolvedAccount } from "../types.js";
 import {
@@ -26,28 +27,27 @@ const baseAccount: TlonResolvedAccount = {
   ownerShip: "~marzod",
 };
 
+function allowlistMigrationDecisions(currentSettings: Record<string, unknown>) {
+  const allowlistKeys = new Set(["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"]);
+  return Object.fromEntries(
+    buildTlonSettingsMigrations(baseAccount, currentSettings)
+      .filter((migration) => allowlistKeys.has(migration.key))
+      .map((migration) => [
+        migration.key,
+        shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
+      ]),
+  );
+}
+
 describe("shouldMigrateTlonSetting", () => {
   it("does not rehydrate explicit empty-array revocations during startup migration", () => {
-    const migrations = buildTlonSettingsMigrations(baseAccount, {
+    const decisions = allowlistMigrationDecisions({
       dmAllowlist: [],
       groupInviteAllowlist: [],
       defaultAuthorizedShips: [],
     });
 
-    expect(
-      Object.fromEntries(
-        migrations
-          .filter((migration) =>
-            ["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"].includes(
-              migration.key,
-            ),
-          )
-          .map((migration) => [
-            migration.key,
-            shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
-          ]),
-      ),
-    ).toEqual({
+    expect(decisions).toEqual({
       dmAllowlist: false,
       groupInviteAllowlist: false,
       defaultAuthorizedShips: false,
@@ -55,22 +55,9 @@ describe("shouldMigrateTlonSetting", () => {
   });
 
   it("still seeds file-config allowlists on first run when settings are missing", () => {
-    const migrations = buildTlonSettingsMigrations(baseAccount, {});
+    const decisions = allowlistMigrationDecisions({});
 
-    expect(
-      Object.fromEntries(
-        migrations
-          .filter((migration) =>
-            ["dmAllowlist", "groupInviteAllowlist", "defaultAuthorizedShips"].includes(
-              migration.key,
-            ),
-          )
-          .map((migration) => [
-            migration.key,
-            shouldMigrateTlonSetting(migration.fileValue, migration.settingsValue),
-          ]),
-      ),
-    ).toEqual({
+    expect(decisions).toEqual({
       dmAllowlist: true,
       groupInviteAllowlist: true,
       defaultAuthorizedShips: true,
@@ -88,8 +75,8 @@ describe("applyTlonSettingsOverrides", () => {
       },
     });
 
-    expect(result.effectiveDmAllowlist).toEqual([]);
-    expect(result.effectiveGroupInviteAllowlist).toEqual([]);
+    expect(result.effectiveDmAllowlist).toStrictEqual([]);
+    expect(result.effectiveGroupInviteAllowlist).toStrictEqual([]);
   });
 
   it("falls back to file config when settings fields are removed", () => {
@@ -122,6 +109,6 @@ describe("applyTlonSettingsOverrides", () => {
     expect(result.effectiveAutoAcceptGroupInvites).toBe(false);
     expect(result.effectiveShowModelSig).toBe(true);
     expect(result.effectiveOwnerShip).toBe("~nec");
-    expect(result.pendingApprovals).toEqual([]);
+    expect(result.pendingApprovals).toStrictEqual([]);
   });
 });

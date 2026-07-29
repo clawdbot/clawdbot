@@ -1,26 +1,31 @@
-import { execFile } from "node:child_process";
+// Memory Wiki plugin module implements obsidian behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
-const execFileAsync = promisify(execFile);
-
-export type ObsidianCliProbe = {
+type ObsidianCliProbe = {
   available: boolean;
   command: string | null;
 };
 
-export type ObsidianCliResult = {
+type ObsidianCliResult = {
   command: string;
   argv: string[];
   stdout: string;
   stderr: string;
 };
 
+// User-triggered CLI helpers must not pin the gateway when Obsidian stops responding.
+const OBSIDIAN_CLI_TIMEOUT_MS = 10_000;
+
 type ObsidianCliDeps = {
-  exec?: typeof execFileAsync;
+  exec?: (
+    command: string,
+    args: string[],
+    options: { logOutput: false; timeoutMs: number },
+  ) => Promise<{ stdout: string; stderr: string }>;
   resolveCommand?: (command: string) => Promise<string | null>;
 };
 
@@ -33,7 +38,7 @@ async function isExecutableFile(inputPath: string): Promise<boolean> {
   }
 }
 
-export async function resolveCommandOnPath(command: string): Promise<string | null> {
+async function resolveCommandOnPath(command: string): Promise<string | null> {
   const pathValue = process.env.PATH ?? "";
   const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
   const windowsExts =
@@ -72,20 +77,23 @@ export async function probeObsidianCli(
   };
 }
 
-export async function runObsidianCli(params: {
+async function runObsidianCli(params: {
   config: ResolvedMemoryWikiConfig;
   subcommand: string;
   args?: string[];
   deps?: ObsidianCliDeps;
 }): Promise<ObsidianCliResult> {
   const resolveCommand = params.deps?.resolveCommand ?? resolveCommandOnPath;
-  const exec = params.deps?.exec ?? execFileAsync;
   const probe = await probeObsidianCli({ resolveCommand });
   if (!probe.command) {
     throw new Error("Obsidian CLI is not available on PATH.");
   }
   const argv = [...buildVaultPrefix(params.config), params.subcommand, ...(params.args ?? [])];
-  const { stdout, stderr } = await exec(probe.command, argv, { encoding: "utf8" });
+  const exec = params.deps?.exec ?? runExec;
+  const { stdout, stderr } = await exec(probe.command, argv, {
+    logOutput: false,
+    timeoutMs: OBSIDIAN_CLI_TIMEOUT_MS,
+  });
   return {
     command: probe.command,
     argv,

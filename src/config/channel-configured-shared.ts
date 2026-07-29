@@ -1,14 +1,9 @@
-import { hasNonEmptyString } from "../infra/outbound/channel-target.js";
+// Shares channel-configured checks across config and runtime surfaces.
+import { getChannelEnvVars } from "../secrets/channel-env-vars.js";
 import { isRecord } from "../utils.js";
 import type { OpenClawConfig } from "./config.js";
 
-const STATIC_ENV_RULES: Record<string, string[] | ((env: NodeJS.ProcessEnv) => boolean)> = {
-  discord: ["DISCORD_BOT_TOKEN"],
-  slack: ["SLACK_BOT_TOKEN"],
-  telegram: ["TELEGRAM_BOT_TOKEN"],
-  irc: (env) => hasNonEmptyString(env.IRC_HOST) && hasNonEmptyString(env.IRC_NICK),
-};
-
+/** Returns a channel config object when `channels.<id>` is present and object-shaped. */
 export function resolveChannelConfigRecord(
   cfg: OpenClawConfig,
   channelId: string,
@@ -18,27 +13,29 @@ export function resolveChannelConfigRecord(
   return isRecord(entry) ? entry : null;
 }
 
+/** Checks whether a shallow channel config contains activation-relevant values. */
 export function hasMeaningfulChannelConfigShallow(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
   }
-  return Object.keys(value).some((key) => key !== "enabled");
+  const keys = Object.keys(value);
+  if (keys.length === 1 && keys[0] === "enabled") {
+    // `enabled: false` alone is an explicit non-configuration signal, but true opts in.
+    return value.enabled === true;
+  }
+  return keys.some((key) => key !== "enabled");
 }
 
+/** Detects static channel configuration from known env vars or `channels.<id>` config. */
 export function isStaticallyChannelConfigured(
   cfg: OpenClawConfig,
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  const staticRule = STATIC_ENV_RULES[channelId];
-  if (Array.isArray(staticRule)) {
-    for (const envVar of staticRule) {
-      if (hasNonEmptyString(env[envVar])) {
-        return true;
-      }
+  for (const envVar of getChannelEnvVars(channelId, { config: cfg, env })) {
+    if (typeof env[envVar] === "string" && env[envVar].trim().length > 0) {
+      return true;
     }
-  } else if (staticRule?.(env)) {
-    return true;
   }
   return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId));
 }

@@ -1,8 +1,8 @@
+// Matrix plugin module implements media text behavior.
 import path from "node:path";
 import type {
   MatrixMessageAttachmentKind,
   MatrixMessageAttachmentSummary,
-  MatrixMessageSummary,
 } from "./actions/types.js";
 
 const MATRIX_MEDIA_KINDS: Record<string, MatrixMessageAttachmentKind> = {
@@ -98,7 +98,7 @@ export function resolveMatrixMessageBody(params: {
   return attachment.caption;
 }
 
-export function formatMatrixAttachmentText(params: {
+function formatMatrixAttachmentText(params: {
   attachment?: MatrixMessageAttachmentSummary;
   tooLarge?: boolean;
   unavailable?: boolean;
@@ -132,12 +132,6 @@ export function formatMatrixMessageText(params: {
     return marker;
   }
   return `${body}\n\n${marker}`;
-}
-
-export function formatMatrixMessageSummaryText(
-  summary: Pick<MatrixMessageSummary, "body" | "attachment">,
-): string | undefined {
-  return formatMatrixMessageText(summary);
 }
 
 export function formatMatrixMediaUnavailableText(params: {

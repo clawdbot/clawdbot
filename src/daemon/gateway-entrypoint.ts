@@ -1,3 +1,4 @@
+/** Resolves gateway dist entrypoints used by installed daemon command lines. */
 import path from "node:path";
 import { pathExists } from "../utils.js";
 
@@ -8,11 +9,12 @@ const GATEWAY_DIST_ENTRYPOINT_BASENAMES = [
   "entry.mjs",
 ] as const;
 
+/** Detects built gateway dist entrypoints from service command arguments. */
 export function isGatewayDistEntrypointPath(inputPath: string): boolean {
   return /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(inputPath);
 }
 
-export function buildGatewayInstallEntrypointCandidates(root?: string): string[] {
+function buildGatewayInstallEntrypointCandidates(root?: string): string[] {
   if (!root) {
     return [];
   }
@@ -35,6 +37,8 @@ export function buildGatewayDistEntrypointCandidates(...inputs: string[]): strin
     distDirs.push(distDir);
   }
 
+  // Prefer canonical basenames across every observed dist dir before falling
+  // through, so repaired services converge on the same entrypoint order.
   const candidates: string[] = [];
   for (const basename of GATEWAY_DIST_ENTRYPOINT_BASENAMES) {
     for (const distDir of distDirs) {

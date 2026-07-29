@@ -1,8 +1,9 @@
-import { describe, it } from "vitest";
+// Opencode tests cover onboard plugin behavior.
 import {
   expectProviderOnboardAllowlistAlias,
   expectProviderOnboardPrimaryAndFallbacks,
-} from "../../test/helpers/plugins/provider-onboard.js";
+} from "openclaw/plugin-sdk/provider-test-contracts";
+import { describe, it } from "vitest";
 import { applyOpencodeZenConfig, applyOpencodeZenProviderConfig } from "./onboard.js";
 
 const MODEL_REF = "opencode/claude-opus-4-6";

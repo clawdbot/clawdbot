@@ -1,3 +1,4 @@
+// Test helper extension boundary tests enforce helper import boundaries.
 import { describe, expect, it } from "vitest";
 import {
   collectTestHelperExtensionImportBoundaryInventory,
@@ -7,14 +8,7 @@ import { createCapturedIo } from "./helpers/captured-io.js";
 
 describe("test-helper extension import boundary inventory", () => {
   it("stays empty", async () => {
-    expect(await collectTestHelperExtensionImportBoundaryInventory()).toEqual([]);
-  });
-
-  it("produces stable sorted output", async () => {
-    const first = await collectTestHelperExtensionImportBoundaryInventory();
-    const second = await collectTestHelperExtensionImportBoundaryInventory();
-
-    expect(second).toEqual(first);
+    expect(await collectTestHelperExtensionImportBoundaryInventory()).toStrictEqual([]);
   });
 
   it("script json output stays empty", async () => {
@@ -23,6 +17,6 @@ describe("test-helper extension import boundary inventory", () => {
 
     expect(exitCode).toBe(0);
     expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual([]);
+    expect(JSON.parse(captured.readStdout())).toStrictEqual([]);
   });
 });

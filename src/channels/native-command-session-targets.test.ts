@@ -1,3 +1,4 @@
+// Native command session target tests cover session targeting for built-in channel commands.
 import { describe, expect, it } from "vitest";
 import { resolveNativeCommandSessionTargets } from "./native-command-session-targets.js";
 
@@ -38,7 +39,7 @@ describe("resolveNativeCommandSessionTargets", () => {
         sessionPrefix: "Slack:Slash",
         userId: "U123",
         targetSessionKey: "agent:qwen:slack:channel:c1",
-        lowercaseSessionKey: true,
+        sessionKeyCase: "lowercase",
       }),
     ).toEqual({
       sessionKey: "agent:qwen:slack:slash:u123",

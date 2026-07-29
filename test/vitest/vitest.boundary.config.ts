@@ -1,10 +1,11 @@
-import { defineProject } from "vitest/config";
+// Vitest boundary config wires the boundary test shard.
+import { defineProject, type TestProjectInlineConfiguration } from "vitest/config";
 import { loadPatternListFromEnv, narrowIncludePatternsForCli } from "./vitest.pattern-file.ts";
 import { resolveVitestIsolation } from "./vitest.scoped-config.ts";
 import { nonIsolatedRunnerPath, sharedVitestConfig } from "./vitest.shared.config.ts";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
-export function loadBoundaryIncludePatternsFromEnv(
+function loadBoundaryIncludePatternsFromEnv(
   env: Record<string, string | undefined> = process.env,
 ): string[] | null {
   return loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
@@ -24,12 +25,12 @@ export function createBoundaryVitestConfig(
       isolate,
       ...(isolate ? { runner: undefined } : { runner: nonIsolatedRunnerPath }),
       include: loadBoundaryIncludePatternsFromEnv(env) ?? cliIncludePatterns ?? boundaryTestFiles,
-      ...(cliIncludePatterns !== null ? { passWithNoTests: true } : {}),
+      ...(cliIncludePatterns?.length === 0 ? { passWithNoTests: true } : {}),
       // Boundary workers still need the shared isolated HOME/bootstrap. Only
       // per-file module isolation is disabled here.
       setupFiles: sharedVitestConfig.test.setupFiles,
     },
-  });
+  } as TestProjectInlineConfiguration);
 }
 
 export default createBoundaryVitestConfig();

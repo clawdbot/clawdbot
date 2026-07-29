@@ -1,0 +1,55 @@
+name: openclaw-codeql-channel-runtime-boundary-critical-quality
+
+disable-default-queries: true
+
+queries:
+  - uses: security-and-quality
+
+query-filters:
+  - include:
+      problem.severity:
+        - error
+  - exclude:
+      tags:
+        - security
+
+paths:
+  - extensions/discord/src
+  - extensions/feishu/src
+  - extensions/googlechat/src
+  - extensions/imessage/src
+  - extensions/irc/src
+  - extensions/line/src
+  - extensions/matrix/src
+  - extensions/mattermost/src
+  - extensions/msteams/src
+  - extensions/nextcloud-talk/src
+  - extensions/nostr/src
+  - extensions/qa-channel/src
+  - extensions/qqbot/src
+  - extensions/signal/src
+  - extensions/slack/src
+  - extensions/synology-chat/src
+  - extensions/telegram/src
+  - extensions/tlon/src
+  - extensions/twitch/src
+  - extensions/whatsapp/src
+  - extensions/zalo/src
+  - extensions/zalouser/src
+  - src/channels
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

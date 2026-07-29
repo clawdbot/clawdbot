@@ -1,10 +1,11 @@
+// Feishu plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig as ClawdbotConfig,
   createAccountListHelpers,
+  hasConfiguredAccountValue,
   normalizeAccountId,
   normalizeOptionalAccountId,
-  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeString } from "./comment-shared.js";
@@ -16,12 +17,19 @@ import type {
   ResolvedFeishuAccount,
 } from "./types.js";
 
-const { listAccountIds: listFeishuAccountIds, resolveDefaultAccountId } = createAccountListHelpers(
-  "feishu",
-  {
-    allowUnlistedDefaultAccount: true,
+const {
+  listAccountIds: listFeishuAccountIds,
+  resolveDefaultAccountId,
+  resolveAccountConfig: resolveMergedFeishuAccountConfig,
+} = createAccountListHelpers<FeishuConfig>("feishu", {
+  allowUnlistedDefaultAccount: true,
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["tools"],
+  hasImplicitDefaultAccount: (cfg) => {
+    const feishu = cfg.channels?.feishu;
+    return hasConfiguredAccountValue(feishu?.appId) && hasConfiguredAccountValue(feishu?.appSecret);
   },
-);
+});
 
 export { listFeishuAccountIds };
 
@@ -43,12 +51,6 @@ export class FeishuSecretRefUnavailableError extends Error {
     this.name = "FeishuSecretRefUnavailableError";
     this.path = path;
   }
-}
-
-export function isFeishuSecretRefUnavailableError(
-  error: unknown,
-): error is FeishuSecretRefUnavailableError {
-  return error instanceof FeishuSecretRefUnavailableError;
 }
 
 function resolveFeishuSecretLike(params: {
@@ -180,12 +182,21 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
  */
 function mergeFeishuAccountConfig(cfg: ClawdbotConfig, accountId: string): FeishuConfig {
   const feishuCfg = cfg.channels?.feishu as FeishuConfig | undefined;
-  return resolveMergedAccountConfig<FeishuConfig>({
-    channelConfig: feishuCfg,
-    accounts: feishuCfg?.accounts as Record<string, Partial<FeishuConfig>> | undefined,
-    accountId,
-    omitKeys: ["defaultAccount"],
-  });
+  const merged = resolveMergedFeishuAccountConfig(cfg, accountId);
+  const topTools = feishuCfg?.tools;
+  if (merged.tools === undefined && topTools !== undefined) {
+    return { ...merged, tools: topTools };
+  }
+  if (topTools?.bitable === false) {
+    return {
+      ...merged,
+      tools: {
+        ...merged.tools,
+        bitable: false,
+      },
+    };
+  }
+  return merged;
 }
 
 /**

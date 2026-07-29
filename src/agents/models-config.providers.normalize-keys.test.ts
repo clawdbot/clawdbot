@@ -1,3 +1,4 @@
+// Covers provider-key canonicalization plus secret marker persistence safeguards.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,14 +9,22 @@ import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.runtime.js", async () => {
-  const { normalizeLmstudioProviderConfig } = await vi.importActual<
-    typeof import("../plugin-sdk/lmstudio-runtime.js")
-  >("../plugin-sdk/lmstudio-runtime.js");
+function normalizeLmstudioBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  return trimmed.replace(/\/api\/v1$/, "").replace(/\/v1$/, "") + "/v1";
+}
+
+vi.mock("./models-config.providers.policy.runtime.js", () => {
   return {
     applyProviderNativeStreamingUsagePolicy: () => undefined,
-    normalizeProviderConfigPolicy: (providerKey: string, provider: unknown) =>
-      providerKey === "lmstudio" ? normalizeLmstudioProviderConfig(provider as never) : undefined,
+    normalizeProviderConfigPolicy: (
+      providerKey: string,
+      provider: { baseUrl?: unknown } | undefined,
+    ) =>
+      // Keep the test focused on normalizeProviders while preserving LM Studio policy behavior.
+      providerKey === "lmstudio" && typeof provider?.baseUrl === "string"
+        ? { ...provider, baseUrl: normalizeLmstudioBaseUrl(provider.baseUrl) }
+        : undefined,
     resolveProviderConfigApiKeyPolicy: () => undefined,
   };
 });
@@ -26,6 +35,7 @@ describe("normalizeProviders", () => {
       NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]["models"][number]
     > = {},
   ) => ({
+    // Compact default model row reused by normalization cases that only vary ids.
     id: "config-model",
     name: "Config model",
     input: ["text"] as Array<"text" | "image">,
@@ -103,6 +113,102 @@ describe("normalizeProviders", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("normalizes retired Google Gemini model ids before emitting provider config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          api: "google-generative-ai",
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Gemini 3 Pro",
+            }),
+          ],
+        },
+        "google-gemini-cli": {
+          baseUrl: "openclaw://google-gemini-cli",
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Gemini CLI 3 Pro",
+            }),
+          ],
+        },
+        openrouter: {
+          baseUrl: "https://openrouter.ai/api/v1",
+          api: "openai-completions",
+          apiKey: "OPENROUTER_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "google/gemini-3-pro-preview",
+              name: "Gemini 3 Pro via OpenRouter",
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized?.google?.models?.map((model) => model.id)).toEqual([
+        "gemini-3.1-pro-preview",
+      ]);
+      expect(normalized?.["google-gemini-cli"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-3.1-pro-preview",
+      ]);
+      expect(normalized?.openrouter?.models?.map((model) => model.id)).toEqual([
+        "google/gemini-3.1-pro-preview",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates Google Gemini provider rows after model id normalization", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          api: "google-generative-ai",
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Pinned Gemini",
+              contextWindow: 12345,
+              cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+            }),
+            createModel({
+              id: "gemini-3.1-pro-preview",
+              name: "Discovered Gemini",
+              contextWindow: 1_048_576,
+              maxTokens: 65536,
+              reasoning: true,
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized?.google?.models).toHaveLength(1);
+      // The first normalized row wins so explicit config details are not replaced by discovery.
+      const model = normalized?.google?.models?.[0];
+      expect(model?.id).toBe("gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Pinned Gemini");
+      expect(model?.contextWindow).toBe(12345);
+      expect(model?.maxTokens).toBe(2048);
+      expect(model?.reasoning).toBe(false);
+      expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const env = {
@@ -235,6 +341,7 @@ describe("normalizeProviders", () => {
         providers,
         agentDir,
       });
+      // Env refs persist the env-name marker; non-env refs collapse to a non-secret sentinel.
       expect(normalized?.openai?.headers?.Authorization).toBe("secretref-env:OPENAI_HEADER_TOKEN");
       expect(normalized?.openai?.headers?.["X-Tenant-Token"]).toBe(NON_ENV_SECRETREF_MARKER);
     } finally {

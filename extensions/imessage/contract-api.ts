@@ -1,9 +1,8 @@
-export {
-  resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
-  resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots,
-} from "./src/media-contract.js";
+// Imessage API module exposes the plugin public contract.
 export {
   DEFAULT_IMESSAGE_ATTACHMENT_ROOTS,
+  resolveIMessageAttachmentRoots as resolveInboundAttachmentRoots,
   resolveIMessageAttachmentRoots,
+  resolveIMessageRemoteAttachmentRoots as resolveRemoteInboundAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
-} from "./src/media-contract.js";
+} from "./media-contract-api.js";

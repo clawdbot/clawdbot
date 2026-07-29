@@ -1,8 +1,9 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+// Kilocode tests cover index plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
-import { registerSingleProviderPlugin } from "../../test/helpers/plugins/plugin-registration.js";
-import { expectPassthroughReplayPolicy } from "../../test/helpers/provider-replay-policy.ts";
 import plugin from "./index.js";
 
 describe("kilocode provider plugin", () => {
@@ -45,13 +46,14 @@ describe("kilocode provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
+    expect(capturedPayload).toEqual({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
       reasoning: { effort: "high" },
     });
 
     const wrappedAuto = provider.wrapStreamFn?.({
       provider: "kilocode",
-      modelId: "kilo/auto",
+      modelId: "kilo-auto/balanced",
       thinkingLevel: "high",
       streamFn: baseStreamFn,
     } as never);
@@ -60,13 +62,141 @@ describe("kilocode provider plugin", () => {
       {
         api: "openai-completions",
         provider: "kilocode",
-        id: "kilo/auto",
+        id: "kilo-auto/balanced",
       } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );
 
     expect(capturedPayload).not.toHaveProperty("reasoning");
+  });
+
+  it("normalizes string stop to array in plugin-owned stream hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = { stop: "\n" };
+      options?.onPayload?.(payload as never, model as never);
+      payloads.push(payload);
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payloads[0]?.stop).toEqual(["\n"]);
+  });
+
+  it("normalizes string stop after caller payload hooks", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      payloads.push(payload);
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {
+        onPayload: (payload) => {
+          (payload as Record<string, unknown>).stop = "\n";
+        },
+      },
+    );
+
+    expect(payloads[0]?.stop).toEqual(["\n"]);
+  });
+
+  it("leaves array stop unchanged in plugin-owned stream hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = { stop: ["\n", "END"] };
+      options?.onPayload?.(payload as never, model as never);
+      payloads.push(payload);
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payloads[0]?.stop).toEqual(["\n", "END"]);
+  });
+
+  it("keeps Kilo feature headers case-insensitively provider-owned", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {
+        headers: {
+          "x-kilocode-feature": "spoofed",
+          "X-Custom": "1",
+        },
+      },
+    );
+
+    const featureHeaderKeys = Object.keys(capturedHeaders ?? {}).filter(
+      (key) => key.toLowerCase() === "x-kilocode-feature",
+    );
+    expect(featureHeaderKeys).toEqual(["X-KILOCODE-FEATURE"]);
+    expect(capturedHeaders?.["X-KILOCODE-FEATURE"]).toBe("openclaw");
+    expect(capturedHeaders?.["X-Custom"]).toBe("1");
   });
 
   it("publishes configured Kilo models through plugin-owned catalog augmentation", async () => {
@@ -95,7 +225,7 @@ describe("kilocode provider plugin", () => {
     ).toEqual([
       {
         provider: "kilocode",
-        id: "google/gemini-3-pro-preview",
+        id: "google/gemini-3.1-pro-preview",
         name: "Gemini 3 Pro Preview",
         input: ["text", "image"],
         reasoning: true,

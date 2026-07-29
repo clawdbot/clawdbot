@@ -1,7 +1,9 @@
+// Focuses an existing subagent run for follow-up routing.
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
-} from "../../../acp/runtime/session-identifiers.js";
+} from "@openclaw/acp-core/runtime/session-identifiers";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readAcpSessionEntry } from "../../../acp/runtime/session-meta.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import {
@@ -18,10 +20,14 @@ import {
 } from "../../../channels/thread-bindings-policy.js";
 import { normalizeConversationRef } from "../../../infra/outbound/session-binding-normalization.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import type { CommandHandlerResult } from "../commands-types.js";
 import { resolveConversationBindingContextFromAcpCommand } from "../conversation-binding-input.js";
-import { type SubagentsCommandContext, resolveFocusTargetSession, stopWithText } from "./shared.js";
+import {
+  type SubagentsCommandContext,
+  resolveCommandSubagentController,
+  resolveFocusTargetSession,
+  stopWithText,
+} from "./shared.js";
 
 type FocusBindingContext = {
   channel: string;
@@ -71,6 +77,11 @@ export async function handleSubagentsFocusAction(
     return stopWithText("Usage: /focus <subagent-label|session-key|session-id|session-label>");
   }
 
+  const controller = resolveCommandSubagentController(params, ctx.requesterKey);
+  if (controller.controlScope !== "children") {
+    return stopWithText("⚠️ Leaf subagents cannot control other sessions.");
+  }
+
   const bindingContext = resolveFocusBindingContext(params);
   if (!bindingContext) {
     return stopWithText("⚠️ /focus must be run inside a bindable conversation.");
@@ -85,7 +96,11 @@ export async function handleSubagentsFocusAction(
     return stopWithText("⚠️ Conversation bindings are unavailable for this account.");
   }
 
-  const focusTarget = await resolveFocusTargetSession({ runs, token });
+  const focusTarget = await resolveFocusTargetSession({
+    runs,
+    token,
+    requesterKey: controller.controllerSessionKey,
+  });
   if (!focusTarget) {
     return stopWithText(`⚠️ Unable to resolve focus target: ${token}`);
   }

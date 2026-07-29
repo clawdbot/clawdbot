@@ -2,6 +2,14 @@
 
 Read-only diff viewer plugin for **OpenClaw** agents.
 
+## Install
+
+```bash
+openclaw plugins install @openclaw/diffs
+```
+
+Restart the Gateway after installing or updating the plugin.
+
 It gives agents one tool, `diffs`, that can:
 
 - render a gateway-hosted diff viewer for canvas use
@@ -12,6 +20,7 @@ It gives agents one tool, `diffs`, that can:
 
 The tool can return:
 
+- `details.changed`: `false` when before/after inputs are identical and no artifact was rendered; `true` for rendered results
 - `details.viewerUrl`: a gateway URL that can be opened in the canvas
 - `details.filePath`: a local rendered artifact path when file rendering is requested
 - `details.fileFormat`: the rendered file format (`png` or `pdf`)
@@ -61,18 +70,11 @@ Useful options:
 - `expandUnchanged`: expand unchanged sections (per-call option only, not a plugin default key)
 - `path`: display name for before and after input
 - `lang`: language hint for before/after input; unknown values fall back to plain text
+- Default syntax highlighting covers common source, config, and documentation languages. Install `diffs-language-pack` for the extended language catalog.
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime for viewer and standalone file outputs
 - `baseUrl`: override the gateway base URL used in the returned viewer link (origin or origin+base path only; no query/hash)
 - `viewerBaseUrl` plugin config: persistent fallback used when a tool call omits `baseUrl`
-
-Legacy input aliases still accepted for backward compatibility:
-
-- `format` -> `fileFormat`
-- `imageFormat` -> `fileFormat`
-- `imageQuality` -> `fileQuality`
-- `imageScale` -> `fileScale`
-- `imageMaxWidth` -> `fileMaxWidth`
 
 Input safety limits:
 
@@ -106,6 +108,7 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
             fileScale: 2,
             fileMaxWidth: 960,
             mode: "both",
+            ttlSeconds: 21600,
           },
         },
       },
@@ -116,10 +119,21 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
 
 Explicit tool parameters still win over these defaults.
 
+## Docs
+
+- https://docs.openclaw.ai/tools/diffs
+
+## Package
+
+- Plugin id: `diffs`
+- Package: `@openclaw/diffs`
+- Minimum OpenClaw host: `2026.4.30`
+
 Security options:
 
 - `security.allowRemoteViewer` (default `false`): allows non-loopback access to `/plugins/diffs/view/...` token URLs
 - `viewerBaseUrl` (optional): persistent viewer-link origin/path fallback for shareable URLs
+- `defaults.ttlSeconds` (default `1800`, max `21600`): default artifact lifetime for viewer and standalone file outputs
 
 Example:
 
@@ -203,8 +217,11 @@ diff --git a/src/example.ts b/src/example.ts
 
 ## Notes
 
+- Multi-file patches start with a changed-files summary card: totals, per-file `+N`/`-N` stats, change badges, and anchor links.
+- Rendered PNG/PDF files keep the per-file header counts but omit the interactive view toggles.
 - The viewer is hosted locally through the gateway under `/plugins/diffs/...`.
-- Artifacts are ephemeral and stored in the plugin temp subfolder (`$TMPDIR/openclaw-diffs`).
+- Viewer HTML and metadata are ephemeral SQLite plugin blobs. The URL token is returned to the caller while SQLite stores only its SHA-256 hash.
+- Rendered PNG/PDF files remain temporary materializations in `$TMPDIR/openclaw-diffs` because delivery APIs require a file path. No JSON metadata sidecars are written or imported.
 - Default viewer URLs use loopback (`127.0.0.1`) unless you set plugin `viewerBaseUrl`, pass `baseUrl`, or use `gateway.bind=custom` + `gateway.customBindHost`.
 - If `gateway.trustedProxies` includes loopback for a same-host proxy (for example Tailscale Serve), raw `127.0.0.1` viewer requests without forwarded client-IP headers fail closed by design.
 - In that topology, prefer `mode=file` / `mode=both` for attachments, or intentionally enable remote viewers and set plugin `viewerBaseUrl` (or pass a proxy/public `baseUrl`) when you need a shareable viewer URL.

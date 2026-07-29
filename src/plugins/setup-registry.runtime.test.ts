@@ -1,28 +1,133 @@
+// Verifies metadata-backed setup registry descriptor lookup.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import { clearCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import type { InstalledPluginIndex } from "./installed-plugin-index.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 
-const loadPluginManifestRegistryMock = vi.hoisted(() => vi.fn());
+const loadPluginRegistrySnapshotMock = vi.hoisted(() => vi.fn());
+const loadPluginManifestRegistryForInstalledIndexMock = vi.hoisted(() => vi.fn());
+const loadPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./manifest-registry.js", () => ({
-  loadPluginManifestRegistry: loadPluginManifestRegistryMock,
+vi.mock("./plugin-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-registry.js")>()),
+  loadPluginRegistrySnapshot: loadPluginRegistrySnapshotMock,
 }));
-
-afterEach(() => {
-  loadPluginManifestRegistryMock.mockReset();
+vi.mock("./manifest-registry-installed.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./manifest-registry-installed.js")>()),
+  loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistryForInstalledIndexMock,
+}));
+vi.mock("./plugin-metadata-snapshot.js", async () => {
+  const current = await import("./current-plugin-metadata-snapshot.js");
+  return {
+    loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+    resolvePluginMetadataSnapshot: (
+      params: Parameters<typeof current.getCurrentPluginMetadataSnapshot>[0] & {
+        allowWorkspaceScopedCurrent?: boolean;
+      },
+    ) =>
+      current.getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
+        allowWorkspaceScopedSnapshot: params.allowWorkspaceScopedCurrent,
+      }) ?? loadPluginMetadataSnapshotMock(params),
+  };
 });
 
-describe("setup-registry runtime fallback", () => {
-  it("uses bundled manifest cliBackends when the setup-registry runtime is unavailable", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      diagnostics: [],
+afterEach(() => {
+  clearCurrentPluginMetadataSnapshot();
+  resetPluginRuntimeStateForTest();
+  loadPluginRegistrySnapshotMock.mockReset();
+  loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+  loadPluginMetadataSnapshotMock.mockReset();
+});
+
+function createCurrentSnapshot(params: {
+  manifestHash: string;
+  cliBackends: string[];
+  workspaceDir?: string;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: InstalledPluginIndex = {
+    version: 1,
+    hostContractVersion: "test-host",
+    compatRegistryVersion: "test-compat",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: "openai",
+        manifestPath: `/tmp/openai-${params.manifestHash}/openclaw.plugin.json`,
+        manifestHash: params.manifestHash,
+        source: `/tmp/openai-${params.manifestHash}/index.ts`,
+        rootDir: `/tmp/openai-${params.manifestHash}`,
+        origin: "bundled",
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
+  return {
+    policyHash,
+    configFingerprint: params.manifestHash,
+    workspaceDir: params.workspaceDir,
+    index,
+    plugins: [
+      {
+        id: "openai",
+        origin: "bundled",
+        cliBackends: params.cliBackends,
+      },
+    ],
+  } as unknown as PluginMetadataSnapshot;
+}
+
+describe("setup-registry descriptor lookup", () => {
+  it("uses enabled metadata cliBackends", async () => {
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [
+          {
+            pluginId: "openai",
+            origin: "bundled",
+            enabled: true,
+          },
+          {
+            pluginId: "disabled",
+            origin: "bundled",
+            enabled: false,
+          },
+          {
+            pluginId: "local",
+            origin: "workspace",
+            enabled: true,
+          },
+        ],
+      },
       plugins: [
         {
           id: "openai",
           origin: "bundled",
-          cliBackends: ["legacy-openai-cli"],
-          setup: {
-            cliBackends: ["Codex-CLI"],
-            requiresRuntime: true,
-          },
+          cliBackends: ["Codex-CLI", "legacy-openai-cli"],
+        },
+        {
+          id: "disabled",
+          origin: "bundled",
+          cliBackends: ["disabled-cli"],
         },
         {
           id: "local",
@@ -32,44 +137,128 @@ describe("setup-registry runtime fallback", () => {
       ],
     });
 
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
-      await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toEqual({
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli" })).toEqual({
       pluginId: "openai",
       backend: { id: "Codex-CLI" },
     });
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "local-cli" })).toBeUndefined();
-    expect(loadPluginManifestRegistryMock).toHaveBeenCalledTimes(1);
-    expect(loadPluginManifestRegistryMock).toHaveBeenCalledWith({ cache: true });
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "local-cli" })).toEqual({
+      pluginId: "local",
+      backend: { id: "local-cli" },
+    });
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "disabled-cli" })).toBeUndefined();
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(3);
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
   });
 
-  it("preserves fail-closed setup lookup when the runtime module explicitly declines to resolve", async () => {
-    loadPluginManifestRegistryMock.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "openai",
-          origin: "bundled",
-          cliBackends: ["legacy-openai-cli"],
-          setup: {
-            cliBackends: ["Codex-CLI"],
-            requiresRuntime: true,
-          },
-        },
-      ],
+  it("refreshes cliBackends when the current metadata snapshot changes", async () => {
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        cliBackends: ["Codex-CLI"],
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli" })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Codex-CLI" },
+    });
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "next-cli" })).toBeUndefined();
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "bravo",
+        cliBackends: ["Next-CLI"],
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli" })).toBeUndefined();
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "next-cli" })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Next-CLI" },
+    });
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("uses workspace-scoped current metadata through the active plugin runtime", async () => {
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
+
+    setActivePluginRegistry(
+      createEmptyPluginRegistry(),
+      "workspace-a",
+      "gateway-bindable",
+      "/workspace/a",
+    );
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        cliBackends: ["Codex-CLI"],
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli", config: {} })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Codex-CLI" },
+    });
+    expect(
+      resolvePluginSetupCliBackendDescriptor({ backend: "next-cli", config: {} }),
+    ).toBeUndefined();
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "bravo",
+        cliBackends: ["Next-CLI"],
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(
+      resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli", config: {} }),
+    ).toBeUndefined();
+    expect(resolvePluginSetupCliBackendDescriptor({ backend: "next-cli", config: {} })).toEqual({
+      pluginId: "openai",
+      backend: { id: "Next-CLI" },
+    });
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse workspace-scoped current metadata without a workspace context", async () => {
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [],
+      },
+      plugins: [],
     });
 
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
-      await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest({
-      resolvePluginSetupCliBackend: () => undefined,
-    });
+    const { resolvePluginSetupCliBackendDescriptor } = await import("./setup-registry.runtime.js");
 
-    expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toBeUndefined();
-    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        cliBackends: ["Codex-CLI"],
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(
+      resolvePluginSetupCliBackendDescriptor({ backend: "codex-cli", config: {} }),
+    ).toBeUndefined();
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
   });
 });

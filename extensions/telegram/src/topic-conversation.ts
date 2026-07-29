@@ -1,3 +1,4 @@
+// Telegram plugin module implements topic conversation behavior.
 export type ParsedTelegramTopicConversation = {
   chatId: string;
   topicId: string;
@@ -41,6 +42,11 @@ export function parseTelegramTopicConversation(params: {
   }
   const parent = params.parentConversationId?.trim();
   if (!parent || !/^-?\d+$/.test(parent)) {
+    return null;
+  }
+  // Telegram DM bindings can carry the chat id in both fields; treat that as
+  // a direct conversation shape, not a legacy topic binding.
+  if (parent === conversation) {
     return null;
   }
   const canonicalConversationId = buildTelegramTopicConversationId({

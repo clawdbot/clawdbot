@@ -1,3 +1,4 @@
+// Imessage helper module supports target parsing helpers behavior.
 export {
   createAllowedChatSenderMatcher,
   parseChatAllowTargetPrefixes,

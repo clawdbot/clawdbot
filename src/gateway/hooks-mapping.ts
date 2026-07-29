@@ -1,8 +1,14 @@
+// Gateway hook mapping resolver.
+// Normalizes hook presets, templates, transforms, and resolved hook actions.
 import fs from "node:fs";
 import path from "node:path";
-import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveConfigPathCandidate } from "../config/paths.js";
+import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -26,19 +32,19 @@ export type HookMappingResolved = {
   transform?: HookMappingTransformResolved;
 };
 
-export type HookMappingTransformResolved = {
+type HookMappingTransformResolved = {
   modulePath: string;
   exportName?: string;
 };
 
-export type HookMappingContext = {
+type HookMappingContext = {
   payload: Record<string, unknown>;
   headers: Record<string, string>;
   url: URL;
   path: string;
 };
 
-export type HookAction =
+type HookAction =
   | {
       kind: "wake";
       text: string;
@@ -51,6 +57,7 @@ export type HookAction =
       agentId?: string;
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
+      sessionKeySource?: "static" | "templated";
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
       channel?: HookMessageChannel;
@@ -60,7 +67,9 @@ export type HookAction =
       timeoutSeconds?: number;
     };
 
-export type HookMappingResult =
+type HookSessionKeyTemplateSource = "static" | "templated";
+
+type HookMappingResult =
   | { ok: true; action: HookAction }
   | { ok: true; action: null; skipped: true }
   | { ok: false; error: string };
@@ -81,6 +90,12 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
 };
 
 const transformCache = new Map<string, HookTransformFn>();
+let transformCacheBustVersion = 0;
+
+export function commitHookTransformMappingReload(): void {
+  transformCache.clear();
+  transformCacheBustVersion += 1;
+}
 
 type HookTransformResult = Partial<{
   kind: HookAction["kind"];
@@ -91,6 +106,7 @@ type HookTransformResult = Partial<{
   wakeMode: "now" | "next-heartbeat";
   name: string;
   sessionKey: string;
+  sessionKeySource: HookSessionKeyTemplateSource;
   deliver: boolean;
   allowUnsafeExternalContent: boolean;
   channel: HookMessageChannel;
@@ -104,6 +120,7 @@ type HookTransformFn = (
   ctx: HookMappingContext,
 ) => HookTransformResult | Promise<HookTransformResult>;
 
+/** Resolve configured hook mappings plus preset mappings into normalized matcher entries. */
 export function resolveHookMappings(
   hooks?: HooksConfig,
   opts?: { configDir?: string },
@@ -134,7 +151,7 @@ export function resolveHookMappings(
     return [];
   }
 
-  const configDir = path.resolve(opts?.configDir ?? path.dirname(CONFIG_PATH));
+  const configDir = path.resolve(opts?.configDir ?? path.dirname(resolveConfigPathCandidate()));
   const transformsRootDir = path.join(configDir, "hooks", "transforms");
   const transformsDir = resolveOptionalContainedPath(
     transformsRootDir,
@@ -262,6 +279,7 @@ function buildActionFromMapping(
       agentId: mapping.agentId,
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
@@ -300,6 +318,7 @@ function mergeAction(
     name: override.name ?? baseAgent?.name,
     agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
+    sessionKeySource: resolveMergedSessionKeySource(baseAgent, override),
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
@@ -326,15 +345,52 @@ function validateAction(action: HookAction): HookMappingResult {
   return { ok: true, action };
 }
 
+function getSessionKeyTemplateSource(
+  sessionKeyTemplate: string | undefined,
+): HookSessionKeyTemplateSource | undefined {
+  const normalizedTemplate = normalizeOptionalString(sessionKeyTemplate);
+  if (!normalizedTemplate) {
+    return undefined;
+  }
+  return hasHookTemplateExpressions(normalizedTemplate) ? "templated" : "static";
+}
+
+function resolveMergedSessionKeySource(
+  baseAgent: Extract<HookAction, { kind: "agent" }> | undefined,
+  override: Exclude<HookTransformResult, null>,
+): HookSessionKeyTemplateSource | undefined {
+  if (typeof override.sessionKey === "string") {
+    const normalizedSessionKey = normalizeOptionalString(override.sessionKey);
+    if (!normalizedSessionKey) {
+      // Empty transform overrides behave like an absent sessionKey and fall
+      // through to the default/generated key path later in hook dispatch.
+      return undefined;
+    }
+    return override.sessionKeySource === "static" ? "static" : "templated";
+  }
+  return baseAgent?.sessionKeySource;
+}
+
+export function hasHookTemplateExpressions(template: string): boolean {
+  return /\{\{\s*[^}]+\s*\}\}/.test(template);
+}
+
 async function loadTransform(transform: HookMappingTransformResolved): Promise<HookTransformFn> {
   const cacheKey = `${transform.modulePath}::${transform.exportName ?? "default"}`;
   const cached = transformCache.get(cacheKey);
   if (cached) {
     return cached;
   }
-  const mod = await importFileModule({ modulePath: transform.modulePath });
+  const generation = transformCacheBustVersion;
+  const mod = await importFileModule({
+    modulePath: transform.modulePath,
+    cacheBust: true,
+    nowMs: generation,
+  });
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(cacheKey, fn);
+  if (generation === transformCacheBustVersion) {
+    transformCache.set(cacheKey, fn);
+  }
   return fn;
 }
 

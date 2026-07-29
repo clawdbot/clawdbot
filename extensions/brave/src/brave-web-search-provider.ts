@@ -1,138 +1,98 @@
+/**
+ * Brave web-search provider factory. It builds the agent tool definition and
+ * lazy-loads HTTP execution only when a search is run.
+ */
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SearchConfigRecord,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
 import {
-  createBraveSchema,
-  mapBraveLlmContextResults,
-  normalizeBraveCountry,
-  normalizeBraveLanguageParams,
-  resolveBraveConfig,
-  resolveBraveMode,
-} from "./brave-web-search-provider.shared.js";
+  mergeScopedSearchConfig,
+  resolveProviderWebSearchPluginConfig,
+} from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildBraveWebSearchProviderBase } from "../web-search-shared.js";
 
-type ConfigInput = Parameters<
-  NonNullable<WebSearchProviderPlugin["getConfiguredCredentialValue"]>
->[0];
-type ConfigTarget = Parameters<
-  NonNullable<WebSearchProviderPlugin["setConfiguredCredentialValue"]>
->[0];
+const loadBraveWebSearchRuntime = createLazyRuntimeModule(
+  () => import("./brave-web-search-provider.runtime.js"),
+);
 
-function resolveProviderWebSearchPluginConfig(
-  config: ConfigInput,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  if (!isRecord(config)) {
-    return undefined;
-  }
-  const plugins = isRecord(config.plugins) ? config.plugins : undefined;
-  const entries = isRecord(plugins?.entries) ? plugins.entries : undefined;
-  const entry = isRecord(entries?.[pluginId]) ? entries[pluginId] : undefined;
-  const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
-  return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
-}
-
-function ensureObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
-
-function setProviderWebSearchPluginConfigValue(
-  configTarget: ConfigTarget,
-  pluginId: string,
-  key: string,
-  value: unknown,
-): void {
-  const plugins = ensureObject(configTarget as Record<string, unknown>, "plugins");
-  const entries = ensureObject(plugins, "entries");
-  const entry = ensureObject(entries, pluginId);
-  if (entry.enabled === undefined) {
-    entry.enabled = true;
-  }
-  const config = ensureObject(entry, "config");
-  const webSearch = ensureObject(config, "webSearch");
-  webSearch[key] = value;
-}
-
-function setTopLevelCredentialValue(
-  searchConfigTarget: Record<string, unknown>,
-  value: unknown,
-): void {
-  searchConfigTarget.apiKey = value;
-}
-
-function mergeScopedSearchConfig(
-  searchConfig: Record<string, unknown> | undefined,
-  key: string,
-  pluginConfig: Record<string, unknown> | undefined,
-  options?: { mirrorApiKeyToTopLevel?: boolean },
-): Record<string, unknown> | undefined {
-  if (!pluginConfig) {
-    return searchConfig;
-  }
-
-  const currentScoped = isRecord(searchConfig?.[key]) ? searchConfig?.[key] : {};
-  const next: Record<string, unknown> = {
-    ...searchConfig,
-    [key]: {
-      ...currentScoped,
-      ...pluginConfig,
+const BraveSearchSchema = {
+  type: "object",
+  properties: {
+    query: { type: "string", description: "Search query string." },
+    count: {
+      type: "integer",
+      description: "Number of results to return (1-10).",
+      minimum: 1,
+      maximum: 10,
     },
-  };
+    country: {
+      type: "string",
+      description:
+        "2-letter country code for region-specific results (e.g., 'DE', 'US', 'ALL'). Default: 'US'.",
+    },
+    language: {
+      type: "string",
+      description: "ISO 639-1 language code for results (e.g., 'en', 'de', 'fr').",
+    },
+    freshness: {
+      type: "string",
+      description: "Filter by time: 'day' (24h), 'week', 'month', or 'year'.",
+    },
+    date_after: {
+      type: "string",
+      description: "Only results published after this date (YYYY-MM-DD).",
+    },
+    date_before: {
+      type: "string",
+      description: "Only results published before this date (YYYY-MM-DD).",
+    },
+    search_lang: {
+      type: "string",
+      description:
+        "Brave language code for search results (e.g., 'en', 'de', 'en-gb', 'zh-hans', 'zh-hant', 'pt-br').",
+    },
+    ui_lang: {
+      type: "string",
+      description:
+        "Locale code for UI elements in language-region format (e.g., 'en-US', 'de-DE', 'fr-FR', 'tr-TR'). Must include region subtag.",
+    },
+  },
+} satisfies Record<string, unknown>;
 
-  if (options?.mirrorApiKeyToTopLevel && pluginConfig.apiKey !== undefined) {
-    next.apiKey = pluginConfig.apiKey;
-  }
-
-  return next;
+function resolveBraveMode(searchConfig?: Record<string, unknown>): "web" | "llm-context" {
+  const brave = isRecord(searchConfig?.brave) ? searchConfig.brave : undefined;
+  return brave?.mode === "llm-context" ? "llm-context" : "web";
 }
 
 function createBraveToolDefinition(
   searchConfig?: SearchConfigRecord,
+  config?: Parameters<typeof isDiagnosticFlagEnabled>[1],
 ): WebSearchProviderToolDefinition {
-  const braveMode = resolveBraveMode(resolveBraveConfig(searchConfig));
+  const braveMode = resolveBraveMode(searchConfig);
+  const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
 
   return {
     description:
       braveMode === "llm-context"
         ? "Search the web using Brave Search LLM Context API. Returns pre-extracted page content (text chunks, tables, code blocks) optimized for LLM grounding."
         : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.",
-    parameters: createBraveSchema(),
+    parameters: BraveSearchSchema,
     execute: async (args) => {
-      const { executeBraveSearch } = await import("./brave-web-search-provider.runtime.js");
-      return await executeBraveSearch(args, searchConfig);
+      const { executeBraveSearch } = await loadBraveWebSearchRuntime();
+      return await executeBraveSearch(args, searchConfig, { diagnosticsEnabled });
     },
   };
 }
 
+/** Create the runtime Brave Search provider descriptor. */
 export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "brave",
-    label: "Brave Search",
-    hint: "Structured results · country/language/time filters",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "Brave Search API key",
-    envVars: ["BRAVE_API_KEY"],
-    placeholder: "BSA...",
-    signupUrl: "https://brave.com/search/api/",
-    docsUrl: "https://docs.openclaw.ai/brave-search",
-    autoDetectOrder: 10,
-    credentialPath: "plugins.entries.brave.config.webSearch.apiKey",
-    inactiveSecretPaths: ["plugins.entries.brave.config.webSearch.apiKey"],
-    getCredentialValue: (searchConfig) => searchConfig?.apiKey,
-    setCredentialValue: setTopLevelCredentialValue,
-    getConfiguredCredentialValue: (config) =>
-      resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey,
-    setConfiguredCredentialValue: (configTarget, value) => {
-      setProviderWebSearchPluginConfigValue(configTarget, "brave", "apiKey", value);
-    },
+    ...buildBraveWebSearchProviderBase(),
     createTool: (ctx) =>
       createBraveToolDefinition(
         mergeScopedSearchConfig(
@@ -141,13 +101,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
           resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
           { mirrorApiKeyToTopLevel: true },
         ),
+        ctx.config,
       ),
   };
 }
-
-export const __testing = {
-  normalizeBraveCountry,
-  normalizeBraveLanguageParams,
-  resolveBraveMode,
-  mapBraveLlmContextResults,
-} as const;

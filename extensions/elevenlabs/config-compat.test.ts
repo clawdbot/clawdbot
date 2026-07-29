@@ -1,3 +1,4 @@
+// Elevenlabs tests cover config compat plugin behavior.
 import type fs from "node:fs";
 import type os from "node:os";
 import type path from "node:path";

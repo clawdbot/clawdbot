@@ -1,49 +1,30 @@
+/**
+ * Runtime-only owner display secret retention for config IO.
+ * Generated secrets stay in memory by config path and are never written back into config files.
+ */
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-export type OwnerDisplaySecretPersistState = {
+/** Runtime-only owner display secrets keyed by config path during config IO. */
+type OwnerDisplaySecretRuntimeState = {
   pendingByPath: Map<string, string>;
-  persistInFlight: Set<string>;
-  persistWarned: Set<string>;
 };
 
-export function persistGeneratedOwnerDisplaySecret(params: {
+/** Retains generated owner display secrets in memory without persisting them into config. */
+export function retainGeneratedOwnerDisplaySecret(params: {
   config: OpenClawConfig;
   configPath: string;
   generatedSecret?: string;
-  logger: Pick<typeof console, "warn">;
-  state: OwnerDisplaySecretPersistState;
-  persistConfig: (
-    config: OpenClawConfig,
-    options: { expectedConfigPath: string },
-  ) => Promise<unknown>;
+  state: OwnerDisplaySecretRuntimeState;
 }): OpenClawConfig {
-  const { config, configPath, generatedSecret, logger, state, persistConfig } = params;
+  const { config, configPath, generatedSecret, state } = params;
   if (!generatedSecret) {
+    // Clear stale pending secrets once the config load no longer generated one for this path.
     state.pendingByPath.delete(configPath);
-    state.persistWarned.delete(configPath);
     return config;
   }
 
+  // Keep the generated secret available to runtime callers while preserving config object identity
+  // and avoiding a write of the secret back to disk.
   state.pendingByPath.set(configPath, generatedSecret);
-  if (!state.persistInFlight.has(configPath)) {
-    state.persistInFlight.add(configPath);
-    void persistConfig(config, { expectedConfigPath: configPath })
-      .then(() => {
-        state.pendingByPath.delete(configPath);
-        state.persistWarned.delete(configPath);
-      })
-      .catch((err) => {
-        if (!state.persistWarned.has(configPath)) {
-          state.persistWarned.add(configPath);
-          logger.warn(
-            `Failed to persist auto-generated commands.ownerDisplaySecret at ${configPath}: ${String(err)}`,
-          );
-        }
-      })
-      .finally(() => {
-        state.persistInFlight.delete(configPath);
-      });
-  }
-
   return config;
 }

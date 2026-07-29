@@ -1,10 +1,13 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord plugin module implements exec approvals behavior.
+import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordExecApprovalConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import {
   getExecApprovalReplyMetadata,
   isChannelExecApprovalClientEnabledFromConfig,
+  matchesApprovalRequestFilters,
   resolveApprovalApprovers,
 } from "./approval-runtime.js";
 import { parseDiscordTarget } from "./target-parsing.js";
@@ -87,9 +90,22 @@ export function shouldSuppressLocalDiscordExecApprovalPrompt(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
   payload: ReplyPayload;
+  hint?: ChannelOutboundPayloadHint;
 }): boolean {
+  const metadata = getExecApprovalReplyMetadata(params.payload);
+  const config = resolveDiscordAccount(params).config.execApprovals;
   return (
+    params.hint?.kind === "approval-pending" &&
+    params.hint.nativeRouteActive === true &&
     isDiscordExecApprovalClientEnabled(params) &&
-    getExecApprovalReplyMetadata(params.payload) !== null
+    metadata !== null &&
+    matchesApprovalRequestFilters({
+      request: {
+        agentId: metadata.agentId,
+        sessionKey: metadata.sessionKey,
+      },
+      agentFilter: config?.agentFilter,
+      sessionFilter: config?.sessionFilter,
+    })
   );
 }

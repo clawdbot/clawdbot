@@ -1,6 +1,10 @@
+/**
+ * Test helper for reserving a loopback port for Browser control server tests.
+ */
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
+/** Returns an available 127.0.0.1 TCP port. */
 export async function getFreePort(): Promise<number> {
   while (true) {
     const port = await new Promise<number>((resolve, reject) => {

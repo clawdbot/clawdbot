@@ -1,3 +1,4 @@
+// Refreshes the checked-in CLI startup benchmark fixture.
 import { spawnSync } from "node:child_process";
 import { parseFlagArgs, stringFlag, intFlag } from "./lib/arg-utils.mjs";
 
@@ -64,7 +65,7 @@ const args = [
   opts.out,
 ];
 
-const run = spawnSync("node", args, {
+const run = spawnSync(process.execPath, args, {
   cwd: process.cwd(),
   stdio: "inherit",
   env: process.env,

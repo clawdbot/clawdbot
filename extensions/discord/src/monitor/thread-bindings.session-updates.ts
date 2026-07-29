@@ -1,3 +1,4 @@
+// Discord plugin module implements thread bindings.session updates behavior.
 import {
   normalizeNonNegativeMs,
   resolveBindingIdsForTargetSession,

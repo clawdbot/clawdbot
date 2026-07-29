@@ -1,8 +1,9 @@
+// Reports which unit tests qualify for the unit-fast routing lane.
 import {
   collectBroadUnitFastTestCandidates,
   collectUnitFastTestFileAnalysis,
   collectUnitFastTestCandidates,
-  unitFastTestFiles,
+  getUnitFastTestFiles,
 } from "../test/vitest/vitest.unit-fast-paths.mjs";
 
 const args = new Set(process.argv.slice(2));
@@ -16,6 +17,7 @@ const candidateCount =
   scope === "broad"
     ? collectBroadUnitFastTestCandidates(process.cwd()).length
     : collectUnitFastTestCandidates(process.cwd()).length;
+const unitFastTestFiles = getUnitFastTestFiles();
 const unitFastCount = analysis.filter((entry) => entry.unitFast).length;
 
 for (const entry of rejected) {

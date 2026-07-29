@@ -1,8 +1,11 @@
+// Run Vitest Profile tests cover run vitest profile script behavior.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildVitestProfileSpawnSpec,
   buildVitestProfileCommand,
+  buildVitestProfileCommandWithArgs,
   parseArgs,
   resolveVitestProfileDir,
 } from "../../scripts/run-vitest-profile.mjs";
@@ -58,10 +61,64 @@ describe("scripts/run-vitest-profile", () => {
     );
   });
 
+  it("uses the Windows-safe pnpm fallback for runner profiling", () => {
+    const spawnSpec = buildVitestProfileSpawnSpec(
+      {
+        command: "pnpm",
+        args: ["vitest", "run"],
+      },
+      {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        npmExecPath: "",
+        platform: "win32",
+      },
+    );
+
+    expect(spawnSpec.options.shell).toBe(false);
+    expect(spawnSpec.command).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(spawnSpec.options.windowsVerbatimArguments).toBe(true);
+    expect(spawnSpec.args).toEqual(["/d", "/s", "/c", "pnpm.cmd vitest run"]);
+  });
+
   it("parses mode and explicit output dir", () => {
     expect(parseArgs(["runner", "--output-dir", "/tmp/out"])).toEqual({
       mode: "runner",
       outputDir: "/tmp/out",
+      vitestArgs: [],
+    });
+  });
+
+  it("rejects missing profile output directories", () => {
+    expect(() => parseArgs(["runner", "--output-dir"])).toThrow("Expected --output-dir <dir>.");
+    expect(() => parseArgs(["runner", "--output-dir", "-h"])).toThrow(
+      "Expected --output-dir <dir>.",
+    );
+    expect(() => parseArgs(["runner", "--output-dir", "--", "--config", "custom.ts"])).toThrow(
+      "Expected --output-dir <dir>.",
+    );
+  });
+
+  it("passes vitest args after a separator", () => {
+    expect(parseArgs(["main", "--output-dir", "/tmp/out", "--", "--config", "custom.ts"])).toEqual({
+      mode: "main",
+      outputDir: "/tmp/out",
+      vitestArgs: ["--config", "custom.ts"],
+    });
+    expect(
+      buildVitestProfileCommandWithArgs({
+        mode: "runner",
+        outputDir: "/tmp/profile-runner",
+        vitestArgs: ["src/example.test.ts"],
+      }).args,
+    ).toContain("src/example.test.ts");
+  });
+
+  it("allows a package-script separator before script flags", () => {
+    expect(parseArgs(["main", "--", "--output-dir", "/tmp/out"])).toEqual({
+      mode: "main",
+      outputDir: "/tmp/out",
+      vitestArgs: [],
     });
   });
 });

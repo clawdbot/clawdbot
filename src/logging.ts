@@ -1,3 +1,4 @@
+// Public logging facade for console logger settings and styling.
 import type { ConsoleLoggerSettings, ConsoleStyle } from "./logging/console.js";
 import {
   enableConsoleCapture,
@@ -20,6 +21,7 @@ import {
   getResolvedLoggerSettings,
   isFileLogLevelEnabled,
   resetLogger,
+  setLoggerConfigLoaderForTests,
   setLoggerOverride,
   toPinoLikeLogger,
 } from "./logging/logger.js";
@@ -50,6 +52,7 @@ export {
   getResolvedLoggerSettings,
   isFileLogLevelEnabled,
   resetLogger,
+  setLoggerConfigLoaderForTests,
   setLoggerOverride,
   toPinoLikeLogger,
   createSubsystemLogger,

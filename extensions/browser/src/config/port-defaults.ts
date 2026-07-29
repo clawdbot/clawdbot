@@ -1,5 +1,8 @@
+/**
+ * Browser port default helpers re-exported from the SDK config bridge.
+ */
 export {
   DEFAULT_BROWSER_CONTROL_PORT,
   deriveDefaultBrowserCdpPortRange,
   deriveDefaultBrowserControlPort,
-} from "openclaw/plugin-sdk/browser-config-support";
+} from "../sdk-config.js";

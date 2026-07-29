@@ -30,6 +30,8 @@ public final class GatewayDiscoveryModel {
         public var tailnetDns: String?
         public var sshPort: Int
         public var gatewayPort: Int?
+        public var gatewayTls: Bool
+        public var gatewayDirectReachable: Bool
         public var cliPath: String?
         public var stableID: String
         public var debugID: String
@@ -43,6 +45,8 @@ public final class GatewayDiscoveryModel {
             tailnetDns: String? = nil,
             sshPort: Int,
             gatewayPort: Int? = nil,
+            gatewayTls: Bool = false,
+            gatewayDirectReachable: Bool = false,
             cliPath: String? = nil,
             stableID: String,
             debugID: String,
@@ -55,6 +59,8 @@ public final class GatewayDiscoveryModel {
             self.tailnetDns = tailnetDns
             self.sshPort = sshPort
             self.gatewayPort = gatewayPort
+            self.gatewayTls = gatewayTls
+            self.gatewayDirectReachable = gatewayDirectReachable
             self.cliPath = cliPath
             self.stableID = stableID
             self.debugID = debugID
@@ -63,7 +69,7 @@ public final class GatewayDiscoveryModel {
     }
 
     public var gateways: [DiscoveredGateway] = []
-    public var statusText: String = "Idle"
+    public var statusText: String = GatewayDiscoveryStatusText.idle
 
     private var browsers: [String: NWBrowser] = [:]
     private var resultsByDomain: [String: Set<NWBrowser.Result>] = [:]
@@ -120,7 +126,7 @@ public final class GatewayDiscoveryModel {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
+            let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
@@ -164,7 +170,7 @@ public final class GatewayDiscoveryModel {
         self.tailscaleServeFallbackTask = nil
         self.tailscaleServeFallbackGateways = []
         self.gateways = []
-        self.statusText = "Stopped"
+        self.statusText = GatewayDiscoveryStatusText.stopped
     }
 
     private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
@@ -184,6 +190,8 @@ public final class GatewayDiscoveryModel {
                 tailnetDns: beacon.tailnetDns,
                 sshPort: beacon.sshPort ?? 22,
                 gatewayPort: beacon.gatewayPort,
+                gatewayTls: beacon.gatewayTls,
+                gatewayDirectReachable: beacon.gatewayDirectReachable,
                 cliPath: beacon.cliPath,
                 stableID: stableID,
                 debugID: "\(beacon.instanceName)@\(beacon.host):\(beacon.port)",
@@ -210,6 +218,8 @@ public final class GatewayDiscoveryModel {
                 tailnetDns: beacon.tailnetDns,
                 sshPort: 22,
                 gatewayPort: beacon.port,
+                gatewayTls: true,
+                gatewayDirectReachable: true,
                 cliPath: nil,
                 stableID: stableID,
                 debugID: "\(beacon.host):\(beacon.port)",
@@ -282,6 +292,8 @@ public final class GatewayDiscoveryModel {
                 tailnetDns: parsedTXT.tailnetDns,
                 sshPort: parsedTXT.sshPort,
                 gatewayPort: parsedTXT.gatewayPort,
+                gatewayTls: parsedTXT.gatewayTls,
+                gatewayDirectReachable: parsedTXT.gatewayDirectReachable,
                 cliPath: parsedTXT.cliPath,
                 stableID: stableID,
                 debugID: GatewayEndpointID.prettyDescription(result.endpoint),
@@ -313,7 +325,7 @@ public final class GatewayDiscoveryModel {
 
                 // Wide-area discovery can be racy (Tailscale not yet up, DNS zone not
                 // published yet). Retry with a short backoff while onboarding is open.
-                let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
+                let beacons = await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0)
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
                         guard let self else { return }
@@ -445,6 +457,8 @@ public final class GatewayDiscoveryModel {
         public var tailnetDns: String?
         public var sshPort: Int
         public var gatewayPort: Int?
+        public var gatewayTls: Bool
+        public var gatewayDirectReachable: Bool
         public var cliPath: String?
     }
 
@@ -453,6 +467,8 @@ public final class GatewayDiscoveryModel {
         var tailnetDns: String?
         var sshPort = 22
         var gatewayPort: Int?
+        var gatewayTls = false
+        var gatewayDirectReachable = false
         var cliPath: String?
 
         if let value = txt["lanHost"] {
@@ -475,6 +491,14 @@ public final class GatewayDiscoveryModel {
         {
             gatewayPort = parsed
         }
+        if let value = txt["gatewayTls"] {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            gatewayTls = normalized == "1" || normalized == "true" || normalized == "yes"
+        }
+        if let value = txt["gatewayDirectReachable"] {
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            gatewayDirectReachable = normalized == "1" || normalized == "true" || normalized == "yes"
+        }
         if let value = txt["cliPath"] {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             cliPath = trimmed.isEmpty ? nil : trimmed
@@ -485,6 +509,8 @@ public final class GatewayDiscoveryModel {
             tailnetDns: tailnetDns,
             sshPort: sshPort,
             gatewayPort: gatewayPort,
+            gatewayTls: gatewayTls,
+            gatewayDirectReachable: gatewayDirectReachable,
             cliPath: cliPath)
     }
 

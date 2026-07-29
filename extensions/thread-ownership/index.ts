@@ -1,11 +1,17 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+// Thread Ownership plugin entrypoint registers its OpenClaw integration.
+import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   definePluginEntry,
   fetchWithSsrFGuard,
+  readProviderJsonResponse,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
   type OpenClawConfig,
   type OpenClawPluginApi,
 } from "./api.js";
+
+const THREAD_OWNERSHIP_CONFLICT_BODY_LIMIT_BYTES = 64 * 1024;
 
 type ThreadOwnershipConfig = {
   forwarderUrl?: string;
@@ -20,6 +26,25 @@ type ThreadOwnershipMessageSendingResult = { cancel: true } | undefined;
 const mentionedThreads = new Map<string, number>();
 const MENTION_TTL_MS = 5 * 60 * 1000;
 
+function isThreadOwnershipConfig(value: unknown): value is ThreadOwnershipConfig {
+  return value !== null && typeof value === "object";
+}
+
+function resolveThreadToken(value: unknown): string {
+  return typeof value === "string" || typeof value === "number" ? String(value) : "";
+}
+
+function resolveSlackConversationId(value: unknown): string {
+  const raw = normalizeOptionalString(value) ?? "";
+  if (!raw) {
+    return "";
+  }
+  const trimmed = raw.trim();
+  const match = /^(?:slack:)?channel:(.+)$/i.exec(trimmed);
+  const resolved = match?.[1]?.trim() || trimmed;
+  return /^[CDGUW][A-Z0-9]+$/i.test(resolved) ? resolved.toUpperCase() : resolved;
+}
+
 function cleanExpiredMentions(): void {
   const now = Date.now();
   for (const [key, ts] of mentionedThreads) {
@@ -27,6 +52,14 @@ function cleanExpiredMentions(): void {
       mentionedThreads.delete(key);
     }
   }
+}
+
+function containsAgentNameMention(text: string, agentName: string): boolean {
+  const trimmedName = agentName.trim();
+  if (!trimmedName) {
+    return false;
+  }
+  return new RegExp(`(^|[^\\w])@${escapeRegExp(trimmedName)}(?=$|[^\\w])`, "i").test(text);
 }
 
 function resolveOwnershipAgent(config: OpenClawConfig): { id: string; name: string } {
@@ -50,36 +83,60 @@ export default definePluginEntry({
   name: "Thread Ownership",
   description: "Slack thread claim coordination for multi-agent setups",
   register(api: OpenClawPluginApi) {
-    const pluginCfg = (api.pluginConfig ?? {}) as ThreadOwnershipConfig;
-    const forwarderUrl = (
-      pluginCfg.forwarderUrl ??
-      process.env.SLACK_FORWARDER_URL ??
-      "http://slack-forwarder:8750"
-    ).replace(/\/$/, "");
-
-    const abTestChannels = new Set(
-      pluginCfg.abTestChannels ??
-        process.env.THREAD_OWNERSHIP_CHANNELS?.split(",").filter(Boolean) ??
-        [],
-    );
-
-    const { id: agentId, name: agentName } = resolveOwnershipAgent(api.config);
-    const botUserId = process.env.SLACK_BOT_USER_ID ?? "";
+    const resolveCurrentState = () => {
+      const currentConfig = (api.runtime.config?.current?.() ?? api.config) as OpenClawConfig;
+      const livePluginCfg = resolveLivePluginConfigObject(
+        api.runtime.config?.current
+          ? () => api.runtime.config.current() as OpenClawConfig
+          : undefined,
+        "thread-ownership",
+        isThreadOwnershipConfig(api.pluginConfig)
+          ? (api.pluginConfig as Record<string, unknown>)
+          : undefined,
+      );
+      const pluginCfg = isThreadOwnershipConfig(livePluginCfg) ? livePluginCfg : {};
+      return {
+        currentConfig,
+        forwarderUrl: (
+          pluginCfg.forwarderUrl ??
+          normalizeOptionalString(process.env.SLACK_FORWARDER_URL) ??
+          "http://slack-forwarder:8750"
+        ).replace(/\/$/, ""),
+        abTestChannels: new Set(
+          (
+            pluginCfg.abTestChannels ??
+            process.env.THREAD_OWNERSHIP_CHANNELS?.split(",").filter(Boolean) ??
+            []
+          )
+            .map((entry) => resolveSlackConversationId(entry))
+            .filter(Boolean),
+        ),
+        botUserId: process.env.SLACK_BOT_USER_ID ?? "",
+        agent: resolveOwnershipAgent(currentConfig),
+      };
+    };
 
     api.on("message_received", async (event, ctx) => {
       if (ctx.channelId !== "slack") {
         return;
       }
+      const { agent, botUserId } = resolveCurrentState();
 
       const text = event.content ?? "";
-      const threadTs = (event.metadata?.threadTs as string) ?? "";
-      const channelId = (event.metadata?.channelId as string) ?? ctx.conversationId ?? "";
+      const threadTs =
+        resolveThreadToken(event.threadId) ||
+        resolveThreadToken(event.metadata?.threadId) ||
+        resolveThreadToken(event.metadata?.threadTs);
+      const channelId =
+        resolveSlackConversationId(ctx.conversationId) ||
+        resolveSlackConversationId(event.metadata?.channelId) ||
+        "";
       if (!threadTs || !channelId) {
         return;
       }
 
       const mentioned =
-        (agentName && text.includes(`@${agentName}`)) ||
+        containsAgentNameMention(text, agent.name) ||
         (botUserId && text.includes(`<@${botUserId}>`));
       if (mentioned) {
         cleanExpiredMentions();
@@ -91,10 +148,19 @@ export default definePluginEntry({
       if (ctx.channelId !== "slack") {
         return undefined;
       }
+      const { abTestChannels, agent, forwarderUrl } = resolveCurrentState();
 
-      const threadTs = (event.metadata?.threadTs as string) ?? "";
-      const channelId = (event.metadata?.channelId as string) ?? event.to;
-      if (!threadTs) {
+      const threadTs =
+        resolveThreadToken(event.replyToId) ||
+        resolveThreadToken(event.threadId) ||
+        resolveThreadToken(event.metadata?.threadId) ||
+        resolveThreadToken(event.metadata?.threadTs);
+      const channelId =
+        resolveSlackConversationId(ctx.conversationId) ||
+        resolveSlackConversationId(event.metadata?.channelId) ||
+        resolveSlackConversationId(event.to) ||
+        "";
+      if (!threadTs || !channelId) {
         return undefined;
       }
       if (abTestChannels.size > 0 && !abTestChannels.has(channelId)) {
@@ -114,7 +180,7 @@ export default definePluginEntry({
           init: {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent_id: agentId }),
+            body: JSON.stringify({ agent_id: agent.id }),
           },
           timeoutMs: 3000,
           policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
@@ -126,14 +192,34 @@ export default definePluginEntry({
             return undefined;
           }
           if (resp.status === 409) {
-            const body = (await resp.json()) as { owner?: string };
+            let owner = "unknown";
+            try {
+              const body = await readProviderJsonResponse<{ owner?: unknown }>(
+                resp,
+                "thread-ownership forwarder conflict",
+                { maxBytes: THREAD_OWNERSHIP_CONFLICT_BODY_LIMIT_BYTES },
+              );
+              if (typeof body.owner === "string" && body.owner) {
+                owner = body.owner;
+              }
+            } catch (error) {
+              // A 409 is authoritative even when its body is malformed or oversized.
+              api.logger.warn?.(
+                `thread-ownership: conflict body unreadable (${String(error)}), cancelling send`,
+              );
+            }
             api.logger.info?.(
-              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${body.owner}`,
+              `thread-ownership: cancelled send to ${channelId}:${threadTs} — owned by ${owner}`,
             );
             return { cancel: true };
           }
           api.logger.warn?.(`thread-ownership: unexpected status ${resp.status}, allowing send`);
         } finally {
+          // 200 / unexpected statuses leave the body unread; 409 may already have
+          // consumed it via readProviderJsonResponse. release() does not cancel streams.
+          if (!resp.bodyUsed) {
+            await resp.body?.cancel().catch(() => undefined);
+          }
           await release();
         }
       } catch (err) {

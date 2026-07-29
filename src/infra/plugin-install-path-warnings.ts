@@ -1,9 +1,10 @@
+// Detects and formats plugin install path warnings.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-export type PluginInstallPathIssue = {
+type PluginInstallPathIssue = {
   kind: "custom-path" | "missing-path";
   pluginId: string;
   path: string;

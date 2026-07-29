@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export { getActiveWebListener } from "./src/active-listener.js";
 export {
   getWebAuthAgeMs,
@@ -5,6 +6,7 @@ export {
   logoutWeb,
   pickWebChannel,
   readWebSelfId,
+  resolveDefaultWebAuthDir,
   WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./src/auth-store.js";

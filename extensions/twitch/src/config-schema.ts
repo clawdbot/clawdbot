@@ -1,15 +1,13 @@
-import { MarkdownConfigSchema } from "openclaw/plugin-sdk/channel-config-primitives";
-import { z } from "openclaw/plugin-sdk/zod";
+// Twitch helper module supports config schema behavior.
+import { MarkdownConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
+import { z } from "zod";
 
 /**
  * Twitch user roles that can be allowed to interact with the bot
  */
 const TwitchRoleSchema = z.enum(["moderator", "owner", "vip", "subscriber", "all"]);
 
-/**
- * Twitch account configuration schema
- */
-const TwitchAccountSchema = z.object({
+const TwitchAccountShape = {
   /** Twitch username */
   username: z.string(),
   /** Twitch OAuth access token (requires chat:read and chat:write scopes) */
@@ -36,16 +34,22 @@ const TwitchAccountSchema = z.object({
   expiresIn: z.number().nullable().optional(),
   /** Timestamp when token was obtained (optional, for token refresh tracking) */
   obtainmentTimestamp: z.number().optional(),
-});
+};
+
+/**
+ * Twitch account configuration schema
+ */
+const TwitchAccountSchema = z.object(TwitchAccountShape);
 
 /**
  * Base configuration properties shared by both single and multi-account modes
  */
-const TwitchConfigBaseSchema = z.object({
+const TwitchConfigBaseShape = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   markdown: MarkdownConfigSchema.optional(),
-});
+  defaultAccount: z.string().optional(),
+};
 
 /**
  * Simplified single-account configuration schema
@@ -53,24 +57,25 @@ const TwitchConfigBaseSchema = z.object({
  * Use this for single-account setups. Properties are at the top level,
  * creating an implicit "default" account.
  */
-const SimplifiedSchema = z.intersection(TwitchConfigBaseSchema, TwitchAccountSchema);
+const SimplifiedSchema = z.object({
+  ...TwitchConfigBaseShape,
+  ...TwitchAccountShape,
+});
 
 /**
  * Multi-account configuration schema
  *
  * Use this for multi-account setups. Each key is an account ID (e.g., "default", "secondary").
  */
-const MultiAccountSchema = z.intersection(
-  TwitchConfigBaseSchema,
-  z
-    .object({
-      /** Per-account configuration (for multi-account setups) */
-      accounts: z.record(z.string(), TwitchAccountSchema),
-    })
-    .refine((val) => Object.keys(val.accounts || {}).length > 0, {
-      message: "accounts must contain at least one entry",
-    }),
-);
+const MultiAccountSchema = z
+  .object({
+    ...TwitchConfigBaseShape,
+    /** Per-account configuration (for multi-account setups) */
+    accounts: z.record(z.string(), TwitchAccountSchema),
+  })
+  .refine((val) => Object.keys(val.accounts || {}).length > 0, {
+    message: "accounts must contain at least one entry",
+  });
 
 /**
  * Twitch plugin configuration schema

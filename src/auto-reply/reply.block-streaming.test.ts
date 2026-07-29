@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+/** Tests block streaming behavior for auto-reply output delivery. */
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
+import { withFastReplyConfig } from "./reply/get-reply-fast-path.test-support.js";
 import { loadGetReplyModuleForTest } from "./reply/get-reply.test-loader.js";
 import { createMockTypingController } from "./reply/reply.test-helpers.js";
 import type { MsgContext } from "./templating.js";
@@ -44,7 +45,7 @@ vi.mock("../channels/model-overrides.js", () => ({
   resolveChannelModelOverride: vi.fn(() => undefined),
 }));
 vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(() => ({})),
+  getRuntimeConfig: vi.fn(() => ({})),
 }));
 vi.mock("../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn(), warn: vi.fn(), info: vi.fn() },
@@ -172,8 +173,11 @@ function createContinueDirectivesResult() {
 }
 
 describe("block streaming", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadFreshGetReplyModuleForTest();
+  });
+
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();

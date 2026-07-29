@@ -1,3 +1,4 @@
+// Tests how session delivery preserves previous channel and target routing state.
 import { describe, expect, it } from "vitest";
 import { resolveLastChannelRaw, resolveLastToRaw } from "./session-delivery.js";
 
@@ -58,12 +59,11 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
       sessionKey: "agent:samantha:main",
       isInterSession: true,
     });
-    // No external route existed — falls through to normal resolution (webchat or undefined)
-    // The important thing is it does NOT throw and returns a defined or undefined value.
-    expect(result === "webchat" || result === undefined).toBe(true);
+    // No external route existed — falls through to normal resolution (webchat or undefined).
+    expect(["webchat", undefined]).toContain(result);
   });
 
-  it("inter-session on session with no persisted lastTo does not crash", () => {
+  it("inter-session on session with no persisted lastTo preserves session route", () => {
     const result = resolveLastToRaw({
       originatingChannelRaw: "webchat",
       originatingToRaw: "session:somekey",
@@ -74,7 +74,7 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
       isInterSession: true,
     });
     // No external route — falls through to normal resolution
-    expect(result === "session:somekey" || result === undefined).toBe(true);
+    expect(["session:somekey", undefined]).toContain(result);
   });
 });
 

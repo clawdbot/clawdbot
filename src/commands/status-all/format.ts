@@ -1,3 +1,7 @@
+// Shared formatting helpers for status overview, gateway summaries, and JSON payloads.
+// These functions keep text and JSON status surfaces aligned without pulling in command orchestration.
+
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
@@ -7,10 +11,9 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { formatGitInstallLabel, type UpdateCheckResult } from "../../infra/update-check.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
-export { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 
 export type StatusOverviewRow = {
@@ -57,6 +60,7 @@ type StatusManagedService = {
   } | null;
 };
 
+/** Resolves the display update channel from config, install kind, and git metadata. */
 export function resolveStatusUpdateChannelInfo(params: {
   updateConfigChannel?: string | null;
   update: {
@@ -69,12 +73,14 @@ export function resolveStatusUpdateChannelInfo(params: {
 }) {
   return resolveUpdateChannelDisplay({
     configChannel: normalizeUpdateChannel(params.updateConfigChannel),
+    currentVersion: VERSION,
     installKind: params.update.installKind ?? "unknown",
     gitTag: params.update.git?.tag ?? null,
     gitBranch: params.update.git?.branch ?? null,
   });
 }
 
+/** Builds the update row fields reused by the overview table and status-all report. */
 export function buildStatusUpdateSurface(params: {
   updateConfigChannel?: string | null;
   update: StatusUpdateLike;
@@ -92,11 +98,13 @@ export function buildStatusUpdateSurface(params: {
   };
 }
 
+/** Formats missing dashboard URLs as disabled instead of leaking empty/null into status rows. */
 export function formatStatusDashboardValue(value: string | null | undefined): string {
   const trimmed = normalizeOptionalString(value);
   return trimmed && trimmed.length > 0 ? trimmed : "disabled";
 }
 
+/** Formats Tailscale exposure in a compact, warning-aware status row value. */
 export function formatStatusTailscaleValue(params: {
   tailscaleMode: string;
   dnsName?: string | null;
@@ -111,8 +119,11 @@ export function formatStatusTailscaleValue(params: {
   const decorateOff = params.decorateOff ?? ((value: string) => value);
   const decorateWarn = params.decorateWarn ?? ((value: string) => value);
   if (params.tailscaleMode === "off") {
+    // Off mode can still show daemon/DNS context when the caller wants diagnostic detail.
     const suffix = [
-      params.includeBackendStateWhenOff && params.backendState ? params.backendState : null,
+      params.includeBackendStateWhenOff && params.backendState
+        ? `daemon ${params.backendState}`
+        : null,
       params.includeDnsNameWhenOff && params.dnsName ? params.dnsName : null,
     ]
       .filter(Boolean)
@@ -136,6 +147,7 @@ export function formatStatusTailscaleValue(params: {
   return decorateWarn(parts.join(" · "));
 }
 
+/** Formats launchd/systemd service state into one row-friendly string. */
 export function formatStatusServiceValue(params: {
   label: string;
   installed: boolean;
@@ -158,6 +170,7 @@ export function formatStatusServiceValue(params: {
   return `${params.label} ${installedPrefix}${params.loadedText}${runtimeSuffix}`;
 }
 
+/** Returns the dashboard URL when the Control UI is enabled for the current gateway binding. */
 export function resolveStatusDashboardUrl(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
 }): string | null {
@@ -169,9 +182,11 @@ export function resolveStatusDashboardUrl(params: {
     bind: params.cfg.gateway?.bind,
     customBindHost: params.cfg.gateway?.customBindHost,
     basePath: params.cfg.gateway?.controlUi?.basePath,
+    tlsEnabled: params.cfg.gateway?.tls?.enabled === true,
   }).httpUrl;
 }
 
+/** Builds the ordered overview rows shared by status command variants. */
 export function buildStatusOverviewRows(params: {
   prefixRows?: StatusOverviewRow[];
   dashboardValue: string;
@@ -191,7 +206,7 @@ export function buildStatusOverviewRows(params: {
   const rows: StatusOverviewRow[] = [...(params.prefixRows ?? [])];
   rows.push(
     { Item: "Dashboard", Value: params.dashboardValue },
-    { Item: "Tailscale", Value: params.tailscaleValue },
+    { Item: "Tailscale exposure", Value: params.tailscaleValue },
     { Item: "Channel", Value: params.channelLabel },
   );
   if (params.gitLabel) {
@@ -220,12 +235,14 @@ export function buildStatusOverviewRows(params: {
   return rows;
 }
 
+/** Builds overview rows directly from raw scan/update/gateway inputs. */
 export function buildStatusOverviewSurfaceRows(params: {
   cfg: Pick<OpenClawConfig, "update" | "gateway">;
   update: StatusUpdateLike;
   tailscaleMode: string;
   tailscaleDns?: string | null;
   tailscaleHttpsUrl?: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   tailscaleBackendState?: string | null;
   includeBackendStateWhenOff?: boolean;
   includeBackendStateWhenOn?: boolean;
@@ -262,6 +279,9 @@ export function buildStatusOverviewSurfaceRows(params: {
   const { dashboardUrl, gatewayValue, gatewaySelfValue, gatewayServiceValue, nodeServiceValue } =
     buildStatusGatewaySurfaceValues({
       cfg: params.cfg,
+      ...(params.advertisedControlUiLinks
+        ? { advertisedControlUiLinks: params.advertisedControlUiLinks }
+        : {}),
       gatewayMode: params.gatewayMode,
       remoteUrlMissing: params.remoteUrlMissing,
       gatewayConnection: params.gatewayConnection,
@@ -306,6 +326,7 @@ export function buildStatusOverviewSurfaceRows(params: {
   });
 }
 
+/** Returns which gateway auth material was actually used for the probe. */
 export function formatGatewayAuthUsed(
   auth: {
     token?: string;
@@ -326,6 +347,7 @@ export function formatGatewayAuthUsed(
   return "none";
 }
 
+/** Formats gateway self metadata returned by the health endpoint. */
 export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null {
   return gatewaySelf?.host || gatewaySelf?.ip || gatewaySelf?.version || gatewaySelf?.platform
     ? [
@@ -339,6 +361,7 @@ export function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string
     : null;
 }
 
+/** Builds gateway target, reachability, auth, and mode strings for text status output. */
 export function buildGatewayStatusSummaryParts(params: {
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
@@ -379,8 +402,10 @@ export function buildGatewayStatusSummaryParts(params: {
   };
 }
 
+/** Builds gateway/dashboard/service values for overview rows. */
 export function buildStatusGatewaySurfaceValues(params: {
   cfg: Pick<OpenClawConfig, "gateway">;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
   gatewayConnection: StatusGatewayConnection;
@@ -424,7 +449,8 @@ export function buildStatusGatewaySurfaceValues(params: {
         : ""
     }${gatewaySelfValue ? ` · ${gatewaySelfValue}` : ""}`;
   return {
-    dashboardUrl: resolveStatusDashboardUrl({ cfg: params.cfg }),
+    dashboardUrl:
+      params.advertisedControlUiLinks?.httpUrl ?? resolveStatusDashboardUrl({ cfg: params.cfg }),
     gatewayValue,
     gatewaySelfValue,
     gatewayServiceValue: formatStatusServiceValue({
@@ -448,6 +474,7 @@ export function buildStatusGatewaySurfaceValues(params: {
   };
 }
 
+/** Builds the stable gateway object used by `openclaw status --json`. */
 export function buildGatewayStatusJsonPayload(params: {
   gatewayMode: "local" | "remote";
   gatewayConnection: {
@@ -460,6 +487,7 @@ export function buildGatewayStatusJsonPayload(params: {
     | {
         connectLatencyMs?: number | null;
         error?: string | null;
+        health?: unknown;
       }
     | null
     | undefined;
@@ -487,6 +515,7 @@ export function buildGatewayStatusJsonPayload(params: {
   };
 }
 
+/** Redacts common credential shapes before text is printed in status diagnostics. */
 export function redactSecrets(text: string): string {
   if (!text) {
     return text;

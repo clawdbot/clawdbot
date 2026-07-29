@@ -1,13 +1,10 @@
+// Capability registry used to decide which shared media model entries are
+// eligible for image/audio/video understanding.
 import type { OpenClawConfig } from "../config/types.js";
 import { resolvePluginCapabilityProviders } from "../plugins/capability-provider-runtime.js";
+import { resolveImageCapableConfigProviderIds } from "./config-provider-models.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingCapabilityRegistry, MediaUnderstandingProvider } from "./types.js";
-
-type ConfigProvider = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]
->;
-
-type ConfigProviderModel = NonNullable<ConfigProvider["models"]>[number];
 
 function mergeProviderCapabilities(
   registry: MediaUnderstandingCapabilityRegistry,
@@ -20,6 +17,7 @@ function mergeProviderCapabilities(
   });
 }
 
+/** Builds provider capability metadata used to filter shared media model entries. */
 export function buildMediaUnderstandingCapabilityRegistry(
   cfg?: OpenClawConfig,
 ): MediaUnderstandingCapabilityRegistry {
@@ -32,24 +30,9 @@ export function buildMediaUnderstandingCapabilityRegistry(
     mergeProviderCapabilities(registry, provider);
   }
 
-  const configProviders = cfg?.models?.providers;
-  if (configProviders && typeof configProviders === "object") {
-    for (const [providerKey, providerCfg] of Object.entries(configProviders)) {
-      if (!providerKey?.trim()) {
-        continue;
-      }
-      const normalizedKey = normalizeMediaProviderId(providerKey);
-      if (registry.has(normalizedKey)) {
-        continue;
-      }
-      const models = providerCfg.models ?? [];
-      const hasImageModel = models.some(
-        (model: ConfigProviderModel) =>
-          Array.isArray(model?.input) && model.input.includes("image"),
-      );
-      if (!hasImageModel) {
-        continue;
-      }
+  for (const normalizedKey of resolveImageCapableConfigProviderIds(cfg)) {
+    // Plugin declarations own provider capability truth; config auto-registration only fills gaps.
+    if (!registry.has(normalizedKey)) {
       mergeProviderCapabilities(registry, {
         id: normalizedKey,
         capabilities: ["image"],

@@ -1,28 +1,8 @@
+// Mcp Channels Seed script supports OpenClaw repository automation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  applyProviderConfigWithDefaultModelPreset,
-  type ModelDefinitionConfig,
-  type OpenClawConfig,
-} from "../../src/plugin-sdk/provider-onboard.ts";
-
-const DOCKER_OPENAI_MODEL_REF = "openai/gpt-5.4";
-const DOCKER_OPENAI_MODEL: ModelDefinitionConfig = {
-  id: "gpt-5.4",
-  name: "gpt-5.4",
-  api: "openai-responses",
-  reasoning: true,
-  input: ["text", "image"],
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-  },
-  contextWindow: 1_050_000,
-  maxTokens: 128_000,
-};
+import { applyDockerOpenAiProviderConfig, type OpenClawConfig } from "./docker-openai-seed.ts";
 
 async function main() {
   const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
@@ -36,30 +16,26 @@ async function main() {
   await fs.mkdir(sessionsDir, { recursive: true });
   await fs.mkdir(path.dirname(configPath), { recursive: true });
 
-  const seededConfig = applyProviderConfigWithDefaultModelPreset(
+  const seededConfig = applyDockerOpenAiProviderConfig(
     {
       gateway: {
         controlUi: {
-          allowInsecureAuth: true,
           enabled: false,
         },
       },
+      agents: {
+        defaults: {
+          heartbeat: {
+            every: "0m",
+          },
+        },
+      },
+      plugins: {
+        enabled: false,
+      },
     } satisfies OpenClawConfig,
-    {
-      providerId: "openai",
-      api: "openai-responses",
-      baseUrl: "http://127.0.0.1:9/v1",
-      defaultModel: DOCKER_OPENAI_MODEL,
-      defaultModelId: DOCKER_OPENAI_MODEL.id,
-      aliases: [{ modelRef: DOCKER_OPENAI_MODEL_REF, alias: "GPT" }],
-      primaryModelRef: DOCKER_OPENAI_MODEL_REF,
-    },
+    "sk-docker-smoke-test",
   );
-  const openAiProvider = seededConfig.models?.providers?.openai;
-  if (!openAiProvider) {
-    throw new Error("failed to seed OpenAI provider config");
-  }
-  openAiProvider.apiKey = "sk-docker-smoke-test";
 
   await fs.writeFile(configPath, JSON.stringify(seededConfig, null, 2), "utf-8");
 
@@ -71,10 +47,12 @@ async function main() {
           sessionId: "sess-main",
           sessionFile,
           updatedAt: now,
-          lastChannel: "imessage",
-          lastTo: "+15551234567",
-          lastAccountId: "imessage-default",
-          lastThreadId: "thread-42",
+          deliveryContext: {
+            channel: "imessage",
+            to: "+15551234567",
+            accountId: "imessage-default",
+            threadId: "thread-42",
+          },
           displayName: "Docker MCP Channel Smoke",
           derivedTitle: "Docker MCP Channel Smoke",
           lastMessagePreview: "seeded transcript",

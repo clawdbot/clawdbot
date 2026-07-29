@@ -1,3 +1,4 @@
+// Vitest extension acpx config wires the extension acpx test shard.
 import { acpxExtensionTestRoots } from "./vitest.extension-acpx-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

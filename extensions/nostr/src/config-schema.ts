@@ -1,11 +1,11 @@
+// Nostr helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  buildChannelConfigSchema,
   DmPolicySchema,
   MarkdownConfigSchema,
-} from "openclaw/plugin-sdk/channel-config-primitives";
+} from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 
 /**
  * Validates https:// URLs only (no javascript:, data:, file:, etc.)
@@ -97,10 +97,3 @@ export const NostrConfigSchema = z.object({
   /** Profile metadata (NIP-01 kind:0 content) */
   profile: NostrProfileSchema.optional(),
 });
-
-export type NostrConfig = z.infer<typeof NostrConfigSchema>;
-
-/**
- * JSON Schema for Control UI (converted from Zod)
- */
-export const nostrChannelConfigSchema = buildChannelConfigSchema(NostrConfigSchema);

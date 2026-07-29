@@ -1,7 +1,9 @@
+// Http module supports OpenClaw QA credential workflows.
 import { httpRouter } from "convex/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { httpAction } from "./_generated/server";
+import { normalizeCredentialPayloadForKind } from "./payload_validation";
 
 type ActorRole = "ci" | "maintainer";
 
@@ -161,6 +163,21 @@ function optionalPositiveInteger(body: Record<string, unknown>, key: string) {
   return raw;
 }
 
+function optionalNonnegativeInteger(body: Record<string, unknown>, key: string) {
+  if (!(key in body) || body[key] === undefined || body[key] === null) {
+    return undefined;
+  }
+  const raw = body[key];
+  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw < 0) {
+    throw new BrokerHttpError(
+      400,
+      "INVALID_BODY",
+      `Expected "${key}" to be a non-negative integer.`,
+    );
+  }
+  return raw;
+}
+
 function optionalBoolean(body: Record<string, unknown>, key: string) {
   if (!(key in body) || body[key] === undefined || body[key] === null) {
     return undefined;
@@ -199,50 +216,6 @@ function optionalListStatus(body: Record<string, unknown>, key: string) {
     );
   }
   return value;
-}
-
-function requirePayloadString(payload: Record<string, unknown>, key: string, kind: string): string {
-  const raw = payload[key];
-  if (typeof raw !== "string") {
-    throw new BrokerHttpError(
-      400,
-      "INVALID_PAYLOAD",
-      `Credential payload for kind "${kind}" must include "${key}" as a string.`,
-    );
-  }
-  const value = raw.trim();
-  if (!value) {
-    throw new BrokerHttpError(
-      400,
-      "INVALID_PAYLOAD",
-      `Credential payload for kind "${kind}" must include a non-empty "${key}" value.`,
-    );
-  }
-  return value;
-}
-
-function normalizeCredentialPayloadForKind(kind: string, payload: Record<string, unknown>) {
-  if (kind !== "telegram") {
-    return payload;
-  }
-
-  const groupId = requirePayloadString(payload, "groupId", "telegram");
-  if (!/^-?\d+$/u.test(groupId)) {
-    throw new BrokerHttpError(
-      400,
-      "INVALID_PAYLOAD",
-      'Credential payload for kind "telegram" must include a numeric "groupId" string.',
-    );
-  }
-
-  const driverToken = requirePayloadString(payload, "driverToken", "telegram");
-  const sutToken = requirePayloadString(payload, "sutToken", "telegram");
-
-  return {
-    groupId,
-    driverToken,
-    sutToken,
-  } satisfies Record<string, unknown>;
 }
 
 function parseActorRole(body: Record<string, unknown>) {
@@ -361,6 +334,35 @@ http.route({
 });
 
 http.route({
+  path: "/qa-credentials/v1/payload-chunk",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const tokenRole = resolveAuthRole(parseBearerToken(request));
+      const body = await parseJsonObject(request);
+      const actorRole = parseActorRole(body);
+      assertRoleAllowed(tokenRole, actorRole);
+
+      const result = await ctx.runQuery(internal.credentials.getPayloadChunk, {
+        kind: requireString(body, "kind"),
+        ownerId: requireString(body, "ownerId"),
+        actorRole,
+        credentialId: normalizeCredentialId(
+          requireString(body, "credentialId"),
+        ) as Id<"credential_sets">,
+        leaseToken: requireString(body, "leaseToken"),
+        index: optionalNonnegativeInteger(body, "index") ?? 0,
+      });
+
+      return jsonResponse(200, result);
+    } catch (error) {
+      const normalized = normalizeError(error);
+      return jsonResponse(normalized.httpStatus, normalized.payload);
+    }
+  }),
+});
+
+http.route({
   path: "/qa-credentials/v1/release",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
@@ -396,7 +398,11 @@ http.route({
       assertMaintainerAdminAuth(parseBearerToken(request));
       const body = await parseJsonObject(request);
       const kind = requireString(body, "kind");
-      const payload = normalizeCredentialPayloadForKind(kind, requireObject(body, "payload"));
+      const payload = normalizeCredentialPayloadForKind(
+        kind,
+        requireObject(body, "payload"),
+        (httpStatus, code, message) => new BrokerHttpError(httpStatus, code, message),
+      );
       const result = await ctx.runMutation(internal.credentials.addCredentialSet, {
         kind,
         payload,

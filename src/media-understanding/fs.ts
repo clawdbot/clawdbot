@@ -1,13 +1,7 @@
-import fs from "node:fs/promises";
+// Small file-system helpers for optional media attachment paths.
+import { pathExists } from "../infra/fs-safe.js";
 
+/** Safely checks optional media file paths without throwing on empty input. */
 export async function fileExists(filePath?: string | null): Promise<boolean> {
-  if (!filePath) {
-    return false;
-  }
-  try {
-    await fs.stat(filePath);
-    return true;
-  } catch {
-    return false;
-  }
+  return filePath ? await pathExists(filePath) : false;
 }

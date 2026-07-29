@@ -1,3 +1,4 @@
+// Whatsapp helper module supports setup test helpers behavior.
 import { expect } from "vitest";
 
 type WhatsAppSetupConfig = {
@@ -12,9 +13,9 @@ type WhatsAppSetupConfig = {
 };
 
 type WizardPromptHarness = {
-  text: { (...args: unknown[]): unknown };
-  select: { (...args: unknown[]): unknown };
-  note: { (...args: unknown[]): unknown };
+  text: (...args: unknown[]) => unknown;
+  select: (...args: unknown[]) => unknown;
+  note: (...args: unknown[]) => unknown;
 };
 
 type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
@@ -23,18 +24,19 @@ type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
   textValues?: string[];
 }) => T;
 
-export const WHATSAPP_OWNER_NUMBER_INPUT = "+1 (555) 555-0123";
-export const WHATSAPP_OWNER_NUMBER = "+15555550123";
-export const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
-export const WHATSAPP_PERSONAL_NUMBER = "+15551112222";
-export const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
-export const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
+const WHATSAPP_OWNER_NUMBER_INPUT = "+1 (555) 555-0123";
+const WHATSAPP_OWNER_NUMBER_E164 = "+15555550123";
+const WHATSAPP_OWNER_NUMBER = "15555550123";
+const WHATSAPP_PERSONAL_NUMBER_INPUT = "+1 (555) 111-2222";
+const WHATSAPP_PERSONAL_NUMBER = "15551112222";
+const WHATSAPP_ACCESS_NOTE_TITLE = "WhatsApp DM access";
+const WHATSAPP_LOGIN_NOTE_TITLE = "WhatsApp";
 
 export function createWhatsAppRootAllowFromConfig(): WhatsAppSetupConfig {
   return {
     channels: {
       whatsapp: {
-        allowFrom: [WHATSAPP_OWNER_NUMBER],
+        allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
       },
     },
   };
@@ -78,7 +80,7 @@ export function createWhatsAppWorkAccountConfig(
       whatsapp: {
         ...(params.defaultAccount ? { defaultAccount: params.defaultAccount } : {}),
         dmPolicy: "disabled",
-        allowFrom: [WHATSAPP_OWNER_NUMBER],
+        allowFrom: [WHATSAPP_OWNER_NUMBER_E164],
         accounts: {
           work: {
             authDir: "/tmp/work",
@@ -99,7 +101,7 @@ export function createWhatsAppAllowlistModeInput(): {
   };
 }
 
-export function expectWhatsAppDmAccess(
+function expectWhatsAppDmAccess(
   cfg: WhatsAppSetupConfig,
   expected: {
     selfChatMode: boolean;
@@ -118,12 +120,12 @@ export function expectWhatsAppDmAccess(
 
 export function expectWhatsAppWorkAccountOpenAccess(cfg: WhatsAppSetupConfig): void {
   expect(cfg.channels?.whatsapp?.dmPolicy).toBe("disabled");
-  expect(cfg.channels?.whatsapp?.allowFrom).toEqual([WHATSAPP_OWNER_NUMBER]);
+  expect(cfg.channels?.whatsapp?.allowFrom).toEqual([WHATSAPP_OWNER_NUMBER_E164]);
   expect(cfg.channels?.whatsapp?.accounts?.work?.dmPolicy).toBe("open");
   expect(cfg.channels?.whatsapp?.accounts?.work?.allowFrom).toEqual(["*", WHATSAPP_OWNER_NUMBER]);
 }
 
-export function expectWhatsAppOwnerNumberPrompt(harness: WizardPromptHarness): void {
+function expectWhatsAppOwnerNumberPrompt(harness: WizardPromptHarness): void {
   expect(harness.text).toHaveBeenCalledWith(
     expect.objectContaining({
       message: "Your personal WhatsApp number (the phone you will message from)",
@@ -201,6 +203,15 @@ export function expectWhatsAppWorkAccountAccessNote(harness: WizardPromptHarness
   expect(harness.note).toHaveBeenCalledWith(
     expect.stringContaining(
       "`channels.whatsapp.accounts.work.dmPolicy` + `channels.whatsapp.accounts.work.allowFrom`",
+    ),
+    WHATSAPP_ACCESS_NOTE_TITLE,
+  );
+}
+
+export function expectWhatsAppDefaultAccountAccessNote(harness: WizardPromptHarness): void {
+  expect(harness.note).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "`channels.whatsapp.accounts.default.dmPolicy` + `channels.whatsapp.accounts.default.allowFrom`",
     ),
     WHATSAPP_ACCESS_NOTE_TITLE,
   );

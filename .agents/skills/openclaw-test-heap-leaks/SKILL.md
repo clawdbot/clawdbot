@@ -1,11 +1,13 @@
 ---
 name: openclaw-test-heap-leaks
-description: Investigate `pnpm test` memory growth, Vitest worker OOMs, and suspicious RSS increases in OpenClaw using the `scripts/test-parallel.mjs` heap snapshot tooling. Use when Codex needs to reproduce test-lane memory growth, collect repeated `.heapsnapshot` files, compare snapshots from the same worker PID, triage likely transformed-module retention versus likely runtime leaks, and fix or reduce the impact by patching cleanup logic or isolating hotspot tests.
+description: Investigate OpenClaw pnpm test memory growth, Vitest OOMs, RSS spikes, and heap snapshot deltas.
 ---
 
 # OpenClaw Test Heap Leaks
 
 Use this skill for test-memory investigations. Do not guess from RSS alone when heap snapshots are available. Treat snapshot-name deltas as triage evidence, not proof, until retainers or dominators support the call.
+
+For **runtime fixes** (e.g., closure leaks in long-running services like the gateway), see [Validating runtime fixes](#validating-runtime-fixes-not-test-memory) below — that uses a dedicated harness, not the test-parallel snapshot machinery.
 
 ## Workflow
 
@@ -62,6 +64,38 @@ Use this skill for test-memory investigations. Do not guess from RSS alone when 
   - `--pid 16133`
 
 Read the top positive deltas first. Large positive growth in module-transform artifacts suggests lane isolation; large positive growth in runtime objects suggests a real leak. If the names alone do not settle it, open the same snapshot pair in DevTools and inspect retainers/dominators for the top rows before declaring root cause.
+
+## Validating runtime fixes (not test-memory)
+
+The workflow above is for diagnosing Vitest worker memory growth. For
+validating that a runtime/closure fix actually releases captured state, use the
+dedicated harness:
+
+- `pnpm leak:embedded-run` — runs `scripts/embedded-run-abort-leak.ts`. Loops N
+  aborted runs in a function-shaped scope mimicking `runEmbeddedAttempt`,
+  writes heap snapshots, and reports a PASS/FAIL verdict on retention growth
+  using `FinalizationRegistry` for tracked-instance counting plus RSS delta.
+
+Modes:
+
+- `closure-extracted` (default) — production fix shape (helper at module scope).
+- `closure-inline` — pre-fix shape (closure inside the runner scope). Use as a
+  sensitivity check: if it passes you've broken the harness, not fixed a bug.
+- `synthetic-leak` — deliberately retains via a module-level bucket. Use to
+  confirm the harness can detect leaks before trusting a PASS on a real fix.
+
+Snapshots land in `.tmp/embedded-run-abort-leak/`. Diff with the same script
+as above:
+
+```
+node .agents/skills/openclaw-test-heap-leaks/scripts/heapsnapshot-delta.mjs \
+  .tmp/embedded-run-abort-leak/baseline-*.heapsnapshot \
+  .tmp/embedded-run-abort-leak/batch-N-*.heapsnapshot --top 30
+```
+
+When fixing a different runtime leak, add a new harness alongside this one
+rather than retrofitting it. The fixture function should mimic the lexical
+scope of the function where the leak lives, not be a generic abort-loop.
 
 ## Output Expectations
 

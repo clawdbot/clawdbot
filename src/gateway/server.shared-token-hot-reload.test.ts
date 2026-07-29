@@ -1,14 +1,16 @@
+/**
+ * Shared gateway-token hot-reload tests.
+ */
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { WebSocket } from "ws";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { openAuthenticatedGatewayWs, waitForGatewayWsClose } from "./shared-auth.test-helpers.js";
 import {
-  connectOk,
   getFreePort,
   installGatewayTestHooks,
   rpcReq,
   startGatewayServer,
   testState,
-  trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -35,22 +37,6 @@ function buildSharedTokenReloadConfig(): Record<string, unknown> {
   };
 }
 
-async function openAuthenticatedWs(token: string): Promise<WebSocket> {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  trackConnectChallengeNonce(ws);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, { token });
-  return ws;
-}
-
-async function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
-  return await new Promise((resolve) => {
-    ws.once("close", (code, reason) => {
-      resolve({ code, reason: reason.toString() });
-    });
-  });
-}
-
 beforeAll(async () => {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -58,7 +44,7 @@ beforeAll(async () => {
   }
   port = await getFreePort();
   testState.gatewayAuth = undefined;
-  process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+  setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
   await fs.writeFile(
     configPath,
     `${JSON.stringify(buildSharedTokenReloadConfig(), null, 2)}\n`,
@@ -68,26 +54,26 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  process.env[SECRET_REF_TOKEN_ID] = OLD_TOKEN;
+  setTestEnvValue(SECRET_REF_TOKEN_ID, OLD_TOKEN);
 });
 
 afterAll(async () => {
-  delete process.env[SECRET_REF_TOKEN_ID];
+  deleteTestEnvValue(SECRET_REF_TOKEN_ID);
   testState.gatewayAuth = ORIGINAL_GATEWAY_AUTH;
   await server.close();
 });
 
 describe("gateway shared token hot reload rotation", () => {
   it("disconnects existing shared-token websocket sessions after hot reload picks up a rotated SecretRef value", async () => {
-    const ws = await openAuthenticatedWs(OLD_TOKEN);
+    const ws = await openAuthenticatedGatewayWs(port, OLD_TOKEN);
     try {
-      const closed = waitForClose(ws);
-      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
+      const closed = waitForGatewayWsClose(ws);
+      setTestEnvValue(SECRET_REF_TOKEN_ID, NEW_TOKEN);
       const reload = await rpcReq<{ warningCount?: number }>(ws, "secrets.reload", {}).catch(
         (err: unknown) => (err instanceof Error ? err : new Error(String(err))),
       );
 
-      await expect(closed).resolves.toMatchObject({
+      await expect(closed).resolves.toEqual({
         code: 4001,
         reason: "gateway auth changed",
       });
@@ -95,7 +81,7 @@ describe("gateway shared token hot reload rotation", () => {
         expect(reload.ok).toBe(true);
       }
 
-      const freshWs = await openAuthenticatedWs(NEW_TOKEN);
+      const freshWs = await openAuthenticatedGatewayWs(port, NEW_TOKEN);
       freshWs.close();
     } finally {
       ws.close();

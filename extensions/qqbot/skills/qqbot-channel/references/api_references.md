@@ -4,6 +4,14 @@
 
 通过 `qqbot_channel_api` 工具代理请求，工具自动处理鉴权。
 
+## 调用安全规则
+
+- `POST`、`PUT`、`PATCH` 和 `DELETE` 会修改真实 QQ 资源。调用前确认用户明确授权了该操作。
+- 删除接口不可逆。删除前先用读取接口确认目标 ID、名称和范围，并把将要删除的对象复述给用户；`qqbot_channel_api` 要求 `confirmed: true` 才会执行 `DELETE`。
+- 批量删除 sentinel 必须二次确认并额外传 `bulkConfirmed: true`；不要把模糊表达自动扩展成“删除全部”。
+- 删除端点不作为普通 agent 速查路径列出。需要删除时，先用读取接口确认对象，再通过受确认保护的删除流程执行。
+- 成员资料和头像 URL 只用于当前请求；除非用户明确要求查看头像/图标，不要内联展示或转发这些图片 URL。
+
 ---
 
 ## 📌 通用说明
@@ -346,9 +354,9 @@ interface Schedule {
 
 ---
 
-### DELETE /channels/{channel_id} — 删除子频道
+### 删除子频道（破坏性操作）
 
-> ⚠️ 不可逆！仅私域机器人可用
+> ⚠️ 不可逆！仅私域机器人可用。调用前必须确认具体子频道 ID、子频道名称和用户删除意图，并传 `confirmed: true`；不要按模糊名称猜测删除目标。确认后使用子频道资源路径 `/channels/{channel_id}`。
 
 ---
 
@@ -415,9 +423,9 @@ interface Schedule {
 
 ---
 
-### DELETE /guilds/{guild_id}/announces/{message_id} — 删除公告
+### 删除公告（破坏性操作）
 
-> `message_id` 设为 `all` 删除所有公告
+> 调用前必须确认具体公告 ID 并传 `confirmed: true`，确认后使用公告资源路径 `/guilds/{guild_id}/announces/{message_id}`。批量删除全部公告只能在用户明确要求并再次确认后使用 `/guilds/{guild_id}/announces/all`，并且必须额外传 `bulkConfirmed: true`。
 
 ---
 
@@ -453,9 +461,9 @@ interface Schedule {
 
 ---
 
-### DELETE /channels/{channel_id}/threads/{thread_id} — 删除帖子
+### 删除帖子（破坏性操作）
 
-> ⚠️ 不可逆！仅私域机器人可用
+> ⚠️ 不可逆！仅私域机器人可用。调用前必须确认具体帖子 ID、帖子标题/作者和用户删除意图，并传 `confirmed: true`。确认后使用帖子资源路径 `/channels/{channel_id}/threads/{thread_id}`。
 
 ---
 
@@ -516,6 +524,6 @@ interface Schedule {
 
 ---
 
-### DELETE /channels/{channel_id}/schedules/{schedule_id} — 删除日程
+### 删除日程（破坏性操作）
 
-> ⚠️ 不可逆！需要管理频道权限
+> ⚠️ 不可逆！需要管理频道权限。调用前必须确认具体日程 ID、日程名称/时间和用户删除意图，并传 `confirmed: true`。确认后使用日程资源路径 `/channels/{channel_id}/schedules/{schedule_id}`。

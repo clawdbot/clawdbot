@@ -1,14 +1,21 @@
-import { spawn } from "node:child_process";
+// Qa Lab plugin module implements model catalog behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
+import { resolveQaNodeExecPath } from "./node-exec.js";
+import {
+  isPreferredQaLiveFrontierCatalogModel,
+  QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
+  QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+  QA_FRONTIER_PROVIDER_IDS,
+} from "./providers/live-frontier/catalog.js";
 import {
   createQaChannelGatewayConfig,
   QA_CHANNEL_REQUIRED_PLUGIN_IDS,
 } from "./qa-channel-transport.js";
 import { buildQaGatewayConfig } from "./qa-gateway-config.js";
-
-const QA_FRONTIER_PROVIDER_IDS = ["anthropic", "google", "openai"] as const;
 
 type ModelRow = {
   key: string;
@@ -37,7 +44,7 @@ function splitModelKey(key: string) {
   };
 }
 
-export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
+function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOption[] {
   const options = rows
     .filter((row) => row.available === true && !row.missing)
     .map((row) => {
@@ -47,7 +54,7 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
         name: row.name,
         provider: parsed?.provider ?? "unknown",
         input: row.input,
-        preferred: row.key === "openai/gpt-5.4",
+        preferred: isPreferredQaLiveFrontierCatalogModel(row.key),
       } satisfies QaRunnerModelOption;
     });
 
@@ -63,29 +70,38 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
   });
 }
 
+function isModelRow(value: unknown): value is ModelRow {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const row = value as Partial<ModelRow>;
+  return (
+    typeof row.key === "string" &&
+    typeof row.name === "string" &&
+    typeof row.input === "string" &&
+    (row.available === true || row.available === false || row.available === null) &&
+    typeof row.missing === "boolean"
+  );
+}
+
+function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout) as unknown;
+  } catch {
+    throw new Error("qa model catalog returned malformed JSON");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("qa model catalog returned invalid JSON payload");
+  }
+  const rows = (payload as { models?: unknown }).models;
+  return selectQaRunnerModelOptions(Array.isArray(rows) ? rows.filter(isModelRow) : []);
+}
+
 const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
 
 function createCatalogAbortError() {
   return new Error(CATALOG_ABORT_ERROR_MESSAGE);
-}
-
-function killProcessTree(pid: number | undefined, signal: NodeJS.Signals) {
-  if (pid === undefined) {
-    return;
-  }
-  try {
-    if (process.platform === "win32") {
-      process.kill(pid, signal);
-      return;
-    }
-    process.kill(-pid, signal);
-  } catch {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // The process already exited.
-    }
-  }
 }
 
 export async function loadQaRunnerModelOptions(params: { repoRoot: string; signal?: AbortSignal }) {
@@ -109,8 +125,8 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       gatewayToken: "qa-model-catalog",
       workspaceDir,
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "anthropic/claude-sonnet-4-6",
+      primaryModel: QA_FRONTIER_CATALOG_PRIMARY_MODEL,
+      alternateModel: QA_FRONTIER_CATALOG_ALTERNATE_MODEL,
       enabledProviderIds: [...QA_FRONTIER_PROVIDER_IDS],
       imageGenerationModel: null,
       controlUiEnabled: false,
@@ -121,74 +137,49 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
     });
     await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, "utf8");
 
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    await new Promise<void>((resolve, reject) => {
-      let aborted = params.signal?.aborted === true;
-      let forceKillTimer: NodeJS.Timeout | undefined;
-      const child = spawn(
-        process.execPath,
-        ["dist/index.js", "models", "list", "--all", "--json"],
-        {
-          cwd: params.repoRoot,
-          env: {
-            ...process.env,
-            HOME: homeDir,
-            OPENCLAW_HOME: homeDir,
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
-            OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
-          },
-          detached: process.platform !== "win32",
-          stdio: ["ignore", "pipe", "pipe"],
+    const nodeExecPath = await resolveQaNodeExecPath();
+    const result = await runCommandWithTimeout(
+      [nodeExecPath, "dist/index.js", "models", "list", "--all", "--json"],
+      {
+        cwd: params.repoRoot,
+        env: {
+          HOME: homeDir,
+          OPENCLAW_HOME: homeDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_OAUTH_DIR: path.join(stateDir, "credentials"),
+          OPENCLAW_CODEX_DISCOVERY_LIVE: "0",
         },
+        killProcessTree: true,
+        maxOutputBytes: {
+          stdout: QA_CHILD_STDOUT_MAX_BYTES,
+          stderr: QA_CHILD_STDERR_TAIL_BYTES,
+        },
+        outputCapture: { stdout: "head", stderr: "tail" },
+        signal: params.signal,
+        terminateOnOutputLimit: { stdout: true },
+      },
+    );
+    if (
+      params.signal?.aborted ||
+      (result.termination === "signal" && !result.outputLimitExceeded)
+    ) {
+      throw createCatalogAbortError();
+    }
+    if (result.outputLimitExceeded || result.stdoutTruncatedBytes) {
+      throw new Error(
+        `qa model catalog stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
       );
-      const cleanup = () => {
-        params.signal?.removeEventListener("abort", abortCatalogLoad);
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
-        }
-      };
-      const abortCatalogLoad = () => {
-        aborted = true;
-        killProcessTree(child.pid, "SIGTERM");
-        forceKillTimer = setTimeout(() => {
-          killProcessTree(child.pid, "SIGKILL");
-        }, 1_000);
-        forceKillTimer.unref();
-      };
-      if (aborted) {
-        abortCatalogLoad();
-      } else {
-        params.signal?.addEventListener("abort", abortCatalogLoad, { once: true });
-      }
-      child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-      child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
-      child.once("error", (error) => {
-        cleanup();
-        reject(aborted ? createCatalogAbortError() : error);
-      });
-      child.once("exit", (code) => {
-        cleanup();
-        if (aborted) {
-          reject(createCatalogAbortError());
-          return;
-        }
-        if (code === 0) {
-          resolve();
-          return;
-        }
-        reject(
-          new Error(
-            `qa model catalog failed (${code ?? "unknown"}): ${Buffer.concat(stderr).toString("utf8").trim()}`,
-          ),
-        );
-      });
-    });
+    }
+    if (result.code !== 0) {
+      const stderrText = result.stderr.trim();
+      const stderrDetail = result.stderrTruncatedBytes
+        ? `[qa model catalog stderr truncated to last ${QA_CHILD_STDERR_TAIL_BYTES} bytes]\n${stderrText}`
+        : stderrText;
+      throw new Error(`qa model catalog failed (${result.code ?? "unknown"}): ${stderrDetail}`);
+    }
 
-    const payload = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { models?: ModelRow[] };
-    return selectQaRunnerModelOptions(payload.models ?? []);
+    return parseQaRunnerModelOptionsOutput(result.stdout);
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

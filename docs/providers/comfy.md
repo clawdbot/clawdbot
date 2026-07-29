@@ -1,32 +1,31 @@
 ---
-title: "ComfyUI"
 summary: "ComfyUI workflow image, video, and music generation setup in OpenClaw"
+title: "ComfyUI"
 read_when:
   - You want to use local ComfyUI workflows with OpenClaw
   - You want to use Comfy Cloud with image, video, or music workflows
   - You need the bundled comfy plugin config keys
 ---
 
-# ComfyUI
+OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The
+plugin is entirely workflow-driven: OpenClaw does not map generic `size`,
+`aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto
+your graph.
 
-OpenClaw ships a bundled `comfy` plugin for workflow-driven ComfyUI runs. The plugin is entirely workflow-driven, so OpenClaw does not try to map generic `size`, `aspectRatio`, `resolution`, `durationSeconds`, or TTS-style controls onto your graph.
-
-| Property        | Detail                                                                           |
-| --------------- | -------------------------------------------------------------------------------- |
-| Provider        | `comfy`                                                                          |
-| Models          | `comfy/workflow`                                                                 |
-| Shared surfaces | `image_generate`, `video_generate`, `music_generate`                             |
-| Auth            | None for local ComfyUI; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for Comfy Cloud |
-| API             | ComfyUI `/prompt` / `/history` / `/view` and Comfy Cloud `/api/*`                |
+| Property     | Detail                                                                           |
+| ------------ | -------------------------------------------------------------------------------- |
+| Provider     | `comfy`                                                                          |
+| Model        | `comfy/workflow`                                                                 |
+| Shared tools | `image_generate`, `video_generate`, `music_generate`                             |
+| Auth         | None for local ComfyUI; `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for Comfy Cloud |
+| API          | ComfyUI `/prompt` / `/history` / `/view`; Comfy Cloud `/api/*`                   |
 
 ## What it supports
 
-- Image generation from a workflow JSON
-- Image editing with 1 uploaded reference image
-- Video generation from a workflow JSON
-- Video generation with 1 uploaded reference image
-- Music or audio generation through the shared `music_generate` tool
-- Output download from a configured node or all matching output nodes
+- Image generation and editing from a workflow JSON (edit takes 1 uploaded reference image)
+- Video generation from a workflow JSON, text-to-video or image-to-video (1 reference image)
+- Music/audio generation through the shared `music_generate` tool, with an optional 1 reference image
+- Output download from a configured node, or from all matching output nodes when none is configured
 
 ## Getting started
 
@@ -44,19 +43,21 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         Export or create a ComfyUI workflow JSON file. Note the node IDs for the prompt input node and the output node you want OpenClaw to read from.
       </Step>
       <Step title="Configure the provider">
-        Set `mode: "local"` and point at your workflow file. Here is a minimal image example:
+        Set `mode: "local"` and point at your workflow file. Minimal image example:
 
         ```json5
         {
-          models: {
-            providers: {
+          plugins: {
+            entries: {
               comfy: {
-                mode: "local",
-                baseUrl: "http://127.0.0.1:8188",
-                image: {
-                  workflowPath: "./workflows/flux-api.json",
-                  promptNodeId: "6",
-                  outputNodeId: "9",
+                config: {
+                  mode: "local",
+                  baseUrl: "http://127.0.0.1:8188",
+                  image: {
+                    workflowPath: "./workflows/flux-api.json",
+                    promptNodeId: "6",
+                    outputNodeId: "9",
+                  },
                 },
               },
             },
@@ -96,17 +97,20 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         Sign up at [comfy.org](https://comfy.org) and generate an API key from your account dashboard.
       </Step>
       <Step title="Set the API key">
-        Provide your key through one of these methods:
+        Provide your key through any of these methods:
 
         ```bash
-        # Environment variable (preferred)
+        # Onboarding flag
+        openclaw onboard --comfy-api-key "your-key"
+
+        # Environment variable (preferred for daemons)
         export COMFY_API_KEY="your-key"
 
         # Alternative environment variable
         export COMFY_CLOUD_API_KEY="your-key"
 
         # Or inline in config
-        openclaw config set models.providers.comfy.apiKey "your-key"
+        openclaw config set plugins.entries.comfy.config.apiKey "your-key"
         ```
       </Step>
       <Step title="Prepare your workflow JSON">
@@ -117,14 +121,16 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
 
         ```json5
         {
-          models: {
-            providers: {
+          plugins: {
+            entries: {
               comfy: {
-                mode: "cloud",
-                image: {
-                  workflowPath: "./workflows/flux-api.json",
-                  promptNodeId: "6",
-                  outputNodeId: "9",
+                config: {
+                  mode: "cloud",
+                  image: {
+                    workflowPath: "./workflows/flux-api.json",
+                    promptNodeId: "6",
+                    outputNodeId: "9",
+                  },
                 },
               },
             },
@@ -133,7 +139,7 @@ Choose between running ComfyUI on your own machine or using Comfy Cloud.
         ```
 
         <Tip>
-        Cloud mode defaults `baseUrl` to `https://cloud.comfy.org`. You only need to set `baseUrl` if you use a custom cloud endpoint.
+        Cloud mode defaults `baseUrl` to `https://cloud.comfy.org`. Set `baseUrl` only for a custom cloud endpoint.
         </Tip>
       </Step>
       <Step title="Set the default model">
@@ -165,25 +171,27 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 
 ```json5
 {
-  models: {
-    providers: {
+  plugins: {
+    entries: {
       comfy: {
-        mode: "local",
-        baseUrl: "http://127.0.0.1:8188",
-        image: {
-          workflowPath: "./workflows/flux-api.json",
-          promptNodeId: "6",
-          outputNodeId: "9",
-        },
-        video: {
-          workflowPath: "./workflows/video-api.json",
-          promptNodeId: "12",
-          outputNodeId: "21",
-        },
-        music: {
-          workflowPath: "./workflows/music-api.json",
-          promptNodeId: "3",
-          outputNodeId: "18",
+        config: {
+          mode: "local",
+          baseUrl: "http://127.0.0.1:8188",
+          image: {
+            workflowPath: "./workflows/flux-api.json",
+            promptNodeId: "6",
+            outputNodeId: "9",
+          },
+          video: {
+            workflowPath: "./workflows/video-api.json",
+            promptNodeId: "12",
+            outputNodeId: "21",
+          },
+          music: {
+            workflowPath: "./workflows/music-api.json",
+            promptNodeId: "3",
+            outputNodeId: "18",
+          },
         },
       },
     },
@@ -195,10 +203,14 @@ Comfy supports shared top-level connection settings plus per-capability workflow
 
 | Key                   | Type                   | Description                                                                           |
 | --------------------- | ---------------------- | ------------------------------------------------------------------------------------- |
-| `mode`                | `"local"` or `"cloud"` | Connection mode.                                                                      |
+| `mode`                | `"local"` or `"cloud"` | Connection mode. Defaults to `"local"`.                                               |
 | `baseUrl`             | string                 | Defaults to `http://127.0.0.1:8188` for local or `https://cloud.comfy.org` for cloud. |
 | `apiKey`              | string                 | Optional inline key, alternative to `COMFY_API_KEY` / `COMFY_CLOUD_API_KEY` env vars. |
-| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode.                                          |
+| `allowPrivateNetwork` | boolean                | Allow a private/LAN `baseUrl` in cloud mode or a local private-DNS FQDN.              |
+
+<Note>
+In `local` mode, loopback/private IP literals and single-label service names such as `http://comfyui:8188` work without `allowPrivateNetwork`. Public-looking private-DNS FQDNs such as `https://comfy.local.example.com` require `allowPrivateNetwork: true`. Private-origin trust stays scoped to the configured scheme, hostname, and port; local redirects cannot leave the configured hostname, while cloud redirects to public CDNs are checked with the default SSRF policy.
+</Note>
 
 ### Per-capability keys
 
@@ -206,19 +218,21 @@ These keys apply inside the `image`, `video`, or `music` sections:
 
 | Key                          | Required | Default  | Description                                                                  |
 | ---------------------------- | -------- | -------- | ---------------------------------------------------------------------------- |
-| `workflow` or `workflowPath` | Yes      | --       | Path to the ComfyUI workflow JSON file.                                      |
+| `workflow` or `workflowPath` | Yes      | --       | Inline workflow JSON, or path to the ComfyUI workflow JSON file.             |
 | `promptNodeId`               | Yes      | --       | Node ID that receives the text prompt.                                       |
 | `promptInputName`            | No       | `"text"` | Input name on the prompt node.                                               |
 | `outputNodeId`               | No       | --       | Node ID to read output from. If omitted, all matching output nodes are used. |
-| `pollIntervalMs`             | No       | --       | Polling interval in milliseconds for job completion.                         |
-| `timeoutMs`                  | No       | --       | Timeout in milliseconds for the workflow run.                                |
+| `pollIntervalMs`             | No       | `1500`   | Polling interval in milliseconds for job completion.                         |
+| `timeoutMs`                  | No       | `300000` | Timeout in milliseconds for the workflow run.                                |
 
-The `image` and `video` sections also support:
+The `image` and `video` sections also support a reference-image input node:
 
 | Key                   | Required                             | Default   | Description                                         |
 | --------------------- | ------------------------------------ | --------- | --------------------------------------------------- |
 | `inputImageNodeId`    | Yes (when passing a reference image) | --        | Node ID that receives the uploaded reference image. |
 | `inputImageInputName` | No                                   | `"image"` | Input name on the image node.                       |
+
+`apiKey` accepts either a literal string or a [secret reference](/gateway/configuration-reference#secrets) object.
 
 ## Workflow details
 
@@ -244,15 +258,17 @@ The `image` and `video` sections also support:
 
     ```json5
     {
-      models: {
-        providers: {
+      plugins: {
+        entries: {
           comfy: {
-            image: {
-              workflowPath: "./workflows/edit-api.json",
-              promptNodeId: "6",
-              inputImageNodeId: "7",
-              inputImageInputName: "image",
-              outputNodeId: "9",
+            config: {
+              image: {
+                workflowPath: "./workflows/edit-api.json",
+                promptNodeId: "6",
+                inputImageNodeId: "7",
+                inputImageInputName: "image",
+                outputNodeId: "9",
+              },
             },
           },
         },
@@ -286,7 +302,7 @@ The `image` and `video` sections also support:
   </Accordion>
 
   <Accordion title="Music workflows">
-    The bundled plugin registers a music-generation provider for workflow-defined audio or music outputs, surfaced through the shared `music_generate` tool:
+    The bundled plugin registers a music-generation provider for workflow-defined audio or music outputs, surfaced through the shared `music_generate` tool. It accepts an optional reference image (up to 1):
 
     ```text
     /tool music_generate prompt="Warm ambient synth loop with soft tape texture"
@@ -301,23 +317,21 @@ The `image` and `video` sections also support:
 
     ```json5
     {
-      models: {
-        providers: {
+      plugins: {
+        entries: {
           comfy: {
-            workflowPath: "./workflows/flux-api.json",
-            promptNodeId: "6",
-            outputNodeId: "9",
+            config: {
+              workflowPath: "./workflows/flux-api.json",
+              promptNodeId: "6",
+              outputNodeId: "9",
+            },
           },
         },
       },
     }
     ```
 
-    OpenClaw treats that legacy shape as the image workflow config. You do not need to migrate immediately, but the nested `image` / `video` / `music` sections are recommended for new setups.
-
-    <Tip>
-    If you only use image generation, the legacy flat config and the new nested `image` section are functionally equivalent.
-    </Tip>
+    OpenClaw treats that legacy shape as the image workflow config. You do not need to migrate immediately, but the nested `image` / `video` / `music` sections are recommended for new setups. If you only use image generation, the legacy flat config and the new nested `image` section are functionally equivalent.
 
   </Accordion>
 
@@ -348,7 +362,7 @@ The `image` and `video` sections also support:
   <Card title="Provider Directory" href="/providers/index" icon="layers">
     Overview of all providers and model refs.
   </Card>
-  <Card title="Configuration Reference" href="/gateway/configuration-reference#agent-defaults" icon="gear">
+  <Card title="Configuration reference" href="/gateway/config-agents#agent-defaults" icon="gear">
     Full config reference including agent defaults.
   </Card>
 </CardGroup>

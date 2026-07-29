@@ -1,11 +1,16 @@
+// Verifies summary instruction policy for preserving opaque identifiers.
 import { describe, expect, it } from "vitest";
-import { buildCompactionSummarizationInstructions } from "./compaction.js";
+import { buildCompactionSummarizationInstructions } from "./compaction.test-support.js";
 
 describe("compaction identifier policy", () => {
   it("defaults to strict identifier preservation", () => {
+    // Identifiers such as UUIDs and ports are safe to preserve, while token/API
+    // key language must not encourage retaining secrets.
     const built = buildCompactionSummarizationInstructions();
     expect(built).toContain("Preserve all opaque identifiers exactly as written");
     expect(built).toContain("UUIDs");
+    expect(built).not.toContain("tokens");
+    expect(built).not.toContain("API keys");
   });
 
   it("can disable identifier preservation with off policy", () => {
@@ -16,6 +21,8 @@ describe("compaction identifier policy", () => {
   });
 
   it("supports custom identifier instructions", () => {
+    // Custom policy replaces the default wording when operators need a narrower
+    // identifier contract for a specific compaction run.
     const built = buildCompactionSummarizationInstructions(undefined, {
       identifierPolicy: "custom",
       identifierInstructions: "Keep ticket IDs unchanged.",

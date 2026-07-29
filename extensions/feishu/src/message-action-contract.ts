@@ -1,3 +1,4 @@
+// Feishu plugin module implements message action contract behavior.
 import type { ChannelMessageActionName } from "openclaw/plugin-sdk/channel-contract";
 
 type MessageActionTargetAliasSpec = {

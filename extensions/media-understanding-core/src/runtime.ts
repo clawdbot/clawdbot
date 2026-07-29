@@ -1,3 +1,4 @@
+// Media Understanding Core plugin module implements runtime behavior.
 export {
   describeImageFile,
   describeImageFileWithModel,

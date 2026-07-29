@@ -1,8 +1,8 @@
-import { parseAgentSessionKey } from "../../../../src/sessions/session-key-utils.js";
+// Memory Host SDK module implements qmd scope behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../../../src/shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type { ResolvedQmdConfig } from "./backend-config.js";
 
 type ParsedQmdSessionScope = {
@@ -107,4 +107,17 @@ function normalizeQmdSessionKey(key?: string): string | undefined {
     return undefined;
   }
   return normalized;
+}
+
+function parseAgentSessionKey(sessionKey: string | undefined | null): { rest: string } | null {
+  const raw = normalizeOptionalLowercaseString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  const parts = raw.split(":").filter(Boolean);
+  if (parts.length < 3 || parts[0] !== "agent") {
+    return null;
+  }
+  const rest = parts.slice(2).join(":");
+  return rest ? { rest } : null;
 }

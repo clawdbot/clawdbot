@@ -1,3 +1,4 @@
+// Imessage plugin module implements status core behavior.
 import type { ResolvedIMessageAccount } from "./accounts.js";
 import type { IMessageProbe } from "./probe.js";
 

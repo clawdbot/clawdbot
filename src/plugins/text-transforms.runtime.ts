@@ -1,31 +1,11 @@
-import { createRequire } from "node:module";
+// Runtime bridge for plugin-provided text transforms.
 import { mergePluginTextTransforms } from "../agents/plugin-text-transforms.js";
+import { getActiveRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type { PluginTextTransforms } from "./types.js";
 
-type PluginRuntimeModule = Pick<typeof import("./runtime.js"), "getActivePluginRegistry">;
-
-const require = createRequire(import.meta.url);
-const RUNTIME_MODULE_CANDIDATES = ["./runtime.js", "./runtime.ts"] as const;
-
-let pluginRuntimeModule: PluginRuntimeModule | undefined;
-
-function loadPluginRuntime(): PluginRuntimeModule | null {
-  if (pluginRuntimeModule) {
-    return pluginRuntimeModule;
-  }
-  for (const candidate of RUNTIME_MODULE_CANDIDATES) {
-    try {
-      pluginRuntimeModule = require(candidate) as PluginRuntimeModule;
-      return pluginRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
-  }
-  return null;
-}
-
+/** Resolves merged text transforms from the active runtime plugin registry. */
 export function resolveRuntimeTextTransforms(): PluginTextTransforms | undefined {
-  const registry = loadPluginRuntime()?.getActivePluginRegistry();
+  const registry = getActiveRuntimePluginRegistry();
   const pluginTextTransforms = Array.isArray(registry?.textTransforms)
     ? registry.textTransforms.map((entry) => entry.transforms)
     : [];

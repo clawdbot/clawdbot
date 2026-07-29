@@ -1,42 +1,18 @@
-function normalizeNumericString(value: string): string | undefined {
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-export function parseFiniteNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    const parsed = Number.parseFloat(value);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
-export function parseStrictInteger(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeNumericString(value);
-  if (!normalized || !/^[+-]?\d+$/.test(normalized)) {
-    return undefined;
-  }
-  const parsed = Number(normalized);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
-}
-
-export function parseStrictPositiveInteger(value: unknown): number | undefined {
-  const parsed = parseStrictInteger(value);
-  return parsed !== undefined && parsed > 0 ? parsed : undefined;
-}
-
-export function parseStrictNonNegativeInteger(value: unknown): number | undefined {
-  const parsed = parseStrictInteger(value);
-  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
-}
+// Number parsing facade for legacy infra imports; implementation lives in
+// normalization-core so config, timers, and CLI parsing share one contract.
+export {
+  parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  positiveSecondsToSafeMilliseconds,
+  nonNegativeSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "../../packages/normalization-core/src/number-coercion.js";

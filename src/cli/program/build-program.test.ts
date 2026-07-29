@@ -1,3 +1,4 @@
+// Build program tests cover root CLI program construction and command wiring.
 import process from "node:process";
 import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -41,10 +42,10 @@ describe("buildProgram", () => {
   }
 
   async function expectCommanderExit(promise: Promise<unknown>, exitCode: number) {
-    const error = await promise.catch((err) => err);
+    const error = await promise.catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(CommanderError);
-    expect(error).toMatchObject({ exitCode });
+    expect((error as CommanderError).exitCode).toBe(exitCode);
     return error as CommanderError;
   }
 
@@ -53,9 +54,9 @@ describe("buildProgram", () => {
     mockProcessOutput();
     createProgramContextMock.mockReturnValue({
       programVersion: "9.9.9-test",
-      channelOptions: ["telegram"],
-      messageChannelOptions: "telegram",
-      agentChannelOptions: "last|telegram",
+      channelOptions: ["quietchat"],
+      messageChannelOptions: "quietchat",
+      agentChannelOptions: "last|quietchat",
     } satisfies ProgramContext);
   });
 

@@ -1,3 +1,4 @@
+// Telegram plugin module implements plugin command behavior.
 import { vi } from "vitest";
 
 export const pluginCommandMocks = {

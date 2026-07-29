@@ -1,6 +1,13 @@
+/**
+ * Output helpers for non-interactive onboarding.
+ *
+ * JSON success/failure payloads and human-readable gateway health diagnostics
+ * are kept here so local and remote setup report failures consistently.
+ */
 import { type RuntimeEnv, writeRuntimeJson } from "../../../runtime.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
+/** Structured daemon/service details attached to gateway health failures. */
 export type GatewayHealthFailureDiagnostics = {
   service?: {
     label: string;
@@ -16,6 +23,16 @@ export type GatewayHealthFailureDiagnostics = {
   inspectError?: string;
 };
 
+/** Coarse recovery category for gateway health failures. */
+type GatewayHealthFailureClassification =
+  | "not-listening"
+  | "auth-mismatch"
+  | "service-missing"
+  | "service-stopped"
+  | "startup-blocked"
+  | "module-missing";
+
+/** Emits the JSON success payload for non-interactive onboarding when requested. */
 export function logNonInteractiveOnboardingJson(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -78,6 +95,74 @@ function formatGatewayRuntimeSummary(
   return parts.join(", ");
 }
 
+function hasConnectionRefusedDetail(detail: string): boolean {
+  return /\b(?:econnrefused|connection refused|connect refused)\b/i.test(detail);
+}
+
+function classifyGatewayHealthFailure(params: {
+  detail?: string;
+  diagnostics?: GatewayHealthFailureDiagnostics;
+}): GatewayHealthFailureClassification | undefined {
+  const detail = params.detail ?? "";
+  const lastGatewayError = params.diagnostics?.lastGatewayError ?? "";
+  const combined = `${detail}\n${lastGatewayError}`;
+  // Classify from both the active probe and the daemon's last error so a fast
+  // restart failure still gets the same recovery hint as a direct probe error.
+  if (
+    /\b(?:unauthorized|forbidden|invalid token|invalid password|auth mismatch)\b/i.test(combined)
+  ) {
+    return "auth-mismatch";
+  }
+  if (
+    /\b(?:runtime[- ]deps?|runtime dependencies|cannot find module|sqlite-vec|loadextension)\b/i.test(
+      combined,
+    )
+  ) {
+    return "module-missing";
+  }
+  if (params.diagnostics?.service?.loaded === false && hasConnectionRefusedDetail(detail)) {
+    return "service-missing";
+  }
+  const runtimeStatus = params.diagnostics?.service?.runtimeStatus;
+  if (
+    runtimeStatus &&
+    runtimeStatus !== "running" &&
+    runtimeStatus !== "active" &&
+    hasConnectionRefusedDetail(detail)
+  ) {
+    return "service-stopped";
+  }
+  if (lastGatewayError.trim()) {
+    return "startup-blocked";
+  }
+  if (hasConnectionRefusedDetail(detail)) {
+    return "not-listening";
+  }
+  return undefined;
+}
+
+function recoveryHintForGatewayHealthFailure(
+  classification: GatewayHealthFailureClassification | undefined,
+): string | undefined {
+  switch (classification) {
+    case "auth-mismatch":
+      return "Fix: run `openclaw doctor --fix`.";
+    case "module-missing":
+      return "Fix: run `openclaw doctor --fix`.";
+    case "service-missing":
+      return "Fix: run `openclaw gateway install --force`.";
+    case "service-stopped":
+      return "Fix: run `openclaw gateway restart`.";
+    case "startup-blocked":
+      return "Fix: run `openclaw gateway status --deep`.";
+    case "not-listening":
+      return "Fix: start `openclaw gateway run`, or run `openclaw gateway restart` for a managed gateway.";
+    default:
+      return undefined;
+  }
+}
+
+/** Emits JSON or human-readable failure output for non-interactive onboarding. */
 export function logNonInteractiveOnboardingFailure(params: {
   opts: OnboardOptions;
   runtime: RuntimeEnv;
@@ -99,7 +184,12 @@ export function logNonInteractiveOnboardingFailure(params: {
   daemonRuntime?: string;
   diagnostics?: GatewayHealthFailureDiagnostics;
 }) {
-  const hints = params.hints?.filter(Boolean) ?? [];
+  const classification = classifyGatewayHealthFailure({
+    detail: params.detail,
+    diagnostics: params.diagnostics,
+  });
+  const recoveryHint = recoveryHintForGatewayHealthFailure(classification);
+  const hints = [...(recoveryHint ? [recoveryHint] : []), ...(params.hints?.filter(Boolean) ?? [])];
   const gatewayRuntime = formatGatewayRuntimeSummary(params.diagnostics);
 
   if (params.opts.json) {
@@ -108,6 +198,7 @@ export function logNonInteractiveOnboardingFailure(params: {
       mode: params.mode,
       phase: params.phase,
       message: params.message,
+      classification,
       detail: params.detail,
       gateway: params.gateway,
       installDaemon: Boolean(params.installDaemon),
@@ -121,6 +212,7 @@ export function logNonInteractiveOnboardingFailure(params: {
 
   const lines = [
     params.message,
+    classification ? `Classification: ${classification}` : undefined,
     params.detail ? `Last probe: ${params.detail}` : undefined,
     params.diagnostics?.service
       ? `Service: ${params.diagnostics.service.label} (${params.diagnostics.service.loaded ? params.diagnostics.service.loadedText : "not loaded"})`

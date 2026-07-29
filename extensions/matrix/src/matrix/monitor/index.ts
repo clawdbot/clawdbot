@@ -1,8 +1,13 @@
+// Matrix plugin entrypoint registers its OpenClaw integration.
 import { format } from "node:util";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
+import {
+  resolveChannelStreamingBlockEnabled,
+  waitUntilAbort,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -13,7 +18,12 @@ import {
   type RuntimeEnv,
 } from "../../runtime-api.js";
 import { getMatrixRuntime } from "../../runtime.js";
-import type { CoreConfig, ReplyToMode } from "../../types.js";
+import type {
+  CoreConfig,
+  MatrixStreamingConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
@@ -38,18 +48,16 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import {
-  createMatrixInboundEventDeduper,
-  type MatrixInboundEventDeduper,
-} from "./inbound-dedupe.js";
+import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
+import { resolveMatrixRoomConfig } from "./rooms.js";
 import { runMatrixStartupMaintenance } from "./startup.js";
 import { createMatrixMonitorStatusController } from "./status.js";
 import { createMatrixMonitorSyncLifecycle } from "./sync-lifecycle.js";
 import { createMatrixMonitorTaskRunner } from "./task-runner.js";
 
-export type MonitorMatrixOpts = {
+type MonitorMatrixOpts = {
   runtime?: RuntimeEnv;
   channelRuntime?: ChannelRuntimeSurface;
   abortSignal?: AbortSignal;
@@ -59,6 +67,32 @@ export type MonitorMatrixOpts = {
   accountId?: string | null;
   setStatus?: (next: import("openclaw/plugin-sdk/channel-contract").ChannelAccountSnapshot) => void;
 };
+
+type MatrixStreamingInput = MatrixStreamingConfig | undefined;
+
+function resolveMatrixStreamingMode(streaming: MatrixStreamingInput): MatrixStreamingMode {
+  const mode = streaming?.mode;
+  if (mode === "partial" || mode === "quiet" || mode === "progress") {
+    return mode;
+  }
+  return "off";
+}
+
+function resolveMatrixPreviewToolProgress(streaming: MatrixStreamingInput): boolean {
+  if (!streaming) {
+    return true;
+  }
+  if (resolveMatrixStreamingMode(streaming) === "progress") {
+    return streaming.progress?.toolProgress ?? streaming.preview?.toolProgress ?? true;
+  }
+  return streaming.preview?.toolProgress ?? true;
+}
+
+function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixStreamingInput): boolean {
+  return (
+    resolveMatrixStreamingMode(streaming) !== "off" && resolveMatrixPreviewToolProgress(streaming)
+  );
+}
 
 const DEFAULT_MEDIA_MAX_MB = 20;
 
@@ -71,7 +105,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw new Error("Matrix provider requires Node (bun runtime not supported)");
   }
   const core = getMatrixRuntime();
-  let cfg = core.config.loadConfig() as CoreConfig;
+  let cfg = core.config.current() as CoreConfig;
   if (cfg.channels?.["matrix"]?.enabled === false) {
     return;
   }
@@ -110,23 +144,30 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const allowlistOnly = accountConfig.allowlistOnly === true;
   const accountAllowBots = accountConfig.allowBots;
-  let allowFrom: string[] = (accountConfig.dm?.allowFrom ?? []).map(String);
-  let groupAllowFrom: string[] = (accountConfig.groupAllowFrom ?? []).map(String);
   let roomsConfig = accountConfig.groups ?? accountConfig.rooms;
   let needsRoomAliasesForConfig = false;
+  const initialAllowFrom = (accountConfig.dm?.allowFrom ?? []).map(String);
+  const initialGroupAllowFrom = (accountConfig.groupAllowFrom ?? []).map(String);
   const configuredBotUserIds = resolveConfiguredMatrixBotUserIds({
     cfg,
     accountId: effectiveAccountId,
   });
 
-  ({ allowFrom, groupAllowFrom, roomsConfig } = await resolveMatrixMonitorConfig({
+  const {
+    allowFrom,
+    allowFromResolvedEntries,
+    groupAllowFrom,
+    groupAllowFromResolvedEntries,
+    roomsConfig: resolvedRoomsConfig,
+  } = await resolveMatrixMonitorConfig({
     cfg,
     accountId: effectiveAccountId,
-    allowFrom,
-    groupAllowFrom,
+    allowFrom: initialAllowFrom,
+    groupAllowFrom: initialGroupAllowFrom,
     roomsConfig,
     runtime,
-  }));
+  });
+  roomsConfig = resolvedRoomsConfig;
   needsRoomAliasesForConfig = Boolean(
     roomsConfig && Object.keys(roomsConfig).some((key) => key.trim().startsWith("#")),
   );
@@ -149,9 +190,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const auth = await resolveMatrixAuth({ cfg, accountId: effectiveAccountId });
   const resolvedInitialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? Math.max(0, Math.floor(opts.initialSyncLimit))
-      : auth.initialSyncLimit;
+    resolveOptionalIntegerOption(opts.initialSyncLimit, { min: 0 }) ?? auth.initialSyncLimit;
   const authWithLimit =
     resolvedInitialSyncLimit === auth.initialSyncLimit
       ? auth
@@ -164,7 +203,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   let cleanedUp = false;
   let client: MatrixClient | null = null;
   let threadBindingManager: { accountId: string; stop: () => void } | null = null;
-  let inboundDeduper: MatrixInboundEventDeduper | null = null;
   const monitorTaskRunner = createMatrixMonitorTaskRunner({
     logger,
     logVerboseMessage,
@@ -184,7 +222,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
         await monitorTaskRunner.waitForIdle();
       }
       threadBindingManager?.stop();
-      await inboundDeduper?.stop();
       if (client) {
         await releaseSharedClientInstance(client, mode);
       }
@@ -236,13 +273,11 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   const historyLimit = Math.max(0, accountConfig.historyLimit ?? globalGroupChatHistoryLimit ?? 0);
   const mediaMaxMb = opts.mediaMaxMb ?? accountConfig.mediaMaxMb ?? DEFAULT_MEDIA_MAX_MB;
   const mediaMaxBytes = Math.max(1, mediaMaxMb) * 1024 * 1024;
-  const streaming: "partial" | "quiet" | "off" =
-    accountConfig.streaming === true || accountConfig.streaming === "partial"
-      ? "partial"
-      : accountConfig.streaming === "quiet"
-        ? "quiet"
-        : "off";
-  const blockStreamingEnabled = accountConfig.blockStreaming === true;
+  const streaming = resolveMatrixStreamingMode(accountConfig.streaming);
+  const previewToolProgressEnabled = resolveMatrixPreviewToolProgressEnabled(
+    accountConfig.streaming,
+  );
+  const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(accountConfig) === true;
   const startupMs = Date.now();
   const startupGraceMs = 0;
   const warnedEncryptedRooms = new Set<string>();
@@ -269,7 +304,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountId: auth.accountId,
     });
     setActiveMatrixClient(client, auth.accountId);
-    inboundDeduper = await createMatrixInboundEventDeduper({
+    const inboundDeduper = createMatrixInboundEventDeduper({
       auth,
       env: process.env,
     });
@@ -283,14 +318,40 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     // /sync cursor we want restart backlogs to replay just like other channels.
     const dropPreStartupMessages = !client.hasPersistedSyncState();
     const { getRoomInfo, getMemberDisplayName } = createMatrixRoomInfoResolver(client);
+    const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
+      const roomInfoForConfig = needsRoomAliasesForConfig
+        ? await getRoomInfo(roomId, { includeAliases: true })
+        : undefined;
+      const aliases = roomInfoForConfig
+        ? [roomInfoForConfig.canonicalAlias ?? "", ...roomInfoForConfig.altAliases].filter(Boolean)
+        : [];
+      return (
+        resolveMatrixRoomConfig({
+          rooms: roomsConfig,
+          roomId,
+          aliases,
+        }).matchSource === "direct"
+      );
+    };
     const directTracker = createDirectRoomTracker(client, {
       log: logVerboseMessage,
+      isExplicitlyConfiguredRoom,
       canPromoteRecentInvite: async (roomId) =>
         shouldPromoteRecentInviteRoom({
           roomId,
           roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
           rooms: roomsConfig,
         }),
+      ...(dmSessionScope === "per-room"
+        ? {
+            canPromoteUnmappedStrictRoom: async (roomId) =>
+              shouldPromoteRecentInviteRoom({
+                roomId,
+                roomInfo: await getRoomInfo(roomId, { includeAliases: true }),
+                rooms: roomsConfig,
+              }),
+          }
+        : {}),
       shouldKeepLocallyPromotedDirectRoom: async (roomId) => {
         try {
           const roomInfo = await getRoomInfo(roomId, { includeAliases: true });
@@ -316,11 +377,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       core,
       cfg,
       accountId: effectiveAccountId,
+      accountConfig,
       runtime,
       logger,
       logVerboseMessage,
       allowFrom,
+      allowFromResolvedEntries,
       groupAllowFrom,
+      groupAllowFromResolvedEntries,
       roomsConfig,
       accountAllowBots,
       configuredBotUserIds,
@@ -330,6 +394,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       dmThreadReplies,
       dmSessionScope,
       streaming,
+      previewToolProgressEnabled,
       blockStreamingEnabled,
       dmEnabled,
       dmPolicy,
@@ -346,6 +411,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       needsRoomAliasesForConfig,
     });
     threadBindingManager = await createMatrixThreadBindingManager({
+      cfg,
       accountId: effectiveAccountId,
       auth,
       client,
@@ -402,7 +468,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       auth,
       env: process.env,
       abortSignal: opts.abortSignal,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       logVerboseMessage(`matrix: failed to backfill deviceId after startup (${String(err)})`);
     });
 
@@ -425,8 +491,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       accountConfig,
       logger,
       logVerboseMessage,
-      loadConfig: () => core.config.loadConfig() as CoreConfig,
-      writeConfigFile: async (nextCfg) => await core.config.writeConfigFile(nextCfg),
+      getRuntimeConfig: () => core.config.current() as CoreConfig,
+      replaceConfigFile: async (nextCfg) => {
+        await core.config.replaceConfigFile({
+          nextConfig: nextCfg,
+          afterWrite: { mode: "auto" },
+        });
+      },
       loadWebMedia: async (url, maxBytes) => await core.media.loadWebMedia(url, maxBytes),
       env: process.env,
       abortSignal: opts.abortSignal,

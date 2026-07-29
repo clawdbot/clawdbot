@@ -1,11 +1,12 @@
+// Matrix helper module supports account config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   listConfiguredAccountIds,
   resolveMergedAccountConfig,
   resolveNormalizedAccountEntry,
-} from "openclaw/plugin-sdk/account-resolution";
-import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+} from "openclaw/plugin-sdk/account-resolution-runtime";
+import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import type { CoreConfig, MatrixAccountConfig, MatrixConfig } from "../types.js";
 
 type MatrixRoomEntries = Record<string, NonNullable<MatrixConfig["groups"]>[string]>;
@@ -121,7 +122,7 @@ export function resolveMatrixAccountConfig(params: {
       | undefined,
     accountId,
     normalizeAccountId,
-    nestedObjectKeys: ["dm", "actions", "execApprovals"],
+    nestedObjectKeys: ["dm", "actions", "execApprovals", "botLoopProtection"],
   });
   const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
   const groups = mergeMatrixRoomEntries(
@@ -147,4 +148,29 @@ export function resolveMatrixAccountConfig(params: {
     ...(groups ? { groups } : {}),
     ...(rooms ? { rooms } : {}),
   };
+}
+
+export function resolveMatrixAccountAllowlistConfig(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+}): {
+  dmAllowFrom?: NonNullable<MatrixConfig["dm"]>["allowFrom"];
+  groupAllowFrom?: MatrixConfig["groupAllowFrom"];
+} {
+  const accountId = normalizeAccountId(params.accountId);
+  const base = resolveMatrixBaseConfig(params.cfg);
+  const accountConfig = findMatrixAccountConfig(params.cfg, accountId);
+  const accountDm = accountConfig?.dm;
+
+  let dmAllowFrom = base.dm?.allowFrom;
+  if (accountDm && Object.hasOwn(accountDm, "allowFrom")) {
+    dmAllowFrom = accountDm.allowFrom;
+  }
+
+  let groupAllowFrom = base.groupAllowFrom;
+  if (accountConfig && Object.hasOwn(accountConfig, "groupAllowFrom")) {
+    groupAllowFrom = accountConfig.groupAllowFrom;
+  }
+
+  return { dmAllowFrom, groupAllowFrom };
 }

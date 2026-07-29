@@ -1,11 +1,25 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import type { ModelProviderConfig } from "../config/types.js";
+// Builds provider catalog entries from plugin manifest metadata.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { ModelProviderConfig } from "../config/types.js";
+import { copyRecordEntries } from "../shared/safe-record.js";
 import type { ProviderCatalogContext, ProviderCatalogResult } from "./types.js";
 
+function addApiKeyToProvider(
+  provider: ModelProviderConfig,
+  apiKey: string,
+): (ModelProviderConfig & { apiKey: string }) | undefined {
+  try {
+    return { ...provider, apiKey };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Finds a provider catalog template entry by normalized provider and template id. */
 export function findCatalogTemplate(params: {
   entries: ReadonlyArray<{ provider: string; id: string }>;
   providerId: string;
@@ -22,6 +36,7 @@ export function findCatalogTemplate(params: {
     .find((entry) => entry !== undefined);
 }
 
+/** Builds a provider catalog result for providers that share one API key. */
 export async function buildSingleProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
@@ -51,6 +66,7 @@ export async function buildSingleProviderApiKeyCatalog(params: {
   };
 }
 
+/** Builds a multi-provider catalog result backed by one provider API key. */
 export async function buildPairedProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
@@ -66,7 +82,10 @@ export async function buildPairedProviderApiKeyCatalog(params: {
   const providers = await params.buildProviders();
   return {
     providers: Object.fromEntries(
-      Object.entries(providers).map(([id, provider]) => [id, { ...provider, apiKey }]),
+      copyRecordEntries<ModelProviderConfig>(providers).flatMap(([id, provider]) => {
+        const providerWithApiKey = addApiKeyToProvider(provider, apiKey);
+        return providerWithApiKey ? [[id, providerWithApiKey]] : [];
+      }),
     ),
   };
 }

@@ -1,26 +1,130 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import * as tar from "tar";
-import { afterEach, describe, expect, it } from "vitest";
-import { pluginSdkEntrypoints } from "../../plugin-sdk/entrypoints.js";
-import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../test-helpers/fs-fixtures.js";
+// Plugin SDK package guardrail tests cover package export and contract drift checks.
+import fs from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  deprecatedBarrelPluginSdkEntrypoints,
+  deprecatedPublicPluginSdkEntrypoints,
+  privateLocalOnlyPluginSdkEntrypoints,
+  pluginSdkEntrypoints,
+  publicPluginOwnedSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+  reservedBundledPluginSdkEntrypoints,
+  supportedBundledFacadeSdkEntrypoints,
+} from "../../plugin-sdk/entrypoints.js";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath as toRepoRelativePathFromRoot,
+} from "../../test-utils/repo-files.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
+const SDK_SUBPATH_DOC_FILE = "docs/plugins/sdk-subpaths.md";
 const PUBLIC_CONTRACT_REFERENCE_FILES = [
   "docs/plugins/architecture.md",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
 ] as const;
 const PLUGIN_SDK_SUBPATH_PATTERN = /openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)\b/g;
-const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>^%\r\n]/;
-const tempDirs: string[] = [];
+const BUNDLED_PLUGIN_FACADE_LOADER_PATTERN =
+  /\bload(?:Activated)?BundledPluginPublicSurfaceModuleSync\b/;
+const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
+  /\b(?:Private helper surface|Narrow plugin-sdk surface for the bundled|Narrow .*runtime exports used by the bundled)\b/i;
+const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
+const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
+  /\b(?:imessage|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
+const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
+const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
+  "openclaw/plugin-sdk",
+  // Bundled code uses the canonical channel-config-schema subpath; the
+  // primitives/legacy shells stay export-compatible for third parties only.
+  "openclaw/plugin-sdk/channel-config-primitives",
+  "openclaw/plugin-sdk/channel-config-schema-legacy",
+  "openclaw/plugin-sdk/compat",
+  "openclaw/plugin-sdk/test-utils",
+]);
+const DEPRECATED_TEST_ALIAS_SPECIFIERS = new Set(["openclaw/plugin-sdk/test-utils"]);
+const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
+  "src/plugins/compat/registry.ts",
+  "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+]);
+const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
+  "extensions/amazon-bedrock/register.sync.runtime.ts",
+  "extensions/github-copilot/index.ts",
+  "extensions/google/index.ts",
+  "extensions/lmstudio/index.ts",
+  "extensions/memory-core/src/memory/provider-adapters.ts",
+  "extensions/mistral/index.ts",
+  "extensions/ollama/index.ts",
+  "extensions/openai/index.ts",
+  "extensions/voyage/index.ts",
+]);
+const LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES = new Set([
+  "extensions/amazon-bedrock/openclaw.plugin.json",
+  "extensions/github-copilot/openclaw.plugin.json",
+  "extensions/google/openclaw.plugin.json",
+  "extensions/lmstudio/openclaw.plugin.json",
+  "extensions/memory-core/openclaw.plugin.json",
+  "extensions/mistral/openclaw.plugin.json",
+  "extensions/ollama/openclaw.plugin.json",
+  "extensions/openai/openclaw.plugin.json",
+  "extensions/voyage/openclaw.plugin.json",
+]);
+const MATRIX_RUNTIME_DEPS = [
+  "@matrix-org/matrix-sdk-crypto-wasm",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "fake-indexeddb",
+  "matrix-js-sdk",
+  "music-metadata",
+] as const;
+const trackedFilesByRoot = new Map<string, readonly string[] | null>();
+
+function toRepoRelativePath(filePath: string): string {
+  return toRepoRelativePathFromRoot(REPO_ROOT, filePath);
+}
+
+function isSkippedTrackedPath(repoRelativePath: string): boolean {
+  return repoRelativePath
+    .split("/")
+    .some((part) => part === "dist" || part === "node_modules" || part === ".git");
+}
+
+function isCodeFile(filePath: string): boolean {
+  return /\.(?:[cm]?ts|tsx|mts|cts)$/.test(filePath);
+}
+
+function listTrackedFiles(root: string): string[] | null {
+  const relativeRoot = toRepoRelativePath(root);
+  if (!relativeRoot || relativeRoot.startsWith("..")) {
+    return null;
+  }
+  if (trackedFilesByRoot.has(relativeRoot)) {
+    const files = trackedFilesByRoot.get(relativeRoot);
+    return files ? [...files] : null;
+  }
+  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
+  if (!trackedFiles) {
+    trackedFilesByRoot.set(relativeRoot, null);
+    return null;
+  }
+  const files = trackedFiles
+    .filter((line) => line.length > 0 && !isSkippedTrackedPath(line))
+    .map((line) => resolve(REPO_ROOT, line))
+    .filter((filePath) => fs.existsSync(filePath))
+    .toSorted();
+  trackedFilesByRoot.set(relativeRoot, files);
+  return [...files];
+}
+
+function listTrackedCodeFiles(root: string): string[] | null {
+  const files = listTrackedFiles(root);
+  return files?.filter(isCodeFile) ?? null;
+}
 
 function collectPluginSdkPackageExports(): string[] {
-  const packageJson = JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
+  const packageJson = JSON.parse(fs.readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
     exports?: Record<string, unknown>;
   };
   const exports = packageJson.exports ?? {};
@@ -41,7 +145,7 @@ function collectPluginSdkPackageExports(): string[] {
 function collectPluginSdkSubpathReferences() {
   const references: Array<{ file: string; subpath: string }> = [];
   for (const file of PUBLIC_CONTRACT_REFERENCE_FILES) {
-    const source = readFileSync(resolve(REPO_ROOT, file), "utf8");
+    const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
     for (const match of source.matchAll(PLUGIN_SDK_SUBPATH_PATTERN)) {
       const subpath = match[1];
       if (!subpath) {
@@ -53,13 +157,115 @@ function collectPluginSdkSubpathReferences() {
   return references;
 }
 
+function collectDocumentedSdkSubpaths(): Set<string> {
+  const source = fs.readFileSync(resolve(REPO_ROOT, SDK_SUBPATH_DOC_FILE), "utf8");
+  return new Set(
+    [...source.matchAll(/`plugin-sdk\/([a-z0-9][a-z0-9-]*)`/g)]
+      .map((match) => match[1])
+      .filter((subpath): subpath is string => Boolean(subpath)),
+  );
+}
+
+function collectBundledPluginIds(): string[] {
+  const trackedFiles = listTrackedFiles(resolve(REPO_ROOT, "extensions"));
+  if (trackedFiles) {
+    return [
+      ...new Set(
+        trackedFiles
+          .map((file) => toRepoRelativePath(file).split("/"))
+          .filter((parts) => parts.length > 2)
+          .map((parts) => parts[1])
+          .filter((pluginId): pluginId is string => Boolean(pluginId)),
+      ),
+    ].toSorted((a, b) => b.length - a.length || a.localeCompare(b));
+  }
+  return fs
+    .readdirSync(resolve(REPO_ROOT, "extensions"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .toSorted((a, b) => b.length - a.length || a.localeCompare(b));
+}
+
+function collectPluginOwnedSdkEntrypoints(): string[] {
+  const pluginIds = collectBundledPluginIds();
+  return pluginSdkEntrypoints
+    .filter((entrypoint) =>
+      pluginIds.some(
+        (pluginId) => entrypoint === pluginId || entrypoint.startsWith(`${pluginId}-`),
+      ),
+    )
+    .toSorted();
+}
+
+function resolvePluginOwnerFromEntrypoint(entrypoint: string): string | undefined {
+  return collectBundledPluginIds().find(
+    (pluginId) => entrypoint === pluginId || entrypoint.startsWith(`${pluginId}-`),
+  );
+}
+
+function collectClassificationOverlaps(classifications: Record<string, readonly string[]>) {
+  const seen = new Map<string, string[]>();
+  for (const [classification, entrypoints] of Object.entries(classifications)) {
+    for (const entrypoint of entrypoints) {
+      const current = seen.get(entrypoint) ?? [];
+      current.push(classification);
+      seen.set(entrypoint, current);
+    }
+  }
+  return [...seen.entries()]
+    .filter(([, matches]) => matches.length > 1)
+    .map(([entrypoint, matches]) => `${entrypoint}: ${matches.toSorted().join(", ")}`)
+    .toSorted();
+}
+
+function collectBundledFacadeSdkEntrypoints(): string[] {
+  const entrypoints: string[] = [];
+  for (const entrypoint of pluginSdkEntrypoints) {
+    const filePath = resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`);
+    const source = fs.readFileSync(filePath, "utf8");
+    if (BUNDLED_PLUGIN_FACADE_LOADER_PATTERN.test(source)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints.toSorted();
+}
+
+function collectPrivateBundledSdkSurfaceEntrypoints(): string[] {
+  const entrypoints: string[] = [];
+  for (const entrypoint of pluginSdkEntrypoints) {
+    const filePath = resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`);
+    const source = fs.readFileSync(filePath, "utf8");
+    if (PRIVATE_BUNDLED_SDK_SURFACE_PATTERN.test(source)) {
+      entrypoints.push(entrypoint);
+    }
+  }
+  return entrypoints.toSorted();
+}
+
+function collectGenericCoreOwnerNameLeaks(): Array<{ file: string; match: string }> {
+  const leaks: Array<{ file: string; match: string }> = [];
+  for (const file of GENERIC_CORE_HELPER_FILES) {
+    const source = fs.readFileSync(resolve(REPO_ROOT, file), "utf8");
+    for (const match of source.matchAll(GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN)) {
+      const ownerName = match[0];
+      if (!ownerName) {
+        continue;
+      }
+      leaks.push({ file, match: ownerName });
+    }
+  }
+  return leaks;
+}
+
 function readRootPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+  files?: string[];
 } {
-  return JSON.parse(readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
+  return JSON.parse(fs.readFileSync(resolve(REPO_ROOT, "package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
+    files?: string[];
   };
 }
 
@@ -67,18 +273,8 @@ function readMatrixPackageJson(): {
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 } {
-  return JSON.parse(readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-  };
-}
-
-function readAmazonBedrockPackageJson(): {
-  dependencies?: Record<string, string>;
-  optionalDependencies?: Record<string, string>;
-} {
   return JSON.parse(
-    readFileSync(resolve(REPO_ROOT, "extensions/amazon-bedrock/package.json"), "utf8"),
+    fs.readFileSync(resolve(REPO_ROOT, "extensions/matrix/package.json"), "utf8"),
   ) as {
     dependencies?: Record<string, string>;
     optionalDependencies?: Record<string, string>;
@@ -95,130 +291,13 @@ function collectRuntimeDependencySpecs(packageJson: {
   ]);
 }
 
-function createRootPackageRequire() {
-  return createRequire(pathToFileURL(resolve(REPO_ROOT, "package.json")).href);
-}
-
-function isNpmExecPath(value: string): boolean {
-  return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(
-    value.split(/[\\/]/).at(-1)?.toLowerCase() ?? "",
-  );
-}
-
-function escapeForCmdExe(arg: string): string {
-  if (WINDOWS_UNSAFE_CMD_CHARS_RE.test(arg)) {
-    throw new Error(`unsafe Windows cmd.exe argument detected: ${JSON.stringify(arg)}`);
-  }
-  if (!arg.includes(" ") && !arg.includes('"')) {
-    return arg;
-  }
-  return `"${arg.replace(/"/g, '""')}"`;
-}
-
-function buildCmdExeCommandLine(command: string, args: string[]): string {
-  return [escapeForCmdExe(command), ...args.map(escapeForCmdExe)].join(" ");
-}
-
-type NpmCommandInvocation = {
-  command: string;
-  args: string[];
-  env?: NodeJS.ProcessEnv;
-  windowsVerbatimArguments?: boolean;
-};
-
-function resolveNpmCommandInvocation(npmArgs: string[]): NpmCommandInvocation {
-  const npmExecPath = process.env.npm_execpath;
-  if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
-    return { command: process.execPath, args: [npmExecPath, ...npmArgs] };
-  }
-
-  if (process.platform !== "win32") {
-    return { command: "npm", args: npmArgs };
-  }
-
-  const nodeDir = dirname(process.execPath);
-  const npmCliCandidates = [
-    resolve(nodeDir, "../lib/node_modules/npm/bin/npm-cli.js"),
-    resolve(nodeDir, "node_modules/npm/bin/npm-cli.js"),
-  ];
-  const npmCliPath = npmCliCandidates.find((candidate) => existsSync(candidate));
-  if (npmCliPath) {
-    return { command: process.execPath, args: [npmCliPath, ...npmArgs] };
-  }
-
-  const npmExePath = resolve(nodeDir, "npm.exe");
-  if (existsSync(npmExePath)) {
-    return { command: npmExePath, args: npmArgs };
-  }
-
-  const npmCmdPath = resolve(nodeDir, "npm.cmd");
-  if (existsSync(npmCmdPath)) {
-    return {
-      command: process.env.ComSpec ?? "cmd.exe",
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(npmCmdPath, npmArgs)],
-      windowsVerbatimArguments: true,
-    };
-  }
-
-  return {
-    command: process.env.ComSpec ?? "cmd.exe",
-    args: ["/d", "/s", "/c", buildCmdExeCommandLine("npm.cmd", npmArgs)],
-    windowsVerbatimArguments: true,
-  };
-}
-
-function packOpenClawToTempDir(packDir: string): string {
-  const invocation = resolveNpmCommandInvocation([
-    "pack",
-    "--ignore-scripts",
-    "--json",
-    "--pack-destination",
-    packDir,
-  ]);
-  const result = spawnSync(invocation.command, invocation.args, {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      ...invocation.env,
-      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-    },
-    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  if (result.status !== 0) {
-    throw new Error((result.stderr || result.stdout || "npm pack failed").trim());
-  }
-  const raw = result.stdout;
-  const parsed = JSON.parse(raw) as Array<{ filename?: string }>;
-  const filename = parsed[0]?.filename?.trim();
-  if (!filename) {
-    throw new Error(`npm pack did not return a filename: ${raw}`);
-  }
-  return join(packDir, filename);
-}
-
-async function readPackedRootPackageJson(archivePath: string): Promise<{
-  dependencies?: Record<string, string>;
-}> {
-  const extractDir = makeTrackedTempDir("openclaw-packed-root-package-json", tempDirs);
-  await tar.x({
-    file: archivePath,
-    cwd: extractDir,
-    filter: (entryPath) => entryPath === "package/package.json",
-    strict: true,
-  });
-  return JSON.parse(readFileSync(join(extractDir, "package", "package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-  };
-}
-
 function collectExtensionFiles(dir: string): string[] {
-  const entries = readdirSync(dir, { withFileTypes: true });
+  const trackedFiles = listTrackedCodeFiles(dir);
+  if (trackedFiles) {
+    return trackedFiles;
+  }
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files: string[] = [];
   for (const entry of entries) {
     if (entry.name === "dist" || entry.name === "node_modules") {
@@ -237,27 +316,37 @@ function collectExtensionFiles(dir: string): string[] {
   return files;
 }
 
+function isExtensionTestOrSupportPath(repoRelativePath: string): boolean {
+  return (
+    /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
+    /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /(?:^|\/)test-helpers\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /(?:^|\/)test-harness\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /(?:^|\/)test-runtime\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test-helpers\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test-harness\.[cm]?tsx?$/.test(repoRelativePath) ||
+    /\.test\.[cm]?tsx?$/.test(repoRelativePath)
+  );
+}
+
 function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: string }> {
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPattern = /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+src\/[^"']+)["']/g;
   for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
-    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
-    if (
-      /(?:^|\/)(?:__tests__|tests|test-support)(?:\/|$)/.test(repoRelativePath) ||
-      /(?:^|\/)test-support\.[cm]?tsx?$/.test(repoRelativePath) ||
-      /\.test\.[cm]?tsx?$/.test(repoRelativePath)
-    ) {
+    const repoRelativePath = toRepoRelativePath(file);
+    if (isExtensionTestOrSupportPath(repoRelativePath)) {
       continue;
     }
-    const extensionRootMatch = /^(.*?\/extensions\/[^/]+)/.exec(file.replaceAll("\\", "/"));
+    const extensionRootMatch = /^(.*?\/extensions\/[^/]+)/.exec(toRepoPath(file));
     const extensionRoot = extensionRootMatch?.[1];
-    const source = readFileSync(file, "utf8");
+    const source = fs.readFileSync(file, "utf8");
     for (const match of source.matchAll(importPattern)) {
       const specifier = match[1];
       if (!specifier) {
         continue;
       }
-      const resolvedSpecifier = resolve(dirname(file), specifier).replaceAll("\\", "/");
+      const resolvedSpecifier = toRepoPath(resolve(dirname(file), specifier));
       if (extensionRoot && resolvedSpecifier.startsWith(`${extensionRoot}/`)) {
         continue;
       }
@@ -270,18 +359,502 @@ function collectExtensionCoreImportLeaks(): Array<{ file: string; specifier: str
   return leaks;
 }
 
+function collectExtensionTestHelperImportLeaks(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']((?:\.\.\/)+test\/helpers\/[^"']+)["']/g,
+    /\bimport\s*\(\s*["']((?:\.\.\/)+test\/helpers\/[^"']+)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']((?:\.\.\/)+test\/helpers\/[^"']+)["']/g,
+  ];
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = toRepoRelativePath(file);
+    if (isExtensionTestOrSupportPath(repoRelativePath)) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    for (const importPattern of importPatterns) {
+      for (const match of source.matchAll(importPattern)) {
+        const specifier = match[1];
+        if (!specifier) {
+          continue;
+        }
+        leaks.push({
+          file: repoRelativePath,
+          specifier,
+        });
+      }
+    }
+  }
+  return leaks;
+}
+
+function collectDeprecatedExtensionSdkImports(): Array<{ file: string; specifier: string }> {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk(?:\/[a-z0-9][a-z0-9-]*)?)["']/g,
+    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk(?:\/[a-z0-9][a-z0-9-]*)?)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk(?:\/[a-z0-9][a-z0-9-]*)?)["']/g,
+  ];
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = toRepoRelativePath(file);
+    const source = fs.readFileSync(file, "utf8");
+    for (const importPattern of importPatterns) {
+      for (const match of source.matchAll(importPattern)) {
+        const specifier = match[1];
+        if (!specifier || !DEPRECATED_EXTENSION_SDK_SPECIFIERS.has(specifier)) {
+          continue;
+        }
+        leaks.push({
+          file: repoRelativePath,
+          specifier,
+        });
+      }
+    }
+  }
+  return leaks;
+}
+
+function collectNewDeprecatedMemoryEmbeddingProviderApiFiles(): string[] {
+  const files: string[] = [];
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = toRepoRelativePath(file);
+    if (isExtensionTestOrSupportPath(repoRelativePath)) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    if (
+      /\b(?:[A-Za-z_$][\w$]*\.)?registerMemoryEmbeddingProvider\s*\(/u.test(source) &&
+      !LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES.has(repoRelativePath)
+    ) {
+      files.push(repoRelativePath);
+    }
+  }
+  return files.toSorted();
+}
+
+function collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(): string[] {
+  const files: string[] = [];
+  const manifestFiles =
+    listGitTrackedFiles({
+      repoRoot: REPO_ROOT,
+      pathspecs: "extensions/**/openclaw.plugin.json",
+    }) ?? [];
+  for (const repoRelativePath of manifestFiles) {
+    const source = fs.readFileSync(resolve(REPO_ROOT, repoRelativePath), "utf8");
+    if (
+      /"memoryEmbeddingProviders"\s*:/u.test(source) &&
+      !LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES.has(repoRelativePath)
+    ) {
+      files.push(repoRelativePath);
+    }
+  }
+  return files.toSorted();
+}
+
+function collectCodeFiles(dir: string): string[] {
+  const trackedFiles = listTrackedCodeFiles(dir);
+  if (trackedFiles) {
+    return trackedFiles;
+  }
+
+  const files: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === "dist" || entry.name === "node_modules" || entry.name === ".git") {
+      continue;
+    }
+    const nextPath = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectCodeFiles(nextPath));
+      continue;
+    }
+    if (!entry.isFile() || !/\.(?:[cm]?ts|tsx|mts|cts)$/.test(entry.name)) {
+      continue;
+    }
+    files.push(nextPath);
+  }
+  return files;
+}
+
+function collectDeprecatedTestAliasImports(): string[] {
+  const leaks: Array<{ file: string; specifier: string }> = [];
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/test-utils)["']/g,
+    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk\/test-utils)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk\/test-utils)["']/g,
+  ];
+  for (const root of ["src", "test", "extensions", "packages"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const repoRelativePath = toRepoRelativePath(file);
+      if (DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES.has(repoRelativePath)) {
+        continue;
+      }
+      const source = fs.readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const specifier = match[1];
+          if (!specifier || !DEPRECATED_TEST_ALIAS_SPECIFIERS.has(specifier)) {
+            continue;
+          }
+          leaks.push({
+            file: repoRelativePath,
+            specifier,
+          });
+        }
+      }
+    }
+  }
+  return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
+}
+
+function parseTestApiNamedExports(source: string): string[] {
+  const exports = new Set<string>();
+  const declarationPattern =
+    /\bexport\s+(?:const|function|class|async\s+function|type|interface)\s+([A-Za-z_$][\w$]*)/g;
+  const exportListPattern = /\bexport\s*\{([^}]+)\}/g;
+
+  for (const match of source.matchAll(declarationPattern)) {
+    const exportName = match[1];
+    if (exportName) {
+      exports.add(exportName);
+    }
+  }
+
+  for (const match of source.matchAll(exportListPattern)) {
+    const exportList = match[1];
+    if (!exportList) {
+      continue;
+    }
+    for (const part of exportList.split(",")) {
+      const item = part.trim().replace(/^type\s+/, "");
+      const aliasMatch = /\bas\s+([A-Za-z_$][\w$]*)$/u.exec(item);
+      const nameMatch = /^([A-Za-z_$][\w$]*)/u.exec(item);
+      const exportName = aliasMatch?.[1] ?? nameMatch?.[1];
+      if (exportName && exportName !== "default") {
+        exports.add(exportName);
+      }
+    }
+  }
+
+  return [...exports].toSorted();
+}
+
+function collectWorkspaceCodeFiles(): string[] {
+  const files: string[] = [];
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    const dir = resolve(REPO_ROOT, root);
+    if (fs.existsSync(dir)) {
+      files.push(...collectCodeFiles(dir));
+    }
+  }
+  return files;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function collectUnusedExtensionTestApiExports(): Array<{ file: string; exportName: string }> {
+  const leaks: Array<{ file: string; exportName: string }> = [];
+  const workspaceCodeFiles = collectWorkspaceCodeFiles();
+  const testApiFiles = collectCodeFiles(resolve(REPO_ROOT, "extensions")).filter((file) =>
+    file.endsWith("/test-api.ts"),
+  );
+  const testApiExports = new Map<string, string[]>();
+  const exportNames = new Set<string>();
+
+  for (const file of testApiFiles) {
+    const source = fs.readFileSync(file, "utf8");
+    const namedExports = parseTestApiNamedExports(source);
+    testApiExports.set(file, namedExports);
+    for (const exportName of namedExports) {
+      exportNames.add(exportName);
+    }
+  }
+
+  if (exportNames.size === 0) {
+    return [];
+  }
+
+  const identifierPattern = new RegExp(
+    `\\b(${[...exportNames].map(escapeRegExp).join("|")})\\b`,
+    "g",
+  );
+  const referenceCounts = new Map<string, number>();
+  const selfReferenceCounts = new Map<string, Map<string, number>>();
+
+  for (const file of workspaceCodeFiles) {
+    const source = fs.readFileSync(file, "utf8");
+    const selfCounts = testApiExports.has(file) ? new Map<string, number>() : undefined;
+    for (const match of source.matchAll(identifierPattern)) {
+      const exportName = match[1];
+      if (!exportName) {
+        continue;
+      }
+      referenceCounts.set(exportName, (referenceCounts.get(exportName) ?? 0) + 1);
+      if (selfCounts) {
+        selfCounts.set(exportName, (selfCounts.get(exportName) ?? 0) + 1);
+      }
+    }
+    if (selfCounts) {
+      selfReferenceCounts.set(file, selfCounts);
+    }
+  }
+
+  for (const [file, namedExports] of testApiExports) {
+    const repoRelativePath = toRepoRelativePath(file);
+    for (const exportName of namedExports) {
+      const referenceCount =
+        (referenceCounts.get(exportName) ?? 0) -
+        (selfReferenceCounts.get(file)?.get(exportName) ?? 0);
+      if (referenceCount === 0) {
+        leaks.push({ file: repoRelativePath, exportName });
+      }
+    }
+  }
+
+  return leaks.toSorted(
+    (a, b) => a.file.localeCompare(b.file) || a.exportName.localeCompare(b.exportName),
+  );
+}
+
+function collectCrossOwnerReservedSdkImports(): Array<{
+  file: string;
+  specifier: string;
+  owner?: string;
+}> {
+  const leaks: Array<{ file: string; specifier: string; owner?: string }> = [];
+  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+  const importPattern =
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g;
+
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = toRepoRelativePath(file);
+    const pluginId = repoRelativePath.split("/")[1];
+    const source = fs.readFileSync(file, "utf8");
+    for (const match of source.matchAll(importPattern)) {
+      const subpath = match[1];
+      if (!subpath || !reserved.has(subpath)) {
+        continue;
+      }
+      const owner = resolvePluginOwnerFromEntrypoint(subpath);
+      if (owner === pluginId) {
+        continue;
+      }
+      leaks.push({
+        file: repoRelativePath,
+        specifier: `openclaw/plugin-sdk/${subpath}`,
+        owner,
+      });
+    }
+  }
+  return leaks;
+}
+
+function collectReservedSdkSubpathImports(): string[] {
+  const imports = new Set<string>();
+  const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+  ];
+
+  for (const root of ["src", "test", "extensions", "packages", "scripts"]) {
+    for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
+      const source = fs.readFileSync(file, "utf8");
+      for (const importPattern of importPatterns) {
+        for (const match of source.matchAll(importPattern)) {
+          const subpath = match[1];
+          if (subpath && reserved.has(subpath)) {
+            imports.add(subpath);
+          }
+        }
+      }
+    }
+  }
+
+  return [...imports].toSorted();
+}
+
+function hasWildcardReexport(entrypoint: string): boolean {
+  const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk", `${entrypoint}.ts`), "utf8");
+  return /^\s*export\s+(?:type\s+)?\*\s+from\s+["'][^"']+["']/mu.test(source);
+}
+
+function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<string>): string[] {
+  const imports = new Set<string>();
+  const importPatterns = [
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+    /\bimport\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["']openclaw\/plugin-sdk\/([a-z0-9][a-z0-9-]*)["']/g,
+  ];
+
+  for (const file of collectExtensionFiles(resolve(REPO_ROOT, "extensions"))) {
+    const repoRelativePath = toRepoRelativePath(file);
+    if (isExtensionTestOrSupportPath(repoRelativePath)) {
+      continue;
+    }
+    const source = fs.readFileSync(file, "utf8");
+    for (const importPattern of importPatterns) {
+      for (const match of source.matchAll(importPattern)) {
+        const subpath = match[1];
+        if (subpath && subpaths.has(subpath)) {
+          imports.add(`${repoRelativePath}: openclaw/plugin-sdk/${subpath}`);
+        }
+      }
+    }
+  }
+
+  return [...imports].toSorted();
+}
+
 describe("plugin-sdk package contract guardrails", () => {
-  afterEach(() => {
-    cleanupTrackedTempDirs(tempDirs);
+  let deprecatedTestAliasImports: string[] = [];
+  let unusedReservedSdkSubpaths: string[] = [];
+
+  beforeAll(() => {
+    deprecatedTestAliasImports = collectDeprecatedTestAliasImports();
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    unusedReservedSdkSubpaths = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
+    );
+  });
+
+  it("lists package guardrail scan inputs from git without walking roots", () => {
+    expectNoReaddirSyncDuring(() => {
+      const pluginIds = collectBundledPluginIds();
+      const extensionFiles = collectExtensionFiles(resolve(REPO_ROOT, "extensions"));
+      const workspaceFiles = collectWorkspaceCodeFiles();
+
+      expect(pluginIds.length).toBeGreaterThan(0);
+      expect(extensionFiles.length).toBeGreaterThan(0);
+      expect(workspaceFiles.length).toBeGreaterThan(extensionFiles.length);
+    });
+  });
+
+  it("keeps plugin-sdk entrypoint metadata unique", () => {
+    const counts = new Map<string, number>();
+    for (const entrypoint of pluginSdkEntrypoints) {
+      counts.set(entrypoint, (counts.get(entrypoint) ?? 0) + 1);
+    }
+    const duplicates = [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([entrypoint]) => entrypoint)
+      .toSorted();
+
+    expect(duplicates).toStrictEqual([]);
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    expect(collectPluginSdkPackageExports()).toEqual([...pluginSdkEntrypoints].toSorted());
+    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
+    const packageExports = collectPluginSdkPackageExports();
+
+    expect(packageExports.filter((entrypoint) => !localOnly.has(entrypoint))).toEqual(
+      [...publicPluginSdkEntrypoints].toSorted(),
+    );
+    expect(
+      publicPluginSdkEntrypoints.filter((entrypoint) => !packageExports.includes(entrypoint)),
+    ).toEqual([]);
+  });
+
+  it("keeps Vitest-backed SDK test helpers local-only", () => {
+    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
+
+    expect(
+      ["plugin-test-contracts", "provider-test-contracts"].every((entrypoint) =>
+        localOnly.has(entrypoint),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
+    const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");
+
+    expect(source).not.toMatch(/export\s+\*\s+from\s+["']\.\.\/infra\/net\/fetch-guard\.js["']/);
+    expect(source).not.toContain("fetchConfiguredLocalOriginWithSsrFGuard");
+    expect(source).not.toContain("GuardedFetchConfiguredLocalOriginOptions");
+  });
+
+  it("keeps configured local-origin fetch helpers out of the public SSRF runtime", async () => {
+    const ssrfRuntime = await import("../../plugin-sdk/ssrf-runtime.js");
+
+    expect(ssrfRuntime).not.toHaveProperty("fetchConfiguredLocalOriginWithSsrFGuard");
+  });
+
+  it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
+    const entrypoints = new Set(pluginSdkEntrypoints);
+    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+    const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
+    const localOnly = new Set<string>(privateLocalOnlyPluginSdkEntrypoints);
+    const unknownReserved = [...reserved].filter((entrypoint) => !entrypoints.has(entrypoint));
+    const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
+    const unknownLocalOnly = [...localOnly].filter((entrypoint) => !entrypoints.has(entrypoint));
+    const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
+      (entrypoint) =>
+        !reserved.has(entrypoint) && !supported.has(entrypoint) && !localOnly.has(entrypoint),
+    );
+    const unreservedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
+      (entrypoint) => !reserved.has(entrypoint) && !localOnly.has(entrypoint),
+    );
+
+    expect({
+      unknownReserved,
+      unknownSupported,
+      unknownLocalOnly,
+      unclassifiedBundledFacades,
+      unreservedPrivateSurfaces,
+    }).toEqual({
+      unknownReserved: [],
+      unknownSupported: [],
+      unknownLocalOnly: [],
+      unclassifiedBundledFacades: [],
+      unreservedPrivateSurfaces: [],
+    });
+  });
+
+  it("keeps plugin-owned SDK subpaths explicitly classified and documented", () => {
+    const entrypoints = new Set(pluginSdkEntrypoints);
+    const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
+    const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
+    const publicOwned = new Set<string>(publicPluginOwnedSdkEntrypoints);
+    const localOnly = new Set<string>(privateLocalOnlyPluginSdkEntrypoints);
+    const documented = collectDocumentedSdkSubpaths();
+    const pluginOwnedEntrypoints = collectPluginOwnedSdkEntrypoints();
+    const classified = new Set([...reserved, ...supported, ...publicOwned, ...localOnly]);
+
+    const unknownPublicOwned = [...publicOwned].filter(
+      (entrypoint) => !entrypoints.has(entrypoint),
+    );
+    const classificationOverlaps = collectClassificationOverlaps({
+      reserved: reservedBundledPluginSdkEntrypoints,
+      supported: supportedBundledFacadeSdkEntrypoints,
+      publicOwned: publicPluginOwnedSdkEntrypoints,
+      localOnly: privateLocalOnlyPluginSdkEntrypoints,
+    });
+    const unclassifiedPluginOwned = pluginOwnedEntrypoints.filter(
+      (entrypoint) => !classified.has(entrypoint),
+    );
+    const undocumentedPluginOwned = pluginOwnedEntrypoints.filter(
+      (entrypoint) => !documented.has(entrypoint),
+    );
+
+    expect({
+      unknownPublicOwned,
+      classificationOverlaps,
+      unclassifiedPluginOwned,
+      undocumentedPluginOwned,
+    }).toEqual({
+      unknownPublicOwned: [],
+      classificationOverlaps: [],
+      unclassifiedPluginOwned: [],
+      undocumentedPluginOwned: [],
+    });
   });
 
   it("keeps curated public plugin-sdk references on exported built subpaths", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
     const exports = new Set(collectPluginSdkPackageExports());
+    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
     const failures: string[] = [];
 
     for (const reference of collectPluginSdkSubpathReferences()) {
@@ -289,7 +862,7 @@ describe("plugin-sdk package contract guardrails", () => {
       if (!entrypoints.has(reference.subpath)) {
         missingFrom.push("scripts/lib/plugin-sdk-entrypoints.json");
       }
-      if (!exports.has(reference.subpath)) {
+      if (!exports.has(reference.subpath) && !localOnly.has(reference.subpath)) {
         missingFrom.push("package.json exports");
       }
       if (missingFrom.length === 0) {
@@ -300,64 +873,97 @@ describe("plugin-sdk package contract guardrails", () => {
       );
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
-  it("mirrors matrix runtime deps needed by the bundled host graph", () => {
-    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
+  it("keeps deprecated public SDK subpaths unused by extension production code", () => {
+    const publicEntrypoints = new Set(publicPluginSdkEntrypoints);
+    const unknownDeprecated = deprecatedPublicPluginSdkEntrypoints.filter(
+      (entrypoint) => !publicEntrypoints.has(entrypoint),
+    );
+    const extensionImports = collectExtensionProductionSdkSubpathImports(
+      new Set<string>(deprecatedPublicPluginSdkEntrypoints),
+    );
+
+    expect({ unknownDeprecated, extensionImports }).toEqual({
+      unknownDeprecated: [],
+      extensionImports: [],
+    });
+  });
+
+  it("keeps deprecated SDK barrels explicit and buildable", () => {
+    const entrypoints = new Set(pluginSdkEntrypoints);
+    const unknownDeprecatedBarrels = deprecatedBarrelPluginSdkEntrypoints.filter(
+      (entrypoint) => !entrypoints.has(entrypoint),
+    );
+    const nonBarrels = deprecatedBarrelPluginSdkEntrypoints.filter(
+      (entrypoint) => !hasWildcardReexport(entrypoint),
+    );
+
+    expect({ unknownDeprecatedBarrels, nonBarrels }).toEqual({
+      unknownDeprecatedBarrels: [],
+      nonBarrels: [],
+    });
+  });
+
+  it("keeps Matrix dependencies local to the Matrix plugin", () => {
+    const rootPackageJson = readRootPackageJson();
+    const rootRuntimeDeps = collectRuntimeDependencySpecs(rootPackageJson);
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);
 
-    for (const dep of [
-      "@matrix-org/matrix-sdk-crypto-wasm",
-      "@matrix-org/matrix-sdk-crypto-nodejs",
-      "fake-indexeddb",
-      "matrix-js-sdk",
-    ]) {
-      expect(rootRuntimeDeps.get(dep)).toBe(matrixRuntimeDeps.get(dep));
+    expect(rootPackageJson.files).toContain("!dist/extensions/matrix/**");
+    for (const dep of MATRIX_RUNTIME_DEPS) {
+      expect(matrixRuntimeDeps.get(dep)).toBeTypeOf("string");
+      expect(matrixRuntimeDeps.get(dep)).not.toBe("");
+      expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
-  });
-
-  it("mirrors Bedrock runtime deps needed by the bundled host graph", () => {
-    const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-    const bedrockRuntimeDeps = collectRuntimeDependencySpecs(bedrockPackageJson);
-
-    for (const dep of ["@aws-sdk/client-bedrock"]) {
-      expect(rootRuntimeDeps.get(dep)).toBe(bedrockRuntimeDeps.get(dep));
-    }
-  });
-
-  it("resolves matrix crypto WASM from the root runtime surface", () => {
-    const rootRequire = createRootPackageRequire();
-    // Normalize filesystem separators so the package assertion stays portable.
-    const resolvedPath = rootRequire
-      .resolve("@matrix-org/matrix-sdk-crypto-wasm")
-      .replaceAll("\\", "/");
-
-    expect(resolvedPath).toContain("@matrix-org/matrix-sdk-crypto-wasm");
-  });
-
-  it("keeps matrix crypto WASM in the packed artifact manifest", async () => {
-    const tempRoot = makeTrackedTempDir("openclaw-matrix-wasm-pack", tempDirs);
-    const packDir = join(tempRoot, "pack");
-    mkdirSync(packDir, { recursive: true });
-
-    const archivePath = packOpenClawToTempDir(packDir);
-    const packedPackageJson = await readPackedRootPackageJson(archivePath);
-    const matrixPackageJson = readMatrixPackageJson();
-    const bedrockPackageJson = readAmazonBedrockPackageJson();
-
-    expect(packedPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"]).toBe(
-      matrixPackageJson.dependencies?.["@matrix-org/matrix-sdk-crypto-wasm"],
-    );
-    expect(packedPackageJson.dependencies?.["@aws-sdk/client-bedrock"]).toBe(
-      bedrockPackageJson.dependencies?.["@aws-sdk/client-bedrock"],
-    );
-    expect(packedPackageJson.dependencies?.["@openclaw/plugin-package-contract"]).toBeUndefined();
+    expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {
-    expect(collectExtensionCoreImportLeaks()).toEqual([]);
+    expect(collectExtensionCoreImportLeaks()).toStrictEqual([]);
+  });
+
+  it("keeps extension production sources off repo test helpers", () => {
+    expect(collectExtensionTestHelperImportLeaks()).toStrictEqual([]);
+  });
+
+  it("keeps extension sources off deprecated plugin-sdk compatibility imports", () => {
+    expect(collectDeprecatedExtensionSdkImports()).toStrictEqual([]);
+  });
+
+  it("keeps new bundled plugins off deprecated memory embedding provider registration", () => {
+    expect({
+      apiFiles: collectNewDeprecatedMemoryEmbeddingProviderApiFiles(),
+      manifestFiles: collectNewDeprecatedMemoryEmbeddingProviderManifestFiles(),
+    }).toStrictEqual({
+      apiFiles: [],
+      manifestFiles: [],
+    });
+  });
+
+  it("keeps real tests off the deprecated plugin-sdk test-utils alias", () => {
+    expect(deprecatedTestAliasImports).toStrictEqual([]);
+  });
+
+  it(
+    "keeps extension test-api exports consumed",
+    () => {
+      expect(collectUnusedExtensionTestApiExports()).toStrictEqual([]);
+    },
+    PACKAGE_CONTRACT_SCAN_TIMEOUT_MS,
+  );
+
+  it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
+    expect(collectCrossOwnerReservedSdkImports()).toStrictEqual([]);
+  });
+
+  it("keeps reserved SDK compatibility subpaths actively used", () => {
+    expect(unusedReservedSdkSubpaths).toStrictEqual([]);
+  });
+
+  it("keeps generic core poll helpers free of plugin owner names", () => {
+    expect(collectGenericCoreOwnerNameLeaks()).toStrictEqual([]);
   });
 });

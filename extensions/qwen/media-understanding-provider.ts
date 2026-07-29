@@ -1,3 +1,4 @@
+// Qwen provider module implements model/runtime integration.
 import {
   buildOpenAiCompatibleVideoRequestBody,
   coerceOpenAiCompatibleVideoText,
@@ -12,40 +13,17 @@ import {
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { QWEN_STANDARD_CN_BASE_URL, QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
+import { QWEN_STANDARD_GLOBAL_BASE_URL } from "./models.js";
 
-const DEFAULT_QWEN_VIDEO_MODEL = "qwen-vl-max-latest";
+const DEFAULT_QWEN_MEDIA_MODEL = "qwen3.6-plus";
 const DEFAULT_QWEN_VIDEO_PROMPT = "Describe the video in detail.";
 
-function resolveQwenStandardBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
-  providerId: string,
-): string {
-  const direct = cfg?.models?.providers?.[providerId]?.baseUrl?.trim();
-  if (!direct) {
-    return QWEN_STANDARD_GLOBAL_BASE_URL;
-  }
-  try {
-    const url = new URL(direct);
-    if (url.hostname === "coding-intl.dashscope.aliyuncs.com") {
-      return QWEN_STANDARD_GLOBAL_BASE_URL;
-    }
-    if (url.hostname === "coding.dashscope.aliyuncs.com") {
-      return QWEN_STANDARD_CN_BASE_URL;
-    }
-    return `${url.origin}${url.pathname}`.replace(/\/+$/u, "");
-  } catch {
-    return QWEN_STANDARD_GLOBAL_BASE_URL;
-  }
-}
-
-export async function describeQwenVideo(
-  params: VideoDescriptionRequest,
-): Promise<VideoDescriptionResult> {
+async function describeQwenVideo(params: VideoDescriptionRequest): Promise<VideoDescriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
-  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_VIDEO_MODEL);
+  const model = resolveMediaUnderstandingString(params.model, DEFAULT_QWEN_MEDIA_MODEL);
   const mime = resolveMediaUnderstandingString(params.mime, "video/mp4");
   const prompt = resolveMediaUnderstandingString(params.prompt, DEFAULT_QWEN_VIDEO_PROMPT);
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
@@ -74,6 +52,7 @@ export async function describeQwenVideo(
       buffer: params.buffer,
     }),
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
     fetchFn,
     allowPrivateNetwork,
     dispatcherPolicy,
@@ -81,7 +60,14 @@ export async function describeQwenVideo(
 
   try {
     await assertOkOrThrowHttpError(res, "Qwen video description failed");
-    const payload = (await res.json()) as OpenAiCompatibleVideoPayload;
+    // Read the success body through the shared byte-bounded JSON reader (16 MiB cap +
+    // stream cancel on overflow) so a hostile or buggy endpoint cannot force the runtime
+    // to buffer an unbounded body. Malformed JSON keeps the
+    // `Qwen video description failed: malformed JSON response` wrapping.
+    const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
+      res,
+      "Qwen video description failed",
+    );
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
       throw new Error("Qwen video description response missing content");
@@ -97,8 +83,8 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     id: "qwen",
     capabilities: ["image", "video"],
     defaultModels: {
-      image: "qwen-vl-max-latest",
-      video: DEFAULT_QWEN_VIDEO_MODEL,
+      image: DEFAULT_QWEN_MEDIA_MODEL,
+      video: DEFAULT_QWEN_MEDIA_MODEL,
     },
     autoPriority: {
       video: 15,
@@ -107,10 +93,4 @@ export function buildQwenMediaUnderstandingProvider(): MediaUnderstandingProvide
     describeImages: describeImagesWithModel,
     describeVideo: describeQwenVideo,
   };
-}
-
-export function resolveQwenMediaUnderstandingBaseUrl(
-  cfg: { models?: { providers?: Record<string, { baseUrl?: string } | undefined> } } | undefined,
-): string {
-  return resolveQwenStandardBaseUrl(cfg, "qwen");
 }

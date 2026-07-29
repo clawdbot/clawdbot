@@ -1,3 +1,4 @@
+// Covers system-run metadata normalization helpers.
 import { describe, expect, it } from "vitest";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 

@@ -1,3 +1,4 @@
+// Vitest extension providers config wires the extension providers test shard.
 import { providerExtensionTestRoots } from "./vitest.extension-provider-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
@@ -17,6 +18,7 @@ export function createExtensionProvidersVitestConfig(
     {
       dir: "extensions",
       env,
+      isolate: true,
       name: "extension-providers",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

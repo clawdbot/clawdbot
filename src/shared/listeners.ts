@@ -1,3 +1,4 @@
+/** Notifies every registered listener while isolating individual listener failures. */
 export function notifyListeners<T>(
   listeners: Iterable<(event: T) => void>,
   event: T,
@@ -12,6 +13,7 @@ export function notifyListeners<T>(
   }
 }
 
+/** Registers a listener in a Set and returns an idempotent unsubscribe handle. */
 export function registerListener<T>(
   listeners: Set<(event: T) => void>,
   listener: (event: T) => void,

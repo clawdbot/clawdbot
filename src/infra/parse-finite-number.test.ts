@@ -1,6 +1,8 @@
+// Covers strict finite number parsing helpers.
 import { describe, expect, it } from "vitest";
 import {
   parseFiniteNumber,
+  parseStrictFiniteNumber,
   parseStrictInteger,
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -20,7 +22,7 @@ describe("parseFiniteNumber", () => {
     expectParserCases(parseFiniteNumber, [
       { value: 42, expected: 42 },
       { value: "3.14", expected: 3.14 },
-      { value: " 3.14ms", expected: 3.14 },
+      { value: " 3.14ms", expected: undefined },
       { value: "+7", expected: 7 },
       { value: "1e3", expected: 1000 },
       { value: Number.NaN, expected: undefined },
@@ -46,6 +48,22 @@ describe("parseStrictInteger", () => {
       { value: "1e3", expected: undefined },
       { value: " ", expected: undefined },
       { value: Number.MAX_SAFE_INTEGER + 1, expected: undefined },
+    ]);
+  });
+});
+
+describe("parseStrictFiniteNumber", () => {
+  it("parses full finite numbers and rejects partial tokens", () => {
+    expectParserCases(parseStrictFiniteNumber, [
+      { value: "42", expected: 42 },
+      { value: "3.14", expected: 3.14 },
+      { value: ".5", expected: 0.5 },
+      { value: "1e3", expected: 1000 },
+      { value: "3.14ms", expected: undefined },
+      { value: "0abc", expected: undefined },
+      { value: "0x10", expected: undefined },
+      { value: " ", expected: undefined },
+      { value: Number.POSITIVE_INFINITY, expected: undefined },
     ]);
   });
 });

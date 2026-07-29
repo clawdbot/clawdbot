@@ -1,5 +1,8 @@
+// Docker backend manager tests cover runtime image matching and removal error
+// handling for sandbox and browser containers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -19,7 +22,8 @@ vi.mock("./docker.js", async () => {
   };
 });
 
-const { dockerSandboxBackendManager } = await import("./docker-backend.js");
+const { createDockerSandboxBackend, dockerSandboxBackendManager } =
+  await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -55,6 +59,23 @@ describe("docker sandbox backend manager", () => {
       stdout: "unused-image",
       stderr: "",
     });
+  });
+
+  it("forwards the canonical scope key to container provisioning", async () => {
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+
+    await createDockerSandboxBackend({
+      sessionKey: "agent:poly:msteams:channel-1",
+      scopeKey,
+      workspaceDir: "/tmp/customer/workspace",
+      agentWorkspaceDir: "/tmp/customer/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
+    });
+
+    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeKey }),
+    );
   });
 
   it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {
@@ -116,6 +137,8 @@ describe("docker sandbox backend manager", () => {
   });
 
   it("defaults docker-backed runtime matching to sandbox.docker.image when label kind is missing", async () => {
+    // Older registry entries did not record configLabelKind; keep ordinary
+    // sandbox matching stable for those existing containers.
     dockerMocks.execDocker.mockResolvedValueOnce({
       code: 0,
       stdout: "openclaw-sandbox:bookworm-slim\n",
@@ -141,5 +164,53 @@ describe("docker sandbox backend manager", () => {
       actualConfigLabel: "openclaw-sandbox:bookworm-slim",
       configLabelMatch: true,
     });
+  });
+
+  it("reports Docker runtime removal failures", async () => {
+    dockerMocks.execDocker.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "permission denied",
+    });
+
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          runtimeLabel: "sandbox-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConfig(),
+      }),
+    ).rejects.toThrow("Failed to remove Docker sandbox runtime sandbox-1: permission denied");
+  });
+
+  it("treats already-missing Docker runtimes as removed", async () => {
+    // Prune/remove flows are idempotent; Docker may have already removed the
+    // container by the time the manager runs.
+    dockerMocks.execDocker.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "Error response from daemon: No such container: sandbox-1",
+    });
+
+    await expect(
+      dockerSandboxBackendManager.removeRuntime({
+        entry: {
+          containerName: "sandbox-1",
+          backendId: "docker",
+          runtimeLabel: "sandbox-1",
+          sessionKey: "agent:coder:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw-sandbox:bookworm-slim",
+        },
+        config: createConfig(),
+      }),
+    ).resolves.toBeUndefined();
   });
 });

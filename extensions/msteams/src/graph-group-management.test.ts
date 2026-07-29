@@ -1,3 +1,4 @@
+// Msteams tests cover graph group management plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -27,8 +28,8 @@ vi.mock("./graph.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => ({
     findPreferredDmByUserId: mockState.findPreferredDmByUserId,
   }),
 }));
@@ -37,13 +38,25 @@ const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
 
+function postGraphBodyAt(index: number): Record<string, unknown> {
+  const call = mockState.postGraphJson.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected Graph post call ${index}`);
+  }
+  const body = call[0]?.body;
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new Error(`expected Graph post call ${index} body`);
+  }
+  return body as Record<string, unknown>;
+}
+
 describe("addParticipantMSTeams", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.resolveGraphToken.mockResolvedValue(TOKEN);
   });
 
-  it("adds member to a chat with default role", async () => {
+  it("maps the default chat member role to Graph owner", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
@@ -58,7 +71,7 @@ describe("addParticipantMSTeams", () => {
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: ["owner"],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-1')",
       },
     });
@@ -86,6 +99,40 @@ describe("addParticipantMSTeams", () => {
     });
   });
 
+  it("normalizes role casing and whitespace", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      userId: "user-aad-id-2",
+      role: " OWNER ",
+    });
+
+    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-2')",
+      },
+    });
+  });
+
+  it("rejects unknown roles", async () => {
+    await expect(
+      addParticipantMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        userId: "user-aad-id-2",
+        role: "admin",
+      }),
+    ).rejects.toThrow('role must be "member" or "owner"');
+
+    expect(mockState.postGraphJson).not.toHaveBeenCalled();
+  });
+
   it("constructs correct user@odata.bind URL", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
@@ -95,13 +142,28 @@ describe("addParticipantMSTeams", () => {
       userId: "abc-def-123",
     });
 
-    const calledBody = mockState.postGraphJson.mock.calls[0][0].body;
+    const calledBody = postGraphBodyAt(0);
     expect(calledBody["user@odata.bind"]).toBe(
       "https://graph.microsoft.com/v1.0/users('abc-def-123')",
     );
   });
 
-  it("adds member to a channel", async () => {
+  it("escapes user ids before building the OData bind URL", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHAT_ID,
+      userId: "o'hara@example.com",
+    });
+
+    const calledBody = postGraphBodyAt(0);
+    expect(calledBody["user@odata.bind"]).toBe(
+      "https://graph.microsoft.com/v1.0/users('o''hara@example.com')",
+    );
+  });
+
+  it("maps the default channel member role to an empty Graph role list", async () => {
     mockState.postGraphJson.mockResolvedValue({});
 
     const result = await addParticipantMSTeams({
@@ -116,8 +178,29 @@ describe("addParticipantMSTeams", () => {
       path: "/teams/team-id-1/channels/channel-id-1/members",
       body: {
         "@odata.type": "#microsoft.graph.aadUserConversationMember",
-        roles: ["member"],
+        roles: [],
         "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-3')",
+      },
+    });
+  });
+
+  it("preserves the owner role for a channel", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: {} as OpenClawConfig,
+      to: CHANNEL_TO,
+      userId: "user-aad-id-4",
+      role: "owner",
+    });
+
+    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: "/teams/team-id-1/channels/channel-id-1/members",
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-4')",
       },
     });
   });

@@ -1,4 +1,6 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+// Plugin HTTP routing tests cover route matching, gateway auth decisions, and upgrade dispatch.
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Duplex } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerPluginHttpRoute } from "../../plugins/http-registry.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
@@ -11,12 +13,16 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import {
+  createGatewayPluginUpgradeHandler,
   createGatewayPluginRequestHandler,
   isRegisteredPluginHttpRoutePath,
   shouldEnforceGatewayAuthForPluginPath,
 } from "./plugins-http.js";
 
 type PluginHandlerLog = Parameters<typeof createGatewayPluginRequestHandler>[0]["log"];
+
+const IMESSAGE_WEBHOOK_PATH = "/imessage-webhook";
+const CANVAS_WS_PATH = "/__openclaw__/canvas/ws";
 
 function createPluginLog(): PluginHandlerLog {
   return { warn: vi.fn() } as unknown as PluginHandlerLog;
@@ -28,6 +34,11 @@ function createRoute(params: {
   auth?: "gateway" | "plugin";
   match?: "exact" | "prefix";
   handler?: (req: IncomingMessage, res: ServerResponse) => boolean | void | Promise<boolean | void>;
+  handleUpgrade?: (
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+  ) => boolean | void | Promise<boolean | void>;
 }) {
   return {
     pluginId: params.pluginId ?? "route",
@@ -35,8 +46,23 @@ function createRoute(params: {
     auth: params.auth ?? "plugin",
     match: params.match ?? "exact",
     handler: params.handler ?? (() => {}),
+    handleUpgrade: params.handleUpgrade,
     source: params.pluginId ?? "route",
   };
+}
+
+function createMockUpgradeSocket() {
+  const socket = {
+    chunks: [] as string[],
+    destroyed: false,
+    write(chunk: string) {
+      socket.chunks.push(chunk);
+    },
+    destroy() {
+      socket.destroyed = true;
+    },
+  } as unknown as Duplex & { chunks: string[]; destroyed: boolean };
+  return socket;
 }
 
 function buildRepeatedEncodedSlash(depth: number): string {
@@ -127,6 +153,48 @@ async function invokeRouteAndCollectRuntimeScopes(params: {
   return { handled, observedScopes, ...response };
 }
 
+async function invokeImessageWebhook(params: {
+  registry: ReturnType<typeof createTestRegistry>;
+  getRouteRegistry?: () => ReturnType<typeof createTestRegistry>;
+}) {
+  const handler = createGatewayPluginRequestHandler({
+    registry: params.registry,
+    ...(params.getRouteRegistry ? { getRouteRegistry: params.getRouteRegistry } : {}),
+    log: createPluginLog(),
+  });
+  const { res } = makeMockHttpResponse();
+  const handled = await handler({ url: IMESSAGE_WEBHOOK_PATH } as IncomingMessage, res);
+  return { handled, res };
+}
+
+async function invokeCanvasGatewayUpgrade(params: { gatewayAuthSatisfied: boolean }) {
+  const routeUpgradeHandler = vi.fn(async () => true);
+  const handler = createGatewayPluginUpgradeHandler({
+    registry: createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: CANVAS_WS_PATH,
+          auth: "gateway",
+          handleUpgrade: routeUpgradeHandler,
+        }),
+      ],
+    }),
+    log: createPluginLog(),
+  });
+  const socket = createMockUpgradeSocket();
+  const handled = await handler(
+    { url: CANVAS_WS_PATH } as IncomingMessage,
+    socket,
+    Buffer.alloc(0),
+    undefined,
+    {
+      gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+      ...(params.gatewayAuthSatisfied ? { gatewayRequestOperatorScopes: ["operator.read"] } : {}),
+    },
+  );
+  return { handled, routeUpgradeHandler, socket };
+}
+
 describe("createGatewayPluginRequestHandler", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
@@ -142,7 +210,7 @@ describe("createGatewayPluginRequestHandler", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(observedScopes).toEqual([]);
+    expect(observedScopes).toStrictEqual([]);
   });
 
   it("preserves gateway-authenticated plugin route runtime scopes from request auth", async () => {
@@ -273,7 +341,7 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the provided registry when the pinned route registry is empty", async () => {
+  it("uses the explicit registry when no route registry resolver is provided", async () => {
     const explicitRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
       return true;
@@ -310,19 +378,13 @@ describe("createGatewayPluginRequestHandler", () => {
     setActivePluginRegistry(laterActiveRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: IMESSAGE_WEBHOOK_PATH,
       auth: "plugin",
       handler: routeHandler,
     });
 
     try {
-      const handler = createGatewayPluginRequestHandler({
-        registry: startupRegistry,
-        log: createPluginLog(),
-      });
-
-      const { res } = makeMockHttpResponse();
-      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
+      const { handled } = await invokeImessageWebhook({ registry: startupRegistry });
       expect(handled).toBe(true);
       expect(routeHandler).toHaveBeenCalledTimes(1);
       expect(laterActiveRegistry.httpRoutes).toHaveLength(0);
@@ -331,7 +393,7 @@ describe("createGatewayPluginRequestHandler", () => {
     }
   });
 
-  it("prefers the pinned route registry over a stale explicit registry", async () => {
+  it("prefers the server-local route registry resolver over a stale explicit registry", async () => {
     const startupRegistry = createTestRegistry();
     const staleExplicitRegistry = createTestRegistry({
       httpRoutes: [createRoute({ path: "/plugins/diffs", auth: "plugin" })],
@@ -345,19 +407,16 @@ describe("createGatewayPluginRequestHandler", () => {
     pinActivePluginHttpRouteRegistry(startupRegistry);
 
     const unregister = registerPluginHttpRoute({
-      path: "/bluebubbles-webhook",
+      path: IMESSAGE_WEBHOOK_PATH,
       auth: "plugin",
       handler: routeHandler,
     });
 
     try {
-      const handler = createGatewayPluginRequestHandler({
+      const { handled } = await invokeImessageWebhook({
         registry: staleExplicitRegistry,
-        log: createPluginLog(),
+        getRouteRegistry: () => startupRegistry,
       });
-
-      const { res } = makeMockHttpResponse();
-      const handled = await handler({ url: "/bluebubbles-webhook" } as IncomingMessage, res);
       expect(handled).toBe(true);
       expect(routeHandler).toHaveBeenCalledTimes(1);
       expect(staleExplicitRegistry.httpRoutes).toHaveLength(1);
@@ -386,10 +445,135 @@ describe("createGatewayPluginRequestHandler", () => {
     const { res, setHeader, end } = makeMockHttpResponse();
     const handled = await handler({ url: "/boom" } as IncomingMessage, res);
     expect(handled).toBe(true);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("boom"));
+    expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
     expect(res.statusCode).toBe(500);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/plain; charset=utf-8");
     expect(end).toHaveBeenCalledWith("Internal Server Error");
+  });
+
+  it("ends a plugin route response when the route throws after sending headers", async () => {
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/partial",
+            handler: async (_req, res) => {
+              res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+              res.write("partial");
+              throw new Error("boom");
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+    const server = createServer((req, res) => {
+      void (async () => {
+        const handled = await handler(req, res);
+        if (!handled) {
+          res.statusCode = 404;
+          res.end("not found");
+        }
+      })();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("server did not bind to a TCP port");
+    }
+    const controller = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${address.port}/partial`, {
+        signal: controller.signal,
+      });
+      const result = await Promise.race([
+        response.text().then(
+          (body) => ({ kind: "body" as const, body }),
+          (err: unknown) => ({ kind: "error" as const, message: String(err) }),
+        ),
+        new Promise<{ kind: "timeout" }>((resolve) => {
+          timeout = setTimeout(() => {
+            controller.abort();
+            resolve({ kind: "timeout" });
+          }, 250);
+        }),
+      ]);
+
+      expect(response.status).toBe(200);
+      expect(result).toEqual({ kind: "body", body: "partial" });
+      expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
+    } finally {
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("does not end a response the plugin already destroyed before throwing", async () => {
+    const log = createPluginLog();
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/destroyed",
+            handler: async (_req, res) => {
+              Object.defineProperty(res, "headersSent", { value: true, configurable: true });
+              res.destroy();
+              throw new Error("boom");
+            },
+          }),
+        ],
+      }),
+      log,
+    });
+    const { res, end } = makeMockHttpResponse();
+
+    const handled = await handler({ url: "/destroyed" } as IncomingMessage, res);
+
+    expect(handled).toBe(true);
+    expect(res.destroyed).toBe(true);
+    expect(end).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith("plugin http route failed (route): Error: boom");
+  });
+});
+
+describe("createGatewayPluginUpgradeHandler", () => {
+  afterEach(() => {
+    releasePinnedPluginHttpRouteRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+  });
+
+  it("claims and rejects matched gateway upgrades when auth was not satisfied", async () => {
+    const { handled, routeUpgradeHandler, socket } = await invokeCanvasGatewayUpgrade({
+      gatewayAuthSatisfied: false,
+    });
+
+    expect(handled).toBe(true);
+    expect(routeUpgradeHandler).not.toHaveBeenCalled();
+    expect(socket.destroyed).toBe(true);
+    expect(socket.chunks.join("")).toContain("HTTP/1.1 401 Unauthorized");
+  });
+
+  it("dispatches gateway upgrades after gateway auth succeeds", async () => {
+    const { handled, routeUpgradeHandler, socket } = await invokeCanvasGatewayUpgrade({
+      gatewayAuthSatisfied: true,
+    });
+
+    expect(handled).toBe(true);
+    expect(routeUpgradeHandler).toHaveBeenCalledTimes(1);
+    expect(socket.destroyed).toBe(false);
+    expect(socket.chunks).toStrictEqual([]);
   });
 });
 

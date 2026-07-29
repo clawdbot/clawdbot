@@ -1,3 +1,4 @@
+// Vitest extension messaging config wires the extension messaging test shard.
 import { messagingExtensionTestRoots } from "./vitest.extension-messaging-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

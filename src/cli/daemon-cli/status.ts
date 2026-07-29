@@ -1,13 +1,17 @@
+// Gateway service status command entrypoint: gathers status, prints it, and handles probe failures.
+import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
-import { colorize, isRich, theme } from "../../terminal/theme.js";
 import { gatherDaemonStatus } from "./status.gather.js";
 import { printDaemonStatus } from "./status.print.js";
 import type { DaemonStatusOptions } from "./types.js";
 
+/** Run Gateway status diagnostics and apply --require-rpc exit behavior. */
 export async function runDaemonStatus(opts: DaemonStatusOptions) {
   try {
     if (opts.requireRpc && !opts.probe) {
-      defaultRuntime.error("Gateway status failed: --require-rpc cannot be used with --no-probe.");
+      defaultRuntime.error(
+        "Gateway status failed: --require-rpc needs probing enabled. Remove --no-probe or drop --require-rpc.",
+      );
       defaultRuntime.exit(1);
       return;
     }
@@ -17,7 +21,7 @@ export async function runDaemonStatus(opts: DaemonStatusOptions) {
       requireRpc: opts.requireRpc,
       deep: opts.deep === true,
     });
-    printDaemonStatus(status, { json: opts.json });
+    printDaemonStatus(status, { json: opts.json, deep: opts.deep === true });
     if (opts.requireRpc && !status.rpc?.ok) {
       defaultRuntime.exit(1);
     }

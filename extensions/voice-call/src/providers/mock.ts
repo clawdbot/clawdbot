@@ -1,5 +1,6 @@
+// Voice Call plugin module implements mock behavior.
 import crypto from "node:crypto";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   EndReason,
   GetCallStatusInput,
@@ -11,11 +12,13 @@ import type {
   PlayTtsInput,
   WebhookParseOptions,
   ProviderWebhookParseResult,
+  SendDtmfInput,
   StartListeningInput,
   StopListeningInput,
   WebhookContext,
   WebhookVerificationResult,
 } from "../types.js";
+import { createWebhookReplayCache, markWebhookReplay } from "../webhook-replay.js";
 import type { VoiceCallProvider } from "./base.js";
 
 /**
@@ -27,9 +30,16 @@ import type { VoiceCallProvider } from "./base.js";
  */
 export class MockProvider implements VoiceCallProvider {
   readonly name = "mock" as const;
+  private readonly replayCache = createWebhookReplayCache();
 
-  verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
-    return { ok: true };
+  verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
+    const requestMaterial = `${ctx.method}\n${ctx.url}\n${ctx.rawBody}`;
+    const key = `mock:${crypto.createHash("sha256").update(requestMaterial).digest("hex")}`;
+    return {
+      ok: true,
+      verifiedRequestKey: key,
+      isReplay: markWebhookReplay(this.replayCache, key),
+    };
   }
 
   parseWebhookEvent(
@@ -85,6 +95,15 @@ export class MockProvider implements VoiceCallProvider {
           ...base,
           type: evt.type,
           text: payload.text ?? "",
+        };
+      }
+
+      case "call.assistant-speech": {
+        const payload = evt as Partial<NormalizedEvent & { transcript?: string }>;
+        return {
+          ...base,
+          type: evt.type,
+          transcript: payload.transcript ?? "",
         };
       }
 
@@ -159,6 +178,10 @@ export class MockProvider implements VoiceCallProvider {
   }
 
   async playTts(_input: PlayTtsInput): Promise<void> {
+    // No-op for mock
+  }
+
+  async sendDtmf(_input: SendDtmfInput): Promise<void> {
     // No-op for mock
   }
 

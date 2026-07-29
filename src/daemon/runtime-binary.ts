@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/** Classifies runtime executable paths for daemon command rendering. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const NODE_VERSIONED_PATTERN = /^node(?:-\d+|\d+)(?:\.\d+)*(?:\.exe)?$/;
 
@@ -9,6 +10,7 @@ function normalizeRuntimeBasename(execPath: string): string {
   return normalizeLowercaseStringOrEmpty(basename);
 }
 
+/** Returns whether an executable path names a Node runtime binary. */
 export function isNodeRuntime(execPath: string): boolean {
   const base = normalizeRuntimeBasename(execPath);
   return (
@@ -20,6 +22,7 @@ export function isNodeRuntime(execPath: string): boolean {
   );
 }
 
+/** Returns whether an executable path names a Bun runtime binary. */
 export function isBunRuntime(execPath: string): boolean {
   const base = normalizeRuntimeBasename(execPath);
   return base === "bun" || base === "bun.exe";

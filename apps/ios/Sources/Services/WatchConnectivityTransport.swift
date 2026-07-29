@@ -7,31 +7,38 @@ private struct WatchConnectivityTransportCallbacks {
     var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
     var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
     var execApprovalSnapshotRequestHandler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?
+    var appSnapshotRequestHandler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?
+    var appCommandHandler: (@Sendable (WatchAppCommandEvent) -> Void)?
 }
 
 private func sendReachableWatchMessage(_ payload: [String: Any], with session: WCSession) async throws {
     // WatchConnectivity replies arrive on its own queue. Keep this continuation explicitly
     // nonisolated so Swift 6 does not inherit a caller actor (for example MainActor) into the
     // Objective-C callback boundary and trap on the reply callback executor check.
-    try await withCheckedThrowingContinuation(isolation: nil) {
-        (continuation: CheckedContinuation<Void, Error>) in
+    try await withCheckedThrowingContinuation(isolation: nil) { (continuation: CheckedContinuation<Void, Error>) in
         session.sendMessage(
             payload,
-            replyHandler: { _ in
-                continuation.resume(returning: ())
+            replyHandler: { reply in
+                do {
+                    try requireAcceptedWatchMessageReply(reply)
+                    continuation.resume(returning: ())
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             },
             errorHandler: { error in
                 continuation.resume(throwing: error)
-            }
-        )
+            })
     }
 }
 
 final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
-    nonisolated private static let logger = Logger(subsystem: "ai.openclaw", category: "watch.messaging")
+    private nonisolated static let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "watch.messaging")
 
     private let session: WCSession?
+    private let activationGate = WatchSessionActivationGate()
     private let callbacksLock = NSLock()
+    private let snapshotContextLock = NSLock()
     private var callbacks = WatchConnectivityTransportCallbacks()
 
     override init() {
@@ -43,7 +50,6 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         super.init()
         if let session = self.session {
             session.delegate = self
-            session.activate()
         }
     }
 
@@ -51,20 +57,8 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         WCSession.isSupported()
     }
 
-    nonisolated static func currentStatusSnapshot() -> WatchMessagingStatus {
-        guard WCSession.isSupported() else {
-            return WatchMessagingStatus(
-                supported: false,
-                paired: false,
-                appInstalled: false,
-                reachable: false,
-                activationState: "unsupported")
-        }
-        return self.status(for: WCSession.default)
-    }
-
     func status() async -> WatchMessagingStatus {
-        await self.ensureActivated()
+        try? await self.ensureActivated()
         return self.currentStatusSnapshot()
     }
 
@@ -98,8 +92,21 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         self.updateCallbacks { $0.execApprovalSnapshotRequestHandler = handler }
     }
 
+    func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
+        self.updateCallbacks { $0.appSnapshotRequestHandler = handler }
+    }
+
+    func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
+        self.updateCallbacks { $0.appCommandHandler = handler }
+    }
+
+    func activate() {
+        guard let session = self.session else { return }
+        self.beginActivation(session)
+    }
+
     func sendPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
-        await self.ensureActivated()
+        try await self.ensureActivated()
         let session = try self.requireReadySession()
         if session.isReachable {
             do {
@@ -121,7 +128,7 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
     }
 
     func sendSnapshotPayload(_ payload: [String: Any]) async throws -> WatchNotificationSendResult {
-        await self.ensureActivated()
+        try await self.ensureActivated()
         let session = try self.requireReadySession()
         if session.isReachable {
             do {
@@ -137,7 +144,12 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
 
         do {
-            try session.updateApplicationContext(payload)
+            try self.snapshotContextLock.withLock {
+                let context = WatchMessagingPayloadCodec.encodeSnapshotApplicationContext(
+                    payload,
+                    merging: session.applicationContext)
+                try session.updateApplicationContext(context)
+            }
             return WatchNotificationSendResult(
                 deliveredImmediately: false,
                 queuedForDelivery: true,
@@ -169,6 +181,9 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         guard let session = self.session else {
             throw WatchMessagingError.unsupported
         }
+        guard session.activationState == .activated else {
+            throw WatchSessionActivationError.failed("session stayed inactive")
+        }
         let snapshot = Self.status(for: session)
         guard snapshot.paired else {
             throw WatchMessagingError.notPaired
@@ -179,18 +194,20 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         return session
     }
 
-    private func ensureActivated() async {
+    private func beginActivation(_ session: WCSession) {
+        if self.activationGate.beginActivation() {
+            session.activate()
+        }
+    }
+
+    private func ensureActivated() async throws {
         guard let session = self.session else { return }
         if session.activationState == .activated {
+            self.activationGate.complete(activated: true, errorDescription: nil)
             return
         }
-        session.activate()
-        for _ in 0..<8 {
-            if session.activationState == .activated {
-                return
-            }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
+        self.beginActivation(session)
+        try await self.activationGate.waitUntilActivated()
     }
 
     private func emitStatusUpdate(_ snapshot: WatchMessagingStatus) {
@@ -229,16 +246,36 @@ final class WatchConnectivityTransport: NSObject, @unchecked Sendable {
         }
     }
 
-    nonisolated private static func status(for session: WCSession) -> WatchMessagingStatus {
-        WatchMessagingStatus(
-            supported: true,
-            paired: session.isPaired,
-            appInstalled: session.isWatchAppInstalled,
-            reachable: session.isReachable,
-            activationState: self.activationStateLabel(session.activationState))
+    private func emitAppSnapshotRequest(_ event: WatchAppSnapshotRequestEvent) {
+        guard let handler = self.callbacksSnapshot().appSnapshotRequestHandler else {
+            return
+        }
+        Task { @MainActor in
+            handler(event)
+        }
     }
 
-    nonisolated private static func activationStateLabel(_ state: WCSessionActivationState) -> String {
+    private func emitAppCommand(_ event: WatchAppCommandEvent) {
+        guard let handler = self.callbacksSnapshot().appCommandHandler else {
+            return
+        }
+        Task { @MainActor in
+            handler(event)
+        }
+    }
+
+    private nonisolated static func status(for session: WCSession) -> WatchMessagingStatus {
+        let activationState = session.activationState
+        let isActivated = activationState == .activated
+        return WatchMessagingStatus(
+            supported: true,
+            paired: isActivated && session.isPaired,
+            appInstalled: isActivated && session.isWatchAppInstalled,
+            reachable: isActivated && session.isReachable,
+            activationState: self.activationStateLabel(activationState))
+    }
+
+    private nonisolated static func activationStateLabel(_ state: WCSessionActivationState) -> String {
         switch state {
         case .notActivated:
             "notActivated"
@@ -258,8 +295,13 @@ extension WatchConnectivityTransport: WCSessionDelegate {
         activationDidCompleteWith activationState: WCSessionActivationState,
         error: (any Error)?)
     {
+        self.activationGate.complete(
+            activated: activationState == .activated,
+            errorDescription: error?.localizedDescription)
         GatewayDiagnostics.log(
-            "watch messaging: activation complete state=\(Self.activationStateLabel(activationState)) error=\(error?.localizedDescription ?? "none")")
+            "watch messaging: activation complete "
+                + "state=\(Self.activationStateLabel(activationState)) "
+                + "error=\(error?.localizedDescription ?? "none")")
         if let error {
             Self.logger.error("watch activation failed: \(error.localizedDescription, privacy: .public)")
         } else {
@@ -269,11 +311,22 @@ extension WatchConnectivityTransport: WCSessionDelegate {
         self.emitStatusUpdate(Self.status(for: session))
     }
 
-    func sessionDidBecomeInactive(_: WCSession) {}
+    func sessionDidBecomeInactive(_ session: WCSession) {
+        GatewayDiagnostics.log("watch messaging: session became inactive")
+        self.emitStatusUpdate(Self.status(for: session))
+    }
 
     func sessionDidDeactivate(_ session: WCSession) {
         GatewayDiagnostics.log("watch messaging: session did deactivate; reactivating")
-        session.activate()
+        self.activationGate.reset()
+        self.beginActivation(session)
+        self.emitStatusUpdate(Self.status(for: session))
+    }
+
+    func sessionWatchStateDidChange(_ session: WCSession) {
+        GatewayDiagnostics.log(
+            "watch messaging: watch state changed "
+                + "paired=\(session.isPaired) installed=\(session.isWatchAppInstalled)")
         self.emitStatusUpdate(Self.status(for: session))
     }
 
@@ -296,6 +349,20 @@ extension WatchConnectivityTransport: WCSessionDelegate {
             transport: "sendMessage")
         {
             self.emitExecApprovalSnapshotRequest(event)
+            return
+        }
+        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
+            message,
+            transport: "sendMessage")
+        {
+            self.emitAppSnapshotRequest(event)
+            return
+        }
+        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
+            message,
+            transport: "sendMessage")
+        {
+            self.emitAppCommand(event)
         }
     }
 
@@ -327,6 +394,22 @@ extension WatchConnectivityTransport: WCSessionDelegate {
             self.emitExecApprovalSnapshotRequest(event)
             return
         }
+        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
+            message,
+            transport: "sendMessage")
+        {
+            replyHandler(["ok": true])
+            self.emitAppSnapshotRequest(event)
+            return
+        }
+        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
+            message,
+            transport: "sendMessage")
+        {
+            replyHandler(["ok": true])
+            self.emitAppCommand(event)
+            return
+        }
         replyHandler(["ok": false, "error": "unsupported_payload"])
     }
 
@@ -352,12 +435,28 @@ extension WatchConnectivityTransport: WCSessionDelegate {
             transport: "transferUserInfo")
         {
             self.emitExecApprovalSnapshotRequest(event)
+            return
+        }
+        if let event = WatchMessagingPayloadCodec.parseAppSnapshotRequestPayload(
+            userInfo,
+            transport: "transferUserInfo")
+        {
+            self.emitAppSnapshotRequest(event)
+            return
+        }
+        if let event = WatchMessagingPayloadCodec.parseAppCommandPayload(
+            userInfo,
+            transport: "transferUserInfo")
+        {
+            self.emitAppCommand(event)
         }
     }
 
     func sessionReachabilityDidChange(_ session: WCSession) {
         GatewayDiagnostics.log(
-            "watch messaging: reachability changed reachable=\(session.isReachable) paired=\(session.isPaired) installed=\(session.isWatchAppInstalled)")
+            "watch messaging: reachability changed "
+                + "reachable=\(session.isReachable) paired=\(session.isPaired) "
+                + "installed=\(session.isWatchAppInstalled)")
         self.emitStatusUpdate(Self.status(for: session))
     }
 }

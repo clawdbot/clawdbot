@@ -1,9 +1,15 @@
+// Verifies provider auth environment trust decisions.
 import { describe, expect, it, vi } from "vitest";
 
 const getProviderEnvVars = vi.hoisted(() => vi.fn(() => ["WHISPERX_API_KEY"]));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 describe("provider auth env trust", () => {
@@ -20,8 +26,52 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(credential).toMatchObject({
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "whisperx",
       keyRef: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
+    });
+  });
+
+  it("buildApiKeyCredential keeps secret-ref-like input literal in plaintext mode", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+
+    const credential = buildApiKeyCredential("ollama", "${AWS_SECRET_ACCESS_KEY}", undefined, {
+      secretInputMode: "plaintext",
+    });
+
+    expect(credential).toEqual({
+      type: "api_key",
+      provider: "ollama",
+      key: "${AWS_SECRET_ACCESS_KEY}",
+    });
+  });
+
+  it("buildApiKeyCredential rejects malformed object SecretRefs", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+    const malformedRefs = [
+      { source: "env", provider: "default", id: "OPENAI_API_KEY", extra: "x" },
+      { source: "env", provider: "Default", id: "OPENAI_API_KEY" },
+      { source: "env", provider: "default", id: "openai_api_key" },
+      { source: "file", provider: "default", id: "providers/openai/apiKey" },
+      { source: "exec", provider: "vault", id: "vault/../api-key" },
+    ];
+
+    for (const ref of malformedRefs) {
+      expect(() => buildApiKeyCredential("openai", ref as never)).toThrow(
+        "API key SecretRef is invalid.",
+      );
+    }
+  });
+
+  it("buildApiKeyCredential keeps invalid env-template strings as plaintext", async () => {
+    const { buildApiKeyCredential } = await import("./provider-auth-helpers.js");
+    const overlongEnvRef = `\${A${"B".repeat(128)}}`;
+
+    expect(buildApiKeyCredential("openai", overlongEnvRef)).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: overlongEnvRef,
     });
   });
 
@@ -39,7 +89,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });
@@ -65,7 +115,7 @@ describe("provider auth env trust", () => {
       config,
       includeUntrustedWorkspacePlugins: false,
     });
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ref: { source: "env", provider: "default", id: "WHISPERX_API_KEY" },
       resolvedValue: "test-secret",
     });

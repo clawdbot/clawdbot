@@ -1,4 +1,9 @@
-import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
+// Ios Node E2E script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../packages/gateway-protocol/src/version.js";
 
 function writeStdoutLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -10,6 +15,62 @@ function writeStdoutJson(value: unknown): void {
 
 function writeStderrLine(message: string): void {
   process.stderr.write(`${message}\n`);
+}
+
+function usage(): string {
+  return [
+    "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [options]",
+    "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
+    "",
+    "Options:",
+    "  --node <id|name-substring>  Select a connected iOS node",
+    "  --wait-seconds <n>          Seconds to wait for an iOS node (default: 25)",
+    "  --dangerous                 Include camera/screen commands",
+    "  --json                      Print JSON results",
+    "  -h, --help                  Show this help",
+  ].join("\n");
+}
+
+const argv = process.argv.slice(2);
+const getArg = (flag: string) => {
+  const index = argv.indexOf(flag);
+  return index === -1 ? undefined : argv[index + 1];
+};
+const hasFlag = (flag: string) => argv.includes(flag);
+const BOOLEAN_FLAGS = new Set(["--dangerous", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set(["--node", "--token", "--url", "--wait-seconds"]);
+
+function isMissingOptionValue(value: string | undefined): boolean {
+  return !value || BOOLEAN_FLAGS.has(value) || VALUE_FLAGS.has(value) || value.startsWith("--");
+}
+
+function failCli(message: string): never {
+  writeStderrLine(message);
+  process.exit(1);
+}
+
+function validateArgs(): void {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      const value = argv[index + 1];
+      if (isMissingOptionValue(value)) {
+        failCli(`${arg} requires a value`);
+      }
+      index += 1;
+      continue;
+    }
+    failCli(`Unknown argument: ${arg}`);
+  }
+}
+
+validateArgs();
+if (hasFlag("--help") || hasFlag("-h")) {
+  writeStdoutLine(usage());
+  process.exit(0);
 }
 
 type NodeListPayload = {
@@ -27,8 +88,6 @@ type NodeListPayload = {
 
 type NodeListNode = NonNullable<NodeListPayload["nodes"]>[number];
 
-const { get: getArg, has: hasFlag } = createArgReader();
-
 const urlRaw = getArg("--url") ?? process.env.OPENCLAW_GATEWAY_URL;
 const token = getArg("--token") ?? process.env.OPENCLAW_GATEWAY_TOKEN;
 const nodeHint = getArg("--node");
@@ -36,13 +95,12 @@ const dangerous = hasFlag("--dangerous") || process.env.OPENCLAW_RUN_DANGEROUS =
 const jsonOut = hasFlag("--json");
 
 if (!urlRaw || !token) {
-  writeStderrLine(
-    "Usage: bun scripts/dev/ios-node-e2e.ts --url <wss://host[:port]> --token <gateway.auth.token> [--node <id|name-substring>] [--dangerous] [--json]\n" +
-      "Or set env: OPENCLAW_GATEWAY_URL / OPENCLAW_GATEWAY_TOKEN",
-  );
+  writeStderrLine(usage());
   process.exit(1);
 }
 
+const waitSeconds = parseWaitSeconds(getArg("--wait-seconds"));
+const { createGatewayWsClient, resolveGatewayUrl } = await import("./gateway-ws-client.ts");
 const url = resolveGatewayUrl(urlRaw);
 
 const isoNow = () => new Date().toISOString();
@@ -73,6 +131,67 @@ function formatErr(err: unknown): string {
   }
 }
 
+function parseWaitSeconds(raw: string | undefined): number {
+  const value = raw ?? "25";
+  const text = value.trim();
+  if (!/^[1-9]\d*$/u.test(text)) {
+    writeStderrLine(`--wait-seconds must be a positive integer; got: ${value}`);
+    process.exit(1);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    writeStderrLine(`--wait-seconds must be a safe positive integer; got: ${value}`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function payloadShapeError(command: string, payload: unknown): string | null {
+  if (payload == null) {
+    return `${command} returned no payload`;
+  }
+  if (Array.isArray(payload)) {
+    return `${command} returned an array payload`;
+  }
+  if (!isRecord(payload)) {
+    return `${command} returned a ${typeof payload} payload`;
+  }
+  if (Object.keys(payload).length === 0) {
+    return `${command} returned an empty object payload`;
+  }
+  if (command === "device.info") {
+    const hasSystemName =
+      typeof payload.systemName === "string" && payload.systemName.trim().length > 0;
+    const hasSystemVersion =
+      typeof payload.systemVersion === "string" && payload.systemVersion.trim().length > 0;
+    if (!hasSystemName || !hasSystemVersion) {
+      return "device.info payload missing systemName/systemVersion";
+    }
+  }
+  return null;
+}
+
+function commandPayloadFromInvokePayload(payload: unknown): unknown {
+  if (!isRecord(payload)) {
+    return payload;
+  }
+  if (typeof payload.payloadJSON === "string") {
+    try {
+      return JSON.parse(payload.payloadJSON);
+    } catch {
+      return undefined;
+    }
+  }
+  if ("payload" in payload && ("ok" in payload || "nodeId" in payload || "command" in payload)) {
+    return commandPayloadFromInvokePayload(payload.payload);
+  }
+  return payload;
+}
+
 function pickIosNode(list: NodeListPayload, hint?: string): NodeListNode | null {
   const nodes = (list.nodes ?? []).filter((n) => n && n.connected);
   const ios = nodes.filter((n) => (n.platform ?? "").toLowerCase().includes("ios"));
@@ -97,8 +216,8 @@ async function main() {
   await waitOpen();
 
   const connectRes = await request("connect", {
-    minProtocol: 3,
-    maxProtocol: 3,
+    minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
     client: {
       id: "cli",
       displayName: "openclaw ios node e2e",
@@ -138,10 +257,11 @@ async function main() {
   const listPayload = (nodesRes.payload ?? {}) as NodeListPayload;
   let node = pickIosNode(listPayload, nodeHint);
   if (!node) {
-    const waitSeconds = Number.parseInt(getArg("--wait-seconds") ?? "25", 10);
     const deadline = Date.now() + Math.max(1, waitSeconds) * 1000;
     while (!node && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => {
+        setTimeout(r, 1000);
+      });
       const res = await request("node.list").catch(() => null);
       if (!res?.ok) {
         continue;
@@ -224,7 +344,7 @@ async function main() {
         idempotencyKey: randomUUID(),
       },
       (t.timeoutMs ?? 12_000) + 2_000,
-    ).catch((err) => {
+    ).catch((err: unknown) => {
       results.push({ id: t.id, ok: false, error: formatErr(err) });
       return null;
     });
@@ -235,6 +355,13 @@ async function main() {
 
     if (!invokeRes.ok) {
       results.push({ id: t.id, ok: false, error: invokeRes.error });
+      continue;
+    }
+
+    const commandPayload = commandPayloadFromInvokePayload(invokeRes.payload);
+    const payloadError = payloadShapeError(t.command, commandPayload);
+    if (payloadError) {
+      results.push({ id: t.id, ok: false, error: payloadError, payload: invokeRes.payload });
       continue;
     }
 

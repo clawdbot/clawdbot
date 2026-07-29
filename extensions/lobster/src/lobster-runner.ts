@@ -1,9 +1,7 @@
+// Lobster plugin module implements lobster runner behavior.
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
-import {
-  resumeToolRequest as embeddedResumeToolRequest,
-  runToolRequest as embeddedRunToolRequest,
-} from "@clawdbot/lobster/core";
 
 export type LobsterEnvelope =
   | {
@@ -15,6 +13,7 @@ export type LobsterEnvelope =
         prompt: string;
         items: unknown[];
         resumeToken?: string;
+        approvalId?: string;
       };
     }
   | {
@@ -27,6 +26,7 @@ export type LobsterRunnerParams = {
   pipeline?: string;
   argsJson?: string;
   token?: string;
+  approvalId?: string;
   approve?: boolean;
   cwd: string;
   timeoutMs: number;
@@ -60,6 +60,7 @@ type EmbeddedToolEnvelope = {
     items: unknown[];
     preview?: string;
     resumeToken?: string;
+    approvalId?: string;
   } | null;
   requiresInput?: {
     prompt: string;
@@ -92,6 +93,8 @@ type EmbeddedToolRuntime = {
 };
 
 type LoadEmbeddedToolRuntime = () => Promise<EmbeddedToolRuntime>;
+
+const workflowExts = new Set([".lobster", ".yaml", ".yml", ".json"]);
 
 function normalizeForCwdSandbox(p: string): string {
   const normalized = path.normalize(p);
@@ -156,6 +159,9 @@ function normalizeEnvelope(envelope: EmbeddedToolEnvelope): LobsterEnvelope {
             ...(envelope.requiresApproval.resumeToken
               ? { resumeToken: envelope.requiresApproval.resumeToken }
               : {}),
+            ...(envelope.requiresApproval.approvalId
+              ? { approvalId: envelope.requiresApproval.approvalId }
+              : {}),
           }
         : null,
     };
@@ -177,28 +183,46 @@ function throwOnErrorEnvelope(envelope: LobsterEnvelope): Extract<LobsterEnvelop
 }
 
 async function resolveWorkflowFile(candidate: string, cwd: string) {
-  const { stat } = await import("node:fs/promises");
   const resolved = path.isAbsolute(candidate) ? candidate : path.resolve(cwd, candidate);
   const fileStat = await stat(resolved);
   if (!fileStat.isFile()) {
     throw new Error("Workflow path is not a file");
   }
   const ext = path.extname(resolved).toLowerCase();
-  if (![".lobster", ".yaml", ".yml", ".json"].includes(ext)) {
+  if (!workflowExts.has(ext)) {
     throw new Error("Workflow file must end in .lobster, .yaml, .yml, or .json");
   }
   return resolved;
 }
 
+function isMissingPathError(error: unknown) {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+function hasWorkflowFileExtension(candidate: string) {
+  return workflowExts.has(path.extname(candidate).toLowerCase());
+}
+
 async function detectWorkflowFile(candidate: string, cwd: string) {
   const trimmed = candidate.trim();
-  if (!trimmed || trimmed.includes("|")) {
+  if (!trimmed || trimmed.includes("|") || !hasWorkflowFileExtension(trimmed)) {
     return null;
+  }
+  if (!/\s/.test(trimmed)) {
+    return await resolveWorkflowFile(trimmed, cwd);
   }
   try {
     return await resolveWorkflowFile(trimmed, cwd);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isMissingPathError(error)) {
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -241,19 +265,20 @@ async function withTimeout<T>(
         clearTimeout(timer);
         resolve(value);
       },
-      (error) => {
+      (error: unknown) => {
         clearTimeout(timer);
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
-  return {
-    runToolRequest: embeddedRunToolRequest,
-    resumeToolRequest: embeddedResumeToolRequest,
-  };
+  // Joined specifier keeps bundlers from statically resolving
+  // @clawdbot/lobster/core; the plugin's declared @clawdbot/lobster dependency
+  // provides it at runtime, so it is a used direct dependency.
+  const coreSpecifier = ["@clawdbot", "lobster", "core"].join("/");
+  return (await import(coreSpecifier)) as EmbeddedToolRuntime;
 }
 
 export function createEmbeddedLobsterRunner(options?: {
@@ -296,8 +321,9 @@ export function createEmbeddedLobsterRunner(options?: {
         }
 
         const token = params.token?.trim() ?? "";
-        if (!token) {
-          throw new Error("token required");
+        const approvalId = params.approvalId?.trim() ?? "";
+        if (!token && !approvalId) {
+          throw new Error("token or approvalId required");
         }
         if (typeof params.approve !== "boolean") {
           throw new Error("approve required");
@@ -306,7 +332,8 @@ export function createEmbeddedLobsterRunner(options?: {
         return throwOnErrorEnvelope(
           normalizeEnvelope(
             await runtime.resumeToolRequest({
-              token,
+              ...(token ? { token } : {}),
+              ...(approvalId ? { approvalId } : {}),
               approved: params.approve,
               ctx,
             }),
@@ -315,4 +342,18 @@ export function createEmbeddedLobsterRunner(options?: {
       });
     },
   };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,3 +1,4 @@
+// Feishu tests cover post plugin behavior.
 import { describe, expect, it } from "vitest";
 import { parsePostContent } from "./post.js";
 
@@ -25,8 +26,8 @@ describe("parsePostContent", () => {
     expect(result.textContent).toBe(
       "Daily \\*Plan\\*\n\n**Bold** *Italic* <u>Underline</u> ~~Strike~~ `Code`",
     );
-    expect(result.imageKeys).toEqual([]);
-    expect(result.mentionedOpenIds).toEqual([]);
+    expect(result.imageKeys).toStrictEqual([]);
+    expect(result.mentionedOpenIds).toStrictEqual([]);
   });
 
   it("renders links and mentions", () => {
@@ -70,7 +71,11 @@ describe("parsePostContent", () => {
 
     expect(result.textContent).toBe("Before ![image] after\n![image]");
     expect(result.imageKeys).toEqual(["img_1", "img_2"]);
-    expect(result.mentionedOpenIds).toEqual([]);
+    expect(result.mentionedOpenIds).toStrictEqual([]);
+    expect(
+      parsePostContent(content, { renderMediaPlaceholders: false, emptyTextFallback: "" })
+        .textContent,
+    ).toBe("Before  after");
   });
 
   it("supports locale wrappers", () => {

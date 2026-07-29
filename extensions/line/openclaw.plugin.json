@@ -1,9 +1,12 @@
 {
   "id": "line",
-  "channels": ["line"],
-  "channelEnvVars": {
-    "line": ["LINE_CHANNEL_ACCESS_TOKEN", "LINE_CHANNEL_SECRET"]
+  "name": "LINE",
+  "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
+  "icon": "https://cdn.simpleicons.org/line",
+  "activation": {
+    "onStartup": false
   },
+  "channels": ["line"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

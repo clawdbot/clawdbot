@@ -1,37 +1,73 @@
+/** Tests dynamic channel env-var discovery from plugin/channel metadata. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type MockManifestRegistry = {
   plugins: Array<{
     id: string;
     origin: string;
-    channelEnvVars?: Record<string, string[]>;
+    packageChannel?: {
+      id: string;
+      configuredState?: { env?: { allOf?: string[]; anyOf?: string[] } };
+    };
   }>;
   diagnostics: unknown[];
 };
 
-const loadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn<() => MockManifestRegistry>(() => ({ plugins: [], diagnostics: [] })),
-);
+const pluginRegistryMocks = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn<() => MockManifestRegistry>(() => ({
+    plugins: [],
+    diagnostics: [],
+  }));
+  return {
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+    loadPluginMetadataSnapshot: vi.fn(() => ({
+      plugins: loadManifestRegistry().plugins,
+      manifestRegistry: loadManifestRegistry(),
+    })),
+  };
+});
 
-vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry,
+vi.mock("../plugins/manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex:
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
 }));
 
-describe("channel env vars dynamic manifest metadata", () => {
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry:
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+}));
+
+describe("channel env vars dynamic package metadata", () => {
   beforeEach(() => {
     vi.resetModules();
-    loadPluginManifestRegistry.mockReset();
-    loadPluginManifestRegistry.mockReturnValue({ plugins: [], diagnostics: [] });
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", async () => {
-    loadPluginManifestRegistry.mockReturnValue({
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
         {
           id: "external-mattermost",
           origin: "global",
-          channelEnvVars: {
-            mattermost: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"],
+          packageChannel: {
+            id: "mattermost",
+            configuredState: {
+              env: { anyOf: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"] },
+            },
           },
         },
       ],
@@ -41,8 +77,8 @@ describe("channel env vars dynamic manifest metadata", () => {
     const mod = await import("./channel-env-vars.js");
 
     expect(mod.getChannelEnvVars("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]);
-    expect(mod.listKnownChannelEnvVarNames()).toEqual(
-      expect.arrayContaining(["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"]),
-    );
+    const knownNames = mod.listKnownChannelEnvVarNames();
+    expect(knownNames).toContain("MATTERMOST_BOT_TOKEN");
+    expect(knownNames).toContain("MATTERMOST_URL");
   });
 });

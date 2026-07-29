@@ -1,7 +1,9 @@
+// Telegram tests cover bot native commands.skills allowlist plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { listSkillCommandsForAgents as listActualSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -26,9 +28,7 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
     resetNativeCommandMenuMocks();
     resetPluginCommandMocks();
     await Promise.all(
-      tempDirs
-        .splice(0, tempDirs.length)
-        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+      tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
     );
   });
 
@@ -60,10 +60,9 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
         },
       ],
     };
-    const actualSkillCommands = await import("../../../src/auto-reply/skill-commands.js");
     listSkillCommandsForAgents.mockImplementation(
-      ({ cfg, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
-        actualSkillCommands.listSkillCommandsForAgents({ cfg, agentIds }),
+      ({ cfg: cfgLocal, agentIds }: { cfg: OpenClawConfig; agentIds?: string[] }) =>
+        listActualSkillCommandsForAgents({ cfg: cfgLocal, agentIds }),
     );
 
     registerTelegramNativeCommands({
@@ -84,7 +83,7 @@ describe("registerTelegramNativeCommands skill allowlist integration", () => {
 
     const registeredCommands = await waitForRegisteredCommands(setMyCommands);
 
-    expect(registeredCommands.some((entry) => entry.command === "alpha_skill")).toBe(true);
-    expect(registeredCommands.some((entry) => entry.command === "beta_skill")).toBe(false);
+    expect(registeredCommands.map((entry) => entry.command)).toContain("alpha_skill");
+    expect(registeredCommands.map((entry) => entry.command)).not.toContain("beta_skill");
   });
 });

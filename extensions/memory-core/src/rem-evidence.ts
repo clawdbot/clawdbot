@@ -1,5 +1,7 @@
+// Memory Core plugin module implements rem evidence behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const REM_BLOCKED_SECTION_RE =
   /\b(morning reminders|tasks? for today|to-?do|pickups?|action items?|next steps?|open questions?|stats|setup tasks?|priority contacts|visitors?|top priority candidates|timeline coverage|action items for morning review|test .* skill|heartbeat checks?|date semantics guardrail|still broken|last message (?:&|and) status|plugin \/ service warning|email triage cron)\b/i;
@@ -63,16 +65,16 @@ const REM_SUMMARY_FACT_LIMIT = 4;
 const REM_SUMMARY_REFLECTION_LIMIT = 4;
 const REM_SUMMARY_MEMORY_LIMIT = 3;
 
-export type GroundedRemPreviewItem = {
+type GroundedRemPreviewItem = {
   text: string;
   refs: string[];
 };
 
-export type GroundedRemCandidate = GroundedRemPreviewItem & {
+type GroundedRemCandidate = GroundedRemPreviewItem & {
   lean: "likely_durable" | "unclear" | "likely_situational";
 };
 
-export type GroundedRemFilePreview = {
+type GroundedRemFilePreview = {
   path: string;
   facts: GroundedRemPreviewItem[];
   reflections: GroundedRemPreviewItem[];
@@ -612,8 +614,13 @@ function splitSubjectLeadClaim(text: string): string[] {
   if (!match?.groups) {
     return [text];
   }
-  const subject = normalizeWhitespace(match.groups.subject);
-  const rest = normalizeWhitespace(match.groups.rest);
+  const rawSubject = match.groups.subject;
+  const rawRest = match.groups.rest;
+  if (rawSubject === undefined || rawRest === undefined) {
+    return [text];
+  }
+  const subject = normalizeWhitespace(rawSubject);
+  const rest = normalizeWhitespace(rawRest);
   if (!subject || !rest) {
     return [text];
   }
@@ -638,7 +645,7 @@ function atomizeClaimText(text: string): string[] {
     .flatMap((part) => splitSubjectLeadClaim(part))
     .map((part) => normalizeWhitespace(part))
     .filter(Boolean);
-  return Array.from(new Set(atomic)).slice(0, 3);
+  return uniqueStrings(atomic).slice(0, 3);
 }
 
 function classifyCandidateLeanFromText(text: string, title: string): GroundedRemCandidate["lean"] {
@@ -675,6 +682,22 @@ function isOperatorRuleSummary(summary: SectionSummary): boolean {
 
 function isRoutingSummary(summary: SectionSummary): boolean {
   return summary.scores.routing > 0 || REM_ROUTING_SIGNAL_RE.test(summary.text);
+}
+
+function findStrongestSummary(
+  summaries: SectionSummary[],
+  predicate: (summary: SectionSummary) => boolean,
+): SectionSummary | undefined {
+  let strongest: SectionSummary | undefined;
+  for (const summary of summaries) {
+    if (!predicate(summary)) {
+      continue;
+    }
+    if (!strongest || summary.scores.overall > strongest.scores.overall) {
+      strongest = summary;
+    }
+  }
+  return strongest;
 }
 
 function previewGroundedRemForFile(params: {
@@ -847,15 +870,15 @@ function previewGroundedRemForFile(params: {
     (sum, { section, snippets }) => sum + scoreSection(section, snippets).tasks,
     0,
   );
-  const strongestRoutingSummary = summaries
-    .filter((summary) => isRoutingSummary(summary))
-    .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
-  const strongestIncidentSummary = summaries
-    .filter((summary) => summary.scores.incident > 0)
-    .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
-  const strongestExternalizationSummary = summaries
-    .filter((summary) => summary.scores.externalization > 0)
-    .toSorted((left, right) => right.scores.overall - left.scores.overall)[0];
+  const strongestRoutingSummary = findStrongestSummary(summaries, isRoutingSummary);
+  const strongestIncidentSummary = findStrongestSummary(
+    summaries,
+    (summary) => summary.scores.incident > 0,
+  );
+  const strongestExternalizationSummary = findStrongestSummary(
+    summaries,
+    (summary) => summary.scores.externalization > 0,
+  );
 
   if (facts.length === 0 && monitoringSignal >= 3) {
     addReflection(
@@ -1075,3 +1098,4 @@ export async function previewGroundedRemMarkdown(params: {
     files: previews,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

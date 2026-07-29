@@ -1,5 +1,7 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Provides shared replay-policy helpers for provider plugins.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import type {
   ProviderReasoningOutputMode,
   ProviderReplayPolicy,
@@ -8,21 +10,43 @@ import type {
   ProviderSanitizeReplayHistoryContext,
 } from "./types.js";
 
+/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
+  options: {
+    sanitizeToolCallIds?: boolean;
+    duplicateToolCallIdStyle?: "openai";
+    modelId?: string | null;
+    dropReasoningFromHistory?: boolean;
+  } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
     modelApi !== "openai-responses" &&
-    modelApi !== "openai-codex-responses" &&
+    modelApi !== "openai-chatgpt-responses" &&
     modelApi !== "azure-openai-responses"
   ) {
     return undefined;
   }
 
+  const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
+  const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
+  const isResponsesFamily =
+    modelApi === "openai-responses" ||
+    modelApi === "openai-chatgpt-responses" ||
+    modelApi === "azure-openai-responses";
+
   return {
-    sanitizeToolCallIds: true,
-    toolCallIdMode: "strict",
+    ...(sanitizeToolCallIds
+      ? {
+          sanitizeToolCallIds: true,
+          toolCallIdMode: "strict" as const,
+          ...(options.duplicateToolCallIdStyle
+            ? { duplicateToolCallIdStyle: options.duplicateToolCallIdStyle }
+            : {}),
+        }
+      : {}),
+    ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
     ...(modelApi === "openai-completions"
       ? {
           applyAssistantFirstOrderingFix: true,
@@ -34,9 +58,13 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
+    ...(modelApi === "openai-completions" && dropReasoningFromHistory
+      ? { dropReasoningFromHistory: true }
+      : {}),
   };
 }
 
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildStrictAnthropicReplayPolicy(
   options: {
     dropThinkingBlocks?: boolean;
@@ -66,10 +94,12 @@ export function buildStrictAnthropicReplayPolicy(
 
 /**
  * Returns true for Claude models that preserve thinking blocks in context
- * natively (Opus 4.5+, Sonnet 4.5+, Haiku 4.5+). For these models, dropping
- * thinking blocks from prior turns breaks prompt cache prefix matching.
+ * natively (Fable 5, Opus 4.5+, Sonnet 4.5+, Haiku 4.5+). For these models,
+ * dropping thinking blocks from prior turns breaks replay and prompt caching.
  *
  * See: https://platform.claude.com/docs/en/build-with-claude/extended-thinking#differences-in-thinking-across-model-versions
+ *
+ * @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks.
  */
 export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   const id = normalizeLowercaseStringOrEmpty(modelId);
@@ -78,13 +108,19 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   }
 
   // Models that preserve thinking blocks natively (Claude 4.5+):
+  // - claude-fable-5
   // - claude-opus-4-x (opus-4-5, opus-4-6, ...)
   // - claude-sonnet-4-x (sonnet-4-5, sonnet-4-6, ...)
   //   Note: "sonnet-4" is safe — legacy "claude-3-5-sonnet" does not contain "sonnet-4"
   // - claude-haiku-4-x (haiku-4-5, ...)
   // Models that require dropping thinking blocks:
   // - claude-3-7-sonnet, claude-3-5-sonnet, and earlier
-  if (id.includes("opus-4") || id.includes("sonnet-4") || id.includes("haiku-4")) {
+  if (
+    id.includes("fable-5") ||
+    id.includes("opus-4") ||
+    id.includes("sonnet-4") ||
+    id.includes("haiku-4")
+  ) {
     return true;
   }
 
@@ -96,6 +132,7 @@ export function shouldPreserveThinkingBlocks(modelId?: string): boolean {
   return false;
 }
 
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
@@ -103,6 +140,7 @@ export function buildAnthropicReplayPolicyForModel(modelId?: string): ProviderRe
   });
 }
 
+/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
 export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): ProviderReplayPolicy {
   const isClaude = normalizeLowercaseStringOrEmpty(modelId).includes("claude");
   return buildStrictAnthropicReplayPolicy({
@@ -112,6 +150,7 @@ export function buildNativeAnthropicReplayPolicyForModel(modelId?: string): Prov
   });
 }
 
+/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function buildHybridAnthropicOrOpenAIReplayPolicy(
   ctx: ProviderReplayPolicyContext,
   options: { anthropicModelDropThinkingBlocks?: boolean } = {},
@@ -126,35 +165,10 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
     });
   }
 
-  return buildOpenAICompatibleReplayPolicy(ctx.modelApi);
+  return buildOpenAICompatibleReplayPolicy(ctx.modelApi, { modelId: ctx.modelId });
 }
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
-const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
-
-function sanitizeGoogleAssistantFirstOrdering(messages: AgentMessage[]): AgentMessage[] {
-  const first = messages[0] as { role?: unknown; content?: unknown } | undefined;
-  const role = first?.role;
-  const content = first?.content;
-  if (
-    role === "user" &&
-    typeof content === "string" &&
-    content.trim() === GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT
-  ) {
-    return messages;
-  }
-  if (role !== "assistant") {
-    return messages;
-  }
-
-  const bootstrap: AgentMessage = {
-    role: "user",
-    content: GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT,
-    timestamp: Date.now(),
-  } as AgentMessage;
-
-  return [bootstrap, ...messages];
-}
 
 function hasGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState): boolean {
   return sessionState
@@ -168,6 +182,7 @@ function markGoogleTurnOrderingMarker(sessionState: ProviderReplaySessionState):
   });
 }
 
+/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   return {
     sanitizeMode: "full",
@@ -185,6 +200,7 @@ export function buildGoogleGeminiReplayPolicy(): ProviderReplayPolicy {
   };
 }
 
+/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function buildPassthroughGeminiSanitizingReplayPolicy(
   modelId?: string,
 ): ProviderReplayPolicy {
@@ -204,6 +220,7 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
+/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {
@@ -218,6 +235,7 @@ export function sanitizeGoogleGeminiReplayHistory(
   return messages;
 }
 
+/** @deprecated Provider replay helper; prefer provider-local replay hooks. */
 export function resolveTaggedReasoningOutputMode(): ProviderReasoningOutputMode {
   return "tagged";
 }

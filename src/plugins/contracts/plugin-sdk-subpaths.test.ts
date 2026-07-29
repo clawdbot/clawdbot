@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
+// Plugin SDK subpath tests cover documented SDK subpath exports and package aliases.
+import fs, { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -20,9 +21,14 @@ import type {
   OpenClawPluginApi as CoreOpenClawPluginApi,
   PluginRuntime as CorePluginRuntime,
 } from "openclaw/plugin-sdk/core";
-import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
-import { describe, expect, expectTypeOf, it } from "vitest";
-import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
+import type {
+  GetReplyOptions as ReplyRuntimeGetReplyOptions,
+  ReplyDispatchBeforeDeliverOptions as ReplyRuntimeBeforeDeliverOptions,
+  ReplyDispatcher as ReplyRuntimeDispatcher,
+} from "openclaw/plugin-sdk/reply-runtime";
+import ts from "typescript";
+import { beforeAll, describe, expect, expectTypeOf, it } from "vitest";
+import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import type {
   BaseProbeResult,
   BaseTokenResolution,
@@ -35,13 +41,19 @@ import type {
   ChannelStatusIssue,
   ChannelThreadingContext,
   ChannelThreadingToolContext,
-} from "../../channels/plugins/types.js";
+} from "../../channels/plugins/types.public.js";
+import * as channelActionsDirectSdk from "../../plugin-sdk/channel-actions.js";
+import * as channelLifecycleDirectSdk from "../../plugin-sdk/channel-lifecycle.js";
 import type {
   ChannelMessageActionContext as SharedChannelMessageActionContext,
   OpenClawPluginApi as SharedOpenClawPluginApi,
   PluginRuntime as SharedPluginRuntime,
 } from "../../plugin-sdk/channel-plugin-common.js";
-import { pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
+import * as channelReplyPipelineDirectSdk from "../../plugin-sdk/channel-reply-pipeline.js";
+import * as coreDirectSdk from "../../plugin-sdk/core.js";
+import { publicPluginSdkSubpaths as pluginSdkSubpaths } from "../../plugin-sdk/entrypoints.js";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -49,7 +61,30 @@ const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
 const PLUGIN_SDK_DIR = resolve(SRC_ROOT, "plugin-sdk");
 const sourceCache = new Map<string, string>();
-const representativeRuntimeSmokeSubpaths = ["channel-runtime", "conversation-runtime"] as const;
+const repoTsFilesCache = new Map<string, string[]>();
+const representativeRuntimeSmokeSubpaths = [
+  "channel-runtime-context",
+  "conversation-runtime",
+] as const;
+const PUBLIC_SDK_TEST_HELPER_SUBPATHS = [
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
+  "test-env",
+  "test-fixtures",
+  "test-live",
+  "test-live-auth",
+  "test-media-generation",
+  "test-media-understanding",
+  "test-node-mocks",
+] as const;
+const PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS = ["provider-http-test-mocks"] as const;
 
 const importResolvedPluginSdkSubpath = async (specifier: string) => import(specifier);
 
@@ -127,6 +162,7 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
     extensionPath: "extensions/browser/browser-profiles.ts",
     expectedExports: [
       "DEFAULT_AI_SNAPSHOT_MAX_CHARS",
+      "DEFAULT_BROWSER_ACTION_TIMEOUT_MS",
       "DEFAULT_BROWSER_DEFAULT_PROFILE_NAME",
       "DEFAULT_BROWSER_EVALUATE_ENABLED",
       "DEFAULT_OPENCLAW_BROWSER_COLOR",
@@ -135,6 +171,7 @@ const BROWSER_HELPER_EXPORT_PARITY_CONTRACTS: readonly BrowserHelperExportParity
       "DEFAULT_UPLOAD_DIR",
       "ResolvedBrowserConfig",
       "ResolvedBrowserProfile",
+      "ResolvedBrowserTabCleanupConfig",
       "resolveBrowserConfig",
       "resolveProfile",
     ],
@@ -216,6 +253,81 @@ function collectNamedExportsFromRepoFile(relativePath: string): string[] {
   return collectNamedExportsFromSource(readRepoSource(relativePath));
 }
 
+function createSourceFile(absolutePath: string): ts.SourceFile {
+  return ts.createSourceFile(
+    absolutePath,
+    readCachedSource(absolutePath),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+}
+
+function resolveTypeScriptModuleSource(fromFile: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) {
+    return null;
+  }
+  const resolved = resolve(dirname(fromFile), specifier);
+  if (resolved.endsWith(".js")) {
+    return `${resolved.slice(0, -3)}.ts`;
+  }
+  if (resolved.endsWith(".ts")) {
+    return resolved;
+  }
+  return `${resolved}.ts`;
+}
+
+function collectReexportedSourceFiles(entrypointPath: string): string[] {
+  const visited = new Set<string>();
+
+  function visit(filePath: string) {
+    if (visited.has(filePath)) {
+      return;
+    }
+    visited.add(filePath);
+    const sourceFile = createSourceFile(filePath);
+    for (const statement of sourceFile.statements) {
+      if (
+        !ts.isExportDeclaration(statement) ||
+        !statement.moduleSpecifier ||
+        !ts.isStringLiteral(statement.moduleSpecifier)
+      ) {
+        continue;
+      }
+      const target = resolveTypeScriptModuleSource(filePath, statement.moduleSpecifier.text);
+      if (target) {
+        visit(target);
+      }
+    }
+  }
+
+  visit(entrypointPath);
+  return [...visited].toSorted();
+}
+
+function topLevelVitestModuleMockLines(filePath: string): number[] {
+  const sourceFile = createSourceFile(filePath);
+  const lines: number[] = [];
+  for (const statement of sourceFile.statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) {
+      continue;
+    }
+    const expression = statement.expression.expression;
+    if (
+      !ts.isPropertyAccessExpression(expression) ||
+      !ts.isIdentifier(expression.expression) ||
+      expression.expression.text !== "vi"
+    ) {
+      continue;
+    }
+    if (!["mock", "doMock", "unmock", "doUnmock"].includes(expression.name.text)) {
+      continue;
+    }
+    lines.push(sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile)).line + 1);
+  }
+  return lines;
+}
+
 function expectNamedExportParity(params: BrowserHelperExportParityContract) {
   const coreExports = collectNamedExportsFromRepoFile(params.corePath);
   const extensionExports = collectNamedExportsFromRepoFile(params.extensionPath);
@@ -225,9 +337,38 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
   ]);
 }
 
+function listTrackedRepoTsFiles(dir: string): string[] | null {
+  const relativeDir = toRepoRelativePath(REPO_ROOT, dir);
+  if (!relativeDir || relativeDir.startsWith("..")) {
+    return null;
+  }
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
+  if (!files) {
+    return null;
+  }
+  return files
+    .filter(
+      (line) =>
+        line.endsWith(".ts") && !line.includes("/dist/") && !line.includes("/node_modules/"),
+    )
+    .map((line) => resolve(REPO_ROOT, ...line.split("/")))
+    .filter((filePath) => fs.existsSync(filePath))
+    .toSorted();
+}
+
 function listRepoTsFiles(dir: string): string[] {
-  const entries = readdirSync(dir, { withFileTypes: true });
-  return entries.flatMap((entry) => {
+  const cached = repoTsFilesCache.get(dir);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const trackedFiles = listTrackedRepoTsFiles(dir);
+  if (trackedFiles) {
+    repoTsFilesCache.set(dir, trackedFiles);
+    return trackedFiles;
+  }
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files = entries.flatMap((entry) => {
     const absolute = resolve(dir, entry.name);
     if (entry.isDirectory()) {
       if (entry.name === "dist" || entry.name === "node_modules") {
@@ -240,6 +381,8 @@ function listRepoTsFiles(dir: string): string[] {
     }
     return absolute.endsWith(".ts") ? [absolute] : [];
   });
+  repoTsFilesCache.set(dir, files);
+  return files;
 }
 
 function findRepoFilesContaining(params: {
@@ -253,7 +396,7 @@ function findRepoFilesContaining(params: {
     .flatMap((root) => listRepoTsFiles(root))
     .filter((file) => !excluded.has(file))
     .filter((file) => !(params.excludeFilesMatching ?? []).some((pattern) => pattern.test(file)))
-    .filter((file) => params.pattern.test(readFileSync(file, "utf8")))
+    .filter((file) => params.pattern.test(readCachedSource(file)))
     .map((file) => file.slice(REPO_ROOT.length + 1))
     .toSorted();
 }
@@ -288,13 +431,13 @@ function sourceMentionsIdentifier(source: string, name: string): boolean {
 function expectSourceMentions(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
   const missing = names.filter((name) => !sourceMentionsIdentifier(source, name));
-  expect(missing, `${subpath} missing exports`).toEqual([]);
+  expect(missing, `${subpath} missing exports`).toStrictEqual([]);
 }
 
 function expectSourceOmits(subpath: string, names: readonly string[]) {
   const source = readPluginSdkSource(subpath);
   const present = names.filter((name) => sourceMentionsIdentifier(source, name));
-  expect(present, `${subpath} leaked exports`).toEqual([]);
+  expect(present, `${subpath} leaked exports`).toStrictEqual([]);
 }
 
 function expectSourceContract(
@@ -304,8 +447,8 @@ function expectSourceContract(
   const source = readPluginSdkSource(subpath);
   const missing = (params.mentions ?? []).filter((name) => !sourceMentionsIdentifier(source, name));
   const present = (params.omits ?? []).filter((name) => sourceMentionsIdentifier(source, name));
-  expect(missing, `${subpath} missing exports`).toEqual([]);
-  expect(present, `${subpath} leaked exports`).toEqual([]);
+  expect(missing, `${subpath} missing exports`).toStrictEqual([]);
+  expect(present, `${subpath} leaked exports`).toStrictEqual([]);
 }
 
 function expectSourceContains(subpath: string, snippet: string) {
@@ -314,6 +457,10 @@ function expectSourceContains(subpath: string, snippet: string) {
 
 function expectSourceOmitsSnippet(subpath: string, snippet: string) {
   expect(readPluginSdkSource(subpath)).not.toContain(snippet);
+}
+
+function expectRepoSourceOmitsSnippet(relativePath: string, snippet: string) {
+  expect(readRepoSource(relativePath)).not.toContain(snippet);
 }
 
 function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
@@ -338,6 +485,21 @@ function isGeneratedBundledFacadeSubpath(subpath: string): boolean {
 }
 
 describe("plugin-sdk subpath exports", () => {
+  let deprecatedChannelRuntimeMatches: string[] = [];
+
+  beforeAll(() => {
+    deprecatedChannelRuntimeMatches = findRepoFilesContaining({
+      roots: [
+        resolve(REPO_ROOT, "src"),
+        resolve(REPO_ROOT, "extensions"),
+        resolve(REPO_ROOT, "test"),
+      ],
+      pattern:
+        /(?:from\s+|import\s+(?:type\s+)?|import\s*\(\s*)["']openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
+      exclude: ["src/plugins/compat/registry.ts", "src/plugins/sdk-alias.test.ts"],
+    });
+  });
+
   it("keeps the curated public list free of internal implementation subpaths", () => {
     for (const deniedSubpath of [
       "acpx",
@@ -345,8 +507,9 @@ describe("plugin-sdk subpath exports", () => {
       "lobster",
       "pairing-access",
       "provider-model-definitions",
+      "qa-channel",
+      "qa-channel-protocol",
       "reply-prefix",
-      "secret-input-runtime",
       "secret-input-schema",
       "signal-core",
       "synology-chat",
@@ -361,9 +524,9 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
-    const removedChannelAliases = new Set(["discord", "signal", "slack", "telegram", "whatsapp"]);
+    const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
-    expect(banned).toEqual([]);
+    expect(banned).toStrictEqual([]);
   });
 
   it("keeps generated bundled-channel facades out of the public sdk list", () => {
@@ -377,7 +540,7 @@ describe("plugin-sdk subpath exports", () => {
           isGeneratedBundledFacadeSubpath(subpath),
       ),
     );
-    expect(banned).toEqual([]);
+    expect(banned).toStrictEqual([]);
   });
 
   it("keeps browser compatibility helper subpaths as thin facades", () => {
@@ -393,6 +556,10 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps helper subpaths aligned", () => {
+    expectSourceContract("expect-runtime", {
+      mentions: ["expectDefined"],
+      omits: ["first", "last"],
+    });
     expectSourceMentions("core", [
       "emptyPluginConfigSchema",
       "definePluginEntry",
@@ -430,68 +597,43 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
-    expectSourceMentions("bluebubbles", [
-      "normalizeBlueBubblesAcpConversationId",
-      "matchBlueBubblesAcpConversation",
-      "resolveBlueBubblesConversationIdFromTarget",
-      "resolveAckReaction",
-      "resolveChannelMediaMaxBytes",
-      "collectBlueBubblesStatusIssues",
-      "createChannelPairingController",
-      "createChannelReplyPipeline",
-      "resolveRequestUrl",
-      "buildProbeChannelStatusSummary",
-      "extractToolSend",
-      "createFixedWindowRateLimiter",
-      "withResolvedWebhookRequestPipeline",
+    expectSourceMentions("media-local-roots", [
+      "getAgentScopedMediaLocalRoots",
+      "getAgentScopedMediaLocalRootsForSources",
     ]);
-    expectSourceMentions("irc", [
-      "createChannelReplyPipeline",
-      "chunkTextForOutbound",
-      "createChannelPairingController",
-      "createLoggerBackedRuntime",
-      "ircSetupAdapter",
-      "ircSetupWizard",
-    ]);
-    expectSourceMentions("bluebubbles-policy", [
-      "isAllowedBlueBubblesSender",
-      "resolveBlueBubblesGroupRequireMention",
-      "resolveBlueBubblesGroupToolPolicy",
-    ]);
-    for (const subpath of [
-      "feishu",
-      "googlechat",
-      "matrix",
-      "mattermost",
-      "msteams",
-      "zalo",
-      "zalouser",
-    ]) {
-      expectSourceMentions(subpath, ["chunkTextForOutbound"]);
-    }
-    for (const subpath of ["googlechat", "msteams", "nextcloud-talk", "zalouser"]) {
-      expectSourceMentions(subpath, [
-        "resolveInboundMentionDecision",
-        "resolveMentionGating",
-        "resolveMentionGatingWithBypass",
-      ]);
-    }
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
+      "isImplicitSameChatApprovalAuthorization",
+      "markImplicitSameChatApprovalAuthorization",
       "resolveApprovalApprovers",
     ]);
-    expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
+    expectSourceContract("approval-reference-runtime", {
+      mentions: ["buildApprovalResolutionRef"],
+      omits: ["resolveApprovalOverGateway", "withOperatorApprovalsGatewayClient"],
+    });
+    expectSourceMentions("reply-chunking", [
+      "chunkText",
+      "chunkTextWithMode",
+      "isSilentReplyPayloadText",
+      "isSilentReplyText",
+    ]);
     expectSourceMentions("reply-history", [
+      "buildInboundHistoryFromEntries",
+      "buildInboundHistoryFromMap",
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "recordPendingHistoryEntryIfEnabled",
     ]);
+    expectSourceMentions("matrix", ["runPluginCommandWithTimeout"]);
     expectSourceContract("reply-runtime", {
       omits: [
         "buildPendingHistoryContextFromMap",
         "clearHistoryEntriesIfEnabled",
         "recordPendingHistoryEntryIfEnabled",
         "DEFAULT_GROUP_HISTORY_LIMIT",
+        "requestedSessionId",
+        "resumeRequestedSession",
       ],
     });
     expectSourceMentions("account-helpers", ["createAccountListHelpers"]);
@@ -521,6 +663,7 @@ describe("plugin-sdk subpath exports", () => {
         "SecretTargetRegistryEntry",
       ],
       omits: [
+        "buildChannelMetadata",
         "buildUntrustedChannelMetadata",
         "evaluateSupplementalContextVisibility",
         "resolvePinnedMainDmOwnerFromAllowlist",
@@ -577,12 +720,6 @@ describe("plugin-sdk subpath exports", () => {
       mentions: ["extractToolPayload", "ToolPayloadCarrier"],
       omits: ["createAnthropicToolPayloadCompatibilityWrapper", "extractToolSend"],
     });
-    expectSourceMentions("compat", [
-      "createPluginRuntimeStore",
-      "createScopedChannelConfigAdapter",
-      "resolveControlCommandGate",
-      "delegateCompactionToRuntime",
-    ]);
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",
       "issueDeviceBootstrapToken",
@@ -621,31 +758,149 @@ describe("plugin-sdk subpath exports", () => {
       "listDirectoryEntriesFromSources",
       "listResolvedDirectoryEntriesFromSources",
     ]);
-    expectSourceContains(
-      "memory-core-host-runtime-core",
-      'export * from "../memory-host-sdk/runtime-core.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-cli",
-      'export * from "../memory-host-sdk/runtime-cli.js";',
-    );
-    expectSourceContains(
-      "memory-core-host-runtime-files",
-      'export * from "../memory-host-sdk/runtime-files.js";',
-    );
+    expectSourceContract("memory-core-host-runtime-core", {
+      mentions: ["SILENT_REPLY_TOKEN", "resolveMemorySearchConfig", "MemoryPluginRuntime"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-core.js";'],
+    });
+    expectSourceContract("memory-core-host-runtime-cli", {
+      mentions: ["defaultRuntime", "withManager", "withProgressTotals"],
+    });
+    expectSourceContract("memory-core-host-runtime-files", {
+      mentions: ["listMemoryFiles", "normalizeExtraMemoryPaths", "MemorySearchResult"],
+      omits: ['export * from "../../packages/memory-host-sdk/src/runtime-files.js";'],
+    });
+    expectSourceMentions("plugin-test-runtime", [
+      "registerSingleProviderPlugin",
+      "registerProviderPlugin",
+      "createRuntimeEnv",
+      "createPluginSetupWizardStatus",
+      "runProviderCatalog",
+    ]);
+    expectSourceMentions("agent-runtime-test-contracts", [
+      "AUTH_PROFILE_RUNTIME_CONTRACT",
+      "DELIVERY_NO_REPLY_RUNTIME_CONTRACT",
+      "createParameterFreeTool",
+      "QUEUED_USER_MESSAGE_MARKER",
+    ]);
+    expectSourceMentions("channel-test-helpers", [
+      "assertBundledChannelEntries",
+      "formatEnvelopeTimestamp",
+      "expectPairingReplyText",
+    ]);
+    expectSourceMentions("provider-test-contracts", [
+      "expectPassthroughReplayPolicy",
+      "runRealtimeSttLiveTest",
+    ]);
+    expectSourceMentions("test-env", [
+      "withEnv",
+      "withServer",
+      "withTempHome",
+      "createMockIncomingRequest",
+      "withFetchPreconnect",
+    ]);
+    expectSourceOmits("test-env", [
+      "collectProviderApiKeys",
+      "createRequestCaptureJsonFetch",
+      "isLiveTestEnabled",
+      "resolveConfiguredLiveVideoModels",
+    ]);
+    expectSourceMentions("test-live", [
+      "createSingleUserPromptMessage",
+      "isLiveTestEnabled",
+      "isBillingErrorMessage",
+      "isModelNotFoundErrorMessage",
+    ]);
+    expectSourceMentions("test-live-auth", [
+      "collectProviderApiKeys",
+      "getShellEnvAppliedKeys",
+      "maybeLoadShellEnvForGenerationProviders",
+    ]);
+    expectSourceMentions("test-media-understanding", [
+      "createRequestCaptureJsonFetch",
+      "installPinnedHostnameTestHooks",
+    ]);
+    expectSourceMentions("test-media-generation", [
+      "encodePngRgba",
+      "parseProviderModelMap",
+      "resolveConfiguredLiveMusicModels",
+      "resolveConfiguredLiveVideoModels",
+    ]);
+    expectSourceMentions("test-fixtures", [
+      "createCliRuntimeCapture",
+      "importFreshModule",
+      "bundledPluginRoot",
+      "createSandboxTestContext",
+      "makeAgentAssistantMessage",
+      "peekSystemEvents",
+      "typedCases",
+    ]);
+    expectSourceMentions("test-node-mocks", [
+      "mockNodeBuiltinModule",
+      "mockNodeChildProcessExecFile",
+      "mockNodeChildProcessSpawnSync",
+    ]);
+    expectSourceMentions("channel-target-testing", [
+      "installCommonResolveTargetErrorCases",
+      "ResolveTargetFn",
+    ]);
+    expectSourceMentions("provider-http-test-mocks", [
+      "getProviderHttpMocks",
+      "installProviderHttpMockCleanup",
+    ]);
+  });
+
+  it("keeps public SDK test helper subpaths free of top-level Vitest module mocks outside opt-in mock helpers", () => {
+    const optInMockSubpaths = new Set<string>(PUBLIC_SDK_TEST_HELPER_SUBPATHS_WITH_TOP_LEVEL_MOCKS);
+    const violations = PUBLIC_SDK_TEST_HELPER_SUBPATHS.filter(
+      (subpath) => !optInMockSubpaths.has(subpath),
+    )
+      .flatMap((subpath) =>
+        collectReexportedSourceFiles(resolve(PLUGIN_SDK_DIR, `${subpath}.ts`)).flatMap((file) =>
+          topLevelVitestModuleMockLines(file).map(
+            (line) => `${file.slice(REPO_ROOT.length + 1)}:${line}`,
+          ),
+        ),
+      )
+      .toSorted();
+
+    expect(violations).toStrictEqual([]);
+  });
+
+  it("lists repo source candidates from git without walking SDK boundary roots", () => {
+    try {
+      expectNoReaddirSyncDuring(() => {
+        repoTsFilesCache.clear();
+        const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
+
+        expect(files.length).toBeGreaterThan(0);
+        expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
+      });
+    } finally {
+      repoTsFilesCache.clear();
+    }
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {
+    expect(deprecatedChannelRuntimeMatches).toStrictEqual([]);
+  });
+
+  it("keeps deprecated channel route key aliases behind compatibility shims", () => {
     const matches = findRepoFilesContaining({
       roots: [
         resolve(REPO_ROOT, "src"),
         resolve(REPO_ROOT, "extensions"),
         resolve(REPO_ROOT, "test"),
       ],
-      pattern: /openclaw\/plugin-sdk\/channel-runtime(?=["'])/u,
-      exclude: ["src/plugins/sdk-alias.test.ts"],
+      pattern: /\b(?:channelRouteIdentityKey|channelRouteKey)\b/u,
+      exclude: [
+        "src/plugin-sdk/channel-route.ts",
+        "src/plugin-sdk/channel-route.test.ts",
+        "src/plugins/compat/registry.ts",
+        "src/plugins/compat/registry.test.ts",
+        "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+      ],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
   it("keeps removed channel-named runtime boundaries out of core imports", () => {
@@ -659,11 +914,11 @@ describe("plugin-sdk subpath exports", () => {
       ],
       excludeFilesMatching: [/\.test\.ts$/u, /\.test-harness\.ts$/u],
     });
-    expect(matches).toEqual([]);
+    expect(matches).toStrictEqual([]);
   });
 
-  it("exports channel runtime helpers from the dedicated subpath", () => {
-    expectSourceOmits("channel-runtime", [
+  it("keeps channel runtime helpers on focused subpaths", () => {
+    expectSourceOmits("channel-runtime-context", [
       "applyChannelMatchMeta",
       "createChannelDirectoryAdapter",
       "createEmptyChannelDirectoryAdapter",
@@ -671,6 +926,7 @@ describe("plugin-sdk subpath exports", () => {
       "createDraftStreamLoop",
       "createLoggedPairingApprovalNotifier",
       "createPairingPrefixStripper",
+      "createChannelRunQueue",
       "createRunStateMachine",
       "createRuntimeDirectoryLiveAdapter",
       "createRuntimeOutboundDelegates",
@@ -741,8 +997,6 @@ describe("plugin-sdk subpath exports", () => {
       "buildChannelKeyCandidates",
       "buildMessagingTarget",
       "createDirectTextMediaOutbound",
-      "createMessageToolButtonsSchema",
-      "createMessageToolCardSchema",
       "createScopedAccountReplyToModeResolver",
       "createStaticReplyToModeResolver",
       "createTopLevelChannelReplyToModeResolver",
@@ -779,8 +1033,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveInboundDebounceMs",
       "resolveEnvelopeFormatOptions",
       "resolveInboundSessionEnvelopeContext",
-      "resolveMentionGating",
-      "resolveMentionGatingWithBypass",
       "shouldDebounceTextInbound",
       "toLocationContext",
     ]);
@@ -811,13 +1063,7 @@ describe("plugin-sdk subpath exports", () => {
       "createTopLevelChannelDmPolicy",
     ]);
     expectSourceContract("channel-actions", {
-      mentions: [
-        "createUnionActionGate",
-        "listTokenSourcedAccounts",
-        "resolveReactionMessageId",
-        "createMessageToolButtonsSchema",
-        "createMessageToolCardSchema",
-      ],
+      mentions: ["createUnionActionGate", "listTokenSourcedAccounts", "resolveReactionMessageId"],
     });
     expectSourceMentions("channel-targets", [
       "applyChannelMatchMeta",
@@ -861,17 +1107,8 @@ describe("plugin-sdk subpath exports", () => {
       "isRecord",
       "resolveEnabledConfiguredAccountId",
     ]);
-    expectSourceMentions("outbound-runtime", [
-      "createRuntimeOutboundDelegates",
-      "resolveOutboundSendDep",
-      "resolveAgentOutboundIdentity",
-    ]);
     expectSourceMentions("command-auth", [
       "buildCommandTextFromArgs",
-      "buildCommandsMessage",
-      "buildCommandsMessagePaginated",
-      "buildCommandsPaginationKeyboard",
-      "buildHelpMessage",
       "buildModelsProviderData",
       "hasControlCommand",
       "listNativeCommandSpecsForConfig",
@@ -895,12 +1132,11 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
-    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
     ]);
-    expectSourceMentions("direct-dm", [
+    expectSourceMentions("channel-inbound", [
       "createDirectDmPreCryptoGuardPolicy",
       "createPreCryptoDirectDmAuthorizer",
       "dispatchInboundDirectDmWithRuntime",
@@ -934,12 +1170,12 @@ describe("plugin-sdk subpath exports", () => {
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
     ]);
-    expectSourceMentions("matrix-runtime-shared", ["formatZonedTimestamp"]);
     expectSourceMentions("ssrf-runtime", [
       "closeDispatcher",
       "createPinnedDispatcher",
       "resolvePinnedHostnameWithPolicy",
       "formatErrorMessage",
+      "isPrivateIpAddress",
       "assertHttpUrlTargetsPrivateNetwork",
       "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
@@ -968,12 +1204,18 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsImportPattern("provider-setup", "./sglang.js");
     expectSourceMentions("provider-auth", [
       "buildOauthProviderAuthResult",
+      "generateHexPkceVerifierChallenge",
       "generatePkceVerifierChallenge",
       "toFormUrlEncoded",
     ]);
     expectSourceOmits("core", ["buildOauthProviderAuthResult"]);
     expectSourceContract("provider-model-shared", {
-      mentions: ["DEFAULT_CONTEXT_TOKENS", "normalizeModelCompat", "cloneFirstTemplateModel"],
+      mentions: [
+        "DEFAULT_CONTEXT_TOKENS",
+        "normalizeModelCompat",
+        "cloneFirstTemplateModel",
+        "resolveFamilyForwardCompatModel",
+      ],
       omits: ["applyOpenAIConfig", "buildKilocodeModelDefinition", "discoverHuggingfaceModels"],
     });
     expectSourceContract("provider-catalog-shared", {
@@ -990,26 +1232,17 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
     expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
-    expectSourceContract("self-hosted-provider-setup", {
-      mentions: [
-        "applyProviderDefaultModel",
-        "discoverOpenAICompatibleLocalModels",
-        "discoverOpenAICompatibleSelfHostedProvider",
-        "configureOpenAICompatibleSelfHostedProviderNonInteractive",
-      ],
-      omits: ["buildVllmProvider", "buildSglangProvider"],
-    });
-    expectSourceOmitsImportPattern("self-hosted-provider-setup", "./vllm.js");
-    expectSourceOmitsImportPattern("self-hosted-provider-setup", "./sglang.js");
+    expectSourceMentions("agent-harness", ["./agent-harness-runtime.js"]);
+    expectSourceMentions("agent-harness-runtime", ["AgentHarness", "EmbeddedPiCompactResult"]);
     expectSourceOmitsSnippet("agent-runtime", "./sglang.js");
     expectSourceOmitsSnippet("agent-runtime", "./vllm.js");
     expectSourceOmitsSnippet("agent-runtime", "../../extensions/");
     expectSourceOmitsSnippet("google-model-id", "./google.js");
     expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
     expectSourceOmitsSnippet("google-model-id", "../../extensions/");
-    expectSourceOmitsSnippet("xai-model-id", "./xai.js");
-    expectSourceOmitsSnippet("xai-model-id", "./facade-runtime.js");
-    expectSourceOmitsSnippet("xai-model-id", "../../extensions/");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [
@@ -1060,7 +1293,7 @@ describe("plugin-sdk subpath exports", () => {
       "requestBodyErrorToText",
       "withResolvedWebhookRequestPipeline",
     ]);
-    expectSourceMentions("testing", ["removeAckReactionAfterReply", "shouldAckReaction"]);
+    expectSourceMentions("channel-feedback", ["removeAckReactionAfterReply", "shouldAckReaction"]);
   });
 
   it("keeps shared plugin-sdk types aligned", () => {
@@ -1082,6 +1315,17 @@ describe("plugin-sdk subpath exports", () => {
     expectTypeOf<CoreOpenClawPluginApi>().toMatchTypeOf<SharedOpenClawPluginApi>();
     expectTypeOf<CorePluginRuntime>().toMatchTypeOf<SharedPluginRuntime>();
     expectTypeOf<CoreChannelMessageActionContext>().toMatchTypeOf<SharedChannelMessageActionContext>();
+    type PrivateResumeOptionKeys = Extract<
+      keyof ReplyRuntimeGetReplyOptions,
+      "requestedSessionId" | "resumeRequestedSession"
+    >;
+    expectTypeOf<PrivateResumeOptionKeys>().toEqualTypeOf<never>();
+    type ReplyRuntimeAppendBeforeDeliverOptions = Parameters<
+      NonNullable<ReplyRuntimeDispatcher["appendBeforeDeliver"]>
+    >[1];
+    expectTypeOf<ReplyRuntimeAppendBeforeDeliverOptions>().toEqualTypeOf<
+      ReplyRuntimeBeforeDeliverOptions | undefined
+    >();
   });
 
   it("keeps runtime entry subpaths importable", async () => {
@@ -1089,10 +1333,6 @@ describe("plugin-sdk subpath exports", () => {
     const channelActionsSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/channel-actions",
     );
-    const globalSingletonSdk = await importResolvedPluginSdkSubpath(
-      "openclaw/plugin-sdk/global-singleton",
-    );
-    const textRuntimeSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/text-runtime");
     const pluginEntrySdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/plugin-entry");
     const channelLifecycleSdk = await importResolvedPluginSdkSubpath(
       "openclaw/plugin-sdk/channel-lifecycle",
@@ -1109,24 +1349,36 @@ describe("plugin-sdk subpath exports", () => {
     }
 
     expect(coreSdk.definePluginEntry).toBe(pluginEntrySdk.definePluginEntry);
-    expect(typeof coreSdk.optionalStringEnum).toBe("function");
-    expect(typeof channelActionsSdk.optionalStringEnum).toBe("function");
-    expect(typeof channelActionsSdk.stringEnum).toBe("function");
-    expect(typeof globalSingletonSdk.resolveGlobalMap).toBe("function");
-    expect(typeof globalSingletonSdk.resolveGlobalSingleton).toBe("function");
-    expect(typeof globalSingletonSdk.createScopedExpiringIdCache).toBe("function");
-    expect(typeof textRuntimeSdk.createScopedExpiringIdCache).toBe("function");
-    expect(typeof textRuntimeSdk.resolveGlobalMap).toBe("function");
-    expect(typeof textRuntimeSdk.resolveGlobalSingleton).toBe("function");
-    expectSourceMentions("infra-runtime", ["createRuntimeOutboundDelegates"]);
-    expectSourceContains("infra-runtime", "../infra/outbound/send-deps.js");
-    expectSourceMentions("error-runtime", ["formatUncaughtError", "isApprovalNotFoundError"]);
+    expect(coreSdk.optionalStringEnum).toBe(coreDirectSdk.optionalStringEnum);
+    expect(coreSdk.prepareMemorySystemPromptAddition).toBe(
+      coreDirectSdk.prepareMemorySystemPromptAddition,
+    );
+    expect(channelActionsSdk.optionalStringEnum).toBe(channelActionsDirectSdk.optionalStringEnum);
+    expect(channelActionsSdk.stringEnum).toBe(channelActionsDirectSdk.stringEnum);
+    expectSourceMentions("error-runtime", [
+      "formatUncaughtError",
+      "isApprovalNotFoundError",
+      "PlatformMessageNotDispatchedError",
+    ]);
 
-    expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
-    expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
-    expect(typeof channelLifecycleSdk.runPassiveAccountLifecycle).toBe("function");
-    expect(typeof channelLifecycleSdk.createRunStateMachine).toBe("function");
-    expect(typeof channelLifecycleSdk.createArmableStallWatchdog).toBe("function");
+    expect(channelLifecycleSdk.createDraftStreamLoop).toBe(
+      channelLifecycleDirectSdk.createDraftStreamLoop,
+    );
+    expect(channelLifecycleSdk.createFinalizableDraftLifecycle).toBe(
+      channelLifecycleDirectSdk.createFinalizableDraftLifecycle,
+    );
+    expect(channelLifecycleSdk.createChannelRunQueue).toBe(
+      channelLifecycleDirectSdk.createChannelRunQueue,
+    );
+    expect(channelLifecycleSdk.runPassiveAccountLifecycle).toBe(
+      channelLifecycleDirectSdk.runPassiveAccountLifecycle,
+    );
+    expect(channelLifecycleSdk.createRunStateMachine).toBe(
+      channelLifecycleDirectSdk.createRunStateMachine,
+    );
+    expect(channelLifecycleSdk.createArmableStallWatchdog).toBe(
+      channelLifecycleDirectSdk.createArmableStallWatchdog,
+    );
 
     expectSourceMentions("channel-pairing", [
       "createChannelPairingController",
@@ -1143,20 +1395,40 @@ describe("plugin-sdk subpath exports", () => {
       "createTypingCallbacks",
       "createReplyPrefixContext",
       "createReplyPrefixOptions",
+      "resolveChannelSourceReplyDeliveryMode",
     ]);
-    expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
-    expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
-    expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
+    expect(channelReplyPipelineSdk.createTypingCallbacks).toBe(
+      channelReplyPipelineDirectSdk.createTypingCallbacks,
+    );
+    expect(channelReplyPipelineSdk.createReplyPrefixContext).toBe(
+      channelReplyPipelineDirectSdk.createReplyPrefixContext,
+    );
+    expect(channelReplyPipelineSdk.createReplyPrefixOptions).toBe(
+      channelReplyPipelineDirectSdk.createReplyPrefixOptions,
+    );
+    expect(channelReplyPipelineSdk.resolveChannelSourceReplyDeliveryMode).toBe(
+      channelReplyPipelineDirectSdk.resolveChannelSourceReplyDeliveryMode,
+    );
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {
       const mod = representativeModules[index];
       expect(typeof mod).toBe("object");
-      expect(mod, `subpath ${id} should resolve`).toBeTruthy();
+      expect(Object.keys(mod as object).length, `subpath ${id} should resolve`).toBeGreaterThan(0);
     }
   });
 
-  it("exports single-provider plugin entry helpers from the dedicated subpath", () => {
-    expect(typeof providerEntrySdk.defineSingleProviderPluginEntry).toBe("function");
+  it("keeps repeated silent-token semantics visible through the reply-chunking subpath", async () => {
+    const replyChunkingSdk = await importResolvedPluginSdkSubpath(
+      "openclaw/plugin-sdk/reply-chunking",
+    );
+
+    expect(replyChunkingSdk.isSilentReplyText("NO_REPLY\n\nNO_REPLY")).toBe(true);
+    expect(replyChunkingSdk.isSilentReplyPayloadText("NO_REPLY\n\nNO_REPLY")).toBe(true);
+    expect(replyChunkingSdk.isSilentReplyText("HEARTBEAT_OK\nHEARTBEAT_OK", "HEARTBEAT_OK")).toBe(
+      true,
+    );
+    expect(replyChunkingSdk.isSilentReplyText("Visible update\n\nNO_REPLY")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

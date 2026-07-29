@@ -1,3 +1,10 @@
+// Discord plugin module implements inbound job behavior.
+import {
+  resolveDiscordChannelIdSafe,
+  resolveDiscordChannelInfoSafe,
+  resolveDiscordChannelNameSafe,
+  resolveDiscordChannelParentSafe,
+} from "./channel-access.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
 
 type DiscordInboundJobRuntimeField =
@@ -5,27 +12,27 @@ type DiscordInboundJobRuntimeField =
   | "abortSignal"
   | "guildHistories"
   | "client"
+  | "turnAdoptionLifecycle"
   | "threadBindings"
   | "discordRestFetch";
 
-export type DiscordInboundJobRuntime = Pick<
-  DiscordMessagePreflightContext,
-  DiscordInboundJobRuntimeField
->;
+type DiscordInboundJobRuntime = Pick<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
-export type DiscordInboundJobPayload = Omit<
-  DiscordMessagePreflightContext,
-  DiscordInboundJobRuntimeField
->;
+type DiscordInboundJobPayload = Omit<DiscordMessagePreflightContext, DiscordInboundJobRuntimeField>;
 
 export type DiscordInboundJob = {
   queueKey: string;
   payload: DiscordInboundJobPayload;
   runtime: DiscordInboundJobRuntime;
-  replayKeys?: string[];
+  ingressSettlement?: {
+    settle: () => Promise<void>;
+    abandon: (error?: unknown) => Promise<void>;
+  };
 };
 
-export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightContext): string {
+  // Serialize work by the eventual session route so one conversation cannot
+  // race itself when Discord channel and session identifiers differ.
   const sessionKey = ctx.route.sessionKey?.trim();
   if (sessionKey) {
     return sessionKey;
@@ -39,13 +46,14 @@ export function resolveDiscordInboundJobQueueKey(ctx: DiscordMessagePreflightCon
 
 export function buildDiscordInboundJob(
   ctx: DiscordMessagePreflightContext,
-  options?: { replayKeys?: readonly string[] },
+  options?: { ingressSettlement?: DiscordInboundJob["ingressSettlement"] },
 ): DiscordInboundJob {
   const {
     runtime,
     abortSignal,
     guildHistories,
     client,
+    turnAdoptionLifecycle,
     threadBindings,
     discordRestFetch,
     message,
@@ -71,10 +79,11 @@ export function buildDiscordInboundJob(
       abortSignal,
       guildHistories,
       client,
+      turnAdoptionLifecycle,
       threadBindings,
       discordRestFetch,
     },
-    replayKeys: options?.replayKeys ? [...options.replayKeys] : undefined,
+    ingressSettlement: options?.ingressSettlement,
   };
 }
 
@@ -101,16 +110,18 @@ function normalizeDiscordThreadChannel(
   if (!threadChannel) {
     return null;
   }
+  const channelInfo = resolveDiscordChannelInfoSafe(threadChannel);
+  const parent = resolveDiscordChannelParentSafe(threadChannel);
   return {
     id: threadChannel.id,
-    name: threadChannel.name,
-    parentId: threadChannel.parentId,
-    parent: threadChannel.parent
+    name: channelInfo.name,
+    parentId: channelInfo.parentId,
+    parent: parent
       ? {
-          id: threadChannel.parent.id,
-          name: threadChannel.parent.name,
+          id: resolveDiscordChannelIdSafe(parent),
+          name: resolveDiscordChannelNameSafe(parent),
         }
       : undefined,
-    ownerId: threadChannel.ownerId,
+    ownerId: channelInfo.ownerId,
   };
 }

@@ -1,7 +1,7 @@
+// Plugin entry guardrail tests cover allowed plugin entrypoint imports and exports.
 import { existsSync, readFileSync } from "node:fs";
 import path, { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginMetadata } from "../bundled-plugin-metadata.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
@@ -25,6 +25,13 @@ const FORBIDDEN_CONTRACT_MODULE_PATH_PATTERNS = [
   /(^|\/)[^/]*\.test(?:[-.][^/]*)?\.[cm]?[jt]s$/u,
   /(^|\/)[^/]*(?:test-harness|test-plugin|test-helper|test-support|harness)[^/]*\.[cm]?[jt]s$/u,
 ] as const;
+const STATIC_FROM_IMPORT_RE =
+  /^\s*import(?:\s+type)?\s+(?!["'])([\s\S]*?)\s+from\s*["']([^"']+)["']/gmu;
+const STATIC_SIDE_EFFECT_IMPORT_RE = /^\s*import\s*["']([^"']+)["']/gmu;
+const RE_EXPORT_STAR_RE =
+  /^\s*export\s+(?:type\s+)?\*\s*(?:as\s+\w+\s+)?from\s*["']([^"']+)["']/gmu;
+const RE_EXPORT_NAMED_RE = /^\s*export\s+(?:type\s+)?\{[^}]*\}\s+from\s*["']([^"']+)["']/gmu;
+
 function listBundledPluginRoots() {
   return loadPluginManifestRegistry({})
     .plugins.filter((plugin) => plugin.origin === "bundled")
@@ -60,28 +67,46 @@ function collectProductionContractEntryPaths(): Array<{
   entryPath: string;
   pluginRoot: string;
 }> {
-  return listBundledPluginMetadata({ rootDir: REPO_ROOT }).flatMap((plugin) => {
-    const pluginRoot = resolve(REPO_ROOT, "extensions", plugin.dirName);
-    const entryPaths = new Set<string>();
-    for (const artifact of plugin.publicSurfaceArtifacts ?? []) {
-      if (!isGuardedContractArtifactBasename(artifact)) {
-        continue;
+  return listBundledPluginMetadata({ rootDir: REPO_ROOT, includeChannelConfigs: false }).flatMap(
+    (plugin) => {
+      const pluginRoot = resolve(REPO_ROOT, "extensions", plugin.dirName);
+      const entryPaths = new Set<string>();
+      for (const artifact of plugin.publicSurfaceArtifacts ?? []) {
+        if (!isGuardedContractArtifactBasename(artifact)) {
+          continue;
+        }
+        const sourcePath = resolvePublicSurfaceSourcePath(pluginRoot, artifact);
+        if (sourcePath) {
+          entryPaths.add(sourcePath);
+        }
       }
-      const sourcePath = resolvePublicSurfaceSourcePath(pluginRoot, artifact);
-      if (sourcePath) {
-        entryPaths.add(sourcePath);
-      }
-    }
-    return [...entryPaths].map((entryPath) => ({
-      pluginId: plugin.manifest.id,
-      entryPath,
-      pluginRoot,
-    }));
-  });
+      return [...entryPaths].map((entryPath) => ({
+        pluginId: plugin.manifest.id,
+        entryPath,
+        pluginRoot,
+      }));
+    },
+  );
 }
 
 function formatRepoRelativePath(filePath: string): string {
   return relative(REPO_ROOT, filePath).replaceAll(path.sep, "/");
+}
+
+function stripSourceComments(source: string): string {
+  return source.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/(^|[^:])\/\/.*$/gmu, "$1");
+}
+
+function importsDefinePluginEntry(importClause: string | undefined): boolean {
+  const namedImports = importClause?.match(/\{([\s\S]*)\}/u)?.[1];
+  if (!namedImports) {
+    return false;
+  }
+
+  return namedImports
+    .split(",")
+    .map((part) => part.trim().replace(/^type\s+/u, ""))
+    .some((part) => part.split(/\s+as\s+/u)[0]?.trim() === "definePluginEntry");
 }
 
 function analyzeSourceModule(params: { filePath: string; source: string }): {
@@ -89,48 +114,45 @@ function analyzeSourceModule(params: { filePath: string; source: string }): {
   relativeSpecifiers: string[];
   importsDefinePluginEntryFromCore: boolean;
 } {
-  const sourceFile = ts.createSourceFile(
-    params.filePath,
-    params.source,
-    ts.ScriptTarget.Latest,
-    true,
-  );
+  const source = stripSourceComments(params.source);
   const specifiers = new Set<string>();
   let importsDefinePluginEntryFromCore = false;
 
-  for (const statement of sourceFile.statements) {
-    if (ts.isImportDeclaration(statement)) {
-      const specifier = ts.isStringLiteral(statement.moduleSpecifier)
-        ? statement.moduleSpecifier.text
-        : undefined;
-      if (specifier) {
-        specifiers.add(specifier);
-      }
-
-      if (
-        specifier === "openclaw/plugin-sdk/core" &&
-        statement.importClause?.namedBindings &&
-        ts.isNamedImports(statement.importClause.namedBindings) &&
-        statement.importClause.namedBindings.elements.some(
-          (element) => (element.propertyName?.text ?? element.name.text) === "definePluginEntry",
-        )
-      ) {
-        importsDefinePluginEntryFromCore = true;
-      }
-
+  for (const match of source.matchAll(STATIC_FROM_IMPORT_RE)) {
+    const importClause = match[1];
+    const specifier = match[2];
+    if (!specifier) {
       continue;
     }
+    specifiers.add(specifier);
 
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-
-    if (statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)) {
-      specifiers.add(statement.moduleSpecifier.text);
+    if (specifier === "openclaw/plugin-sdk/core" && importsDefinePluginEntry(importClause)) {
+      importsDefinePluginEntryFromCore = true;
     }
   }
 
-  const nextSpecifiers = [...specifiers];
+  for (const match of source.matchAll(STATIC_SIDE_EFFECT_IMPORT_RE)) {
+    const specifier = match[1];
+    if (specifier) {
+      specifiers.add(specifier);
+    }
+  }
+
+  for (const match of source.matchAll(RE_EXPORT_STAR_RE)) {
+    const specifier = match[1];
+    if (specifier) {
+      specifiers.add(specifier);
+    }
+  }
+
+  for (const match of source.matchAll(RE_EXPORT_NAMED_RE)) {
+    const specifier = match[1];
+    if (specifier) {
+      specifiers.add(specifier);
+    }
+  }
+
+  const nextSpecifiers = [...specifiers].toSorted();
   return {
     specifiers: nextSpecifiers,
     relativeSpecifiers: nextSpecifiers.filter((specifier) => specifier.startsWith(".")),
@@ -234,7 +256,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("does not advertise runtime helper sidecars as bundled plugin entry extensions", () => {
@@ -259,7 +281,7 @@ describe("plugin entry guardrails", () => {
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps bundled production contract barrels off test-only imports and re-exports", () => {
@@ -271,7 +293,7 @@ describe("plugin entry guardrails", () => {
         }).map((failure) => `${pluginId}: ${failure}`),
     );
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("follows relative import edges while scanning guarded contract graphs", () => {
@@ -283,7 +305,7 @@ describe("plugin entry guardrails", () => {
         import "./setup.js";
         export { x };
         export * from "./barrel.js";
-        import { y } from "openclaw/plugin-sdk/testing";
+        import { y } from "openclaw/plugin-sdk/core";
       `,
       }).relativeSpecifiers.toSorted(),
     ).toEqual(["./barrel.js", "./safe.js", "./setup.js"]);

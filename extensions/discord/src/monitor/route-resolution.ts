@@ -1,6 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Discord plugin module implements route resolution behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   deriveLastRoutePolicy,
+  isAcpSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
   resolveAgentRoute,
   type ResolvedAgentRoute,
   type RoutePeer,
@@ -97,4 +102,40 @@ export function resolveDiscordEffectiveRoute(params: {
     }),
     ...(params.matchedBy ? { matchedBy: params.matchedBy } : {}),
   };
+}
+
+function hasExplicitRuntimeBindingIntent(record: SessionBindingRecord): boolean {
+  if (record.targetKind === "subagent") {
+    return true;
+  }
+  if (isAcpSessionKey(record.targetSessionKey) || isSubagentSessionKey(record.targetSessionKey)) {
+    return true;
+  }
+  const metadata = record.metadata;
+  if (!metadata || typeof metadata !== "object") {
+    return false;
+  }
+  return (
+    typeof metadata.boundBy === "string" ||
+    typeof metadata.label === "string" ||
+    typeof metadata.threadName === "string" ||
+    metadata.pluginBindingOwner === "plugin"
+  );
+}
+
+export function shouldIgnoreStaleDiscordRouteBinding(params: {
+  bindingRecord?: SessionBindingRecord | null;
+  route: ResolvedAgentRoute;
+}): boolean {
+  const bindingRecord = params.bindingRecord;
+  const boundSessionKey = bindingRecord?.targetSessionKey?.trim();
+  if (!bindingRecord || !boundSessionKey || hasExplicitRuntimeBindingIntent(bindingRecord)) {
+    return false;
+  }
+  const bound = parseAgentSessionKey(boundSessionKey);
+  const routed = parseAgentSessionKey(params.route.sessionKey);
+  if (!bound || !routed || bound.rest !== routed.rest) {
+    return false;
+  }
+  return bound.agentId !== params.route.agentId;
 }

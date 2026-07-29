@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Checks pairing config logic for account-scoped allowlist handling.
 import ts from "typescript";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mjs";
 import {
@@ -54,14 +55,6 @@ function findViolations(content, filePath) {
             reason: "readChannelAllowFromStore call must pass explicit accountId as 3rd arg",
           });
         }
-      } else if (
-        callName === "readLegacyChannelAllowFromStore" ||
-        callName === "readLegacyChannelAllowFromStoreSync"
-      ) {
-        violations.push({
-          line: toLine(sourceFile, node),
-          reason: `${callName} is legacy-only; use account-scoped readChannelAllowFromStore* APIs`,
-        });
       } else if (callName === "upsertChannelPairingRequest") {
         const firstArg = node.arguments[0];
         if (!firstArg || !hasRequiredAccountIdProperty(firstArg)) {

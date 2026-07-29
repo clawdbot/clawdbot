@@ -1,3 +1,4 @@
+// Extension package TypeScript boundary tests cover package compile isolation.
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,7 +9,6 @@ const CHECK_EXTENSION_PACKAGE_BOUNDARY_BIN = resolve(
   "scripts/check-extension-package-tsc-boundary.mjs",
 );
 const SHOULD_RUN_BOUNDARY_SCRIPT_WRAPPER =
-  process.env.GITHUB_ACTIONS !== "true" ||
   process.env.OPENCLAW_RUN_EXTENSION_PACKAGE_BOUNDARY_TEST === "1";
 
 function runNode(args: string[], timeout: number) {
@@ -20,8 +20,8 @@ function runNode(args: string[], timeout: number) {
   });
 }
 
-// The CI check-additional job runs this script directly. Avoid duplicating the cold
-// 97-extension compile inside the full node test shard.
+// The CI check-additional job and package scripts run this script directly. Keep this
+// wrapper opt-in so full Vitest runs do not duplicate the cold extension compile.
 describe.skipIf(!SHOULD_RUN_BOUNDARY_SCRIPT_WRAPPER)(
   "opt-in extension package TypeScript boundaries",
   () => {

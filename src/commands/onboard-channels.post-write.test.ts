@@ -1,3 +1,4 @@
+// Onboard channel post-write tests cover plugin post-write hooks after channel setup.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {

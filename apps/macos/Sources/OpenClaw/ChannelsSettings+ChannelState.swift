@@ -6,7 +6,7 @@ extension ChannelsSettings {
         _ id: String,
         as type: T.Type) -> T?
     {
-        self.store.snapshot?.decodeChannel(id, as: type)
+        self.store.decodedChannel(id, as: type)
     }
 
     private func configuredChannelTint(configured: Bool, running: Bool, hasError: Bool, probeOk: Bool?) -> Color {
@@ -349,21 +349,13 @@ extension ChannelsSettings {
         }
     }
 
-    var enabledChannels: [ChannelItem] {
-        self.orderedChannels.filter { self.channelEnabled($0) }
-    }
-
-    var availableChannels: [ChannelItem] {
-        self.orderedChannels.filter { !self.channelEnabled($0) }
-    }
-
-    func ensureSelection() {
+    func ensureSelection(in orderedChannels: [ChannelItem]) {
         guard let selected = self.selectedChannel else {
-            self.selectedChannel = self.orderedChannels.first
+            self.selectedChannel = orderedChannels.first
             return
         }
-        if !self.orderedChannels.contains(selected) {
-            self.selectedChannel = self.orderedChannels.first
+        if !orderedChannels.contains(selected) {
+            self.selectedChannel = orderedChannels.first
         }
     }
 

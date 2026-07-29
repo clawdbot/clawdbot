@@ -1,3 +1,4 @@
+// Chat content tests cover message content normalization for chat surfaces.
 import { describe, expect, it } from "vitest";
 import { extractTextFromChatContent } from "./chat-content.js";
 

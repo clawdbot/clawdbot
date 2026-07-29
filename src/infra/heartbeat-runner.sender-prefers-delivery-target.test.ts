@@ -1,3 +1,4 @@
+// Covers heartbeat sender selection when delivery target differs.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";

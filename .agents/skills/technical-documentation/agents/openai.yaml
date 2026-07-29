@@ -1,0 +1,10 @@
+interface:
+  display_name: "Technical Documentation"
+  short_description: "Build and review technical documentation for brownfield and evergreen systems."
+  icon_small: "./assets/icon.jpg"
+  icon_large: "./assets/icon.jpg"
+  brand_color: "#111827"
+  default_prompt: "Build or review technical documentation with a clear, maintainable, and production-ready workflow."
+
+policy:
+  allow_implicit_invocation: true

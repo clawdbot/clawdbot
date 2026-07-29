@@ -1,9 +1,10 @@
 {
   "id": "telegram",
-  "channels": ["telegram"],
-  "channelEnvVars": {
-    "telegram": ["TELEGRAM_BOT_TOKEN"]
+  "icon": "https://cdn.simpleicons.org/telegram",
+  "activation": {
+    "onStartup": false
   },
+  "channels": ["telegram"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -1,25 +1,26 @@
+// Shared ACP command helpers for session identity and reply formatting.
 import { randomUUID } from "node:crypto";
-import { toAcpRuntimeErrorText } from "../../../acp/runtime/error-text.js";
-import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
-import type { AcpRuntimeSessionMode } from "../../../acp/runtime/types.js";
-import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
-import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import { toAcpRuntimeErrorText } from "@openclaw/acp-core/runtime/error-text";
+import type { AcpRuntimeSessionMode } from "@openclaw/acp-core/runtime/types";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { AcpRuntimeError } from "../../../acp/runtime/errors.js";
+import { supportsAutomaticThreadBindingSpawn } from "../../../channels/thread-bindings-policy.js";
+import type { AcpSessionRuntimeOptions } from "../../../config/sessions/types.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "../commands-types.js";
 import { resolveAcpCommandChannel, resolveAcpCommandThreadId } from "./context.js";
 
 export const COMMAND = "/acp";
-export const ACP_SPAWN_USAGE =
+const ACP_SPAWN_USAGE =
   "Usage: /acp spawn [harness-id] [--mode persistent|oneshot] [--thread auto|here|off] [--bind here|off] [--cwd <path>] [--label <label>].";
-export const ACP_STEER_USAGE =
+const ACP_STEER_USAGE =
   "Usage: /acp steer [--session <session-key|session-id|session-label>] <instruction>";
 export const ACP_SET_MODE_USAGE =
   "Usage: /acp set-mode <mode> [session-key|session-id|session-label]";
-export const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
+const ACP_SET_USAGE = "Usage: /acp set <key> <value> [session-key|session-id|session-label]";
 export const ACP_CWD_USAGE = "Usage: /acp cwd <path> [session-key|session-id|session-label]";
 export const ACP_PERMISSIONS_USAGE =
   "Usage: /acp permissions <profile> [session-key|session-id|session-label]";
@@ -34,8 +35,6 @@ export const ACP_INSTALL_USAGE = "Usage: /acp install";
 export const ACP_DOCTOR_USAGE = "Usage: /acp doctor";
 export const ACP_SESSIONS_USAGE = "Usage: /acp sessions";
 export const ACP_STEER_OUTPUT_LIMIT = 800;
-export { SESSION_ID_RE } from "../../../sessions/session-id.js";
-
 export type AcpAction =
   | "spawn"
   | "cancel"
@@ -57,7 +56,7 @@ export type AcpAction =
 export type AcpSpawnThreadMode = "auto" | "here" | "off";
 export type AcpSpawnBindMode = "here" | "off";
 
-export type ParsedSpawnInput = {
+type ParsedSpawnInput = {
   agentId: string;
   mode: AcpRuntimeSessionMode;
   thread: AcpSpawnThreadMode;
@@ -66,17 +65,17 @@ export type ParsedSpawnInput = {
   label?: string;
 };
 
-export type ParsedSteerInput = {
+type ParsedSteerInput = {
   sessionToken?: string;
   instruction: string;
 };
 
-export type ParsedSingleValueCommandInput = {
+type ParsedSingleValueCommandInput = {
   value: string;
   sessionToken?: string;
 };
 
-export type ParsedSetCommandInput = {
+type ParsedSetCommandInput = {
   key: string;
   value: string;
   sessionToken?: string;
@@ -194,7 +193,7 @@ export function parseSpawnInput(
   let label: string | undefined;
   let rawAgentId: string | undefined;
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const token = normalizedTokens[i] ?? "";
 
     const modeOption = readOptionValue({ tokens: normalizedTokens, index: i, flag: "--mode" });
@@ -331,7 +330,7 @@ export function parseSteerInput(
   let sessionToken: string | undefined;
   const instructionTokens: string[] = [];
 
-  for (let i = 0; i < normalizedTokens.length; ) {
+  for (let i = 0; i < normalizedTokens.length;) {
     const sessionOption = readOptionValue({
       tokens: normalizedTokens,
       index: i,

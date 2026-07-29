@@ -1,21 +1,16 @@
+// Moonshot plugin entrypoint registers its OpenClaw integration.
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { applyMoonshotNativeStreamingUsageCompat } from "./api.js";
 import { moonshotMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import {
-  applyMoonshotConfig,
-  applyMoonshotConfigCn,
-  MOONSHOT_DEFAULT_MODEL_REF,
-} from "./onboard.js";
-import { buildMoonshotProvider } from "./provider-catalog.js";
+import { applyMoonshotConfig, applyMoonshotConfigCn } from "./onboard.js";
+import { buildMoonshotProvider, MOONSHOT_DEFAULT_MODEL_REF } from "./provider-catalog.js";
+import { isMoonshotAlwaysThinkingModelId, resolveThinkingProfile } from "./provider-policy-api.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 const PROVIDER_ID = "moonshot";
-const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
-  family: "openai-compatible",
-});
-const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
+const moonshotThinkingStreamHooks = buildProviderStreamFamilyHooks("moonshot-thinking");
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
@@ -24,11 +19,12 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Moonshot",
     docsPath: "/providers/moonshot",
+    aliases: ["moonshotai", "moonshot-ai"],
     auth: [
       {
         methodId: "api-key",
         label: "Kimi API key (.ai)",
-        hint: "Kimi K2.5 + Kimi",
+        hint: "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -36,13 +32,13 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfig(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupLabel: "Moonshot AI (Kimi)",
         },
       },
       {
         methodId: "api-key-cn",
         label: "Kimi API key (.cn)",
-        hint: "Kimi K2.5 + Kimi",
+        hint: "Kimi API models · https://platform.kimi.ai/docs/pricing/chat",
         optionKey: "moonshotApiKey",
         flagName: "--moonshot-api-key",
         envVar: "MOONSHOT_API_KEY",
@@ -50,18 +46,32 @@ export default defineSingleProviderPluginEntry({
         defaultModel: MOONSHOT_DEFAULT_MODEL_REF,
         applyConfig: (cfg) => applyMoonshotConfigCn(cfg),
         wizard: {
-          groupLabel: "Moonshot AI (Kimi K2.5)",
+          groupLabel: "Moonshot AI (Kimi)",
         },
       },
     ],
     catalog: {
       buildProvider: buildMoonshotProvider,
+      buildStaticProvider: buildMoonshotProvider,
       allowExplicitBaseUrl: true,
+      liveModelDiscovery: true,
     },
     applyNativeStreamingUsageCompat: ({ providerConfig }) =>
       applyMoonshotNativeStreamingUsageCompat(providerConfig),
-    ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
-    ...MOONSHOT_THINKING_STREAM_HOOKS,
+    buildReplayPolicy: ({ modelApi, modelId }) =>
+      buildOpenAICompatibleReplayPolicy(modelApi, {
+        modelId,
+        sanitizeToolCallIds: modelApi === "openai-completions",
+        duplicateToolCallIdStyle: "openai",
+        dropReasoningFromHistory: false,
+      }),
+    ...moonshotThinkingStreamHooks,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      isMoonshotAlwaysThinkingModelId(ctx.modelId)
+        ? moonshotThinkingStreamHooks.wrapStreamFn?.(ctx)
+        : ctx.streamFn,
+    resolveThinkingProfile,
+    isModernModelRef: ({ modelId }) => isMoonshotAlwaysThinkingModelId(modelId),
   },
   register(api) {
     api.registerMediaUnderstandingProvider(moonshotMediaUnderstandingProvider);

@@ -1,4 +1,5 @@
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+// Matrix plugin module implements draft stream behavior.
+import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
 import type { CoreConfig } from "../types.js";
 import type { MatrixClient } from "./sdk.js";
 import { editMessageMatrix, prepareMatrixSingleText, sendSingleTextMessageMatrix } from "./send.js";
@@ -17,18 +18,23 @@ function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
       includeMentions: false,
     };
   }
+  // Drafts can contain partial model text and raw tool-progress paths; keep
+  // Matrix mentions inert until callers send a normal final message.
   return {
     msgtype: MsgType.Text,
+    includeMentions: false,
   };
 }
 
-export type MatrixDraftStream = {
+type MatrixDraftStream = {
   /** Update the draft with the latest accumulated text for the current block. */
   update: (text: string) => void;
   /** Ensure the last pending update has been sent. */
   flush: () => Promise<void>;
   /** Flush and mark this block as done. Returns the event ID if a message was sent. */
   stop: () => Promise<string | undefined>;
+  /** Cancel pending draft updates without creating a new preview event. */
+  discardPending: () => Promise<void>;
   /** Clear the MSC4357 live marker in place when the draft is kept as final text. */
   finalizeLive: () => Promise<boolean>;
   /** Reset state for the next text block (after tool calls). */
@@ -180,6 +186,12 @@ export function createMatrixDraftStream(params: {
     return currentEventId;
   };
 
+  const discardPending = async (): Promise<void> => {
+    stopped = true;
+    loop.stop();
+    await loop.waitForInFlight();
+  };
+
   const reset = (): void => {
     // Clear reply context unless preserveReplyId is set (replyToMode "all"),
     // in which case subsequent blocks should keep replying to the original.
@@ -203,6 +215,7 @@ export function createMatrixDraftStream(params: {
     },
     flush: loop.flush,
     stop,
+    discardPending,
     finalizeLive,
     reset,
     eventId: () => currentEventId,

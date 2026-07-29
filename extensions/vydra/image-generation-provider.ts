@@ -1,6 +1,12 @@
+// Vydra provider module implements model/runtime integration.
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_VYDRA_IMAGE_MODEL,
   downloadVydraAsset,
@@ -48,39 +54,40 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
         throw new Error("Vydra image generation supports at most one image per request.");
       }
 
-      const { fetchFn, baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveVydraRequestContext({
-          cfg: req.cfg,
-          agentDir: req.agentDir,
-          authStore: req.authStore,
-          capability: "image",
-        });
+      const { fetchFn, baseUrl, requestPolicy } = await resolveVydraRequestContext({
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        authStore: req.authStore,
+        capability: "image",
+        ssrfPolicy: req.ssrfPolicy,
+      });
 
       const model = req.model?.trim() || DEFAULT_VYDRA_IMAGE_MODEL;
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/models/${model}`,
-        headers,
+        headers: requestPolicy.headers,
         body: {
           prompt: req.prompt,
           model: "text-to-image",
         },
         timeoutMs: req.timeoutMs,
         fetchFn,
-        allowPrivateNetwork,
-        dispatcherPolicy,
+        allowPrivateNetwork: requestPolicy.allowPrivateNetwork,
+        ssrfPolicy: requestPolicy.ssrfPolicy,
+        dispatcherPolicy: requestPolicy.dispatcherPolicy,
       });
 
       try {
         await assertOkOrThrowHttpError(response, "Vydra image generation failed");
-        const submitted = await response.json();
+        const submitted = await readProviderJsonResponse(response, "vydra.image-generation");
         const completedPayload = await resolveCompletedVydraPayload({
           submitted,
           baseUrl,
-          headers,
           timeoutMs: req.timeoutMs,
           fetchFn,
           kind: "image",
           missingJobIdMessage: "Vydra image generation response missing job id",
+          requestPolicy,
         });
         const imageUrl = extractVydraResultUrls(completedPayload, "image")[0];
         if (!imageUrl) {
@@ -91,6 +98,8 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
           kind: "image",
           timeoutMs: req.timeoutMs,
           fetchFn,
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+          requestPolicy,
         });
         return {
           images: [

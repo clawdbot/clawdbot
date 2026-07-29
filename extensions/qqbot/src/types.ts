@@ -1,4 +1,10 @@
+import type { GroupToolPolicyConfig } from "openclaw/plugin-sdk/channel-policy";
+// Qqbot type declarations define plugin contracts.
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+import type { QQBotDmPolicy, QQBotGroupPolicy } from "./engine/access/index.js";
+import type { QQBotGroupCommandLevel } from "./engine/config/group.js";
+
+export type { QQBotDmPolicy, QQBotGroupPolicy };
 
 /** QQ Bot base config. */
 export interface QQBotConfig {
@@ -22,6 +28,26 @@ export interface ResolvedQQBotAccount {
   config: QQBotAccountConfig;
 }
 
+/** QQBot-native exec approval delivery + approver authorization. */
+export interface QQBotExecApprovalConfig {
+  enabled?: boolean | "auto";
+  approvers?: string[];
+  agentFilter?: string[];
+  sessionFilter?: string[];
+  target?: "dm" | "channel" | "both";
+}
+
+interface QQBotGroupConfig {
+  requireMention?: boolean;
+  commandLevel?: QQBotGroupCommandLevel;
+  ignoreOtherMentions?: boolean;
+  historyLimit?: number;
+  name?: string;
+  prompt?: string;
+  tools?: GroupToolPolicyConfig;
+  toolsBySender?: Record<string, GroupToolPolicyConfig>;
+}
+
 /** QQ Bot account config from user settings. */
 export interface QQBotAccountConfig {
   enabled?: boolean;
@@ -29,16 +55,45 @@ export interface QQBotAccountConfig {
   appId?: string;
   clientSecret?: SecretInput;
   clientSecretFile?: string;
+  /**
+   * Sender allowlist for direct-message access control and command
+   * authorization. Entries accept raw openids, `qqbot:OPENID` prefixed
+   * form, and the `"*"` wildcard. Matching is case-insensitive.
+   *
+   * Semantics depend on {@link dmPolicy}:
+   *   - `dmPolicy="open"` (default when allowFrom is empty or contains `"*"`)
+   *     — everyone can DM the bot; the list only influences command gating.
+   *   - `dmPolicy="allowlist"` (default when a non-wildcard list is configured)
+   *     — only listed openids may DM the bot; other DMs are dropped.
+   *   - `dmPolicy="disabled"` — all DMs are dropped regardless of this list.
+   *
+   * For group access, see {@link groupAllowFrom} / {@link groupPolicy}.
+   */
   allowFrom?: string[];
+  /**
+   * Group-scoped sender allowlist. If omitted, group access falls back to
+   * {@link allowFrom}. Set explicitly when the group whitelist needs to
+   * differ from the DM whitelist.
+   */
+  groupAllowFrom?: string[];
+  /**
+   * DM access policy. Defaults:
+   *   - omitted + allowFrom empty/wildcard → `"open"`
+   *   - omitted + allowFrom non-wildcard   → `"allowlist"`
+   */
+  dmPolicy?: QQBotDmPolicy;
+  /**
+   * Group access policy. Defaults mirror {@link dmPolicy}: if either
+   * `groupAllowFrom` or `allowFrom` has a non-wildcard entry the policy
+   * is `"allowlist"`, otherwise `"open"`.
+   */
+  groupPolicy?: QQBotGroupPolicy;
   /** Optional system prompt prepended to user messages. */
   systemPrompt?: string;
   /** Whether markdown output is enabled. Defaults to true. */
   markdownSupport?: boolean;
-  /**
-   * @deprecated Use audioFormatPolicy.uploadDirectFormats instead.
-   * Legacy list of formats that can upload directly without SILK conversion.
-   */
-  voiceDirectUploadFormats?: string[];
+  /** QQBot-native exec approval delivery + approver authorization. */
+  execApprovals?: QQBotExecApprovalConfig;
   /**
    * Audio format policy covering inbound STT and outbound upload behavior.
    */
@@ -58,13 +113,17 @@ export interface QQBotAccountConfig {
    */
   upgradeMode?: "doc" | "hot-reload";
   /**
-   * Block streaming configuration.
-   * - mode "partial" (default): enable block streaming for incremental delivery.
-   * - mode "off": buffer the full response before sending.
+   * Block streaming + optional QQ C2C official stream API.
+   * - `mode` "partial" (default) enables block streaming; "off" disables it.
+   * - `nativeTransport: true` uses QQ's official C2C `stream_messages` API for DMs.
+   * Legacy `streaming: true|false` scalars and the `c2cStreamApi` key migrate
+   * via `openclaw doctor --fix`.
    */
   streaming?: {
     mode?: "off" | "partial";
+    nativeTransport?: boolean;
   };
+  groups?: Record<string, QQBotGroupConfig>;
 }
 
 /** Audio format policy controlling which formats can skip transcoding. */

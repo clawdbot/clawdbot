@@ -1,3 +1,4 @@
+// Resolves a channel plugin's default account with strict or read-only diagnostics.
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -5,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 
-export type ChannelDefaultAccountContext = {
+type ChannelDefaultAccountContext = {
   accountIds: string[];
   defaultAccountId: string;
   account: unknown;
@@ -19,7 +20,7 @@ export type ChannelDefaultAccountContext = {
   degraded: boolean;
 };
 
-export type ChannelAccountContextMode = "strict" | "read_only";
+type ChannelAccountContextMode = "strict" | "read_only";
 
 function getBooleanField(value: unknown, key: string): boolean | undefined {
   const record = isRecord(value) ? value : null;
@@ -39,6 +40,7 @@ function formatContextDiagnostic(params: {
   return `${prefix}channels.${params.pluginId}.accounts.${params.accountId}: ${params.message}`;
 }
 
+/** Resolve default channel account state for commands that need enabled/configured checks. */
 export async function resolveDefaultChannelAccountContext(
   plugin: ChannelPlugin,
   cfg: OpenClawConfig,

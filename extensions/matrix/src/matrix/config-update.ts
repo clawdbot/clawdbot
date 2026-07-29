@@ -1,19 +1,20 @@
+// Matrix helper module supports config update behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { coerceSecretRef } from "openclaw/plugin-sdk/config-runtime";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
 import { normalizeSecretInputString } from "openclaw/plugin-sdk/setup";
 import type { CoreConfig, MatrixConfig } from "../types.js";
 import { findMatrixAccountConfig } from "./account-config.js";
 import {
-  resolveMatrixConfigFieldPath,
-  resolveMatrixConfigPath,
+  resolveMatrixConfigPath as resolveMatrixConfigPathBase,
   shouldStoreMatrixAccountAtTopLevel,
 } from "./config-paths.js";
 
 export {
   resolveMatrixConfigFieldPath,
-  resolveMatrixConfigPath,
   shouldStoreMatrixAccountAtTopLevel,
 } from "./config-paths.js";
+export const resolveMatrixConfigPath = resolveMatrixConfigPathBase;
 
 export type MatrixAccountPatch = {
   name?: string | null;
@@ -103,9 +104,11 @@ function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups
   if (!rooms) {
     return rooms;
   }
-  return Object.fromEntries(
-    Object.entries(rooms).map(([roomId, roomCfg]) => [roomId, roomCfg ? { ...roomCfg } : roomCfg]),
-  );
+  const clonedRoomEntries: Array<[string, NonNullable<MatrixConfig["groups"]>[string]]> = [];
+  for (const [roomId, roomCfg] of Object.entries(rooms)) {
+    clonedRoomEntries.push([roomId, roomCfg ? { ...roomCfg } : roomCfg]);
+  }
+  return Object.fromEntries(clonedRoomEntries);
 }
 
 function applyNullableArrayField(
@@ -187,7 +190,12 @@ export function updateMatrixAccountConfig(
     if (patch.initialSyncLimit === null) {
       delete nextAccount.initialSyncLimit;
     } else {
-      nextAccount.initialSyncLimit = Math.max(0, Math.floor(patch.initialSyncLimit));
+      const initialSyncLimit = resolveOptionalIntegerOption(patch.initialSyncLimit, { min: 0 });
+      if (initialSyncLimit === undefined) {
+        delete nextAccount.initialSyncLimit;
+      } else {
+        nextAccount.initialSyncLimit = initialSyncLimit;
+      }
     }
   }
 

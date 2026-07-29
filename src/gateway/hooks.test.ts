@@ -1,6 +1,7 @@
+// Gateway hooks tests cover token extraction, target agent resolution, payload
+// normalization, allowed-agent checks, and channel alias handling.
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { createIMessageTestPlugin } from "../../test/helpers/channels/imessage-test-plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -8,6 +9,7 @@ import {
   extractHookToken,
   isHookAgentAllowed,
   normalizeHookDispatchSessionKey,
+  resolveEffectiveHookTargetAgentId,
   resolveHookSessionKey,
   resolveHookTargetAgentId,
   normalizeAgentPayload,
@@ -31,13 +33,21 @@ const createDemoAliasPlugin = () => ({
   },
 });
 
+const createIMessageAliasPlugin = () => ({
+  ...createChannelTestPluginBase({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+  }),
+});
+
 describe("gateway hooks helpers", () => {
   const resolveHooksConfigOrThrow = (cfg: OpenClawConfig) => {
     const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
     if (!resolved) {
       throw new Error("hooks config missing");
     }
+    expect(resolved.token).toBe(cfg.hooks?.token);
     return resolved;
   };
 
@@ -50,6 +60,32 @@ describe("gateway hooks helpers", () => {
       },
       agents: {
         list: [{ id: "main", default: true }, { id: "hooks" }],
+      },
+    }) as OpenClawConfig;
+
+  const buildStaticShadowingMappingConfig = (params: {
+    firstMatch?: Partial<{ path: string; source: string }>;
+    firstMessageTemplate?: string;
+    secondMatch?: Partial<{ path: string; source: string }>;
+  }) =>
+    ({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            ...(params.firstMatch ? { match: params.firstMatch } : {}),
+            action: "agent",
+            messageTemplate: params.firstMessageTemplate ?? "catch-all",
+            sessionKey: "hook:static",
+          },
+          {
+            match: params.secondMatch ?? { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:{{messages[0].id}}",
+          },
+        ],
       },
     }) as OpenClawConfig;
 
@@ -131,7 +167,7 @@ describe("gateway hooks helpers", () => {
         {
           pluginId: "imessage",
           source: "test",
-          plugin: createIMessageTestPlugin(),
+          plugin: createIMessageAliasPlugin(),
         },
       ]),
     );
@@ -174,40 +210,52 @@ describe("gateway hooks helpers", () => {
     }
   });
 
-  test("resolveHookTargetAgentId falls back to default for unknown agent ids", () => {
+  test("resolveHookTargetAgentId preserves omitted default target intent", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
         list: [{ id: "main", default: true }, { id: "hooks" }],
       },
     } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(cfg);
     expect(resolveHookTargetAgentId(resolved, "hooks")).toBe("hooks");
     expect(resolveHookTargetAgentId(resolved, "missing-agent")).toBe("main");
     expect(resolveHookTargetAgentId(resolved, undefined)).toBeUndefined();
+    expect(resolveHookTargetAgentId(resolved, " ")).toBeUndefined();
+    expect(resolveEffectiveHookTargetAgentId(resolved, undefined)).toBe("main");
+    expect(resolveEffectiveHookTargetAgentId(resolved, " ")).toBe("main");
   });
 
-  test("isHookAgentAllowed honors hooks.allowedAgentIds for explicit routing", () => {
+  test("isHookAgentAllowed honors hooks.allowedAgentIds for effective target routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, undefined)).toBe(false);
+    expect(isHookAgentAllowed(resolved, "")).toBe(false);
+    expect(isHookAgentAllowed(resolved, "   ")).toBe(false);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(false);
   });
 
-  test("isHookAgentAllowed treats empty allowlist as deny-all for explicit agentId", () => {
+  test("isHookAgentAllowed treats empty allowlist as deny-all routing", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
-    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, undefined)).toBe(false);
+    expect(isHookAgentAllowed(resolved, "")).toBe(false);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
+  });
+
+  test("isHookAgentAllowed allows omitted agentId when default agent is allowlisted", () => {
+    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["main"]));
+    expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, "")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
+    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
+    expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
   });
 
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
+    expect(isHookAgentAllowed(resolved, "")).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
   });
@@ -216,11 +264,7 @@ describe("gateway hooks helpers", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
     } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(cfg);
     const denied = resolveHookSessionKey({
       hooksConfig: resolved,
       source: "request",
@@ -233,11 +277,7 @@ describe("gateway hooks helpers", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret", allowRequestSessionKey: true },
     } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(cfg);
     const allowed = resolveHookSessionKey({
       hooksConfig: resolved,
       source: "request",
@@ -255,11 +295,7 @@ describe("gateway hooks helpers", () => {
         allowedSessionKeyPrefixes: ["hook:"],
       },
     } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(cfg);
 
     const blocked = resolveHookSessionKey({
       hooksConfig: resolved,
@@ -270,10 +306,46 @@ describe("gateway hooks helpers", () => {
 
     const allowed = resolveHookSessionKey({
       hooksConfig: resolved,
-      source: "mapping",
+      source: "mapping-static",
       sessionKey: "hook:gmail:1",
     });
     expect(allowed).toEqual({ ok: true, value: "hook:gmail:1" });
+  });
+
+  test("resolveHookSessionKey blocks templated mapping sessionKey when request overrides are disabled", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfigOrThrow(cfg);
+
+    const denied = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "mapping-templated",
+      sessionKey: "hook:gmail:attacker",
+    });
+    expect(denied.ok).toBe(false);
+  });
+
+  test("resolveHookSessionKey still allows static mapping sessionKey when request overrides are disabled", () => {
+    const cfg = {
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowedSessionKeyPrefixes: ["hook:", "hook:gmail:"],
+      },
+    } as OpenClawConfig;
+    const resolved = resolveHooksConfigOrThrow(cfg);
+
+    const allowed = resolveHookSessionKey({
+      hooksConfig: resolved,
+      source: "mapping-static",
+      sessionKey: "hook:gmail:fixed",
+    });
+    expect(allowed).toEqual({ ok: true, value: "hook:gmail:fixed" });
   });
 
   test("resolveHookSessionKey uses defaultSessionKey when request key is absent", () => {
@@ -284,11 +356,7 @@ describe("gateway hooks helpers", () => {
         defaultSessionKey: "hook:ingress",
       },
     } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(cfg);
 
     const resolvedKey = resolveHookSessionKey({
       hooksConfig: resolved,
@@ -338,6 +406,108 @@ describe("gateway hooks helpers", () => {
     ).toThrow(
       "hooks.allowedSessionKeyPrefixes must include 'hook:' when hooks.defaultSessionKey is unset",
     );
+  });
+
+  test("resolveHooksConfig requires prefixes for templated mapping session keys", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowRequestSessionKey: true,
+          mappings: [
+            {
+              match: { path: "gmail" },
+              action: "agent",
+              messageTemplate: "Subject: {{messages[0].subject}}",
+              sessionKey: "hook:gmail:{{messages[0].id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
+    );
+  });
+
+  test("resolveHooksConfig allows a static explicit mapping to shadow the templated gmail preset", () => {
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowRequestSessionKey: false,
+        presets: ["gmail"],
+        mappings: [
+          {
+            match: { path: "gmail" },
+            action: "agent",
+            messageTemplate: "Subject: {{messages[0].subject}}",
+            sessionKey: "hook:gmail:static",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
+      "hook:gmail:static",
+      "hook:gmail:{{messages[0].id}}",
+    ]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
+  });
+
+  test("resolveHooksConfig allows a static catch-all mapping to shadow a later templated mapping", () => {
+    const resolved = resolveHooksConfigOrThrow(buildStaticShadowingMappingConfig({}));
+
+    expect(resolved.mappings.map((mapping) => mapping.sessionKey)).toEqual([
+      "hook:static",
+      "hook:gmail:{{messages[0].id}}",
+    ]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
+  });
+
+  test("resolveHooksConfig ignores templated session keys on wake mappings", () => {
+    const resolved = resolveHooksConfigOrThrow({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            match: { path: "wake" },
+            action: "wake",
+            textTemplate: "ping",
+            sessionKey: "hook:wake:{{payload.id}}",
+          },
+        ],
+      },
+    } as OpenClawConfig);
+
+    expect(resolved.mappings).toHaveLength(1);
+    expect(resolved.mappings[0]?.action).toBe("wake");
+    expect(resolved.mappings[0]?.matchPath).toBe("wake");
+    expect(resolved.mappings[0]?.sessionKey).toBe("hook:wake:{{payload.id}}");
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
+  });
+
+  test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {
+    const resolved = resolveHooksConfigOrThrow(
+      buildStaticShadowingMappingConfig({ firstMatch: { path: "/" } }),
+    );
+
+    expect(resolved.mappings.map((mapping) => mapping.matchPath)).toEqual(["", "gmail"]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
+  });
+
+  test("resolveHooksConfig treats empty match.source as a wildcard for shadowing", () => {
+    const resolved = resolveHooksConfigOrThrow(
+      buildStaticShadowingMappingConfig({
+        firstMatch: { path: "gmail", source: "" },
+        firstMessageTemplate: "catch-all source",
+        secondMatch: { path: "gmail", source: "gmail" },
+      }),
+    );
+
+    expect(resolved.mappings.map((mapping) => mapping.matchSource)).toEqual(["", "gmail"]);
+    expect(resolved.sessionPolicy.allowedSessionKeyPrefixes).toBeUndefined();
   });
 });
 

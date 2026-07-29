@@ -1,3 +1,4 @@
+// Defines hook configuration matching and command types.
 export type HookMappingMatch = {
   path?: string;
   source?: string;
@@ -86,8 +87,6 @@ export type InternalHooksConfig = {
     /** Additional hook directories to scan */
     extraDirs?: string[];
   };
-  /** Install records for hook packs or hooks */
-  installs?: Record<string, HookInstallRecord>;
 };
 
 export type HooksConfig = {
@@ -110,11 +109,11 @@ export type HooksConfig = {
    */
   allowedSessionKeyPrefixes?: string[];
   /**
-   * Restrict explicit hook `agentId` routing to these agent ids.
-   * Omit or include `*` to allow any agent. Set `[]` to deny all explicit `agentId` routing.
+   * Restrict hook execution to these effective agent ids, including
+   * default-agent routing when `agentId` is omitted. Omit or include `*` to
+   * allow any agent. Set `[]` to deny all agent routing.
    */
   allowedAgentIds?: string[];
-  maxBodyBytes?: number;
   presets?: string[];
   transformsDir?: string;
   mappings?: HookMappingConfig[];

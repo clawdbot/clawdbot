@@ -1,6 +1,11 @@
+/**
+ * Chat-history text helpers for session tools.
+ *
+ * Removes tool messages and extracts sanitized assistant-visible text from stored messages.
+ */
 import { extractAssistantTextForPhase } from "../../shared/chat-message-content.js";
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
-import { sanitizeUserFacingText } from "../pi-embedded-helpers/sanitize-user-facing-text.js";
+import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
@@ -20,24 +25,6 @@ export function sanitizeTextContent(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "history");
 }
 
-export function hasAssistantPhaseMetadata(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  if ((message as { role?: unknown }).role !== "assistant") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      typeof (block as { textSignature?: unknown }).textSignature === "string",
-  );
-}
 export function extractAssistantText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;

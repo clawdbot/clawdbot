@@ -1,3 +1,4 @@
+// QR dashboard integration tests cover QR dashboard command wiring and rendered output.
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
@@ -7,6 +8,7 @@ const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
+const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
 const {
   runtimeLogs,
   runtimeErrors,
@@ -19,6 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
+    getRuntimeConfig: loadConfigMock,
     loadConfig: loadConfigMock,
     readConfigFileSnapshot: readConfigFileSnapshotMock,
     resolveGatewayPort: resolveGatewayPortMock,
@@ -27,6 +30,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("../commands/gateway-readiness.js", () => ({
+  ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
 }));
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -119,6 +126,11 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
   beforeEach(() => {
     resetRuntimeCapture();
     vi.clearAllMocks();
+    ensureGatewayReadyForOperationMock.mockResolvedValue({
+      ready: true,
+      status: {},
+      recovered: false,
+    });
     runtimeExit.mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
@@ -139,11 +151,13 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
 
     await runCli(["qr", "--setup-code-only"]);
     const setupCode = findSetupCodeLogLine(runtimeLogs);
-    expect(setupCode).toBeTruthy();
-    const payload = decodeSetupCode(setupCode ?? "");
+    if (!setupCode) {
+      throw new Error("expected QR setup code log line");
+    }
+    const payload = decodeSetupCode(setupCode);
     expect(payload.url).toBe("ws://127.0.0.1:18789");
-    expect(payload.bootstrapToken).toBeTruthy();
-    expect(runtimeErrors).toEqual([]);
+    expect(payload.bootstrapToken).toBe("bootstrap-123");
+    expect(runtimeErrors).toStrictEqual([]);
 
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
@@ -155,7 +169,7 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
       "Token auto-auth is disabled for SecretRef-managed gateway.auth.token",
     );
     expect(joined).not.toContain("Token auto-auth unavailable");
-    expect(runtimeErrors).toEqual([]);
+    expect(runtimeErrors).toStrictEqual([]);
   });
 
   it("fails qr but keeps dashboard actionable when the shared token SecretRef is unresolved", async () => {

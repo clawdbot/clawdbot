@@ -1,3 +1,4 @@
+// Matrix plugin module implements approval native behavior.
 import {
   createChannelApprovalCapability,
   createApproverRestrictedNativeApprovalCapability,
@@ -9,12 +10,15 @@ import {
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
 } from "openclaw/plugin-sdk/approval-native-runtime";
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
+} from "openclaw/plugin-sdk/approval-runtime";
 import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
-import type { ExecApprovalRequest, PluginApprovalRequest } from "openclaw/plugin-sdk/infra-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixApprovalAuthApprovers, matrixApprovalAuth } from "./approval-auth.js";
 import { normalizeMatrixApproverId } from "./approval-ids.js";
 import {
@@ -82,11 +86,11 @@ function resolveSessionMatrixOriginTarget(sessionTarget: {
   };
 }
 
-function matrixTargetsMatch(a: MatrixOriginTarget, b: MatrixOriginTarget): boolean {
-  return (
-    normalizeComparableTarget(a.to) === normalizeComparableTarget(b.to) &&
-    (a.threadId ?? "") === (b.threadId ?? "")
-  );
+function normalizeMatrixOriginTarget(target: MatrixOriginTarget): MatrixOriginTarget {
+  return {
+    ...target,
+    to: normalizeComparableTarget(target.to),
+  };
 }
 
 function hasMatrixPluginApprovers(params: { cfg: CoreConfig; accountId?: string | null }): boolean {
@@ -148,15 +152,20 @@ function resolveSuppressionAccountId(params: {
 
 const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "matrix",
-  shouldHandleRequest: ({ cfg, accountId, request }) =>
-    shouldHandleMatrixApprovalRequest({
+  shouldHandleRequest: ({ cfg, accountId, approvalKind, request }) => {
+    if (approvalKind !== "exec" && approvalKind !== "plugin") {
+      return false;
+    }
+    return shouldHandleMatrixApprovalRequest({
       cfg,
       accountId,
+      approvalKind,
       request,
-    }),
+    });
+  },
   resolveTurnSourceTarget: resolveTurnSourceMatrixOriginTarget,
   resolveSessionTarget: resolveSessionMatrixOriginTarget,
-  targetsMatch: matrixTargetsMatch,
+  normalizeTargetForMatch: normalizeMatrixOriginTarget,
   resolveFallbackTarget: (request) => {
     const sessionConversation = resolveApprovalRequestSessionConversation({
       request,
@@ -235,10 +244,11 @@ const matrixNativeApprovalCapability = createApproverRestrictedNativeApprovalCap
         cfg,
         accountId,
       }),
-    shouldHandle: ({ cfg, accountId, request }) =>
+    shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
       shouldHandleMatrixApprovalRequest({
         cfg,
         accountId,
+        approvalKind,
         request,
       }),
     load: async () =>
@@ -268,6 +278,22 @@ const matrixDeliveryAdapter = matrixBaseDeliveryAdapter && {
     ) {
       return false;
     }
+    if (params.approvalKind === "plugin") {
+      const targetChannel = normalizeLowercaseStringOrEmpty(params.target.channel);
+      const turnSourceChannel = normalizeLowercaseStringOrEmpty(
+        params.request.request.turnSourceChannel,
+      );
+      return (
+        targetChannel === "matrix" &&
+        turnSourceChannel === "matrix" &&
+        shouldHandleMatrixApprovalRequest({
+          cfg: params.cfg,
+          accountId,
+          approvalKind: "plugin",
+          request: params.request,
+        })
+      );
+    }
     return matrixBaseDeliveryAdapter.shouldSuppressForwardingFallback?.(params) ?? false;
   },
 };
@@ -288,7 +314,7 @@ const matrixNativeAdapter = matrixBaseNativeApprovalAdapter && {
     });
     return {
       ...capabilities,
-      enabled: capabilities.enabled && hasApprovers && clientEnabled,
+      enabled: hasApprovers && clientEnabled,
     };
   },
   resolveOriginTarget: matrixBaseNativeApprovalAdapter.resolveOriginTarget,

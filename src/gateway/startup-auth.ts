@@ -1,11 +1,9 @@
+// Gateway startup auth preparation.
+// Merges auth overrides, resolves secret refs, validates weak secrets, and generates fallbacks.
 import crypto from "node:crypto";
-import type {
-  GatewayAuthConfig,
-  GatewayTailscaleConfig,
-  OpenClawConfig,
-} from "../config/config.js";
-import { replaceConfigFile } from "../config/config.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasConfiguredGatewayAuthSecretInput,
   resolveGatewayPasswordSecretRefValue,
@@ -13,32 +11,13 @@ import {
 } from "./auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "./auth-mode-policy.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
-import {
-  hasGatewayPasswordEnvCandidate,
-  hasGatewayTokenEnvCandidate,
-  trimToUndefined,
-} from "./credentials.js";
+import { trimToUndefined } from "./credentials.js";
+import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 
-/**
- * Placeholder credentials that have ever shipped in `.env.example` or been
- * used as copy-paste examples in onboarding docs. If any of these ever
- * becomes the resolved gateway credential at startup, reject the launch —
- * the operator almost certainly copied an example file verbatim without
- * replacing the sentinel, which would otherwise leave the gateway protected
- * by a publicly-known credential.
- *
- * This is a belt-and-suspenders complement to keeping `.env.example` blank:
- * the example file alone does not protect users who follow an older doc
- * snippet or copy a tutorial command line.
- */
-const KNOWN_WEAK_GATEWAY_TOKENS: ReadonlySet<string> = new Set([
-  "change-me-to-a-long-random-token",
-]);
+const HOOKS_GATEWAY_AUTH_REUSE_WARNING =
+  "Security warning: hooks.token matches active Gateway shared-secret auth. Startup continues for compatibility; rotate hooks.token or Gateway auth. Run openclaw security audit for a full report, and run openclaw doctor --fix when the reused hooks.token is persisted in config.";
 
-const KNOWN_WEAK_GATEWAY_PASSWORDS: ReadonlySet<string> = new Set([
-  "change-me-to-a-strong-password", // pragma: allowlist secret
-]);
-
+/** Merge sparse runtime auth overrides into persisted Gateway auth config. */
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
   override?: GatewayAuthConfig,
@@ -68,6 +47,7 @@ export function mergeGatewayAuthConfig(
   return merged;
 }
 
+/** Merge sparse runtime Tailscale overrides into persisted Gateway Tailscale config. */
 export function mergeGatewayTailscaleConfig(
   base?: GatewayTailscaleConfig,
   override?: GatewayTailscaleConfig,
@@ -81,6 +61,12 @@ export function mergeGatewayTailscaleConfig(
   }
   if (override.resetOnExit !== undefined) {
     merged.resetOnExit = override.resetOnExit;
+  }
+  if (override.serviceName !== undefined) {
+    merged.serviceName = override.serviceName;
+  }
+  if (override.preserveFunnel !== undefined) {
+    merged.preserveFunnel = override.preserveFunnel;
   }
   return merged;
 }
@@ -103,23 +89,32 @@ function resolveGatewayAuthFromConfig(params: {
   });
 }
 
-function shouldPersistGeneratedToken(params: {
-  persistRequested: boolean;
-  resolvedAuth: ResolvedGatewayAuth;
-}): boolean {
-  if (!params.persistRequested) {
-    return false;
+function findActiveGatewaySharedSecret(auth: ResolvedGatewayAuth): string {
+  if (auth.mode === "token") {
+    return normalizeOptionalString(auth.token) ?? "";
   }
-
-  // Keep CLI/runtime mode overrides ephemeral: startup should not silently
-  // mutate durable auth policy when mode was chosen by an override flag.
-  if (params.resolvedAuth.modeSource === "override") {
-    return false;
+  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
+    return normalizeOptionalString(auth.password) ?? "";
   }
-
-  return true;
+  return "";
 }
 
+function warnHooksTokenReuseGatewayAuth(params: {
+  cfg: OpenClawConfig;
+  auth: ResolvedGatewayAuth;
+  warn?: (message: string) => void;
+}): void {
+  if (params.cfg.hooks?.enabled !== true || !params.warn) {
+    return;
+  }
+  const hooksToken = normalizeOptionalString(params.cfg.hooks.token) ?? "";
+  if (!hooksToken || hooksToken !== findActiveGatewaySharedSecret(params.auth)) {
+    return;
+  }
+  params.warn(HOOKS_GATEWAY_AUTH_REUSE_WARNING);
+}
+
+/** Check every source that can satisfy token auth before startup generates one. */
 function hasGatewayTokenCandidate(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -145,23 +140,25 @@ function hasGatewayTokenOverrideCandidate(params: { authOverride?: GatewayAuthCo
 }
 
 function hasGatewayPasswordOverrideCandidate(params: {
-  env: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
 }): boolean {
-  if (hasGatewayPasswordEnvCandidate(params.env)) {
-    return true;
-  }
   return (
     typeof params.authOverride?.password === "string" &&
     params.authOverride.password.trim().length > 0
   );
 }
 
+/** Ensure startup has effective Gateway auth, generating only an ephemeral token if needed. */
 export async function ensureGatewayStartupAuth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
+  warn?: (message: string) => void;
+  /**
+   * Legacy startup option retained for external callers. Startup-generated auth
+   * is runtime-only; durable auth changes must go through explicit config tools.
+   */
   persist?: boolean;
   baseHash?: string;
 }): Promise<{
@@ -172,29 +169,35 @@ export async function ensureGatewayStartupAuth(params: {
 }> {
   assertExplicitGatewayAuthModeWhenBothConfigured(params.cfg);
   const env = params.env ?? process.env;
-  const persistRequested = params.persist === true;
   const explicitMode = params.authOverride?.mode ?? params.cfg.gateway?.auth?.mode;
+  // Resolve only refs that can satisfy the effective mode; inactive refs stay
+  // as refs so startup does not require unrelated secret providers.
   const [resolvedTokenRefValue, resolvedPasswordRefValue] = await Promise.all([
     resolveGatewayTokenSecretRefValue({
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasTokenCandidate:
-        hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }) ||
-        hasGatewayTokenEnvCandidate(env),
-      hasPasswordCandidate:
-        hasGatewayPasswordOverrideCandidate({ env, authOverride: params.authOverride }) ||
+      hasTokenOverride: hasGatewayTokenOverrideCandidate({ authOverride: params.authOverride }),
+      hasPasswordOverride: hasGatewayPasswordOverrideCandidate({
+        authOverride: params.authOverride,
+      }),
+      hasTokenFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_TOKEN)),
+      hasPasswordFallback:
+        Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)) ||
         hasConfiguredGatewayAuthSecretInput(params.cfg, "gateway.auth.password"),
     }),
     resolveGatewayPasswordSecretRefValue({
       cfg: params.cfg,
       env,
       mode: explicitMode,
-      hasPasswordCandidate: hasGatewayPasswordOverrideCandidate({
-        env,
+      hasPasswordOverride: hasGatewayPasswordOverrideCandidate({
         authOverride: params.authOverride,
       }),
-      hasTokenCandidate: hasGatewayTokenCandidate({
+      hasTokenOverride: hasGatewayTokenOverrideCandidate({
+        authOverride: params.authOverride,
+      }),
+      hasPasswordFallback: Boolean(trimToUndefined(env.OPENCLAW_GATEWAY_PASSWORD)),
+      hasTokenFallback: hasGatewayTokenCandidate({
         cfg: params.cfg,
         env,
         authOverride: params.authOverride,
@@ -217,7 +220,7 @@ export async function ensureGatewayStartupAuth(params: {
   });
   if (resolved.mode !== "token" || (resolved.token?.trim().length ?? 0) > 0) {
     assertGatewayAuthNotKnownWeak(resolved);
-    assertHooksTokenSeparateFromGatewayAuth({ cfg: params.cfg, auth: resolved });
+    warnHooksTokenReuseGatewayAuth({ cfg: params.cfg, auth: resolved, warn: params.warn });
     return { cfg: params.cfg, auth: resolved, persistedGeneratedToken: false };
   }
 
@@ -233,17 +236,6 @@ export async function ensureGatewayStartupAuth(params: {
       },
     },
   };
-  const persist = shouldPersistGeneratedToken({
-    persistRequested,
-    resolvedAuth: resolved,
-  });
-  if (persist) {
-    await replaceConfigFile({
-      nextConfig: nextCfg,
-      baseHash: params.baseHash,
-    });
-  }
-
   const nextAuth = resolveGatewayAuthFromConfig({
     cfg: nextCfg,
     env,
@@ -255,60 +247,11 @@ export async function ensureGatewayStartupAuth(params: {
   // the rule applies uniformly and guards against any future path that might
   // feed a non-generated value through nextAuth.
   assertGatewayAuthNotKnownWeak(nextAuth);
-  assertHooksTokenSeparateFromGatewayAuth({ cfg: nextCfg, auth: nextAuth });
+  warnHooksTokenReuseGatewayAuth({ cfg: nextCfg, auth: nextAuth, warn: params.warn });
   return {
     cfg: nextCfg,
     auth: nextAuth,
     generatedToken,
-    persistedGeneratedToken: persist,
+    persistedGeneratedToken: false,
   };
-}
-
-export function assertGatewayAuthNotKnownWeak(auth: ResolvedGatewayAuth): void {
-  if (auth.mode === "token") {
-    const token = auth.token?.trim() ?? "";
-    if (token && KNOWN_WEAK_GATEWAY_TOKENS.has(token)) {
-      throw new Error(
-        "Invalid config: gateway auth token is set to the example placeholder " +
-          "from .env.example. Generate a real secret (e.g. `openssl rand -hex 32`) " +
-          "and set OPENCLAW_GATEWAY_TOKEN or gateway.auth.token before starting " +
-          "the gateway.",
-      );
-    }
-    return;
-  }
-  if (auth.mode === "password") {
-    const password = auth.password?.trim() ?? "";
-    if (password && KNOWN_WEAK_GATEWAY_PASSWORDS.has(password)) {
-      throw new Error(
-        "Invalid config: gateway auth password is set to the example placeholder " +
-          "from .env.example. Choose a real password and set OPENCLAW_GATEWAY_PASSWORD " +
-          "or gateway.auth.password before starting the gateway.",
-      );
-    }
-  }
-}
-
-export function assertHooksTokenSeparateFromGatewayAuth(params: {
-  cfg: OpenClawConfig;
-  auth: ResolvedGatewayAuth;
-}): void {
-  if (params.cfg.hooks?.enabled !== true) {
-    return;
-  }
-  const hooksToken = normalizeOptionalString(params.cfg.hooks.token) ?? "";
-  if (!hooksToken) {
-    return;
-  }
-  const gatewayToken =
-    params.auth.mode === "token" ? (normalizeOptionalString(params.auth.token) ?? "") : "";
-  if (!gatewayToken) {
-    return;
-  }
-  if (hooksToken !== gatewayToken) {
-    return;
-  }
-  throw new Error(
-    "Invalid config: hooks.token must not match gateway auth token. Set a distinct hooks.token for hook ingress.",
-  );
 }

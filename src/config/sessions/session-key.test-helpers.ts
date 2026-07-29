@@ -1,3 +1,4 @@
+// Session key test helpers isolate environment state for key normalization tests.
 import { afterEach, beforeEach } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
@@ -7,6 +8,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 
+/** Builds the minimum message context needed by session key tests. */
 export function makeCtx(overrides: Partial<MsgContext>): MsgContext {
   return {
     Body: "",

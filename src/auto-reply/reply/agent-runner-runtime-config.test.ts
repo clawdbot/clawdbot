@@ -1,13 +1,11 @@
+// Tests agent runner runtime config assembly from command and session state.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
-  type OpenClawConfig,
-} from "../../config/config.js";
-import {
-  buildEmbeddedRunBaseParams,
-  resolveProviderScopedAuthProfile,
-} from "./agent-runner-utils.js";
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildEmbeddedRunBaseParams } from "./agent-runner-run-params.js";
 import type { FollowupRun } from "./queue.js";
 
 function makeRun(config: OpenClawConfig): FollowupRun["run"] {
@@ -73,12 +71,24 @@ describe("buildEmbeddedRunBaseParams runtime config", () => {
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
-      authProfile: resolveProviderScopedAuthProfile({
-        provider: "openai",
-        primaryProvider: "openai",
-      }),
+      authProfile: {},
     });
 
     expect(resolved.config).toBe(resolvedRunConfig);
+  });
+
+  it("carries out-of-band tool bindings into the embedded run", () => {
+    const run = makeRun({});
+    run.toolBindings = { browser: { kind: "tab", targetId: "target-1" } };
+
+    const resolved = buildEmbeddedRunBaseParams({
+      run,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      authProfile: {},
+    });
+
+    expect(resolved.toolBindings).toEqual(run.toolBindings);
   });
 });

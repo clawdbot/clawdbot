@@ -8,20 +8,22 @@
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   readStringValue,
-} from "openclaw/plugin-sdk/text-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
+import { publishNostrProfile, getNostrProfileState } from "./channel.js";
+import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
 import {
   createFixedWindowRateLimiter,
   getPluginRuntimeGatewayRequestScope,
   readJsonBodyWithLimit,
   requestBodyErrorToText,
-} from "../runtime-api.js";
-import { publishNostrProfile, getNostrProfileState } from "./channel.js";
-import { NostrProfileSchema, type NostrProfile } from "./config-schema.js";
+} from "./nostr-profile-http-runtime.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 
@@ -29,7 +31,7 @@ import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 // Types
 // ============================================================================
 
-export interface NostrProfileHttpContext {
+interface NostrProfileHttpContext {
   /** Get current profile from config */
   getConfigProfile: (accountId: string) => NostrProfile | undefined;
   /** Update profile in config (after successful publish) */
@@ -57,18 +59,6 @@ const profileRateLimiter = createFixedWindowRateLimiter({
   maxTrackedKeys: RATE_LIMIT_MAX_TRACKED_KEYS,
 });
 
-export function clearNostrProfileRateLimitStateForTest(): void {
-  profileRateLimiter.clear();
-}
-
-export function getNostrProfileRateLimitStateSizeForTest(): number {
-  return profileRateLimiter.size();
-}
-
-export function isNostrProfileRateLimitedForTest(accountId: string, nowMs: number): boolean {
-  return profileRateLimiter.isRateLimited(accountId, nowMs);
-}
-
 function checkRateLimit(accountId: string): boolean {
   return !profileRateLimiter.isRateLimited(accountId);
 }
@@ -77,35 +67,11 @@ function checkRateLimit(accountId: string): boolean {
 // Mutex for Concurrent Publish Prevention
 // ============================================================================
 
-const publishLocks = new Map<string, Promise<void>>();
+const publishLocks = new KeyedAsyncQueue();
 
 async function withPublishLock<T>(accountId: string, fn: () => Promise<T>): Promise<T> {
-  // Atomic mutex using promise chaining - prevents TOCTOU race condition
-  const prev = publishLocks.get(accountId) ?? Promise.resolve();
-  let resolve: () => void;
-  const next = new Promise<void>((r) => {
-    resolve = r;
-  });
-  // Atomically replace the lock before awaiting - any concurrent request
-  // will now wait on our `next` promise
-  publishLocks.set(accountId, next);
-
-  // Wait for previous operation to complete
-  await prev.catch(() => {});
-
-  try {
-    return await fn();
-  } finally {
-    resolve!();
-    // Clean up if we're the last in chain
-    if (publishLocks.get(accountId) === next) {
-      publishLocks.delete(accountId);
-    }
-  }
+  return await publishLocks.enqueue(accountId, fn);
 }
-
-// Export for use in import validation
-export { validateUrlSafety };
 
 // ============================================================================
 // Validation Schemas
@@ -201,8 +167,7 @@ function isLoopbackRemoteAddress(remoteAddress: string | undefined): boolean {
 function isLoopbackOriginLike(value: string): boolean {
   try {
     const url = new URL(value);
-    const hostname = normalizeLowercaseStringOrEmpty(url.hostname);
-    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1";
+    return isLoopbackHost(url.hostname);
   } catch {
     return false;
   }

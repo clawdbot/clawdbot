@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements errors behavior.
 export function formatErrorMessage(err: unknown): string {
   if (err instanceof Error) {
     let formatted = err.message || err.name || "Error";

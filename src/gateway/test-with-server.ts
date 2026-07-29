@@ -1,10 +1,13 @@
+// Connected Gateway server test helpers.
+// Provides reusable websocket server fixtures for Control UI/Gateway tests.
 import { afterAll, beforeAll, beforeEach } from "vitest";
 import { connectOk, startServerWithClient, testState } from "./test-helpers.js";
 
 type StartServerWithClient = typeof startServerWithClient;
-export type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
-export type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
+type GatewayWs = Awaited<ReturnType<StartServerWithClient>>["ws"];
+type GatewayServer = Awaited<ReturnType<StartServerWithClient>>["server"];
 
+/** Starts a gateway, connects a client, runs the callback, and closes resources. */
 export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise<T> {
   const { server, ws, envSnapshot } = await startServerWithClient("secret");
   try {
@@ -16,6 +19,7 @@ export async function withServer<T>(run: (ws: GatewayWs) => Promise<T>): Promise
   }
 }
 
+/** Installs a reusable connected Control UI server suite for gateway tests. */
 export function installConnectedControlUiServerSuite(
   onReady: (started: { server: GatewayServer; ws: GatewayWs; port: number }) => void,
 ): void {

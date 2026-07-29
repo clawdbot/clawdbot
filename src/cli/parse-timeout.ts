@@ -1,3 +1,7 @@
+// Shared CLI timeout parsers for millisecond flags and config-backed fallbacks.
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+
+/** Parse a positive millisecond timeout, returning undefined for absent or invalid input. */
 export function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
@@ -12,11 +16,19 @@ export function parseTimeoutMs(raw: unknown): number | undefined {
     if (!trimmed) {
       return undefined;
     }
-    value = Number.parseInt(trimmed, 10);
+    return parseStrictPositiveInteger(trimmed);
   }
-  return Number.isFinite(value) ? value : undefined;
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
+function invalidTimeout(value?: string): Error {
+  const suffix = value ? ` Received: "${value}".` : "";
+  return new Error(
+    `Invalid --timeout. Use a positive millisecond value, e.g. --timeout 30000.${suffix}`,
+  );
+}
+
+/** Parse a positive timeout or return the supplied fallback for missing values. */
 export function parseTimeoutMsWithFallback(
   raw: unknown,
   fallbackMs: number,
@@ -37,18 +49,21 @@ export function parseTimeoutMsWithFallback(
 
   if (value === null) {
     if (options.invalidType === "error") {
-      throw new Error("invalid --timeout");
+      throw invalidTimeout();
     }
     return fallbackMs;
   }
 
   if (!value) {
+    if (options.invalidType === "error") {
+      throw invalidTimeout();
+    }
     return fallbackMs;
   }
 
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidTimeout(value);
   }
   return parsed;
 }

@@ -5,8 +5,13 @@
  * This handler is called before built-in command handlers.
  */
 
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -20,13 +25,32 @@ export const handlePluginCommand: CommandHandler = async (
 ): Promise<CommandHandlerResult | null> => {
   const { command, cfg } = params;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const targetAgentId =
+    params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
+      ? (resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }) ??
+        params.agentId ??
+        DEFAULT_AGENT_ID)
+      : (params.agentId ?? DEFAULT_AGENT_ID);
+  const sessionTarget = targetSessionEntry?.sessionId
+    ? {
+        agentId: targetAgentId,
+        sessionId: targetSessionEntry.sessionId,
+        sessionKey: params.sessionKey,
+        storePath: resolveSessionStorePathForScope({
+          agentId: targetAgentId,
+          sessionKey: params.sessionKey,
+          storePath:
+            params.storePath ?? resolveStorePath(cfg.session?.store, { agentId: targetAgentId }),
+        }),
+      }
+    : undefined;
 
   if (!allowTextCommands) {
     return null;
   }
 
   // Try to match a plugin command
-  const match = matchPluginCommand(command.commandBodyNormalized);
+  const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
   if (!match) {
     return null;
   }
@@ -39,14 +63,19 @@ export const handlePluginCommand: CommandHandler = async (
     channel: command.channel,
     channelId: command.channelId,
     isAuthorizedSender: command.isAuthorizedSender,
+    senderIsOwner: command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: targetAgentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
-    sessionFile: targetSessionEntry?.sessionFile,
+    sessionTarget,
+    sessionFile: sessionTarget ? formatSqliteSessionFileMarker(sessionTarget) : undefined,
+    authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody: command.commandBodyNormalized,
     config: cfg,
     from: command.from,
     to: command.to,
+    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
       typeof params.ctx.MessageThreadId === "string" ||
@@ -55,9 +84,12 @@ export const handlePluginCommand: CommandHandler = async (
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
   });
+  const shouldContinue = result.continueAgent === true;
+  const { continueAgent: _continueAgent, ...reply } = result;
+  void _continueAgent;
 
   return {
-    shouldContinue: false,
-    reply: result,
+    shouldContinue,
+    reply: Object.keys(reply).length > 0 ? reply : undefined,
   };
 };

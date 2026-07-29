@@ -1,3 +1,5 @@
+// Reply-prefix context helpers shared by channel reply dispatchers.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity, resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
@@ -5,10 +7,12 @@ import {
   type ResponsePrefixContext,
 } from "../auto-reply/reply/response-prefix-template.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 type ModelSelectionContext = Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0];
 
+/**
+ * Mutable response-prefix state shared between reply setup and model selection callbacks.
+ */
 export type ReplyPrefixContextBundle = {
   prefixContext: ResponsePrefixContext;
   responsePrefix?: string;
@@ -16,11 +20,17 @@ export type ReplyPrefixContextBundle = {
   onModelSelected: (ctx: ModelSelectionContext) => void;
 };
 
+/**
+ * Reply option subset consumed by channel reply dispatchers.
+ */
 export type ReplyPrefixOptions = Pick<
   ReplyPrefixContextBundle,
   "responsePrefix" | "responsePrefixContextProvider" | "onModelSelected"
 >;
 
+/**
+ * Creates response-prefix options and a live context provider for the selected model.
+ */
 export function createReplyPrefixContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -51,6 +61,9 @@ export function createReplyPrefixContext(params: {
   };
 }
 
+/**
+ * Creates the reply-prefix options object expected by `getReply` call sites.
+ */
 export function createReplyPrefixOptions(params: {
   cfg: OpenClawConfig;
   agentId: string;

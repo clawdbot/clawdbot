@@ -7,6 +7,8 @@ When you need to show edits as a real diff, prefer the `diffs` tool instead of w
 
 The `diffs` tool accepts either `before` + `after` text, or a unified `patch` string.
 
+Check `details.changed`: identical before/after input returns `false` without creating an artifact; rendered results return `true`.
+
 Use `mode=view` when you want an interactive gateway-hosted viewer. After the tool returns, use `details.viewerUrl` with the canvas tool via `canvas present` or `canvas navigate`.
 If the deployment uses a loopback trusted proxy (for example Tailscale Serve with `gateway.trustedProxies` including `127.0.0.1`), raw loopback viewer requests can fail closed without forwarded client-IP headers. In that topology, prefer `mode=file` / `mode=both`, or use a configured `viewerBaseUrl` / explicit proxy/public `baseUrl` when you need a shareable viewer URL.
 

@@ -1,3 +1,4 @@
+// Opencode API module exposes the plugin public contract.
 export {
   applyOpencodeZenModelDefault,
   OPENCODE_ZEN_DEFAULT_MODEL,

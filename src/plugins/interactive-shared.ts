@@ -1,4 +1,5 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+// Shares interactive plugin metadata normalization across registries.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
 export function toPluginInteractiveRegistryKey(channel: string, namespace: string): string {
   return `${normalizeOptionalLowercaseString(channel) ?? ""}:${namespace.trim()}`;
@@ -19,7 +20,7 @@ export function validatePluginInteractiveNamespace(namespace: string): string | 
 }
 
 export function resolvePluginInteractiveMatch<TRegistration>(params: {
-  interactiveHandlers: Map<string, TRegistration>;
+  interactiveHandlers: Pick<ReadonlyMap<string, TRegistration>, "get">;
   channel: string;
   data: string;
 }): { registration: TRegistration; namespace: string; payload: string } | null {

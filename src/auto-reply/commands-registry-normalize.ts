@@ -1,9 +1,11 @@
-import type { OpenClawConfig } from "../config/types.js";
+import { expectDefined } from "@openclaw/normalization-core";
+/** Normalizes slash-command text aliases and builds command detection caches. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.js";
 import { escapeRegExp } from "../utils.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type {
@@ -22,6 +24,20 @@ let cachedTextAliasMap: Map<string, TextAliasSpec> | null = null;
 let cachedTextAliasCommands: ChatCommandDefinition[] | null = null;
 let cachedDetection: CommandDetection | undefined;
 let cachedDetectionCommands: ChatCommandDefinition[] | null = null;
+
+function appendMultilineTail(head: string, tail: string | undefined, spec?: TextAliasSpec): string {
+  if (!tail) {
+    return head;
+  }
+  if (!spec || spec.key === "skill" || spec.key === "learn") {
+    return `${head}\n${tail}`;
+  }
+  if (spec.key === "reset") {
+    const flattened = tail.replace(/\s+/g, " ").trim();
+    return flattened ? `${head} ${flattened}` : head;
+  }
+  return head;
+}
 
 function getTextAliasMap(): Map<string, TextAliasSpec> {
   const commands = getChatCommands();
@@ -49,6 +65,7 @@ function getTextAliasMap(): Map<string, TextAliasSpec> {
   return map;
 }
 
+/** Normalizes command text to canonical aliases, removing bot mentions when appropriate. */
 export function normalizeCommandBody(raw: string, options?: CommandNormalizeOptions): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) {
@@ -57,12 +74,14 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
 
   const newline = trimmed.indexOf("\n");
   const singleLine = newline === -1 ? trimmed : trimmed.slice(0, newline).trim();
+  const multilineTail = newline === -1 ? undefined : trimmed.slice(newline + 1).trimStart();
 
+  // `/cmd: value` is accepted as `/cmd value` because some channels insert colon syntax.
   const colonMatch = singleLine.match(/^\/([^\s:]+)\s*:(.*)$/);
   const normalized = colonMatch
     ? (() => {
         const [, command, rest] = colonMatch;
-        const normalizedRest = rest.trimStart();
+        const normalizedRest = expectDefined(rest, "commands registry normalize rest").trimStart();
         return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
       })()
     : singleLine;
@@ -80,26 +99,30 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
   const textAliasMap = getTextAliasMap();
   const exact = textAliasMap.get(lowered);
   if (exact) {
-    return exact.canonical;
+    return appendMultilineTail(exact.canonical, multilineTail, exact);
   }
 
   const tokenMatch = commandBody.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
   if (!tokenMatch) {
-    return commandBody;
+    return appendMultilineTail(commandBody, multilineTail);
   }
   const [, token, rest] = tokenMatch;
   const tokenKey = `/${normalizeLowercaseStringOrEmpty(token)}`;
   const tokenSpec = textAliasMap.get(tokenKey);
   if (!tokenSpec) {
-    return commandBody;
+    return appendMultilineTail(commandBody, multilineTail);
   }
   if (rest && !tokenSpec.acceptsArgs) {
     return commandBody;
   }
   const normalizedRest = rest?.trimStart();
-  return normalizedRest ? `${tokenSpec.canonical} ${normalizedRest}` : tokenSpec.canonical;
+  const normalizedHead = normalizedRest
+    ? `${tokenSpec.canonical} ${normalizedRest}`
+    : tokenSpec.canonical;
+  return appendMultilineTail(normalizedHead, multilineTail, tokenSpec);
 }
 
+/** Returns cached exact and regex detectors for the current command registry instance. */
 export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
   const commands = getChatCommands();
   if (cachedDetection && cachedDetectionCommands === commands) {
@@ -119,7 +142,7 @@ export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
         continue;
       }
       if (cmd.acceptsArgs) {
-        patterns.push(`${escaped}(?:\\s+.+|\\s*:\\s*.*)?`);
+        patterns.push(`${escaped}(?:\\s+[\\s\\S]+|\\s*:\\s*[\\s\\S]*)?`);
       } else {
         patterns.push(`${escaped}(?:\\s*:\\s*)?`);
       }
@@ -133,6 +156,7 @@ export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
   return cachedDetection;
 }
 
+/** Resolves a raw text command to the matching normalized alias when known. */
 export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
   const trimmed = normalizeCommandBody(raw).trim();
   if (!trimmed.startsWith("/")) {
@@ -154,6 +178,7 @@ export function maybeResolveTextAlias(raw: string, cfg?: OpenClawConfig) {
   return getTextAliasMap().has(tokenKey) ? tokenKey : null;
 }
 
+/** Resolves a raw text command into its command definition and raw argument tail. */
 export function resolveTextCommand(
   raw: string,
   cfg?: OpenClawConfig,

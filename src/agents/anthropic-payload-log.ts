@@ -1,14 +1,19 @@
+/**
+ * Optional Anthropic request/usage JSONL diagnostics.
+ * Redacts payload content before writing and stores digests for correlation
+ * without persisting raw secret-bearing request bodies.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
-import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
 import { resolveStateDir } from "../config/paths.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { redactImageDataForDiagnostics } from "./payload-redaction.js";
+import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
+import type { AgentMessage, StreamFn } from "./runtime/index.js";
 
 type PayloadLogStage = "request" | "usage";
 
@@ -53,21 +58,25 @@ function getWriter(filePath: string): PayloadLogWriter {
 
 function formatError(error: unknown): string | undefined {
   if (error instanceof Error) {
-    return error.message;
+    const redacted = redactAgentDiagnosticPayload(error.message);
+    return typeof redacted === "string" ? redacted : error.message;
   }
   if (typeof error === "string") {
-    return error;
+    const redacted = redactAgentDiagnosticPayload(error);
+    return typeof redacted === "string" ? redacted : error;
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
   }
   if (error && typeof error === "object") {
-    return safeJsonStringify(error) ?? "unknown error";
+    return safeJsonStringify(redactAgentDiagnosticPayload(error)) ?? "unknown error";
   }
   return undefined;
 }
 
 function digest(value: unknown): string | undefined {
+  // Hash the redacted payload so repeated requests can be correlated even when
+  // payload bodies are too sensitive to inspect directly.
   const serialized = safeJsonStringify(value);
   if (!serialized) {
     return undefined;
@@ -75,11 +84,13 @@ function digest(value: unknown): string | undefined {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
-function isAnthropicModel(model: Model<Api> | undefined | null): boolean {
+function isAnthropicModel(model: Model | undefined | null): boolean {
   return (model as { api?: unknown })?.api === "anthropic-messages";
 }
 
 function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {
+  // Usage is attached to assistant messages after streaming; walk backwards to
+  // avoid logging stale usage from an earlier assistant turn.
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i] as { role?: unknown; usage?: unknown };
     if (msg?.role === "assistant" && msg.usage && typeof msg.usage === "object") {
@@ -89,12 +100,13 @@ function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknow
   return null;
 }
 
-export type AnthropicPayloadLogger = {
+type AnthropicPayloadLogger = {
   enabled: true;
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;
 };
 
+/** Create an Anthropic payload/usage logger when the env flag is enabled. */
 export function createAnthropicPayloadLogger(params: {
   env?: NodeJS.ProcessEnv;
   runId?: string;
@@ -137,7 +149,9 @@ export function createAnthropicPayloadLogger(params: {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
-        const redactedPayload = redactImageDataForDiagnostics(payload);
+        // Forward the original payload to the provider hook, but persist only
+        // the redacted diagnostic copy.
+        const redactedPayload = redactAgentDiagnosticPayload(payload);
         record({
           ...base,
           ts: new Date().toISOString(),
@@ -173,7 +187,7 @@ export function createAnthropicPayloadLogger(params: {
       ...base,
       ts: new Date().toISOString(),
       stage: "usage",
-      usage,
+      usage: redactAgentDiagnosticPayload(usage),
       error: errorMessage,
     });
     log.info("anthropic usage", {

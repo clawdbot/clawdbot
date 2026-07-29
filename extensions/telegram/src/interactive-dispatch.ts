@@ -1,3 +1,4 @@
+// Telegram plugin module implements interactive dispatch behavior.
 import {
   createInteractiveConversationBindingHelpers,
   dispatchPluginInteractiveHandler,
@@ -7,7 +8,7 @@ import {
   type PluginInteractiveRegistration,
 } from "openclaw/plugin-sdk/plugin-runtime";
 
-export type TelegramInteractiveButtons = Array<
+type TelegramInteractiveButtons = Array<
   Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
 >;
 
@@ -47,12 +48,22 @@ export type TelegramInteractiveHandlerContext = {
   getCurrentConversationBinding: () => Promise<PluginConversationBinding | null>;
 };
 
+export type TelegramInteractiveHandlerResult = {
+  handled?: boolean;
+  /**
+   * Submit text through Telegram's normal inbound path after the callback handler
+   * returns, so plugin buttons can act like user-authored replies.
+   */
+  submitText?: string;
+} | void;
+
 export type TelegramInteractiveHandlerRegistration = PluginInteractiveRegistration<
   TelegramInteractiveHandlerContext,
-  "telegram"
+  "telegram",
+  TelegramInteractiveHandlerResult
 >;
 
-export type TelegramInteractiveDispatchContext = Omit<
+type TelegramInteractiveDispatchContext = Omit<
   TelegramInteractiveHandlerContext,
   | "callback"
   | "respond"
@@ -80,12 +91,17 @@ export async function dispatchTelegramPluginInteractiveHandler(params: {
     deleteMessage: () => Promise<void>;
   };
   onMatched?: () => Promise<void> | void;
+  afterInvoke?: (result: TelegramInteractiveHandlerResult) => Promise<void> | void;
 }) {
-  return await dispatchPluginInteractiveHandler<TelegramInteractiveHandlerRegistration>({
+  return await dispatchPluginInteractiveHandler<
+    TelegramInteractiveHandlerRegistration,
+    TelegramInteractiveHandlerResult
+  >({
     channel: "telegram",
     data: params.data,
     dedupeId: params.callbackId,
     onMatched: params.onMatched,
+    afterInvoke: params.afterInvoke,
     invoke: ({ registration, namespace, payload }) => {
       const { callbackMessage, ...handlerContext } = params.ctx;
       return registration.handler({

@@ -1,3 +1,4 @@
+// TS topology public fixture barrel re-exports public SDK members.
 export {
   aliasedThing,
   sharedThing,

@@ -1,10 +1,10 @@
+// Verifies secrets schema parsing and validation behavior.
 import { describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,
   VALID_EXEC_SECRET_REF_IDS,
 } from "../test-utils/secret-ref-test-vectors.js";
 import { validateConfigObjectRaw } from "./validation.js";
-import { GoogleChatConfigSchema } from "./zod-schema.providers-core.js";
 
 function validateOpenAiApiKeyRef(apiKey: unknown) {
   return validateConfigObjectRaw({
@@ -36,7 +36,6 @@ describe("config secret refs schema", () => {
             source: "exec",
             command: "/usr/local/bin/openclaw-secret-resolver",
             args: ["resolve"],
-            allowSymlinkCommand: true,
           },
         },
       },
@@ -54,13 +53,13 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("accepts openai-codex-responses as a model api value", () => {
+  it("accepts openai-chatgpt-responses as a model api value", () => {
     const result = validateConfigObjectRaw({
       models: {
         providers: {
-          "openai-codex": {
+          openai: {
             baseUrl: "https://chatgpt.com/backend-api",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
           },
         },
@@ -68,18 +67,6 @@ describe("config secret refs schema", () => {
     });
 
     expect(result.ok).toBe(true);
-  });
-
-  it("accepts googlechat serviceAccount refs", () => {
-    const result = GoogleChatConfigSchema.safeParse({
-      serviceAccountRef: {
-        source: "file",
-        provider: "filemain",
-        id: "/channels/googlechat/serviceAccount",
-      },
-    });
-
-    expect(result.success).toBe(true);
   });
 
   it("accepts skills entry apiKey refs", () => {
@@ -124,8 +111,8 @@ describe("config secret refs schema", () => {
                 passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
               },
             },
-            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
           },
+          models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
         },
       },
     });

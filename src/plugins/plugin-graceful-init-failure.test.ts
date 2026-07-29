@@ -1,3 +1,4 @@
+// Verifies graceful plugin init failure handling and reporting.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const fixtureTempDirs: string[] = [];
 const fixtureRoot = makeTrackedTempDir("openclaw-plugin-graceful", fixtureTempDirs);
 let tempDirIndex = 0;
+const { loadOpenClawPlugins, clearPluginLoaderCache } = await import("./loader.test-fixtures.js");
 
 afterAll(() => {
   cleanupTrackedTempDirs(fixtureTempDirs);
@@ -48,7 +50,6 @@ function readPluginId(pluginPath: string): string {
 }
 
 async function loadPlugins(pluginPaths: string[], warnings?: string[]) {
-  const { loadOpenClawPlugins, clearPluginLoaderCache } = await import("./loader.js");
   clearPluginLoaderCache();
   const allow = pluginPaths.map((pluginPath) => readPluginId(pluginPath));
   return loadOpenClawPlugins({
@@ -60,23 +61,46 @@ async function loadPlugins(pluginPaths: string[], warnings?: string[]) {
         allow,
       },
     },
+    installRecords: {},
     logger: {
       info: () => {},
       debug: () => {},
       error: () => {},
       warn: (message: string) => warnings?.push(message),
     },
+    onlyPluginIds: allow,
+    workspaceDir: fixtureRoot,
   });
 }
 
+type LoadedPluginRegistry = Awaited<ReturnType<typeof loadPlugins>>;
+type LoadedPluginEntry = LoadedPluginRegistry["plugins"][number];
+
+function requirePluginEntry(registry: LoadedPluginRegistry, pluginId: string): LoadedPluginEntry {
+  const entry = registry.plugins.find((plugin) => plugin.id === pluginId);
+  if (!entry) {
+    throw new Error(`expected ${pluginId} registry entry`);
+  }
+  return entry;
+}
+
+function requireWarning(warnings: string[], text: string): string {
+  const warning = warnings.find((candidate) => candidate.includes(text));
+  if (!warning) {
+    throw new Error(`expected warning containing ${text}`);
+  }
+  return warning;
+}
+
 describe("graceful plugin initialization failure", () => {
-  it("does not crash when register throws", async () => {
+  it("marks plugin entry errored when register throws", async () => {
     const plugin = writePlugin({
       id: "throws-on-register",
       body: `module.exports = { id: "throws-on-register", register() { throw new Error("config schema mismatch"); } };`,
     });
 
-    await expect(loadPlugins([plugin.file])).resolves.toBeDefined();
+    const registry = await loadPlugins([plugin.file]);
+    expect(requirePluginEntry(registry, "throws-on-register").status).toBe("error");
   });
 
   it("keeps loading other plugins after one register failure", async () => {
@@ -104,14 +128,47 @@ describe("graceful plugin initialization failure", () => {
     const registry = await loadPlugins([plugin.file]);
     const after = new Date();
 
-    const failed = registry.plugins.find((entry) => entry.id === "register-error");
-    expect(failed).toBeDefined();
-    expect(failed?.status).toBe("error");
-    expect(failed?.failurePhase).toBe("register");
-    expect(failed?.error).toContain("brutal config fail");
-    expect(failed?.failedAt).toBeInstanceOf(Date);
-    expect(failed?.failedAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
-    expect(failed?.failedAt?.getTime()).toBeLessThanOrEqual(after.getTime());
+    const failed = requirePluginEntry(registry, "register-error");
+    expect(failed.status).toBe("error");
+    expect(failed.failurePhase).toBe("register");
+    expect(failed.error).toContain("brutal config fail");
+    expect(failed.failedAt).toBeInstanceOf(Date);
+    expect(failed.failedAt?.getTime()).toBeGreaterThanOrEqual(before.getTime());
+    expect(failed.failedAt?.getTime()).toBeLessThanOrEqual(after.getTime());
+  });
+
+  it("rolls back partial metadata without breaking an earlier class-backed service", async () => {
+    const stable = writePlugin({
+      id: "a-stable-service-plugin",
+      body: `class StableService {
+        constructor() { this.id = "stable-service"; }
+        start() {}
+        ping() { return "still-alive"; }
+      }
+      module.exports = { id: "a-stable-service-plugin", register(api) {
+        api.registerService(new StableService());
+      } };`,
+    });
+    const failing = writePlugin({
+      id: "z-partial-register-failure",
+      body: `module.exports = { id: "z-partial-register-failure", register(api) {
+        api.registerService({ id: "failed-service", start() {} });
+        api.registerHttpRoute({ path: "/failed", auth: "plugin", handler: async () => true });
+        throw new Error("fail after partial registration");
+      } };`,
+    });
+
+    const registry = await loadPlugins([stable.file, failing.file]);
+    const failed = requirePluginEntry(registry, "z-partial-register-failure");
+    const stableService = registry.services.find((entry) => entry.service.id === "stable-service")
+      ?.service as { ping?: () => string } | undefined;
+
+    expect(failed.status).toBe("error");
+    expect(failed.services).toEqual([]);
+    expect(failed.httpRoutes).toBe(0);
+    expect(registry.services.map((entry) => entry.service.id)).toEqual(["stable-service"]);
+    expect(registry.httpRoutes).toEqual([]);
+    expect(stableService?.ping?.()).toBe("still-alive");
   });
 
   it("records validation failures before register", async () => {
@@ -141,10 +198,10 @@ describe("graceful plugin initialization failure", () => {
     const warnings: string[] = [];
     await loadPlugins([registerFailure.file, validationFailure.file], warnings);
 
-    const summary = warnings.find((warning) => warning.includes("failed to initialize"));
-    expect(summary).toBeDefined();
+    const summary = requireWarning(warnings, "failed to initialize");
     expect(summary).toContain("register: warn-register");
     expect(summary).toContain("validation: warn-validation");
+    expect(summary).toContain("openclaw plugins inspect <id> --runtime --json");
     expect(summary).toContain("openclaw plugins list");
   });
 });

@@ -1,94 +1,112 @@
-import {
-  resolveAgentModelFallbackValues,
-  resolveAgentModelPrimaryValue,
-  toAgentModelListLike,
-} from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+/**
+ * Public model-selection facade for persisted, configured, and allowed refs.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { sanitizeForLog, stripAnsi } from "../terminal/ansi.js";
+} from "@openclaw/normalization-core/string-coerce";
 import {
-  resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
-  resolveAgentModelFallbacksOverride,
-} from "./agent-scope.js";
-import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentModelFallbacksOverride } from "./agent-scope.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-export { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "./model-selection-config.js";
+export {
+  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
+} from "./model-thinking-default.js";
+import {
+  type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
-  findNormalizedProviderValue,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-  parseModelRef,
-} from "./model-selection-normalize.js";
+} from "./model-ref-shared.js";
+import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import {
+  buildAllowedModelSetWithFallbacks,
+  buildConfiguredAllowlistKeys,
+  buildConfiguredModelCatalog,
+  buildModelAliasIndex,
+  getModelRefStatusWithFallbackModels,
+  inferUniqueProviderFromCatalog,
+  inferUniqueProviderFromConfiguredModels,
+  normalizeModelSelection,
+  resolveBareModelDefaultProvider,
+  resolveAllowedModelRefFromAliasIndex,
+  resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
+  resolveConfiguredModelRef,
+  resolveConfiguredOpenRouterCompatAlias,
+  resolveHooksGmailModel,
+  resolveModelAliasFromPair,
+  resolveModelRefFromString,
+  type ModelAliasIndex,
+  type ModelRefStatus,
+} from "./model-selection-shared.js";
 
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
 
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  log ??= createSubsystemLogger("model-selection");
-  return log;
-}
+export type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
-
-export type ModelAliasIndex = {
-  byAlias: Map<string, { alias: string; ref: ModelRef }>;
-  byKey: Map<string, string[]>;
-};
-
-function sanitizeModelWarningValue(value: string): string {
-  const stripped = value ? stripAnsi(value) : "";
-  let controlBoundary = -1;
-  for (let index = 0; index < stripped.length; index += 1) {
-    const code = stripped.charCodeAt(index);
-    if (code <= 0x1f || code === 0x7f) {
-      controlBoundary = index;
-      break;
-    }
-  }
-  if (controlBoundary === -1) {
-    return sanitizeForLog(stripped);
-  }
-  return sanitizeForLog(stripped.slice(0, controlBoundary));
-}
+export { resolveDefaultModelForAgent, resolveSubagentConfiguredModelSelection };
 
 export {
+  buildConfiguredAllowlistKeys,
+  buildConfiguredModelCatalog,
+  buildModelAliasIndex,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
+  inferUniqueProviderFromConfiguredModels,
+  inferUniqueProviderFromCatalog,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
+  normalizeModelSelection,
   normalizeProviderId,
   normalizeProviderIdForAuth,
   parseModelRef,
+  resolveBareModelDefaultProvider,
+  resolveConfiguredModelRef,
+  resolveHooksGmailModel,
+  resolveModelAliasFromPair,
+  resolveModelRefFromString,
 };
-export type { ModelRef };
 export { isCliProvider } from "./model-selection-cli.js";
 
+function normalizePersistedDefaultProvider(value: unknown): string {
+  return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
+}
+
 export function resolvePersistedOverrideModelRef(params: {
-  defaultProvider: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  defaultProvider?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
-  const defaultProvider = params.defaultProvider.trim();
-  const overrideProvider = params.overrideProvider?.trim();
-  const overrideModel = params.overrideModel?.trim();
+  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
+  const overrideProvider = normalizeOptionalString(params.overrideProvider);
+  const overrideModel = normalizeOptionalString(params.overrideModel);
   if (!overrideModel) {
     return null;
   }
   const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
   return (
-    parseModelRef(encodedOverride, defaultProvider) ?? {
+    parseModelRef(encodedOverride, defaultProvider, {
+      allowManifestNormalization: params.allowManifestNormalization,
+      allowPluginNormalization: params.allowPluginNormalization,
+    }) ?? {
       provider: overrideProvider || defaultProvider,
       model: overrideModel,
     }
@@ -100,21 +118,26 @@ export function resolvePersistedOverrideModelRef(params: {
  * Use this when callers intentionally want the last executed model identity.
  */
 export function resolvePersistedModelRef(params: {
-  defaultProvider: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  defaultProvider?: unknown;
+  runtimeProvider?: unknown;
+  runtimeModel?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
-  const defaultProvider = params.defaultProvider.trim();
-  const runtimeProvider = params.runtimeProvider?.trim();
-  const runtimeModel = params.runtimeModel?.trim();
+  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
+  const runtimeProvider = normalizeOptionalString(params.runtimeProvider);
+  const runtimeModel = normalizeOptionalString(params.runtimeModel);
   if (runtimeModel) {
     if (runtimeProvider) {
       return { provider: runtimeProvider, model: runtimeModel };
     }
     return (
-      parseModelRef(runtimeModel, defaultProvider) ?? {
+      parseModelRef(runtimeModel, defaultProvider, {
+        allowManifestNormalization: params.allowManifestNormalization,
+        allowPluginNormalization: params.allowPluginNormalization,
+      }) ?? {
         provider: defaultProvider,
         model: runtimeModel,
       }
@@ -124,6 +147,8 @@ export function resolvePersistedModelRef(params: {
     defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 
@@ -133,16 +158,20 @@ export function resolvePersistedModelRef(params: {
  * overrides before falling back to runtime identity.
  */
 export function resolvePersistedSelectedModelRef(params: {
-  defaultProvider: string;
-  runtimeProvider?: string;
-  runtimeModel?: string;
-  overrideProvider?: string;
-  overrideModel?: string;
+  defaultProvider?: unknown;
+  runtimeProvider?: unknown;
+  runtimeModel?: unknown;
+  overrideProvider?: unknown;
+  overrideModel?: unknown;
+  allowManifestNormalization?: boolean;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const override = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (override) {
     return override;
@@ -151,15 +180,17 @@ export function resolvePersistedSelectedModelRef(params: {
     defaultProvider: params.defaultProvider,
     runtimeProvider: params.runtimeProvider,
     runtimeModel: params.runtimeModel,
+    allowManifestNormalization: params.allowManifestNormalization,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 
 export function normalizeStoredOverrideModel(params: {
-  providerOverride?: string | null;
-  modelOverride?: string | null;
+  providerOverride?: unknown;
+  modelOverride?: unknown;
 }): { providerOverride?: string; modelOverride?: string } {
-  const providerOverride = params.providerOverride?.trim();
-  const modelOverride = params.modelOverride?.trim();
+  const providerOverride = normalizeOptionalString(params.providerOverride);
+  const modelOverride = normalizeOptionalString(params.modelOverride);
   if (!providerOverride || !modelOverride) {
     return {
       providerOverride,
@@ -176,331 +207,77 @@ export function normalizeStoredOverrideModel(params: {
   };
 }
 
-export function inferUniqueProviderFromConfiguredModels(params: {
-  cfg: OpenClawConfig;
-  model: string;
-}): string | undefined {
-  const model = params.model.trim();
-  if (!model) {
-    return undefined;
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(model);
-  const providers = new Set<string>();
-  const addProvider = (provider: string) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    if (!normalizedProvider) {
-      return;
-    }
-    providers.add(normalizedProvider);
-  };
-  const configuredModels = params.cfg.agents?.defaults?.models;
-  if (configuredModels) {
-    for (const key of Object.keys(configuredModels)) {
-      const ref = key.trim();
-      if (!ref || !ref.includes("/")) {
-        continue;
-      }
-      const parsed = parseModelRef(ref, DEFAULT_PROVIDER, {
-        allowPluginNormalization: false,
-      });
-      if (!parsed) {
-        continue;
-      }
-      if (parsed.model === model || normalizeLowercaseStringOrEmpty(parsed.model) === normalized) {
-        addProvider(parsed.provider);
-        if (providers.size > 1) {
-          return undefined;
-        }
-      }
-    }
-  }
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders) {
-    for (const [providerId, providerConfig] of Object.entries(configuredProviders)) {
-      const models = providerConfig?.models;
-      if (!Array.isArray(models)) {
-        continue;
-      }
-      for (const entry of models) {
-        const modelId = entry?.id?.trim();
-        if (!modelId) {
-          continue;
-        }
-        if (modelId === model || normalizeLowercaseStringOrEmpty(modelId) === normalized) {
-          addProvider(providerId);
-        }
-      }
-      if (providers.size > 1) {
-        return undefined;
-      }
-    }
-  }
-  if (providers.size !== 1) {
-    return undefined;
-  }
-  return providers.values().next().value;
+export function resolveAllowlistModelKey(
+  raw: string,
+  defaultProvider: string,
+  cfg?: OpenClawConfig,
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
+): string | null {
+  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
-export function resolveAllowlistModelKey(raw: string, defaultProvider: string): string | null {
-  const parsed = parseModelRef(raw, defaultProvider);
-  if (!parsed) {
-    return null;
-  }
-  return modelKey(parsed.provider, parsed.model);
-}
-
-export function buildConfiguredAllowlistKeys(params: {
-  cfg: OpenClawConfig | undefined;
+export async function canonicalizeCaseOnlyCatalogModelRef(params: {
+  raw: string | undefined;
+  cfg?: OpenClawConfig;
   defaultProvider: string;
-}): Set<string> | null {
-  const rawAllowlist = Object.keys(params.cfg?.agents?.defaults?.models ?? {});
-  if (rawAllowlist.length === 0) {
-    return null;
-  }
-
-  const keys = new Set<string>();
-  for (const raw of rawAllowlist) {
-    const key = resolveAllowlistModelKey(raw, params.defaultProvider);
-    if (key) {
-      keys.add(key);
-    }
-  }
-  return keys.size > 0 ? keys : null;
-}
-
-export function buildModelAliasIndex(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  allowPluginNormalization?: boolean;
-}): ModelAliasIndex {
-  const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
-  const byKey = new Map<string, string[]>();
-
-  const rawModels = params.cfg.agents?.defaults?.models ?? {};
-  for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
-    const parsed = parseModelRef(keyRaw, params.defaultProvider, {
-      allowPluginNormalization: params.allowPluginNormalization,
-    });
-    if (!parsed) {
-      continue;
-    }
-    const alias =
-      normalizeOptionalString((entryRaw as { alias?: string } | undefined)?.alias) ?? "";
-    if (!alias) {
-      continue;
-    }
-    const aliasKey = normalizeLowercaseStringOrEmpty(alias);
-    byAlias.set(aliasKey, { alias, ref: parsed });
-    const key = modelKey(parsed.provider, parsed.model);
-    const existing = byKey.get(key) ?? [];
-    existing.push(alias);
-    byKey.set(key, existing);
-  }
-
-  return { byAlias, byKey };
-}
-
-type ModelCatalogMetadata = {
-  configuredByKey: Map<string, ModelCatalogEntry>;
-  aliasByKey: Map<string, string>;
-};
-
-function buildModelCatalogMetadata(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-}): ModelCatalogMetadata {
-  const configuredByKey = new Map<string, ModelCatalogEntry>();
-  for (const entry of buildConfiguredModelCatalog({ cfg: params.cfg })) {
-    configuredByKey.set(modelKey(entry.provider, entry.id), entry);
-  }
-
-  const aliasByKey = new Map<string, string>();
-  const configuredModels = params.cfg.agents?.defaults?.models ?? {};
-  for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
-    const key = resolveAllowlistModelKey(rawKey, params.defaultProvider);
-    if (!key) {
-      continue;
-    }
-    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
-      continue;
-    }
-    aliasByKey.set(key, alias);
-  }
-
-  return { configuredByKey, aliasByKey };
-}
-
-function applyModelCatalogMetadata(params: {
-  entry: ModelCatalogEntry;
-  metadata: ModelCatalogMetadata;
-}): ModelCatalogEntry {
-  const key = modelKey(params.entry.provider, params.entry.id);
-  const configuredEntry = params.metadata.configuredByKey.get(key);
-  const alias = params.metadata.aliasByKey.get(key);
-  if (!configuredEntry && !alias) {
-    return params.entry;
-  }
-  const nextAlias = alias ?? params.entry.alias;
-  const nextContextWindow = configuredEntry?.contextWindow ?? params.entry.contextWindow;
-  const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
-  const nextInput = configuredEntry?.input ?? params.entry.input;
-
-  return {
-    ...params.entry,
-    name: configuredEntry?.name ?? params.entry.name,
-    ...(nextAlias ? { alias: nextAlias } : {}),
-    ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
-    ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
-    ...(nextInput ? { input: nextInput } : {}),
-  };
-}
-
-function buildSyntheticAllowedCatalogEntry(params: {
-  parsed: ModelRef;
-  metadata: ModelCatalogMetadata;
-}): ModelCatalogEntry {
-  const key = modelKey(params.parsed.provider, params.parsed.model);
-  const configuredEntry = params.metadata.configuredByKey.get(key);
-  const alias = params.metadata.aliasByKey.get(key);
-  const nextContextWindow = configuredEntry?.contextWindow;
-  const nextReasoning = configuredEntry?.reasoning;
-  const nextInput = configuredEntry?.input;
-
-  return {
-    id: params.parsed.model,
-    name: configuredEntry?.name ?? params.parsed.model,
-    provider: params.parsed.provider,
-    ...(alias ? { alias } : {}),
-    ...(nextContextWindow !== undefined ? { contextWindow: nextContextWindow } : {}),
-    ...(nextReasoning !== undefined ? { reasoning: nextReasoning } : {}),
-    ...(nextInput ? { input: nextInput } : {}),
-  };
-}
-
-export function resolveModelRefFromString(params: {
-  raw: string;
-  defaultProvider: string;
+  loadCatalog: () => Promise<ModelCatalogEntry[]>;
   aliasIndex?: ModelAliasIndex;
+  allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
-}): { ref: ModelRef; alias?: string } | null {
-  const { model } = splitTrailingAuthProfile(params.raw);
-  if (!model) {
-    return null;
+  preserveAuthProfile?: boolean;
+}): Promise<string | undefined> {
+  const rawModel = normalizeOptionalString(params.raw);
+  if (!rawModel) {
+    return undefined;
   }
-  if (!model.includes("/")) {
-    const aliasKey = normalizeLowercaseStringOrEmpty(model);
-    const aliasMatch = params.aliasIndex?.byAlias.get(aliasKey);
-    if (aliasMatch) {
-      return { ref: aliasMatch.ref, alias: aliasMatch.alias };
-    }
+  const split = splitTrailingAuthProfile(rawModel);
+  if (shouldKeepProfileQualifiedModelRefRaw(split.profile, params.preserveAuthProfile)) {
+    return rawModel;
   }
-  const parsed = parseModelRef(model, params.defaultProvider, {
+  if (!isCaseOnlyProviderModelRef(split.model)) {
+    return rawModel;
+  }
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    raw: split.model,
+    defaultProvider: params.defaultProvider,
+    aliasIndex: params.aliasIndex,
+    allowManifestNormalization: params.allowManifestNormalization,
     allowPluginNormalization: params.allowPluginNormalization,
   });
-  if (!parsed) {
-    return null;
+  if (!resolved) {
+    return rawModel;
   }
-  return { ref: parsed };
+  const entry = findModelInCatalog(
+    await params.loadCatalog(),
+    resolved.ref.provider,
+    resolved.ref.model,
+  );
+  return entry ? formatCatalogModelRef(entry, split.profile) : rawModel;
 }
 
-export function resolveConfiguredModelRef(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-  defaultModel: string;
-  allowPluginNormalization?: boolean;
-}): ModelRef {
-  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
-  if (rawModel) {
-    const trimmed = rawModel.trim();
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      defaultProvider: params.defaultProvider,
-      allowPluginNormalization: params.allowPluginNormalization,
-    });
-    if (!trimmed.includes("/")) {
-      const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
-      const aliasMatch = aliasIndex.byAlias.get(aliasKey);
-      if (aliasMatch) {
-        return aliasMatch.ref;
-      }
-
-      const inferredProvider = inferUniqueProviderFromConfiguredModels({
-        cfg: params.cfg,
-        model: trimmed,
-      });
-      if (inferredProvider) {
-        return { provider: inferredProvider, model: trimmed };
-      }
-
-      // Default to the configured provider if no provider is specified, but warn as this is deprecated.
-      const safeTrimmed = sanitizeModelWarningValue(trimmed);
-      const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
-      getLog().warn(
-        `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
-      );
-      return { provider: params.defaultProvider, model: trimmed };
-    }
-
-    const resolved = resolveModelRefFromString({
-      raw: trimmed,
-      defaultProvider: params.defaultProvider,
-      aliasIndex,
-      allowPluginNormalization: params.allowPluginNormalization,
-    });
-    if (resolved) {
-      return resolved.ref;
-    }
-
-    // User specified a model but it could not be resolved — warn before falling back.
-    const safe = sanitizeForLog(trimmed);
-    const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
-    getLog().warn(
-      `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
-    );
-  }
-  // Before falling back to the hardcoded default, check if the default provider
-  // is actually available. If it isn't but other providers are configured, prefer
-  // the first configured provider's first model to avoid reporting a stale default
-  // from a removed provider. (See #38880)
-  const fallbackProvider = resolveConfiguredProviderFallback({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-  });
-  if (fallbackProvider) {
-    return fallbackProvider;
-  }
-  return { provider: params.defaultProvider, model: params.defaultModel };
+function hasExplicitProviderModelRef(raw: string): boolean {
+  const slash = raw.indexOf("/");
+  return slash > 0 && slash < raw.length - 1;
 }
 
-export function resolveDefaultModelForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): ModelRef {
-  const agentModelOverride = params.agentId
-    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
-    : undefined;
-  const cfg =
-    agentModelOverride && agentModelOverride.length > 0
-      ? {
-          ...params.cfg,
-          agents: {
-            ...params.cfg.agents,
-            defaults: {
-              ...params.cfg.agents?.defaults,
-              model: {
-                ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
-                primary: agentModelOverride,
-              },
-            },
-          },
-        }
-      : params.cfg;
-  return resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
+function isCaseOnlyProviderModelRef(raw: string): boolean {
+  return hasExplicitProviderModelRef(raw) && raw !== raw.toLowerCase();
+}
+
+function shouldKeepProfileQualifiedModelRefRaw(
+  profile: string | undefined,
+  preserveAuthProfile: boolean | undefined,
+): boolean {
+  return Boolean(profile && preserveAuthProfile === false);
+}
+
+function formatCatalogModelRef(entry: ModelCatalogEntry, profile: string | undefined): string {
+  return appendAuthProfileSuffix(`${entry.provider}/${entry.id}`, profile);
+}
+
+function appendAuthProfileSuffix(modelRef: string, profile: string | undefined): string {
+  return profile ? `${modelRef}@${profile}` : modelRef;
 }
 
 function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string }): string[] {
@@ -513,16 +290,24 @@ function resolveAllowedFallbacks(params: { cfg: OpenClawConfig; agentId?: string
   return resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
 }
 
-export function resolveSubagentConfiguredModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string | undefined {
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model)
-  );
+/**
+ * Resolve a normalized model string through a pre-built alias index, returning
+ * a fully qualified `provider/model` string.  If the value is already qualified
+ * or not a known alias, returns it unchanged.
+ */
+function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  // Already a provider/model ref — no alias resolution needed.
+  if (value.includes("/")) {
+    return value;
+  }
+  // Check if the value is a known alias; if so, resolve to provider/model.
+  // Unknown bare strings are returned as-is (don't guess the provider).
+  const aliasKey = normalizeLowercaseStringOrEmpty(value);
+  const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+  if (aliasMatch) {
+    return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
+  }
+  return value;
 }
 
 export function resolveSubagentSpawnModelSelection(params: {
@@ -534,186 +319,139 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return (
+  const configured = resolveConfiguredSubagentSpawnModelSelection({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    modelOverride: params.modelOverride,
+    defaultProvider: runtimeDefault.provider,
+  });
+  if (configured) {
+    return configured;
+  }
+  const raw =
+    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
+    `${runtimeDefault.provider}/${runtimeDefault.model}`;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: runtimeDefault.provider,
+  });
+  return resolveModelThroughAliases(raw, aliasIndex);
+}
+
+export function resolveConfiguredSubagentSpawnModelSelection(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  modelOverride?: unknown;
+  defaultProvider?: string;
+  includeAgentPrimary?: boolean;
+}): string | undefined {
+  const raw =
     normalizeModelSelection(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
-    }) ??
-    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
-    `${runtimeDefault.provider}/${runtimeDefault.model}`
-  );
+      includeAgentPrimary: params.includeAgentPrimary,
+    });
+  if (!raw) {
+    return undefined;
+  }
+  const defaultProvider =
+    normalizeOptionalString(params.defaultProvider) ??
+    resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }).provider;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider,
+  });
+  return resolveModelThroughAliases(raw, aliasIndex);
 }
 
-export function buildAllowedModelSet(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  agentId?: string;
-}): {
+export function buildAllowedModelSet(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  automaticFallbackKeys: Set<string>;
 } {
-  const metadata = buildModelCatalogMetadata({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-  });
-  const catalog = params.catalog.map((entry) => applyModelCatalogMetadata({ entry, metadata }));
-  const rawAllowlist = (() => {
-    const modelMap = params.cfg.agents?.defaults?.models ?? {};
-    return Object.keys(modelMap);
-  })();
-  const allowAny = rawAllowlist.length === 0;
-  const defaultModel = params.defaultModel?.trim();
-  const defaultRef =
-    defaultModel && params.defaultProvider
-      ? parseModelRef(defaultModel, params.defaultProvider)
-      : null;
-  const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
-  const catalogKeys = new Set(catalog.map((entry) => modelKey(entry.provider, entry.id)));
-
-  if (allowAny) {
-    if (defaultKey) {
-      catalogKeys.add(defaultKey);
-    }
-    return {
-      allowAny: true,
-      allowedCatalog: catalog,
-      allowedKeys: catalogKeys,
-    };
-  }
-
-  const allowedKeys = new Set<string>();
-  const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
-  for (const raw of rawAllowlist) {
-    const parsed = parseModelRef(raw, params.defaultProvider);
-    if (!parsed) {
-      continue;
-    }
-    const key = modelKey(parsed.provider, parsed.model);
-    // Explicit allowlist entries are always trusted, even when bundled catalog
-    // data is stale and does not include the configured model yet.
-    allowedKeys.add(key);
-
-    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
-      syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
-    }
-  }
-
-  for (const fallback of resolveAllowedFallbacks({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  })) {
-    const parsed = parseModelRef(fallback, params.defaultProvider);
-    if (parsed) {
-      const key = modelKey(parsed.provider, parsed.model);
-      allowedKeys.add(key);
-
-      if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
-        syntheticCatalogEntries.set(key, buildSyntheticAllowedCatalogEntry({ parsed, metadata }));
-      }
-    }
-  }
-
-  if (defaultKey) {
-    allowedKeys.add(defaultKey);
-  }
-
-  const allowedCatalog = [
-    ...catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
-    ...syntheticCatalogEntries.values(),
-  ];
-
-  if (allowedCatalog.length === 0 && allowedKeys.size === 0) {
-    if (defaultKey) {
-      catalogKeys.add(defaultKey);
-    }
-    return {
-      allowAny: true,
-      allowedCatalog: catalog,
-      allowedKeys: catalogKeys,
-    };
-  }
-
-  return { allowAny: false, allowedCatalog, allowedKeys };
-}
-
-export function buildConfiguredModelCatalog(params: { cfg: OpenClawConfig }): ModelCatalogEntry[] {
-  const providers = params.cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return [];
-  }
-
-  const catalog: ModelCatalogEntry[] = [];
-  for (const [providerRaw, provider] of Object.entries(providers)) {
-    const providerId = normalizeProviderId(providerRaw);
-    if (!providerId || !Array.isArray(provider?.models)) {
-      continue;
-    }
-    for (const model of provider.models) {
-      const id = normalizeOptionalString(model?.id) ?? "";
-      if (!id) {
-        continue;
-      }
-      const name = normalizeOptionalString(model?.name) || id;
-      const contextWindow =
-        typeof model?.contextWindow === "number" && model.contextWindow > 0
-          ? model.contextWindow
-          : undefined;
-      const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
-      const input = Array.isArray(model?.input) ? model.input : undefined;
-      catalog.push({
-        provider: providerId,
-        id,
-        name,
-        contextWindow,
-        reasoning,
-        input,
-      });
-    }
-  }
-
-  return catalog;
-}
-
-export type ModelRefStatus = {
-  key: string;
-  inCatalog: boolean;
-  allowAny: boolean;
-  allowed: boolean;
-};
-
-export function getModelRefStatus(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  ref: ModelRef;
-  defaultProvider: string;
-  defaultModel?: string;
-}): ModelRefStatus {
-  const allowed = buildAllowedModelSet({
+  return buildAllowedModelSetWithFallbacks({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
+    fallbackModels: resolveAllowedFallbacks({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }),
+    manifestPlugins: params.manifestPlugins,
   });
-  const key = modelKey(params.ref.provider, params.ref.model);
-  return {
-    key,
-    inCatalog: params.catalog.some((entry) => modelKey(entry.provider, entry.id) === key),
-    allowAny: allowed.allowAny,
-    allowed: allowed.allowAny || allowed.allowedKeys.has(key),
-  };
 }
 
-export function resolveAllowedModelRef(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  raw: string;
-  defaultProvider: string;
-  defaultModel?: string;
-}):
+export function getModelRefStatus(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    ref: ModelRef;
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+): ModelRefStatus {
+  return getModelRefStatusWithFallbackModels({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    ref: params.ref,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    agentId: params.agentId,
+    fallbackModels: resolveAllowedFallbacks({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }),
+    manifestPlugins: params.manifestPlugins,
+  });
+}
+
+function getModelRefStatusForResolve(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+  ref: ModelRef,
+): ModelRefStatus {
+  return getModelRefStatus({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    ref,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
+  });
+}
+
+export function resolveAllowedModelRef(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    raw: string;
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+):
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -726,38 +464,32 @@ export function resolveAllowedModelRef(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
+    manifestPlugins: params.manifestPlugins,
   });
 
-  // When the model string has no provider prefix ("/"), try to infer the
-  // correct provider from the configured allowlist before falling back to the
-  // session's current default provider. This prevents provider prefix drift
-  // when switching models across different providers (see #48369).
-  const effectiveDefaultProvider = !trimmed.includes("/")
-    ? (inferUniqueProviderFromConfiguredModels({ cfg: params.cfg, model: trimmed }) ??
-      params.defaultProvider)
-    : params.defaultProvider;
-
-  const resolved = resolveModelRefFromString({
-    raw: trimmed,
-    defaultProvider: effectiveDefaultProvider,
-    aliasIndex,
-  });
-  if (!resolved) {
-    return { error: `invalid model: ${trimmed}` };
-  }
-
-  const status = getModelRefStatus({
+  const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
     cfg: params.cfg,
-    catalog: params.catalog,
-    ref: resolved.ref,
+    raw: trimmed,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.defaultModel,
+    manifestPlugins: params.manifestPlugins,
   });
-  if (!status.allowed) {
-    return { error: `model not allowed: ${status.key}` };
+  if (openrouterCompatRef) {
+    const status = getModelRefStatusForResolve(params, openrouterCompatRef);
+    if (!status.allowed) {
+      return { error: `model not allowed: ${status.key}` };
+    }
+    return { ref: openrouterCompatRef, key: status.key };
   }
 
-  return { ref: resolved.ref, key: status.key };
+  return resolveAllowedModelRefFromAliasIndex({
+    cfg: params.cfg,
+    raw: params.raw,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+    manifestPlugins: params.manifestPlugins,
+    getStatus: (ref) => getModelRefStatusForResolve(params, ref),
+  });
 }
 
 /** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
@@ -773,51 +505,4 @@ export function resolveReasoningDefault(params: {
       (entry.provider === key && entry.id === params.model),
   );
   return candidate?.reasoning === true ? "on" : "off";
-}
-
-/**
- * Resolve the model configured for Gmail hook processing.
- * Returns null if hooks.gmail.model is not set.
- */
-export function resolveHooksGmailModel(params: {
-  cfg: OpenClawConfig;
-  defaultProvider: string;
-}): ModelRef | null {
-  const hooksModel = params.cfg.hooks?.gmail?.model;
-  if (!hooksModel?.trim()) {
-    return null;
-  }
-
-  const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
-    defaultProvider: params.defaultProvider,
-  });
-
-  const resolved = resolveModelRefFromString({
-    raw: hooksModel,
-    defaultProvider: params.defaultProvider,
-    aliasIndex,
-  });
-
-  return resolved?.ref ?? null;
-}
-
-/**
- * Normalize a model selection value (string or `{primary?: string}`) to a
- * plain trimmed string.  Returns `undefined` when the input is empty/missing.
- * Shared by sessions-spawn and cron isolated-agent model resolution.
- */
-export function normalizeModelSelection(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed || undefined;
-  }
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const primary = (value as { primary?: unknown }).primary;
-  if (typeof primary === "string" && primary.trim()) {
-    return primary.trim();
-  }
-  return undefined;
 }

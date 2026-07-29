@@ -9,13 +9,24 @@ export type {
   ImagesDescriptionRequest,
   ImagesDescriptionResult,
   MediaUnderstandingProvider,
+  MediaUnderstandingProviderAuthContext,
+  MediaUnderstandingProviderAuthResult,
+  MediaUnderstandingProviderRequestAuth,
+  MediaUnderstandingProviderSyntheticAuthResult,
+  StructuredExtractionImageInput,
+  StructuredExtractionInput,
+  StructuredExtractionRequest,
+  StructuredExtractionResult,
+  StructuredExtractionTextInput,
   VideoDescriptionRequest,
   VideoDescriptionResult,
 } from "../media-understanding/types.js";
 
 export {
   describeImageWithModel,
+  describeImageWithModelPayloadTransform,
   describeImagesWithModel,
+  describeImagesWithModelPayloadTransform,
 } from "../media-understanding/image-runtime.js";
 export {
   buildOpenAiCompatibleVideoRequestBody,

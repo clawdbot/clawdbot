@@ -3,9 +3,9 @@ import Foundation
 public enum CaptureRateLimits {
     public static func clampDurationMs(
         _ ms: Int?,
-        defaultMs: Int = 10_000,
+        defaultMs: Int = 10000,
         minMs: Int = 250,
-        maxMs: Int = 60_000) -> Int
+        maxMs: Int = 60000) -> Int
     {
         let value = ms ?? defaultMs
         return min(maxMs, max(minMs, value))

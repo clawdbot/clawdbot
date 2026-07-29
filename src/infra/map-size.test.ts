@@ -1,3 +1,4 @@
+// Covers bounded map pruning.
 import { describe, expect, it } from "vitest";
 import { pruneMapToMaxSize } from "./map-size.js";
 
@@ -32,6 +33,39 @@ describe("pruneMapToMaxSize", () => {
         ["b", 2],
       ] as const,
       maxSize: -4,
+      expected: [],
+    },
+    {
+      name: "leaves maps untouched for NaN limits",
+      entries: [
+        ["a", 1],
+        ["b", 2],
+      ] as const,
+      maxSize: Number.NaN,
+      expected: [
+        ["a", 1],
+        ["b", 2],
+      ],
+    },
+    {
+      name: "leaves maps untouched for positive infinity limits",
+      entries: [
+        ["a", 1],
+        ["b", 2],
+      ] as const,
+      maxSize: Number.POSITIVE_INFINITY,
+      expected: [
+        ["a", 1],
+        ["b", 2],
+      ],
+    },
+    {
+      name: "clears maps for negative infinity limits",
+      entries: [
+        ["a", 1],
+        ["b", 2],
+      ] as const,
+      maxSize: Number.NEGATIVE_INFINITY,
       expected: [],
     },
     {

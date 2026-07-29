@@ -1,56 +1,57 @@
-import { Type } from "@sinclair/typebox";
+// Memory Core plugin module implements tools.shared behavior.
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
-  resolveSessionAgentId,
-  type MemoryCorpusGetResult,
+  resolveSessionAgentIds,
   type MemoryCorpusSearchResult,
   type AnyAgentTool,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-
-type MemoryToolRuntime = typeof import("./tools.runtime.js");
+import type { PluginStateLeaseRunner } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { Type } from "typebox";
+import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
+type MemoryToolOptions = {
+  config?: OpenClawConfig;
+  getConfig?: () => OpenClawConfig | undefined;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+  oneShotCliRun?: boolean;
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
+};
 
-let memoryToolRuntimePromise: Promise<MemoryToolRuntime> | null = null;
-
-export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
-  memoryToolRuntimePromise ??= import("./tools.runtime.js");
-  return await memoryToolRuntimePromise;
-}
+export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
 
 export const MemorySearchSchema = Type.Object({
   query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
+  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
+  minScore: optionalFiniteNumberSchema(),
+  corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
 });
 
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
-  corpus: Type.Optional(
-    Type.Union([Type.Literal("memory"), Type.Literal("wiki"), Type.Literal("all")]),
-  ),
+  from: Type.Optional(Type.Integer()),
+  lines: Type.Optional(Type.Integer()),
+  corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
 });
 
-export function resolveMemoryToolContext(options: {
-  config?: OpenClawConfig;
-  agentSessionKey?: string;
-}) {
-  const cfg = options.config;
+function resolveMemoryToolContext(options: MemoryToolOptions) {
+  const cfg = options.getConfig?.() ?? options.config;
   if (!cfg) {
     return null;
   }
-  const agentId = resolveSessionAgentId({
+  const { sessionAgentId: agentId } = resolveSessionAgentIds({
     sessionKey: options.agentSessionKey,
     config: cfg,
+    agentId: options.agentId,
   });
   if (!resolveMemorySearchConfig(cfg, agentId)) {
     return null;
@@ -58,46 +59,43 @@ export function resolveMemoryToolContext(options: {
   return { cfg, agentId };
 }
 
-export async function getMemoryManagerContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): Promise<
-  | {
-      manager: NonNullable<MemorySearchManagerResult["manager"]>;
-    }
-  | {
-      error: string | undefined;
-    }
-> {
-  return await getMemoryManagerContextWithPurpose({ ...params, purpose: undefined });
-}
-
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status";
+  purpose?: "default" | "status" | "cli";
+  acquireLocalService?: MemoryCoreAcquireLocalService;
+  withLease?: PluginStateLeaseRunner;
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
+      debug?: NonNullable<MemorySearchManagerResult["debug"]>;
     }
   | {
       error: string | undefined;
     }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
-  const { manager, error } = await getMemorySearchManager({
+  const startedAt = Date.now();
+  const { manager, debug, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
     purpose: params.purpose,
+    ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
+    ...(params.withLease ? { withLease: params.withLease } : {}),
   });
-  return manager ? { manager } : { error };
+  return manager
+    ? {
+        manager,
+        debug: {
+          ...debug,
+          managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
+        },
+      }
+    : { error };
 }
 
 export function createMemoryTool(params: {
-  options: {
-    config?: OpenClawConfig;
-    agentSessionKey?: string;
-  };
+  options: MemoryToolOptions;
   label: string;
   name: string;
   description: string;
@@ -113,19 +111,40 @@ export function createMemoryTool(params: {
     name: params.name,
     description: params.description,
     parameters: params.parameters,
-    execute: params.execute(ctx),
+    execute: async (toolCallId, toolParams, signal, onUpdate) => {
+      const latestCtx = resolveMemoryToolContext(params.options) ?? ctx;
+      return await params.execute(latestCtx)(toolCallId, toolParams, signal, onUpdate);
+    },
   };
 }
 
-export function buildMemorySearchUnavailableResult(error: string | undefined) {
+export function buildMemorySearchUnavailableResult(
+  error: string | undefined,
+  overrides?: {
+    warning?: string;
+    action?: string;
+  },
+) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
-  const warning = isQuotaError
-    ? "Memory search is unavailable because the embedding provider quota is exhausted."
-    : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const normalizedReason = normalizeLowercaseStringOrEmpty(reason);
+  const isQuotaError = /insufficient_quota|quota|429/.test(normalizedReason);
+  const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
+    normalizedReason,
+  );
+  const warning =
+    overrides?.warning ??
+    (isQuotaError
+      ? "Memory search is unavailable because the embedding provider quota is exhausted."
+      : isMissingNodeSqlite
+        ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+        : "Memory search is unavailable due to an embedding/provider error.");
+  const action =
+    overrides?.action ??
+    (isQuotaError
+      ? "Top up or switch embedding provider, then retry memory_search."
+      : isMissingNodeSqlite
+        ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
+        : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,
@@ -144,10 +163,12 @@ export function buildMemorySearchUnavailableResult(error: string | undefined) {
 export async function searchMemoryCorpusSupplements(params: {
   query: string;
   maxResults?: number;
+  agentId?: string;
   agentSessionKey?: string;
-  corpus?: "memory" | "wiki" | "all";
+  sandboxed?: boolean;
+  corpus?: "memory" | "wiki" | "all" | "sessions";
 }): Promise<MemoryCorpusSearchResult[]> {
-  if (params.corpus === "memory") {
+  if (params.corpus === "memory" || params.corpus === "sessions") {
     return [];
   }
   const supplements = listMemoryCorpusSupplements();
@@ -173,10 +194,12 @@ export async function getMemoryCorpusSupplementResult(params: {
   lookup: string;
   fromLine?: number;
   lineCount?: number;
+  agentId?: string;
   agentSessionKey?: string;
-  corpus?: "memory" | "wiki" | "all";
-}): Promise<MemoryCorpusGetResult | null> {
-  if (params.corpus === "memory") {
+  sandboxed?: boolean;
+  corpus?: "memory" | "wiki" | "all" | "sessions";
+}) {
+  if (params.corpus === "memory" || params.corpus === "sessions") {
     return null;
   }
   for (const registration of listMemoryCorpusSupplements()) {

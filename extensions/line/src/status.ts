@@ -1,3 +1,4 @@
+// Line plugin module implements status behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildTokenChannelStatusSummary,
@@ -31,6 +32,9 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
       configured: hasLineCredentials(account),
       extra: {
         tokenSource: account.tokenSource,
+        signingSecretSource: account.signingSecretSource,
+        tokenStatus: account.tokenStatus,
+        signingSecretStatus: account.signingSecretStatus,
         mode: "webhook",
       },
     }),

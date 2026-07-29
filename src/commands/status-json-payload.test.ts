@@ -1,5 +1,8 @@
+// Status JSON payload tests cover update metadata, overview rows, and structured status output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildStatusJsonPayload, resolveStatusUpdateChannelInfo } from "./status-json-payload.ts";
+import { VERSION } from "../version.js";
+import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
+import { buildStatusJsonPayload } from "./status-json-payload.ts";
 
 const mocks = vi.hoisted(() => ({
   normalizeUpdateChannel: vi.fn((value?: string | null) => value ?? null),
@@ -40,6 +43,7 @@ describe("status-json-payload", () => {
     expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
     expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
       configChannel: "beta",
+      currentVersion: VERSION,
       installKind: "package",
       gitTag: "v1.2.3",
       gitBranch: "main",
@@ -82,7 +86,7 @@ describe("status-json-payload", () => {
         pluginCompatibility: [
           {
             pluginId: "legacy",
-            code: "legacy-before-agent-start",
+            code: "deprecated-memory-embedding-provider-api",
             severity: "warn",
             message: "warn",
           },
@@ -125,7 +129,7 @@ describe("status-json-payload", () => {
         warnings: [
           {
             pluginId: "legacy",
-            code: "legacy-before-agent-start",
+            code: "deprecated-memory-embedding-provider-api",
             severity: "warn",
             message: "warn",
           },

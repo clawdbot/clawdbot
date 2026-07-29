@@ -1,3 +1,4 @@
+// Vitest secrets config wires the secrets test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createSecretsVitestConfig(env?: Record<string, string | undefined>) {
@@ -5,7 +6,6 @@ export function createSecretsVitestConfig(env?: Record<string, string | undefine
     dir: "src/secrets",
     env,
     name: "secrets",
-    pool: "forks",
     passWithNoTests: true,
   });
 }

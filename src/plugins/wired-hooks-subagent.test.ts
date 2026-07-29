@@ -1,8 +1,8 @@
 /**
- * Test: subagent_spawning, subagent_delivery_target, subagent_spawned & subagent_ended hook wiring
+ * Test: subagent spawning, routing, progress, and terminal hook wiring.
  */
 import { describe, expect, it, vi } from "vitest";
-import { createHookRunnerWithRegistry } from "./hooks.test-helpers.js";
+import { addStaticTestHooks, createHookRunnerWithRegistry } from "./hooks.test-fixtures.js";
 
 describe("subagent hook runner methods", () => {
   const baseRequester = {
@@ -22,6 +22,7 @@ describe("subagent hook runner methods", () => {
     hookName:
       | "subagent_spawning"
       | "subagent_spawned"
+      | "subagent_progress"
       | "subagent_delivery_target"
       | "subagent_ended";
     event: Record<string, unknown>;
@@ -38,9 +39,11 @@ describe("subagent hook runner methods", () => {
         ? await runner.runSubagentSpawning(params.event as never, params.ctx as never)
         : params.hookName === "subagent_spawned"
           ? await runner.runSubagentSpawned(params.event as never, params.ctx as never)
-          : params.hookName === "subagent_delivery_target"
-            ? await runner.runSubagentDeliveryTarget(params.event as never, params.ctx as never)
-            : await runner.runSubagentEnded(params.event as never, params.ctx as never);
+          : params.hookName === "subagent_progress"
+            ? await runner.runSubagentProgress(params.event as never, params.ctx as never)
+            : params.hookName === "subagent_delivery_target"
+              ? await runner.runSubagentDeliveryTarget(params.event as never, params.ctx as never)
+              : await runner.runSubagentEnded(params.event as never, params.ctx as never);
 
     expect(handler).toHaveBeenCalledWith(params.event, params.ctx);
     return result;
@@ -78,6 +81,18 @@ describe("subagent hook runner methods", () => {
         mode: "run" as const,
         requester: baseRequester,
         threadRequested: true,
+      },
+      ctx: baseSubagentCtx,
+    },
+    {
+      name: "runSubagentProgress invokes registered subagent_progress hooks",
+      hookName: "subagent_progress" as const,
+      methodName: "runSubagentProgress" as const,
+      event: {
+        phase: "started" as const,
+        runId: "run-1",
+        childSessionKey: "agent:main:subagent:child",
+        requester: { ...baseRequester, messageId: "message-1" },
       },
       ctx: baseSubagentCtx,
     },
@@ -160,6 +175,69 @@ describe("subagent hook runner methods", () => {
     expect(runner.hasHooks("subagent_spawning")).toBe(true);
     expect(runner.hasHooks("subagent_delivery_target")).toBe(true);
     expect(runner.hasHooks("subagent_spawned")).toBe(false);
+    expect(runner.hasHooks("subagent_progress")).toBe(false);
     expect(runner.hasHooks("subagent_ended")).toBe(false);
+  });
+
+  it("runSubagentSpawning preserves higher-priority delivery origins", async () => {
+    const { registry, runner } = createHookRunnerWithRegistry([]);
+    addStaticTestHooks(registry, {
+      hookName: "subagent_spawning",
+      hooks: [
+        {
+          pluginId: "high",
+          priority: 100,
+          result: {
+            status: "ok",
+            threadBindingReady: true,
+            deliveryOrigin: {
+              channel: "matrix",
+              accountId: "ops",
+              to: "room:!high:example",
+              threadId: "$high",
+            },
+          },
+        },
+        {
+          pluginId: "low",
+          priority: 10,
+          result: {
+            status: "ok",
+            threadBindingReady: true,
+            deliveryOrigin: {
+              channel: "matrix",
+              accountId: "ops",
+              to: "room:!low:example",
+              threadId: "$low",
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await runner.runSubagentSpawning(
+      {
+        childSessionKey: "agent:main:subagent:child",
+        agentId: "main",
+        mode: "session",
+        requester: baseRequester,
+        threadRequested: true,
+      },
+      {
+        childSessionKey: "agent:main:subagent:child",
+        requesterSessionKey: "agent:main:main",
+      },
+    );
+
+    expect(result).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "matrix",
+        accountId: "ops",
+        to: "room:!high:example",
+        threadId: "$high",
+      },
+    });
   });
 });

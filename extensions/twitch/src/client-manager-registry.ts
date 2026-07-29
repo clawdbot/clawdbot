@@ -78,38 +78,10 @@ export async function removeClientManager(accountId: string): Promise<void> {
     return;
   }
 
-  // Disconnect the client manager
-  await entry.manager.disconnectAll();
-
-  // Remove from registry
-  registry.delete(accountId);
-  entry.logger.info(`Unregistered client manager for account: ${accountId}`);
-}
-
-/**
- * Disconnect and remove all client managers from the registry.
- *
- * @returns Promise that resolves when all cleanup is complete
- */
-export async function removeAllClientManagers(): Promise<void> {
-  const promises = [...registry.keys()].map((accountId) => removeClientManager(accountId));
-  await Promise.all(promises);
-}
-
-/**
- * Get the number of registered client managers.
- *
- * @returns The count of registered managers
- */
-export function getRegisteredClientManagerCount(): number {
-  return registry.size;
-}
-
-/**
- * Clear all client managers without disconnecting.
- *
- * This is primarily for testing purposes.
- */
-export function _clearAllClientManagersForTest(): void {
-  registry.clear();
+  try {
+    await entry.manager.disconnectAll();
+  } finally {
+    registry.delete(accountId);
+    entry.logger.info(`Unregistered client manager for account: ${accountId}`);
+  }
 }

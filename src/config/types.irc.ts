@@ -1,7 +1,14 @@
-import type { CommonChannelMessagingConfig } from "./types.channel-messaging-common.js";
+// Defines IRC channel configuration types.
+import type {
+  ChannelMentionPatternsConfig,
+  CommonChannelMessagingConfig,
+} from "./types.channel-messaging-common.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
-export type IrcAccountConfig = CommonChannelMessagingConfig & {
+export type IrcAccountConfig = Omit<
+  CommonChannelMessagingConfig,
+  "mentionPatterns" | "replyToMode"
+> & {
   /** IRC server hostname (example: irc.example.com). */
   host?: string;
   /** IRC server port (default: 6697 with TLS, otherwise 6667). */
@@ -50,7 +57,7 @@ export type IrcAccountConfig = CommonChannelMessagingConfig & {
     }
   >;
   /** Optional mention patterns specific to IRC channel messages. */
-  mentionPatterns?: string[];
+  mentionPatterns?: ChannelMentionPatternsConfig<true>;
 };
 
 export type IrcConfig = {
@@ -59,9 +66,3 @@ export type IrcConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & IrcAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    irc?: IrcConfig;
-  }
-}

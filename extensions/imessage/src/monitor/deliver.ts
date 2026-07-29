@@ -1,15 +1,15 @@
+// Imessage plugin module implements deliver behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   deliverTextOrMediaReply,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
 import {
   chunkTextWithMode,
   convertMarkdownTables,
-  loadConfig,
   resolveChunkMode,
   resolveMarkdownTableMode,
 } from "./deliver.runtime.js";
@@ -17,19 +17,18 @@ import type { SentMessageCache } from "./echo-cache.js";
 import { sanitizeOutboundText } from "./sanitize-outbound.js";
 
 export async function deliverReplies(params: {
+  cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
-  client: Awaited<ReturnType<typeof createIMessageRpcClient>>;
   accountId?: string;
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
   sentMessageCache?: Pick<SentMessageCache, "remember">;
 }) {
-  const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
-    params;
+  const { replies, target, runtime, maxBytes, textLimit, accountId, sentMessageCache } = params;
   const scope = `${accountId ?? ""}:${target}`;
-  const cfg = loadConfig();
+  const { cfg } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "imessage",
@@ -47,27 +46,30 @@ export async function deliverReplies(params: {
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
         const sent = await sendMessageIMessage(target, chunk, {
+          config: params.cfg,
           maxBytes,
-          client,
           accountId,
           replyToId: payload.replyToId,
         });
-        // Post-send cache population (#47830): caching happens after each chunk is sent,
-        // not before. The window between send completion and cache write is sub-millisecond;
-        // the next SQLite inbound poll is 1-2s away, so no echo can arrive before the
-        // cache entry exists.
-        sentMessageCache?.remember(scope, { text: sent.sentText, messageId: sent.messageId });
+        const echoText = sent.echoText ?? sent.sentText;
+        sentMessageCache?.remember(scope, {
+          ...(echoText ? { text: echoText } : {}),
+          ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
+          messageId: sent.messageId,
+        });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
         const sent = await sendMessageIMessage(target, caption ?? "", {
+          config: params.cfg,
           mediaUrl,
           maxBytes,
-          client,
           accountId,
           replyToId: payload.replyToId,
         });
+        const echoText = sent.echoText ?? (sent.sentText || undefined);
         sentMessageCache?.remember(scope, {
-          text: sent.sentText || undefined,
+          ...(echoText ? { text: echoText } : {}),
+          ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
           messageId: sent.messageId,
         });
       },
@@ -76,4 +78,22 @@ export async function deliverReplies(params: {
       runtime.log?.(`imessage: delivered reply to ${target}`);
     }
   }
+}
+
+export function createIMessageEchoCachingSend(params: {
+  accountId?: string;
+  sentMessageCache?: Pick<SentMessageCache, "remember">;
+}): typeof sendMessageIMessage {
+  return async (target, text, opts) => {
+    const sanitizedText = sanitizeOutboundText(text);
+    const sent = await sendMessageIMessage(target, sanitizedText, opts);
+    const scope = `${params.accountId ?? opts.accountId ?? ""}:${target}`;
+    const echoText = sent.echoText ?? (sent.sentText || undefined);
+    params.sentMessageCache?.remember(scope, {
+      ...(echoText ? { text: echoText } : {}),
+      ...(sent.echoMedia ? { media: sent.echoMedia } : {}),
+      messageId: sent.messageId,
+    });
+    return sent;
+  };
 }

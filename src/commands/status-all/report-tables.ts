@@ -1,4 +1,7 @@
-import type { RenderTableOptions } from "../../terminal/table.js";
+// Table row helpers for status report sections.
+// These functions keep terminal styling decisions out of the scan/data layer.
+
+import type { RenderTableOptions } from "../../../packages/terminal-core/src/table.js";
 import { formatTimeAgo } from "./format.js";
 import type { StatusReportSection } from "./text-report.js";
 
@@ -32,6 +35,7 @@ export const statusAgentsTableColumns = [
   { key: "Store", header: "Store", flex: true, minWidth: 34 },
 ] as const;
 
+/** Formats agent status rows for the status report table. */
 export function buildStatusAgentTableRows(params: {
   agentStatus: AgentStatusLike;
   ok: (text: string) => string;
@@ -51,6 +55,7 @@ export function buildStatusAgentTableRows(params: {
   }));
 }
 
+/** Converts per-channel account detail rows into renderable table sections. */
 export function buildStatusChannelDetailSections(params: {
   details: ChannelDetailLike[];
   width: number;
@@ -66,6 +71,7 @@ export function buildStatusChannelDetailSections(params: {
     columns: detail.columns.map((column) => ({
       key: column,
       header: column,
+      // Notes can include file paths and credential source summaries; give them remaining width.
       flex: column === "Notes",
       minWidth: column === "Notes" ? 28 : 10,
     })),

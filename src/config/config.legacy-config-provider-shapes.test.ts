@@ -1,3 +1,4 @@
+// Regresses legacy provider config shapes accepted by config loading.
 import { describe, expect, it } from "vitest";
 import { normalizeLegacyTalkConfig } from "../commands/doctor/shared/legacy-talk-config-normalizer.js";
 import type { OpenClawConfig } from "./types.js";

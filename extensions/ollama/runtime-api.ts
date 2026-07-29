@@ -1,9 +1,9 @@
+// Ollama API module exposes the plugin public contract.
 export {
   buildAssistantMessage,
   buildOllamaChatRequest,
   createConfiguredOllamaCompatStreamWrapper,
   convertToOllamaMessages,
-  createConfiguredOllamaCompatNumCtxWrapper,
   createConfiguredOllamaStreamFn,
   createOllamaStreamFn,
   isOllamaCompatProvider,

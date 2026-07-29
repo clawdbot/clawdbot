@@ -1,9 +1,17 @@
+/**
+ * Browser action request types.
+ *
+ * Defines the closed action union accepted by browser-control `/act` routes and
+ * reused by the Browser agent tool.
+ */
+/** Form field descriptor used by fill actions. */
 export type BrowserFormField = {
   ref: string;
   type: string;
   value?: string | number | boolean;
 };
 
+/** Normalized browser action request sent to the control server. */
 export type BrowserActRequest =
   | {
       kind: "click";
@@ -13,6 +21,16 @@ export type BrowserActRequest =
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
+      delayMs?: number;
+      timeoutMs?: number;
+    }
+  | {
+      kind: "clickCoords";
+      x: number;
+      y: number;
+      targetId?: string;
+      doubleClick?: boolean;
+      button?: string;
       delayMs?: number;
       timeoutMs?: number;
     }

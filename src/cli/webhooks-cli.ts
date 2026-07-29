@@ -1,4 +1,8 @@
+// Webhook CLI registrations, currently Gmail Pub/Sub setup and service runner commands.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import {
   type GmailRunOptions,
@@ -16,11 +20,11 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import { formatCliCommand } from "./command-format.js";
 
+/** Register webhook-related subcommands on the root Commander program. */
 export function registerWebhooksCli(program: Command) {
   const webhooks = program
     .command("webhooks")
@@ -109,7 +113,9 @@ function parseGmailSetupOptions(raw: Record<string, unknown>): GmailSetupOptions
   const accountRaw = raw.account;
   const account = normalizeOptionalString(accountRaw) ?? "";
   if (!account) {
-    throw new Error("--account is required");
+    throw new Error(
+      `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
+    );
   }
   const common = parseGmailCommonOptions(raw);
   return {
@@ -138,11 +144,11 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     hookToken: normalizeOptionalString(raw.hookToken),
     pushToken: normalizeOptionalString(raw.pushToken),
     bind: normalizeOptionalString(raw.bind),
-    port: numberOption(raw.port),
+    port: numberOption(raw.port, "--port"),
     path: normalizeOptionalString(raw.path),
     includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
+    maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
+    renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
     tailscaleRaw: normalizeOptionalString(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
@@ -171,15 +177,15 @@ function gmailOptionsFromCommon(
   };
 }
 
-function numberOption(value: unknown): number | undefined {
+function numberOption(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) {
-    return undefined;
+  const n = parseStrictPositiveInteger(value);
+  if (n === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
   }
-  return Math.floor(n);
+  return n;
 }
 
 function booleanOption(value: unknown): boolean | undefined {

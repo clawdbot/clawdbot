@@ -1,3 +1,4 @@
+// Openshell plugin entrypoint registers its OpenClaw integration.
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import {
@@ -23,6 +24,7 @@ export default definePluginEntry({
       manager: createOpenShellSandboxBackendManager({
         pluginConfig,
       }),
+      resolveWorkdir: () => pluginConfig.remoteWorkspaceDir,
     });
   },
 });

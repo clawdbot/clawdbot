@@ -1,17 +1,10 @@
+// Feishu plugin entrypoint registers its OpenClaw integration.
 import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
-
-type FeishuSubagentHooksModule = typeof import("./api.js");
-
-let feishuSubagentHooksPromise: Promise<FeishuSubagentHooksModule> | null = null;
-
-function loadFeishuSubagentHooksModule() {
-  feishuSubagentHooksPromise ??= import("./api.js");
-  return feishuSubagentHooksPromise;
-}
+import { registerFeishuSubagentHooks } from "./subagent-hooks-api.js";
 
 function registerFeishuDocTools(api: OpenClawPluginApi) {
   const register = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
@@ -67,7 +60,7 @@ export default defineBundledChannelEntry({
   description: "Feishu/Lark channel plugin",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "feishuPlugin",
   },
   secrets: {
@@ -79,18 +72,7 @@ export default defineBundledChannelEntry({
     exportName: "setFeishuRuntime",
   },
   registerFull(api) {
-    api.on("subagent_spawning", async (event, ctx) => {
-      const { handleFeishuSubagentSpawning } = await loadFeishuSubagentHooksModule();
-      return await handleFeishuSubagentSpawning(event, ctx);
-    });
-    api.on("subagent_delivery_target", async (event) => {
-      const { handleFeishuSubagentDeliveryTarget } = await loadFeishuSubagentHooksModule();
-      return handleFeishuSubagentDeliveryTarget(event);
-    });
-    api.on("subagent_ended", async (event) => {
-      const { handleFeishuSubagentEnded } = await loadFeishuSubagentHooksModule();
-      handleFeishuSubagentEnded(event);
-    });
+    registerFeishuSubagentHooks(api);
     registerFeishuDocTools(api);
     registerFeishuChatTools(api);
     registerFeishuWikiTools(api);

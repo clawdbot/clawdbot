@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+// Covers plugin config state normalization and reset behavior.
+import { describe, expect, it, vi } from "vitest";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -7,6 +8,8 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "./config-state.js";
+import * as discovery from "./discovery.js";
+import * as manifest from "./manifest.js";
 
 function normalizeVoiceCallEntry(entry: Record<string, unknown>) {
   return normalizePluginsConfig({
@@ -70,10 +73,22 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: false,
+          allowConversationAccess: true,
+          timeoutMs: 250,
+          timeouts: {
+            before_prompt_build: 90_000,
+            agent_end: 60_000,
+          },
         },
       },
       expectedHooks: {
         allowPromptInjection: false,
+        allowConversationAccess: true,
+        timeoutMs: 250,
+        timeouts: {
+          before_prompt_build: 90_000,
+          agent_end: 60_000,
+        },
       },
     },
     {
@@ -81,7 +96,12 @@ describe("normalizePluginsConfig", () => {
       entry: {
         hooks: {
           allowPromptInjection: "nope",
-        } as unknown as { allowPromptInjection: boolean },
+          allowConversationAccess: "nope",
+          timeoutMs: 0,
+          timeouts: {
+            before_prompt_build: 900_000,
+          },
+        } as unknown as { allowPromptInjection: boolean; allowConversationAccess: boolean },
       },
       expectedHooks: undefined,
     },
@@ -94,12 +114,12 @@ describe("normalizePluginsConfig", () => {
       name: "normalizes plugin subagent override policy settings",
       subagent: {
         allowModelOverride: true,
-        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.4"],
+        allowedModels: [" anthropic/claude-sonnet-4-6 ", "", "openai/gpt-5.5"],
       },
       expected: {
         allowModelOverride: true,
         hasAllowedModelsConfig: true,
-        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.4"],
+        allowedModels: ["anthropic/claude-sonnet-4-6", "openai/gpt-5.5"],
       },
     },
     {
@@ -128,12 +148,29 @@ describe("normalizePluginsConfig", () => {
     expect(normalizeVoiceCallEntry({ subagent })?.subagent).toEqual(expected);
   });
 
+  it("normalizes plugin llm override policy settings", () => {
+    expect(
+      normalizeVoiceCallEntry({
+        llm: {
+          allowModelOverride: true,
+          allowedModels: [" openai/gpt-5.4 ", "", "anthropic/claude-sonnet-4-6"],
+          allowAgentIdOverride: false,
+        },
+      })?.llm,
+    ).toEqual({
+      allowModelOverride: true,
+      hasAllowedModelsConfig: true,
+      allowedModels: ["openai/gpt-5.4", "anthropic/claude-sonnet-4-6"],
+      allowAgentIdOverride: false,
+    });
+  });
+
   it("normalizes legacy plugin ids to their merged bundled plugin id", () => {
     const result = normalizePluginsConfig({
-      allow: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
-      deny: ["openai-codex", "google-gemini-cli", "minimax-portal-auth"],
+      allow: ["openai", "google-gemini-cli", "minimax-portal-auth"],
+      deny: ["openai", "google-gemini-cli", "minimax-portal-auth"],
       entries: {
-        "openai-codex": {
+        openai: {
           enabled: true,
         },
         "google-gemini-cli": {
@@ -150,6 +187,84 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.openai?.enabled).toBe(true);
     expect(result.entries.google?.enabled).toBe(true);
     expect(result.entries.minimax?.enabled).toBe(false);
+  });
+
+  it("normalizes unknown plugin ids without consulting discovery", async () => {
+    const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
+    discoverPlugins.mockClear();
+
+    const result = normalizePluginsConfig({
+      allow: ["unknown-plugin-one", "unknown-plugin-two"],
+      deny: ["unknown-plugin-three"],
+      entries: {
+        "unknown-plugin-four": {
+          enabled: true,
+        },
+      },
+    });
+
+    expect(result.allow).toEqual(["unknown-plugin-one", "unknown-plugin-two"]);
+    expect(result.deny).toEqual(["unknown-plugin-three"]);
+    expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
+    expect(discoverPlugins).not.toHaveBeenCalled();
+  });
+
+  it("normalizes unknown plugin ids to lowercase canonical keys", () => {
+    const result = normalizePluginsConfig({
+      allow: [" Demo-Plugin "],
+      deny: [" OTHER-PLUGIN "],
+      entries: {
+        " CODEX ": { enabled: true },
+      },
+    });
+
+    expect(result.allow).toEqual(["demo-plugin"]);
+    expect(result.deny).toEqual(["other-plugin"]);
+    expect(result.entries.codex?.enabled).toBe(true);
+  });
+
+  it("does not consult discovery or manifests for alias lookup", async () => {
+    const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins").mockReturnValue({
+      candidates: [
+        {
+          idHint: "anthropic",
+          source: "/tmp/openclaw-bundled-anthropic/index.js",
+          rootDir: "/tmp/openclaw-bundled-anthropic",
+          origin: "bundled",
+          bundledManifest: {
+            id: "anthropic",
+            configSchema: {},
+            providers: ["anthropic"],
+          },
+        },
+        {
+          idHint: "external-anthropic",
+          source: "/tmp/openclaw-global-anthropic/index.js",
+          rootDir: "/tmp/openclaw-global-anthropic",
+          origin: "global",
+        },
+      ],
+      diagnostics: [],
+    });
+    const loadManifest = vi.spyOn(manifest, "loadPluginManifest").mockReturnValue({
+      ok: true,
+      manifestPath: "/tmp/openclaw-global-anthropic/openclaw.plugin.json",
+      manifest: {
+        id: "external-anthropic",
+        configSchema: {},
+        providers: ["anthropic"],
+      },
+    });
+    discoverPlugins.mockClear();
+    loadManifest.mockClear();
+
+    const result = normalizePluginsConfig({
+      deny: ["anthropic"],
+    });
+
+    expect(result.deny).toEqual(["anthropic"]);
+    expect(discoverPlugins).not.toHaveBeenCalled();
+    expect(loadManifest).not.toHaveBeenCalled();
   });
 });
 

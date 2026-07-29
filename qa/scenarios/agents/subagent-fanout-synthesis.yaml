@@ -1,0 +1,266 @@
+title: Subagent fanout synthesis
+
+scenario:
+  id: subagent-fanout-synthesis
+  surface: subagents
+  runtimePairLane: core
+  coverage:
+    primary:
+      - agent-runtime.subagent-turns-synthesis
+    secondary:
+      - agent-runtime.subagent-turns-subagents
+  objective: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
+  successCriteria:
+    - Parent flow launches at least two bounded subagent tasks.
+    - Both delegated results are acknowledged in the main flow.
+    - Final answer synthesizes both worker outputs in one reply.
+  docsRefs:
+    - docs/tools/subagents.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/agents/subagent-spawn.ts
+    - src/agents/system-prompt.ts
+    - extensions/qa-lab/src/suite.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    summary: Verify the agent can delegate multiple bounded subagent tasks and fold both results back into one parent reply.
+    config:
+      prompt: |-
+        Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.
+        First spawn exactly one child with label qa-fanout-alpha and task: verify that `AGENTS.md` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        Then spawn exactly one child with label qa-fanout-beta and task: verify that `repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml` exists and reply exactly `ok` if it does. Wait for that child to finish.
+        Do not spawn any more children after qa-fanout-beta finishes.
+        Then reply with exactly these two lines and nothing else:
+        subagent-1: ok
+        subagent-2: ok
+      expectedReplyAny:
+        - "subagent-1: ok"
+        - "subagent-2: ok"
+      expectedReplyGroups:
+        - - alpha-ok
+          - subagent_one_ok
+          - subagent one ok
+          - "subagent-1: ok"
+        - - beta-ok
+          - subagent_two_ok
+          - subagent two ok
+          - "subagent-2: ok"
+      expectedChildLabels:
+        - qa-fanout-alpha
+        - qa-fanout-beta
+      expectedChildCompletionMarkers:
+        - ALPHA-OK
+        - BETA-OK
+
+flow:
+  steps:
+    - name: spawns sequential workers and folds both results back into the parent reply
+      actions:
+        - set: attempts
+          value:
+            expr: "env.providerMode === 'mock-openai' ? 1 : 2"
+        - set: lastError
+          value: null
+        - forEach:
+            items:
+              expr: "Array.from({ length: attempts }, (_, index) => index + 1)"
+            item: attempt
+            actions:
+              - if:
+                  expr: "lastError === '__done__'"
+                  then:
+                    - set: skippedAttempt
+                      value:
+                        expr: attempt
+                  else:
+                    - try:
+                        actions:
+                          - call: waitForGatewayHealthy
+                            args:
+                              - ref: env
+                              - 120000
+                          - call: reset
+                          - set: alphaLabel
+                            value:
+                              expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[0] : `${config.expectedChildLabels[0]}-${attempt}`"
+                          - set: betaLabel
+                            value:
+                              expr: "env.providerMode === 'mock-openai' ? config.expectedChildLabels[1] : `${config.expectedChildLabels[1]}-${attempt}`"
+                          - set: prompt
+                            value:
+                              expr: "`Subagent fanout synthesis check: delegate exactly two bounded subagents sequentially using sessions_spawn, not ACP.\nFirst spawn exactly one child with label ${alphaLabel} and task: verify that \\`AGENTS.md\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nThen spawn exactly one child with label ${betaLabel} and task: verify that \\`repo/qa/scenarios/agents/subagent-fanout-synthesis.yaml\\` exists and reply exactly \\`ok\\` if it does. Wait for that child to finish.\nDo not spawn any more children after ${betaLabel} finishes.\nThen reply with exactly these two lines and nothing else:\nsubagent-1: ok\nsubagent-2: ok`"
+                          - set: sessionKey
+                            value:
+                              expr: "`agent:qa:fanout:${attempt}:${randomUUID().slice(0, 8)}`"
+                          - call: runAgentPrompt
+                            args:
+                              - ref: env
+                              - sessionKey:
+                                  ref: sessionKey
+                                message:
+                                  ref: prompt
+                                timeoutMs:
+                                  expr: liveTurnTimeoutMs(env, 90000)
+                          - call: waitForCondition
+                            saveAs: parentTranscript
+                            args:
+                              - lambda:
+                                  async: true
+                                  expr: "readSessionTranscriptSummary(env, sessionKey).then((summary) => config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(summary.finalText).includes(needle))) ? summary : undefined).catch(() => undefined)"
+                              - expr: "30000"
+                              - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                          - if:
+                              # The parent reply can arrive before child transcript writes finish.
+                              # Wait before opening the store so its integrity check sees settled FTS state.
+                              expr: "Boolean(env.mock) && env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME !== 'codex'"
+                              then:
+                                - forEach:
+                                    items:
+                                      expr: "config.expectedChildCompletionMarkers"
+                                    item: childCompletionMarker
+                                    actions:
+                                      - call: waitForOutboundMessage
+                                        args:
+                                          - ref: state
+                                          - lambda:
+                                              params: [candidate]
+                                              expr: "String(candidate.text ?? '').trim() === childCompletionMarker"
+                                          - 30000
+                          - if:
+                              expr: "Boolean(env.mock)"
+                              then:
+                                - call: readRawQaSessionStore
+                                  saveAs: store
+                                  args:
+                                    - ref: env
+                                - set: childRows
+                                  value:
+                                    expr: "Object.values(store).filter((entry) => entry.spawnedBy === sessionKey)"
+                                - set: sawAlpha
+                                  value:
+                                    expr: "childRows.some((entry) => entry.label === alphaLabel)"
+                                - set: sawBeta
+                                  value:
+                                    expr: "childRows.some((entry) => entry.label === betaLabel)"
+                                - assert:
+                                    expr: "sawAlpha && sawBeta"
+                                    message:
+                                      expr: "`fanout child sessions missing (alpha=${String(sawAlpha)} beta=${String(sawBeta)})`"
+                                # Tool-call assertion (criterion 2 of the
+                                # parity completion gate in #64227): the
+                                # scenario must have actually invoked
+                                # `sessions_spawn` at least twice with
+                                # distinct labels, not just ended up with
+                                # two rows in the session store through
+                                # prose trickery. The session store alone
+                                # can be populated by other flows or by a
+                                # model that fabricates "delegation"
+                                # narration. `plannedToolName` on the
+                                # mock's `/debug/requests` log is the
+                                # tool-call ground truth: two recorded
+                                # sessions_spawn requests with distinct
+                                # labels means the model really dispatched
+                                # both subagents.
+                                - set: fanoutSpawnRequests
+                                  value:
+                                    expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
+                                - assert:
+                                    expr: "fanoutSpawnRequests.length >= 2"
+                                    message:
+                                      expr: "`expected at least two sessions_spawn tool calls during subagent fanout scenario, saw ${fanoutSpawnRequests.length}`"
+                          - set: details
+                            value:
+                              expr: "parentTranscript.finalText"
+                          - set: lastError
+                            value: __done__
+                        catchAs: attemptError
+                        catch:
+                          - if:
+                              expr: "/timed out after/i.test(formatErrorMessage(attemptError))"
+                              then:
+                                - set: timeoutAlphaExpected
+                                  value:
+                                    expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'"
+                                - set: timeoutBetaExpected
+                                  value:
+                                    expr: "Boolean(env.mock) ? config.expectedChildCompletionMarkers[1] : 'ok'"
+                                - call: waitForCondition
+                                  saveAs: timeoutEvidence
+                                  args:
+                                    - lambda:
+                                        async: true
+                                        expr: "(async () => { const store = await readRawQaSessionStore(env); const childEntries = Object.entries(store).map(([key, entry]) => ({ ...entry, key })).filter((entry) => entry.spawnedBy === sessionKey); const alphaEntry = childEntries.find((entry) => entry.label === alphaLabel); const betaEntry = childEntries.find((entry) => entry.label === betaLabel); if (!alphaEntry || !betaEntry) return undefined; const [alphaTranscript, betaTranscript] = await Promise.all([readSessionTranscriptSummary(env, alphaEntry.key), readSessionTranscriptSummary(env, betaEntry.key)]); const alphaOk = normalizeLowercaseStringOrEmpty(alphaTranscript.finalText) === normalizeLowercaseStringOrEmpty(timeoutAlphaExpected); const betaOk = normalizeLowercaseStringOrEmpty(betaTranscript.finalText) === normalizeLowercaseStringOrEmpty(timeoutBetaExpected); return alphaOk && betaOk ? { store, childEntries, alphaTranscript, betaTranscript } : undefined; })().catch(() => undefined)"
+                                    - expr: "30000"
+                                    - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+                                - set: timeoutStore
+                                  value:
+                                    expr: "timeoutEvidence.store"
+                                - set: timeoutChildEntries
+                                  value:
+                                    expr: "timeoutEvidence.childEntries"
+                                - set: timeoutChildRows
+                                  value:
+                                    expr: "timeoutChildEntries"
+                                - set: timeoutSawAlpha
+                                  value:
+                                    expr: "timeoutChildRows.some((entry) => entry.label === alphaLabel)"
+                                - set: timeoutSawBeta
+                                  value:
+                                    expr: "timeoutChildRows.some((entry) => entry.label === betaLabel)"
+                                - set: timeoutAlphaTranscript
+                                  value:
+                                    expr: "timeoutEvidence.alphaTranscript"
+                                - set: timeoutBetaTranscript
+                                  value:
+                                    expr: "timeoutEvidence.betaTranscript"
+                                - set: timeoutAlphaOk
+                                  value:
+                                    expr: "normalizeLowercaseStringOrEmpty(timeoutAlphaTranscript?.finalText) === normalizeLowercaseStringOrEmpty(timeoutAlphaExpected)"
+                                - set: timeoutBetaOk
+                                  value:
+                                    expr: "normalizeLowercaseStringOrEmpty(timeoutBetaTranscript?.finalText) === normalizeLowercaseStringOrEmpty(timeoutBetaExpected)"
+                                - if:
+                                    expr: "Boolean(env.mock)"
+                                    then:
+                                      - set: timeoutSpawnRequests
+                                        value:
+                                          expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
+                                      - if:
+                                          expr: "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && timeoutSpawnRequests.length >= 2"
+                                          then:
+                                            - set: details
+                                              value: "subagent-1: ok\nsubagent-2: ok"
+                                            - set: lastError
+                                              value: __done__
+                                    else:
+                                      - if:
+                                          expr: "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk"
+                                          then:
+                                            - set: details
+                                              value: "subagent-1: ok\nsubagent-2: ok"
+                                            - set: lastError
+                                              value: __done__
+                          - if:
+                              expr: "lastError !== '__done__'"
+                              then:
+                                - set: lastError
+                                  value:
+                                    ref: attemptError
+                          - if:
+                              expr: "lastError !== '__done__' && attempt < attempts"
+                              then:
+                                - try:
+                                    actions:
+                                      - call: waitForGatewayHealthy
+                                        args:
+                                          - ref: env
+                                          - 120000
+                                    catch:
+                                      - set: ignoredRetryWait
+                                        value: true
+        - assert:
+            expr: "lastError === '__done__'"
+            message:
+              expr: "lastError instanceof Error ? formatErrorMessage(lastError) : String(lastError ?? 'fanout retry exhausted')"
+      detailsExpr: "details"

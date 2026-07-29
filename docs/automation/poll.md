@@ -1,8 +1,12 @@
 ---
-summary: "Redirect to /tools/message"
+summary: "Redirect to /cli/message"
 title: "Polls"
 ---
 
-# Polls
+This page moved. Poll documentation, including `openclaw message poll` flags and per-channel limits, lives in [Message tool](/cli/message).
 
-This page moved to [Message tool](/cli/message). See [Message tool](/cli/message) for poll documentation.
+## Related
+
+- [Webhooks](/automation/cron-jobs#webhooks)
+- [Scheduled tasks](/automation/cron-jobs)
+- [Background tasks](/automation/tasks)

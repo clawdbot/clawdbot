@@ -1,6 +1,6 @@
 ---
 name: taskflow
-description: Use when work should span one or more detached tasks but still behave like one job with a single owner context. TaskFlow is the durable flow substrate under authoring layers like Lobster, ACPX, plugins, or plain code. Keep conditional logic in the caller; use TaskFlow for flow identity, child-task linkage, waiting state, revision-checked mutations, and user-facing emergence.
+description: "Coordinate multi-step detached tasks as one durable TaskFlow job with owner context, state, waits, and child tasks."
 metadata: { "openclaw": { "emoji": "🪝" } }
 ---
 
@@ -130,9 +130,9 @@ taskFlow.finish({
 
 Use the flow runtime for state and task linkage. Keep decisions in the authoring layer:
 
-- `business` → post to Slack and wait
-- `personal` → notify the owner now
-- `later` → append to an end-of-day summary bucket
+- `business` -> post to Slack and wait
+- `personal` -> notify the owner now
+- `later` -> append to an end-of-day summary bucket
 
 ## Operational pattern
 

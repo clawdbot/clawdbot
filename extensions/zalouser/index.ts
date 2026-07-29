@@ -1,3 +1,4 @@
+// Zalouser plugin entrypoint registers its OpenClaw integration.
 import {
   type AnyAgentTool,
   defineBundledChannelEntry,
@@ -21,7 +22,7 @@ export default defineBundledChannelEntry({
   description: "Zalo personal account messaging via native zca-js integration",
   importMetaUrl: import.meta.url,
   plugin: {
-    specifier: "./api.js",
+    specifier: "./channel-plugin-api.js",
     exportName: "zalouserPlugin",
   },
   runtime: {

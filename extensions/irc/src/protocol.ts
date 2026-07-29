@@ -1,9 +1,10 @@
+// Irc plugin module implements protocol behavior.
 import { randomUUID } from "node:crypto";
 import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
 
-export type ParsedIrcLine = {
+type ParsedIrcLine = {
   raw: string;
   prefix?: string;
   command: string;
@@ -11,7 +12,7 @@ export type ParsedIrcLine = {
   trailing?: string;
 };
 
-export type ParsedIrcPrefix = {
+type ParsedIrcPrefix = {
   nick?: string;
   user?: string;
   host?: string;
@@ -108,13 +109,28 @@ export function parseIrcPrefix(prefix?: string): ParsedIrcPrefix {
 function decodeLiteralEscapes(input: string): string {
   // Defensive: this is not a full JS string unescaper.
   // It's just enough to catch common "\r\n" / "\u0001" style payloads.
-  return input
-    .replace(/\\r/g, "\r")
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .replace(/\\0/g, "\0")
-    .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)));
+  return (
+    input
+      .replace(/\\r/g, "\r")
+      .replace(/\\n/g, "\n")
+      .replace(/\\t/g, "\t")
+      .replace(/\\0/g, "\0")
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(Number.parseInt(hex, 16)))
+      // Step 1: decode surrogate pairs — first group locked to high surrogate range
+      // (U+D800–U+DBFF: [dD][89abAB]xx), second to low surrogate range
+      // (U+DC00–U+DFFF: [dD][c-fC-F]xx). This prevents a non-surrogate \uXXXX
+      // from being greedily paired with the following high surrogate and consuming it.
+      .replace(/\\u([dD][89abAB][0-9a-fA-F]{2})\\u([dD][c-fC-F][0-9a-fA-F]{2})/g, (_match, h, l) =>
+        String.fromCodePoint(
+          0x10000 + ((Number.parseInt(h, 16) - 0xd800) << 10) + (Number.parseInt(l, 16) - 0xdc00),
+        ),
+      )
+      // Step 2: decode BMP codepoints; preserve lone surrogates as literals
+      .replace(/\\u([0-9a-fA-F]{4})/g, (match, hex) => {
+        const codePoint = Number.parseInt(hex, 16);
+        return codePoint >= 0xd800 && codePoint <= 0xdfff ? match : String.fromCharCode(codePoint);
+      })
+  );
 }
 
 export function sanitizeIrcOutboundText(text: string): string {
@@ -138,30 +154,6 @@ export function sanitizeIrcTarget(raw: string): string {
     throw new Error(`Invalid IRC target: ${raw}`);
   }
   return decoded;
-}
-
-export function splitIrcText(text: string, maxChars = 350): string[] {
-  const cleaned = sanitizeIrcOutboundText(text);
-  if (!cleaned) {
-    return [];
-  }
-  if (cleaned.length <= maxChars) {
-    return [cleaned];
-  }
-  const chunks: string[] = [];
-  let remaining = cleaned;
-  while (remaining.length > maxChars) {
-    let splitAt = remaining.lastIndexOf(" ", maxChars);
-    if (splitAt < Math.floor(maxChars * 0.5)) {
-      splitAt = maxChars;
-    }
-    chunks.push(remaining.slice(0, splitAt).trim());
-    remaining = remaining.slice(splitAt).trimStart();
-  }
-  if (remaining) {
-    chunks.push(remaining);
-  }
-  return chunks.filter(Boolean);
 }
 
 export function makeIrcMessageId() {

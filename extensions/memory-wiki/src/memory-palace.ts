@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements memory palace behavior.
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { parseWikiMarkdown, type WikiPageKind } from "./markdown.js";
 import { readQueryableWikiPages } from "./query.js";
@@ -12,7 +13,7 @@ const PALACE_KIND_LABELS: Record<WikiPageKind, string> = {
   report: "Reports",
 };
 
-export type MemoryWikiPalaceItem = {
+type MemoryWikiPalaceItem = {
   pagePath: string;
   title: string;
   kind: WikiPageKind;
@@ -28,7 +29,7 @@ export type MemoryWikiPalaceItem = {
   snippet?: string;
 };
 
-export type MemoryWikiPalaceCluster = {
+type MemoryWikiPalaceCluster = {
   key: WikiPageKind;
   label: string;
   itemCount: number;
@@ -39,13 +40,27 @@ export type MemoryWikiPalaceCluster = {
   items: MemoryWikiPalaceItem[];
 };
 
-export type MemoryWikiPalaceStatus = {
+type MemoryWikiPalacePageCounts = Record<WikiPageKind, number>;
+
+type MemoryWikiPalaceStatus = {
   totalItems: number;
+  totalPages: number;
+  pageCounts: MemoryWikiPalacePageCounts;
   totalClaims: number;
   totalQuestions: number;
   totalContradictions: number;
   clusters: MemoryWikiPalaceCluster[];
 };
+
+function createEmptyPalacePageCounts(): MemoryWikiPalacePageCounts {
+  return {
+    synthesis: 0,
+    entity: 0,
+    concept: 0,
+    source: 0,
+    report: 0,
+  };
+}
 
 function normalizeTimestamp(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -89,28 +104,33 @@ export async function listMemoryWikiPalace(
   config: ResolvedMemoryWikiConfig,
 ): Promise<MemoryWikiPalaceStatus> {
   const pages = await readQueryableWikiPages(config.vault.path);
+  const pageCounts = pages.reduce<MemoryWikiPalacePageCounts>((counts, page) => {
+    counts[page.kind] += 1;
+    return counts;
+  }, createEmptyPalacePageCounts());
+  const totalClaims = pages.reduce((sum, page) => sum + page.claims.length, 0);
+  const totalQuestions = pages.reduce((sum, page) => sum + page.questions.length, 0);
+  const totalContradictions = pages.reduce((sum, page) => sum + page.contradictions.length, 0);
   const items = pages
     .map((page) => {
       const parsed = parseWikiMarkdown(page.raw);
-      return {
-        pagePath: page.relativePath,
-        title: page.title,
-        kind: page.kind,
-        ...(page.id ? { id: page.id } : {}),
-        ...(normalizeTimestamp(page.updatedAt)
-          ? { updatedAt: normalizeTimestamp(page.updatedAt) }
-          : {}),
-        ...(typeof page.sourceType === "string" && page.sourceType.trim().length > 0
+      return Object.assign(
+        { pagePath: page.relativePath, title: page.title, kind: page.kind },
+        page.id ? { id: page.id } : {},
+        normalizeTimestamp(page.updatedAt) ? { updatedAt: normalizeTimestamp(page.updatedAt) } : {},
+        typeof page.sourceType === `string` && page.sourceType.trim().length > 0
           ? { sourceType: page.sourceType.trim() }
-          : {}),
-        claimCount: page.claims.length,
-        questionCount: page.questions.length,
-        contradictionCount: page.contradictions.length,
-        claims: page.claims.map((claim) => claim.text).slice(0, 3),
-        questions: page.questions.slice(0, 3),
-        contradictions: page.contradictions.slice(0, 3),
-        ...(extractSnippet(parsed.body) ? { snippet: extractSnippet(parsed.body) } : {}),
-      } satisfies MemoryWikiPalaceItem;
+          : {},
+        {
+          claimCount: page.claims.length,
+          questionCount: page.questions.length,
+          contradictionCount: page.contradictions.length,
+          claims: page.claims.map((claim) => claim.text).slice(0, 3),
+          questions: page.questions.slice(0, 3),
+          contradictions: page.contradictions.slice(0, 3),
+        },
+        extractSnippet(parsed.body) ? { snippet: extractSnippet(parsed.body) } : {},
+      ) satisfies MemoryWikiPalaceItem;
     })
     .filter(
       (item) =>
@@ -126,23 +146,27 @@ export async function listMemoryWikiPalace(
     if (clusterItems.length === 0) {
       return null;
     }
-    return {
-      key: kind,
-      label: PALACE_KIND_LABELS[kind],
-      itemCount: clusterItems.length,
-      claimCount: clusterItems.reduce((sum, item) => sum + item.claimCount, 0),
-      questionCount: clusterItems.reduce((sum, item) => sum + item.questionCount, 0),
-      contradictionCount: clusterItems.reduce((sum, item) => sum + item.contradictionCount, 0),
-      ...(clusterItems[0]?.updatedAt ? { updatedAt: clusterItems[0].updatedAt } : {}),
-      items: clusterItems,
-    } satisfies MemoryWikiPalaceCluster;
+    return Object.assign(
+      {
+        key: kind,
+        label: PALACE_KIND_LABELS[kind],
+        itemCount: clusterItems.length,
+        claimCount: clusterItems.reduce((sum, item) => sum + item.claimCount, 0),
+        questionCount: clusterItems.reduce((sum, item) => sum + item.questionCount, 0),
+        contradictionCount: clusterItems.reduce((sum, item) => sum + item.contradictionCount, 0),
+      },
+      clusterItems[0]?.updatedAt ? { updatedAt: clusterItems[0].updatedAt } : {},
+      { items: clusterItems },
+    ) satisfies MemoryWikiPalaceCluster;
   }).filter((entry): entry is MemoryWikiPalaceCluster => entry !== null);
 
   return {
     totalItems: items.length,
-    totalClaims: items.reduce((sum, item) => sum + item.claimCount, 0),
-    totalQuestions: items.reduce((sum, item) => sum + item.questionCount, 0),
-    totalContradictions: items.reduce((sum, item) => sum + item.contradictionCount, 0),
+    totalPages: pages.length,
+    pageCounts,
+    totalClaims,
+    totalQuestions,
+    totalContradictions,
     clusters,
   };
 }

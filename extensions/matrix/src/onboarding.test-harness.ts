@@ -1,3 +1,5 @@
+// Matrix setup module handles plugin onboarding behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OutputRuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { afterEach, vi } from "vitest";
@@ -23,6 +25,7 @@ const previousMatrixEnv = Object.fromEntries(
   MATRIX_ENV_KEYS.map((key) => [key, process.env[key]]),
 ) as Record<(typeof MATRIX_ENV_KEYS)[number], string | undefined>;
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets callers ascribe plugin runtime shape.
 function createNonExitingTypedRuntimeEnv<TRuntime>(): TRuntime {
   return {
     log: vi.fn(),
@@ -64,7 +67,7 @@ export function createMatrixWizardPrompter(params: {
     fallback: PromptHandler<T | Promise<T>> | undefined,
   ): Promise<T> => {
     if (values && message in values) {
-      return values[message];
+      return expectDefined(values[message], `${kind} prompt value for ${message}`);
     }
     if (fallback) {
       return await fallback(message);
@@ -294,6 +297,7 @@ export function createMatrixNamedAccountsConfig(params: {
     {
       homeserver: string;
       accessToken?: string;
+      encryption?: boolean;
     }
   >;
 }): CoreConfig {

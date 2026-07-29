@@ -1,3 +1,4 @@
+// Legacy config tests cover channel plugin config compatibility and migration helpers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 
@@ -85,12 +86,13 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     ]);
 
-    const rules = collectChannelLegacyConfigRules({
+    const config = {
       channels: {
         slack: {},
         "custom-chat": {},
       },
-    });
+    };
+    const rules = collectChannelLegacyConfigRules(config);
 
     expect(rules).toEqual([
       {
@@ -103,8 +105,58 @@ describe("collectChannelLegacyConfigRules", () => {
       },
     ]);
     expect(listPluginDoctorLegacyConfigRulesMock).toHaveBeenCalledWith({
+      config,
       pluginIds: ["custom-chat"],
     });
+  });
+
+  it("does not rescan registry when a bundled bootstrap plugin has no legacy rules", () => {
+    getBootstrapChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "imessage"
+        ? {
+            doctor: {},
+          }
+        : undefined,
+    );
+
+    const rules = collectChannelLegacyConfigRules({
+      channels: {
+        imessage: {},
+      },
+    });
+
+    expect(rules).toStrictEqual([]);
+    expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
+  });
+
+  it("treats empty doctor-contract legacy rules as authoritative", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) =>
+      channelId === "imessage" ? { legacyConfigRules: [] } : undefined,
+    );
+    getBootstrapChannelPluginMock.mockImplementation((channelId: string) =>
+      channelId === "imessage"
+        ? {
+            doctor: {
+              legacyConfigRules: [
+                {
+                  path: ["channels", "imessage", "legacy"],
+                  message: "should not load bootstrap rules",
+                },
+              ],
+            },
+          }
+        : undefined,
+    );
+
+    const rules = collectChannelLegacyConfigRules({
+      channels: {
+        imessage: {},
+      },
+    });
+
+    expect(rules).toStrictEqual([]);
+    expect(getBootstrapChannelPluginMock).not.toHaveBeenCalled();
+    expect(listPluginDoctorLegacyConfigRulesMock).not.toHaveBeenCalled();
   });
 
   it("scopes channel legacy scans to touched channels during dry-run validation", () => {
@@ -125,6 +177,37 @@ describe("collectChannelLegacyConfigRules", () => {
         },
       },
       [["channels", "discord", "token"]],
+    );
+
+    expect(rules).toEqual([
+      {
+        path: ["channels", "discord"],
+        message: "legacy discord rule",
+      },
+    ]);
+    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledTimes(1);
+    expect(loadBundledChannelDoctorContractApiMock).toHaveBeenCalledWith("discord");
+  });
+
+  it("skips channel ids already covered by explicit legacy rules", () => {
+    loadBundledChannelDoctorContractApiMock.mockImplementation((channelId: string) => ({
+      legacyConfigRules: [
+        {
+          path: ["channels", channelId],
+          message: `legacy ${channelId} rule`,
+        },
+      ],
+    }));
+
+    const rules = collectChannelLegacyConfigRules(
+      {
+        channels: {
+          discord: {},
+          telegram: {},
+        },
+      },
+      undefined,
+      new Set(["telegram"]),
     );
 
     expect(rules).toEqual([

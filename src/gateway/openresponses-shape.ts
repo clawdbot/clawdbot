@@ -1,5 +1,10 @@
+// OpenResponses output item factories.
+// Keeps assistant/function-call output assembly in schema-compatible shapes.
 import type { OutputItem } from "./open-responses.schema.js";
 
+// Small OpenResponses output factories keep streamed assistant/function-call
+// items in the exact schema shape expected by response assembly and tests.
+/** Creates an assistant output message item for OpenResponses-compatible responses. */
 export function createAssistantOutputItem(params: {
   id: string;
   text: string;
@@ -16,6 +21,7 @@ export function createAssistantOutputItem(params: {
   };
 }
 
+/** Creates a function-call output item for OpenResponses-compatible responses. */
 export function createFunctionCallOutputItem(params: {
   id: string;
   callId: string;

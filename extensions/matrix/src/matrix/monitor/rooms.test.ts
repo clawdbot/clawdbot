@@ -1,3 +1,4 @@
+// Matrix tests cover rooms plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveMatrixRoomConfig } from "./rooms.js";
 
@@ -42,7 +43,7 @@ describe("resolveMatrixRoomConfig", () => {
         aliases: [],
       });
       expect(result.matchSource).toBe("direct");
-      expect(result.config).toBeDefined();
+      expect(result.config).toEqual({ enabled: true });
     });
 
     it('returns matchSource="direct" for alias match', () => {
@@ -52,7 +53,7 @@ describe("resolveMatrixRoomConfig", () => {
         aliases: ["#alias:example.org"],
       });
       expect(result.matchSource).toBe("direct");
-      expect(result.config).toBeDefined();
+      expect(result.config).toEqual({ enabled: true });
     });
 
     it('returns matchSource="wildcard" for wildcard match', () => {
@@ -62,7 +63,7 @@ describe("resolveMatrixRoomConfig", () => {
         aliases: [],
       });
       expect(result.matchSource).toBe("wildcard");
-      expect(result.config).toBeDefined();
+      expect(result.config).toEqual({ enabled: true });
     });
 
     it("returns undefined matchSource when no match", () => {

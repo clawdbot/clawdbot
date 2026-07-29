@@ -1,3 +1,4 @@
+// Register thread tests cover message thread command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
@@ -15,6 +16,10 @@ function createHelpers(runMessageAction: MessageCliHelpers["runMessageAction"]):
     withRequiredMessageTarget: (command) => command.requiredOption("-t, --target <dest>", "Target"),
     runMessageAction,
   };
+}
+
+function firstMessageActionCall(runMessageAction: { mock: { calls: unknown[][] } }) {
+  return runMessageAction.mock.calls[0] as [string, Record<string, unknown>] | undefined;
 }
 
 describe("registerMessageThreadCommands", () => {
@@ -83,16 +88,12 @@ describe("registerMessageThreadCommands", () => {
       { from: "user" },
     );
 
-    expect(runMessageAction).toHaveBeenCalledWith(
-      "topic-create",
-      expect.objectContaining({
-        channel: " topic-chat ",
-        target: "room-1",
-        name: "Build Updates",
-        message: "hello",
-      }),
-    );
-    const remappedCall = runMessageAction.mock.calls.at(0);
+    const remappedCall = firstMessageActionCall(runMessageAction);
+    expect(remappedCall?.[0]).toBe("topic-create");
+    expect(remappedCall?.[1]?.channel).toBe(" topic-chat ");
+    expect(remappedCall?.[1]?.target).toBe("room-1");
+    expect(remappedCall?.[1]?.name).toBe("Build Updates");
+    expect(remappedCall?.[1]?.message).toBe("hello");
     expect(remappedCall?.[1]).not.toHaveProperty("threadName");
   });
 
@@ -116,16 +117,12 @@ describe("registerMessageThreadCommands", () => {
       { from: "user" },
     );
 
-    expect(runMessageAction).toHaveBeenCalledWith(
-      "thread-create",
-      expect.objectContaining({
-        channel: "plain-chat",
-        target: "channel:123",
-        threadName: "Build Updates",
-        message: "hello",
-      }),
-    );
-    const defaultCall = runMessageAction.mock.calls.at(0);
+    const defaultCall = firstMessageActionCall(runMessageAction);
+    expect(defaultCall?.[0]).toBe("thread-create");
+    expect(defaultCall?.[1]?.channel).toBe("plain-chat");
+    expect(defaultCall?.[1]?.target).toBe("channel:123");
+    expect(defaultCall?.[1]?.threadName).toBe("Build Updates");
+    expect(defaultCall?.[1]?.message).toBe("hello");
     expect(defaultCall?.[1]).not.toHaveProperty("name");
   });
 });

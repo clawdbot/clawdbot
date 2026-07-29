@@ -1,3 +1,4 @@
+/** Built-in and channel-derived command registry data for auto-reply commands. */
 import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { getActivePluginChannelRegistryVersionFromState } from "../plugins/runtime-channel-state.js";
 import {
@@ -6,7 +7,9 @@ import {
   defineChatCommand,
 } from "./commands-registry.shared.js";
 import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import { listThinkingLevels } from "./thinking.js";
 
+/** Builds and caches the chat-command registry for the current channel-plugin registry version. */
 type ChannelPlugin = ReturnType<typeof listLoadedChannelPlugins>[number];
 
 function supportsNativeCommands(plugin: ChannelPlugin): boolean {
@@ -25,12 +28,10 @@ function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
 let cachedRegistryVersion = -1;
-let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeRegistryVersion = -1;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
-    ...buildBuiltinChatCommands(),
+    ...buildBuiltinChatCommands({ listThinkingLevels }),
     ...listLoadedChannelPlugins()
       .filter(supportsNativeCommands)
       .map((plugin) => defineDockCommand(plugin)),
@@ -40,6 +41,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
   return commands;
 }
 
+/** Returns the current command registry, including dynamic dock commands for native surfaces. */
 export function getChatCommands(): ChatCommandDefinition[] {
   const registryVersion = getActivePluginChannelRegistryVersionFromState();
   if (cachedCommands && registryVersion === cachedRegistryVersion) {
@@ -48,20 +50,5 @@ export function getChatCommands(): ChatCommandDefinition[] {
   const commands = buildChatCommands();
   cachedCommands = commands;
   cachedRegistryVersion = registryVersion;
-  cachedNativeCommandSurfaces = null;
   return commands;
-}
-
-export function getNativeCommandSurfaces(): Set<string> {
-  const registryVersion = getActivePluginChannelRegistryVersionFromState();
-  if (cachedNativeCommandSurfaces && registryVersion === cachedNativeRegistryVersion) {
-    return cachedNativeCommandSurfaces;
-  }
-  cachedNativeCommandSurfaces = new Set(
-    listLoadedChannelPlugins()
-      .filter(supportsNativeCommands)
-      .map((plugin) => plugin.id),
-  );
-  cachedNativeRegistryVersion = registryVersion;
-  return cachedNativeCommandSurfaces;
 }

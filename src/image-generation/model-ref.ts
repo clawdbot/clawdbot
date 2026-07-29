@@ -1,5 +1,8 @@
-import { parseGenerationModelRef } from "../media-generation/model-ref.js";
+/** Parses image-generation model references into provider/model components. */
+import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
 
+// Image model refs share the generic media-generation provider/model grammar:
+// "provider/model" when explicit, otherwise null for default resolution.
 export function parseImageGenerationModelRef(
   raw: string | undefined,
 ): { provider: string; model: string } | null {

@@ -1,9 +1,15 @@
+/** Resolves effective exec-tool overrides for reply runs. */
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 
-export type ReplyExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
+/** Exec defaults that can be overridden by inline directives or session state. */
+export type ReplyExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "security" | "ask" | "node" | "nodeCwd"
+>;
 
+/** Resolves effective exec defaults for a reply run. */
 export function resolveReplyExecOverrides(params: {
   directives: InlineDirectives;
   sessionEntry?: SessionEntry;
@@ -23,8 +29,10 @@ export function resolveReplyExecOverrides(params: {
     params.agentExecDefaults?.ask;
   const node =
     params.directives.execNode ?? params.sessionEntry?.execNode ?? params.agentExecDefaults?.node;
-  if (!host && !security && !ask && !node) {
+  const nodeCwd =
+    node && node === params.sessionEntry?.execNode ? params.sessionEntry.execCwd : undefined;
+  if (!host && !security && !ask && !node && !nodeCwd) {
     return undefined;
   }
-  return { host, security, ask, node };
+  return { host, security, ask, node, ...(nodeCwd ? { nodeCwd } : {}) };
 }

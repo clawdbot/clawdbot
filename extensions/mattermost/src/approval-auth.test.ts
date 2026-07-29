@@ -1,3 +1,4 @@
+// Mattermost tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
 import { mattermostApprovalAuth } from "./approval-auth.js";
 

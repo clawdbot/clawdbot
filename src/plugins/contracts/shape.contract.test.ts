@@ -1,23 +1,32 @@
-import { describe, expect, it } from "vitest";
+// Plugin shape contract tests cover manifest, API, and runtime export shapes.
 import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
-} from "../../../test/helpers/plugins/contracts-testkit.js";
-import { buildAllPluginInspectReports } from "../status.js";
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { describe, expect, it } from "vitest";
+import { buildPluginShapeSummary } from "../inspect-shape.js";
 
 describe("plugin shape compatibility matrix", () => {
-  it("keeps legacy hook-only, plain capability, and hybrid capability shapes explicit", () => {
-    const { config, registry } = createPluginRegistryFixture();
+  it("keeps hook-only, plain capability, and hybrid capability shapes explicit", () => {
+    const { config, registry } = createPluginRegistryFixture({
+      plugins: {
+        entries: {
+          "hook-only": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
+      },
+    });
 
     registerVirtualTestPlugin({
       registry,
       config,
-      id: "lca-legacy",
-      name: "LCA Legacy",
+      id: "hook-only",
+      name: "Hook Only",
       register(api) {
-        api.on("before_agent_start", () => ({
-          prependContext: "legacy",
-        }));
+        api.on("before_prompt_build", () => ({ prependContext: "hook-only" }));
       },
     });
 
@@ -94,13 +103,37 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
-    const inspect = buildAllPluginInspectReports({
+    registerVirtualTestPlugin({
+      registry,
       config,
-      report: {
-        workspaceDir: "/virtual-workspace",
-        ...registry.registry,
+      id: "session-catalog-demo",
+      name: "Session Catalog Demo",
+      register(api) {
+        api.registerSessionCatalog({
+          id: "session-catalog-demo",
+          label: "Session Catalog Demo",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
+        });
       },
     });
+
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "document-extract-test",
+      name: "Document Extract Test",
+      contracts: { documentExtractors: ["pdf"] },
+      register() {},
+    });
+
+    const report = {
+      workspaceDir: "/virtual-workspace",
+      ...registry.registry,
+    };
+    const inspect = report.plugins.map((plugin) =>
+      Object.assign({ plugin }, buildPluginShapeSummary({ plugin, report })),
+    );
 
     expect(
       inspect.map((entry) => ({
@@ -110,7 +143,7 @@ describe("plugin shape compatibility matrix", () => {
       })),
     ).toEqual([
       {
-        id: "lca-legacy",
+        id: "hook-only",
         shape: "hook-only",
         capabilityMode: "none",
       },
@@ -129,11 +162,27 @@ describe("plugin shape compatibility matrix", () => {
         shape: "plain-capability",
         capabilityMode: "plain",
       },
+      {
+        id: "session-catalog-demo",
+        shape: "plain-capability",
+        capabilityMode: "plain",
+      },
+      {
+        id: "document-extract-test",
+        shape: "plain-capability",
+        capabilityMode: "plain",
+      },
     ]);
 
-    expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
     expect(inspect.map((entry) => entry.capabilities.map((capability) => capability.kind))).toEqual(
-      [[], ["text-inference"], ["text-inference", "web-search"], ["channel"]],
+      [
+        [],
+        ["text-inference"],
+        ["text-inference", "web-search"],
+        ["channel"],
+        ["session-catalog"],
+        ["document-extractors"],
+      ],
     );
   });
 });

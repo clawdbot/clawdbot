@@ -1,13 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+// Qa Lab helper module supports qa gateway config behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultQaModelForMode,
-  isQaFastModeModelRef,
   normalizeQaProviderMode,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
+import { getQaProvider } from "./providers/index.js";
+import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
+import type { RuntimeId } from "./runtime-parity.js";
+
+export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
 export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
@@ -16,44 +23,30 @@ export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://localhost:43124",
 ]);
 
-export type QaThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
-
-export function normalizeQaThinkingLevel(input: unknown): QaThinkingLevel | undefined {
-  const value = typeof input === "string" ? input.trim().toLowerCase() : "";
-  const collapsed = value.replace(/[\s_-]+/g, "");
-  if (collapsed === "off") {
-    return "off";
-  }
-  if (collapsed === "minimal" || collapsed === "min") {
-    return "minimal";
-  }
-  if (collapsed === "low") {
-    return "low";
-  }
-  if (collapsed === "medium" || collapsed === "med") {
-    return "medium";
-  }
-  if (collapsed === "high") {
-    return "high";
-  }
-  if (collapsed === "xhigh" || collapsed === "extrahigh") {
-    return "xhigh";
-  }
-  if (collapsed === "adaptive" || collapsed === "auto") {
-    return "adaptive";
-  }
-  return undefined;
-}
-
-function trimTrailingApiV1(baseUrl: string) {
-  return baseUrl.replace(/\/v1\/?$/i, "");
-}
+export const QA_BASE_RUNTIME_PLUGIN_IDS = Object.freeze(["acpx", "memory-core"]);
+export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
+const QA_LAB_PLUGIN_ID = "qa-lab";
 
 export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
-  return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
+  return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
+}
+
+function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : fallback;
+}
+
+function remapQaMockModelRefForCodex(modelRef: string) {
+  const split = splitQaModelRef(modelRef);
+  return split?.provider === "mock-openai" ? `openai/${split.model}` : modelRef;
+}
+
+function buildQaModelSelection(primaryModel: string, alternateModel: string) {
+  const fallbacks = alternateModel !== primaryModel ? [alternateModel] : undefined;
+  return fallbacks ? { primary: primaryModel, fallbacks } : { primary: primaryModel };
 }
 
 export function buildQaGatewayConfig(params: {
@@ -65,7 +58,7 @@ export function buildQaGatewayConfig(params: {
   controlUiRoot?: string;
   controlUiAllowedOrigins?: string[];
   controlUiEnabled?: boolean;
-  providerMode?: QaProviderMode | "live-openai";
+  providerMode?: QaProviderMode;
   primaryModel?: string;
   alternateModel?: string;
   imageGenerationModel?: string | null;
@@ -76,186 +69,168 @@ export function buildQaGatewayConfig(params: {
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
+  forcedRuntime?: RuntimeId;
 }): OpenClawConfig {
-  const mockProviderBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
-  const mockAnthropicBaseUrl = trimTrailingApiV1(mockProviderBaseUrl);
-  const mockOpenAiProvider: ModelProviderConfig = {
-    baseUrl: mockProviderBaseUrl,
-    apiKey: "test",
-    api: "openai-responses",
-    request: {
-      allowPrivateNetwork: true,
-    },
-    models: [
-      {
-        id: "gpt-5.4",
-        name: "gpt-5.4",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-      {
-        id: "gpt-5.4-alt",
-        name: "gpt-5.4-alt",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-      {
-        id: "gpt-image-1",
-        name: "gpt-image-1",
-        api: "openai-responses",
-        reasoning: false,
-        input: ["text"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 128_000,
-        maxTokens: 4096,
-      },
-    ],
-  };
-  const mockNamedOpenAiProvider: ModelProviderConfig = {
-    ...mockOpenAiProvider,
-    models: mockOpenAiProvider.models.map((model) => ({ ...model })),
-  };
-  const mockAnthropicProvider: ModelProviderConfig = {
-    baseUrl: mockAnthropicBaseUrl,
-    apiKey: "test",
-    api: "anthropic-messages",
-    request: {
-      allowPrivateNetwork: true,
-    },
-    models: [
-      {
-        id: "claude-opus-4-6",
-        name: "claude-opus-4-6",
-        api: "anthropic-messages",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 200_000,
-        maxTokens: 4096,
-      },
-      {
-        id: "claude-sonnet-4-6",
-        name: "claude-sonnet-4-6",
-        api: "anthropic-messages",
-        reasoning: false,
-        input: ["text", "image"],
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-        },
-        contextWindow: 200_000,
-        maxTokens: 4096,
-      },
-    ],
-  };
-  const providerMode = normalizeQaProviderMode(params.providerMode ?? "mock-openai");
-  const primaryModel = params.primaryModel ?? defaultQaModelForMode(providerMode);
-  const alternateModel =
-    params.alternateModel ?? defaultQaModelForMode(providerMode, { alternate: true });
+  const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
+  const providerMode = normalizeQaProviderMode(params.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
+  const provider = getQaProvider(providerMode);
+  const usesCodexMockAppServer = params.forcedRuntime === "codex" && providerMode === "mock-openai";
+  const normalizedPrimaryModel = normalizeQaGatewayModelRef(
+    params.primaryModel,
+    defaultQaModelForMode(providerMode),
+  );
+  const normalizedAlternateModel = normalizeQaGatewayModelRef(
+    params.alternateModel,
+    defaultQaModelForMode(providerMode, { alternate: true }),
+  );
+  const primaryModel = usesCodexMockAppServer
+    ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
+    : normalizedPrimaryModel;
+  const alternateModel = usesCodexMockAppServer
+    ? remapQaMockModelRefForCodex(normalizedAlternateModel)
+    : normalizedAlternateModel;
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
-    .filter((provider): provider is string => Boolean(provider));
+    .filter((providerValue): providerValue is string => Boolean(providerValue));
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
-      : providerMode === "mock-openai"
-        ? "mock-openai/gpt-image-1"
-        : modelProviderIds.includes("openai")
-          ? "openai/gpt-image-1"
-          : null;
+      : provider.defaultImageGenerationModel({ modelProviderIds });
   const selectedProviderIds =
-    providerMode === "live-frontier"
+    provider.usesModelProviderPlugins || usesCodexMockAppServer
       ? [
           ...new Set(
             [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
               .map((value) =>
                 typeof value === "string" ? (splitQaModelRef(value)?.provider ?? value) : null,
               )
-              .filter((provider): provider is string => Boolean(provider)),
+              .filter((providerLocal): providerLocal is string => Boolean(providerLocal)),
           ),
         ]
       : [];
+  const configuredPluginIds = uniqueStrings(
+    (params.enabledPluginIds ?? [])
+      .map((pluginId) => pluginId.trim())
+      .filter((pluginId) => pluginId.length > 0),
+  );
+  const providerSelectedPluginIds = usesCodexMockAppServer
+    ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
+    : provider.usesModelProviderPlugins
+      ? uniqueStrings(
+          (params.enabledPluginIds?.length ?? 0) > 0 ? configuredPluginIds : selectedProviderIds,
+        )
+      : configuredPluginIds;
+  // A forced Codex cell must stage its harness even when the provider owner is
+  // selected independently; otherwise its QA-only sandbox never takes effect.
   const selectedPluginIds =
-    providerMode === "live-frontier"
-      ? [
-          ...new Set(
-            (params.enabledPluginIds?.length ?? 0) > 0
-              ? params.enabledPluginIds
-              : selectedProviderIds,
-          ),
-        ]
-      : [
-          ...new Set(
-            (params.enabledPluginIds ?? [])
-              .map((pluginId) => pluginId.trim())
-              .filter((pluginId) => pluginId.length > 0),
-          ),
-        ];
-  const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
+    params.forcedRuntime === "codex"
+      ? uniqueStrings([...providerSelectedPluginIds, "codex"])
+      : providerSelectedPluginIds;
+  const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
   const pluginEntries = Object.fromEntries(
-    selectedPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
+    selectedPluginIds.map((pluginId) => [
+      pluginId,
+      params.forcedRuntime === "codex" && pluginId === "codex"
+        ? {
+            enabled: true,
+            config: {
+              appServer: {
+                sandbox: "workspace-write",
+                ...(params.fastMode === true ? { serviceTier: "priority" } : {}),
+              },
+            },
+          }
+        : { enabled: true },
+    ]),
   );
   const transportPluginEntries = Object.fromEntries(
     transportPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
   );
-  const allowedPlugins = [...new Set(["memory-core", ...selectedPluginIds, ...transportPluginIds])];
-  const liveModelParams =
-    providerMode === "live-frontier"
-      ? (modelRef: string) => ({
-          transport: "sse",
-          openaiWsWarmup: false,
-          ...(params.fastMode === true || isQaFastModeModelRef(modelRef) ? { fastMode: true } : {}),
-          ...(params.thinkingDefault ? { thinking: params.thinkingDefault } : {}),
-        })
-      : (_modelRef: string) => ({
-          transport: "sse",
-          openaiWsWarmup: false,
-        });
+  const allowedPlugins = [
+    ...new Set([
+      ...QA_BASE_RUNTIME_PLUGIN_IDS,
+      QA_LAB_PLUGIN_ID,
+      ...selectedPluginIds,
+      ...transportPluginIds,
+    ]),
+  ];
+  const resolveModelEntry = (modelRef: string) => {
+    // Codex owns its app-server transport. OpenClaw provider params would make
+    // the forced parity cell an authored route that Codex correctly rejects.
+    if (params.forcedRuntime === "codex") {
+      return {};
+    }
+    return {
+      params: provider.resolveModelParams({
+        modelRef,
+        fastMode: params.fastMode,
+        thinkingDefault: params.thinkingDefault,
+      }),
+    };
+  };
   const allowedOrigins = mergeQaControlUiAllowedOrigins(params.controlUiAllowedOrigins);
-  const liveProviderConfigs =
-    providerMode === "live-frontier" ? (params.liveProviderConfigs ?? {}) : {};
-  const hasLiveProviderConfigs = Object.keys(liveProviderConfigs).length > 0;
+  const providerGatewayModels = provider.buildGatewayModels({
+    providerBaseUrl,
+    primaryModel,
+    alternateModel,
+    liveProviderConfigs: params.liveProviderConfigs,
+  });
+  const codexMockOpenAiCatalog = providerGatewayModels?.providers.openai;
+  const gatewayModels =
+    usesCodexMockAppServer && codexMockOpenAiCatalog
+      ? {
+          mode: "merge" as const,
+          providers: {
+            openai: {
+              ...codexMockOpenAiCatalog,
+              // Keep synthetic QA model ids registered without authoring the
+              // private mock route that the Codex harness cannot reproduce.
+              baseUrl: QA_CODEX_OPENAI_CATALOG_BASE_URL,
+              request: undefined,
+            },
+          },
+        }
+      : providerGatewayModels;
+  const mockMemorySearch =
+    provider.kind === "mock"
+      ? {
+          provider: "openai",
+          model: "text-embedding-3-small",
+          remote: {
+            // Memory embeddings bypass the model runtime, so bind them to the
+            // mock explicitly or a forced runtime can fall through to a live API.
+            baseUrl: providerBaseUrl,
+            apiKey: "test",
+          },
+        }
+      : {};
 
   return {
+    memory: {
+      backend: "builtin",
+      search: {
+        ...mockMemorySearch,
+      },
+    },
     plugins: {
       allow: allowedPlugins,
+      slots: {
+        memory: "memory-core",
+      },
       entries: {
         acpx: {
-          enabled: false,
+          enabled: true,
+          config: {
+            pluginToolsMcpBridge: true,
+            openClawToolsMcpBridge: true,
+          },
         },
         "memory-core": {
+          enabled: true,
+        },
+        [QA_LAB_PLUGIN_ID]: {
           enabled: true,
         },
         ...pluginEntries,
@@ -265,45 +240,31 @@ export function buildQaGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspaceDir,
-        model: {
-          primary: primaryModel,
-        },
+        model: buildQaModelSelection(primaryModel, alternateModel),
         ...(imageGenerationModelRef
           ? {
-              imageGenerationModel: {
-                primary: imageGenerationModelRef,
+              mediaModels: {
+                image: { primary: imageGenerationModelRef },
               },
             }
           : {}),
         ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
-        memorySearch: {
-          sync: {
-            watch: true,
-            watchDebounceMs: 25,
-            onSessionStart: true,
-            onSearch: true,
-          },
-        },
         models: {
-          [primaryModel]: {
-            params: liveModelParams(primaryModel),
-          },
-          [alternateModel]: {
-            params: liveModelParams(alternateModel),
-          },
+          [primaryModel]: resolveModelEntry(primaryModel),
+          [alternateModel]: resolveModelEntry(alternateModel),
         },
         subagents: {
           allowAgents: ["*"],
           maxConcurrent: 2,
         },
       },
-      list: [
-        {
-          id: "qa",
+      entries: {
+        qa: {
           default: true,
-          model: {
-            primary: primaryModel,
-          },
+          model: buildQaModelSelection(primaryModel, alternateModel),
+          ...(params.forcedRuntime === "codex" && params.fastMode !== undefined
+            ? { fastModeDefault: params.fastMode }
+            : {}),
           identity: {
             name: "C-3PO QA",
             theme: "Flustered Protocol Droid",
@@ -313,31 +274,26 @@ export function buildQaGatewayConfig(params: {
           subagents: {
             allowAgents: ["*"],
           },
+          tools: {
+            profile: "coding",
+          },
         },
-      ],
+      },
     },
-    memory: {
-      backend: "builtin",
+    tools: {
+      // The parity scenarios are code-agent contracts: they must always expose
+      // file, image, memory, and subagent tools even when the surrounding
+      // environment defaults to a messaging-only profile.
+      profile: "coding",
     },
-    ...(providerMode === "mock-openai"
+    ...(gatewayModels
       ? {
           models: {
-            mode: "replace",
-            providers: {
-              "mock-openai": mockOpenAiProvider,
-              openai: mockNamedOpenAiProvider,
-              anthropic: mockAnthropicProvider,
-            },
+            mode: gatewayModels.mode,
+            providers: gatewayModels.providers,
           },
         }
-      : hasLiveProviderConfigs
-        ? {
-            models: {
-              mode: "merge",
-              providers: liveProviderConfigs,
-            },
-          }
-        : {}),
+      : {}),
     gateway: {
       mode: "local",
       bind: params.bind,
@@ -346,11 +302,6 @@ export function buildQaGatewayConfig(params: {
         mode: "token",
         token: params.gatewayToken,
       },
-      reload: {
-        // QA restart scenarios need deterministic reload timing instead of the
-        // much longer production deferral window.
-        deferralTimeoutMs: 1_000,
-      },
       controlUi: {
         enabled: params.controlUiEnabled ?? true,
         ...((params.controlUiEnabled ?? true) && params.controlUiRoot
@@ -358,7 +309,6 @@ export function buildQaGatewayConfig(params: {
           : {}),
         ...((params.controlUiEnabled ?? true)
           ? {
-              allowInsecureAuth: true,
               allowedOrigins,
             }
           : {}),

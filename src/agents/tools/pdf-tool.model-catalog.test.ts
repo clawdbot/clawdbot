@@ -1,3 +1,5 @@
+// Model catalog document support tests keep PDF routing tied to declared input
+// capabilities.
 import { describe, expect, it } from "vitest";
 import { modelSupportsDocument } from "../model-catalog.js";
 

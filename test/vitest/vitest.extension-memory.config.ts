@@ -1,3 +1,4 @@
+// Vitest extension memory config wires the extension memory test shard.
 import { memoryExtensionTestRoots } from "./vitest.extension-memory-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
@@ -17,8 +18,8 @@ export function createExtensionMemoryVitestConfig(
     {
       dir: "extensions",
       env,
+      isolate: true,
       name: "extension-memory",
-      pool: "forks",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],
     },

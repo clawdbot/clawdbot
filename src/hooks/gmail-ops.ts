@@ -1,13 +1,14 @@
+// Gmail hook ops helpers run Gmail setup and watcher support commands.
 import { spawn } from "node:child_process";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
+  getRuntimeConfig,
   type OpenClawConfig,
   CONFIG_PATH,
-  loadConfig,
   readConfigFileSnapshot,
+  replaceConfigFile,
   resolveGatewayPort,
   validateConfigObjectWithPlugins,
-  writeConfigFile,
 } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
@@ -42,6 +43,8 @@ import {
   normalizeHooksPath,
   normalizeServePath,
   parseTopicPath,
+  resolveGogExecutable,
+  resolveGogServeInvocation,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 
@@ -237,7 +240,10 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   if (!validated.ok) {
     throw new Error(`Config validation failed: ${validated.issues[0]?.message ?? "invalid"}`);
   }
-  await writeConfigFile(validated.config);
+  await replaceConfigFile({
+    nextConfig: validated.config,
+    afterWrite: { mode: "auto" },
+  });
 
   const summary = {
     projectId,
@@ -271,7 +277,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
 export async function runGmailService(opts: GmailRunOptions) {
   await ensureDependency("gog", ["gogcli"]);
-  const config = loadConfig();
+  const config = getRuntimeConfig();
 
   const overrides: GmailHookOverrides = {
     account: opts.account,
@@ -315,8 +321,21 @@ export async function runGmailService(opts: GmailRunOptions) {
   let child = spawnGogServe(runtimeConfig);
 
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
+  let renewalInFlight: Promise<void> | null = null;
   const renewTimer = setInterval(() => {
-    void startGmailWatch(runtimeConfig);
+    if (shuttingDown || renewalInFlight) {
+      return;
+    }
+    const renewal = startGmailWatch(runtimeConfig)
+      .catch((err: unknown) => {
+        defaultRuntime.error(`gmail watch renew failed: ${String(err)}`);
+      })
+      .finally(() => {
+        if (renewalInFlight === renewal) {
+          renewalInFlight = null;
+        }
+      });
+    renewalInFlight = renewal;
   }, renewMs);
 
   const detachSignals = () => {
@@ -355,14 +374,19 @@ export async function runGmailService(opts: GmailRunOptions) {
 function spawnGogServe(cfg: GmailHookRuntimeConfig) {
   const args = buildGogWatchServeArgs(cfg);
   defaultRuntime.log(`Starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
-  return spawn("gog", args, { stdio: "inherit" });
+  const invocation = resolveGogServeInvocation(args);
+  return spawn(invocation.command, invocation.args, {
+    stdio: "inherit",
+    windowsHide: invocation.windowsHide,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  });
 }
 
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
   fatal = false,
 ) {
-  const args = ["gog", ...buildGogWatchStartArgs(cfg)];
+  const args = [resolveGogExecutable(), ...buildGogWatchStartArgs(cfg)];
   const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
   if (result.code !== 0) {
     const message = result.stderr || result.stdout || "gog watch start failed";

@@ -1,11 +1,5 @@
-export type QueueMode =
-  | "steer"
-  | "followup"
-  | "collect"
-  | "steer-backlog"
-  | "steer+backlog"
-  | "queue"
-  | "interrupt";
+/** Queue handling mode for inbound channel messages. */
+export type QueueMode = "steer" | "followup" | "collect" | "interrupt";
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
 export type QueueModeByProvider = {
@@ -15,8 +9,10 @@ export type QueueModeByProvider = {
   irc?: QueueMode;
   googlechat?: QueueMode;
   slack?: QueueMode;
+  mattermost?: QueueMode;
   signal?: QueueMode;
   imessage?: QueueMode;
   msteams?: QueueMode;
   webchat?: QueueMode;
+  matrix?: QueueMode;
 };

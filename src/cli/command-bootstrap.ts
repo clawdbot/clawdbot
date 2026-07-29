@@ -1,23 +1,29 @@
+// Shared command preflight: config readiness plus optional plugin registry activation.
+import type { ConfigFileSnapshot } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  ensureCliPluginRegistryLoaded,
-  resolvePluginRegistryScopeForCommandPath,
-} from "./plugin-registry-loader.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import type { CliPluginRegistryPolicy } from "./command-catalog.js";
+import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
+import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
 
-let configGuardModulePromise: Promise<typeof import("./program/config-guard.js")> | undefined;
+const configGuardModuleLoader = createLazyImportLoader(() => import("./program/config-guard.js"));
 
 function loadConfigGuardModule() {
-  configGuardModulePromise ??= import("./program/config-guard.js");
-  return configGuardModulePromise;
+  return configGuardModuleLoader.load();
 }
 
+/** Run the lazy command bootstrap steps selected by command policy. */
 export async function ensureCliCommandBootstrap(params: {
   runtime: RuntimeEnv;
   commandPath: string[];
   suppressDoctorStdout?: boolean;
   skipConfigGuard?: boolean;
   allowInvalid?: boolean;
+  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
+  pluginRegistry?: CliPluginRegistryPolicy;
+  skipPristineCoreStateMigrations?: boolean;
+  skipPristineStartupStateMigrations?: boolean;
 }) {
   if (!params.skipConfigGuard) {
     const { ensureConfigReady } = await loadConfigGuardModule();
@@ -25,14 +31,23 @@ export async function ensureCliCommandBootstrap(params: {
       runtime: params.runtime,
       commandPath: params.commandPath,
       ...(params.allowInvalid ? { allowInvalid: true } : {}),
+      ...(params.beforeStateMigrations
+        ? { beforeStateMigrations: params.beforeStateMigrations }
+        : {}),
       ...(params.suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      ...(params.skipPristineStartupStateMigrations
+        ? { skipPristineStartupStateMigrations: true }
+        : {}),
+      ...(params.skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
     });
   }
   if (!params.loadPlugins) {
     return;
   }
+  const pluginRegistryLoadPolicy =
+    params.pluginRegistry ?? resolveCliCommandPathPolicy(params.commandPath).pluginRegistry;
   await ensureCliPluginRegistryLoaded({
-    scope: resolvePluginRegistryScopeForCommandPath(params.commandPath),
+    scope: pluginRegistryLoadPolicy.scope,
     routeLogsToStderr: params.suppressDoctorStdout,
   });
 }

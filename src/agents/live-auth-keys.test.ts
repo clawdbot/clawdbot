@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for live-test provider API-key discovery.
+ * Verifies env precedence, manifest fallback, and non-secret error classifiers.
+ */
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.unmock("../secrets/provider-env-vars.js");
@@ -10,12 +14,12 @@ async function loadModulesForTest(): Promise<void> {
   ({ collectProviderApiKeys } = await import("./live-auth-keys.js"));
 }
 
-describe("collectProviderApiKeys", () => {
-  beforeAll(async () => {
-    await loadModulesForTest();
-  });
+beforeAll(async () => {
+  await loadModulesForTest();
+});
 
-  it("honors provider auth env vars with nonstandard names", async () => {
+describe("collectProviderApiKeys", () => {
+  it("honors provider auth env vars with nonstandard names", () => {
     const env = { MODELSTUDIO_API_KEY: "modelstudio-live-key" };
 
     expect(
@@ -26,7 +30,7 @@ describe("collectProviderApiKeys", () => {
     ).toEqual(["modelstudio-live-key"]);
   });
 
-  it("dedupes manifest env vars against direct provider env naming", async () => {
+  it("dedupes manifest env vars against direct provider env naming", () => {
     const env = { XAI_API_KEY: "xai-live-key" };
 
     expect(

@@ -1,8 +1,12 @@
+// Auth rate-limit tests cover sliding-window, lockout, scope, loopback, and
+// cleanup behavior shared by gateway secret and device-token authentication.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
+  buildRateLimitIdentityKey,
   createAuthRateLimiter,
   type AuthRateLimiter,
 } from "./auth-rate-limit.js";
@@ -18,6 +22,7 @@ describe("auth rate limiter", () => {
       lockoutMs: number;
       exemptLoopback: boolean;
       pruneIntervalMs: number;
+      maxEntries: number;
     }>,
   ) {
     limiter = createAuthRateLimiter({
@@ -107,6 +112,23 @@ describe("auth rate limiter", () => {
     }
   });
 
+  it("clamps oversized lockout durations", () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      limiter.recordFailure("10.0.0.34");
+
+      expect(limiter.check("10.0.0.34").retryAfterMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // ---------- sliding window expiry ----------
 
   it("expires old failures outside the window", () => {
@@ -136,6 +158,87 @@ describe("auth rate limiter", () => {
     // A different IP should be unaffected.
     expect(limiter.check("10.0.0.11").allowed).toBe(true);
     expect(limiter.check("10.0.0.11").remaining).toBe(2);
+  });
+
+  it("caps unique client entries under flood", () => {
+    createLimiter({ maxEntries: 3, pruneIntervalMs: 0 });
+
+    limiter.recordFailure("10.0.1.1");
+    limiter.recordFailure("10.0.1.2");
+    limiter.recordFailure("10.0.1.3");
+    limiter.recordFailure("10.0.1.4");
+
+    expect(limiter.size()).toBe(3);
+    expect(limiter.check("10.0.1.1").remaining).toBe(2);
+    expect(limiter.check("10.0.1.4").remaining).toBe(1);
+  });
+
+  it("preserves locked entries when flood eviction runs", () => {
+    createLimiter({ maxEntries: 3, pruneIntervalMs: 0 });
+
+    limiter.recordFailure("10.0.2.1");
+    limiter.recordFailure("10.0.2.1");
+    expect(limiter.check("10.0.2.1").allowed).toBe(false);
+    limiter.recordFailure("10.0.2.2");
+    limiter.recordFailure("10.0.2.3");
+
+    limiter.recordFailure("10.0.2.4");
+
+    expect(limiter.size()).toBe(3);
+    expect(limiter.check("10.0.2.1").allowed).toBe(false);
+    expect(limiter.check("10.0.2.2").remaining).toBe(2);
+    expect(limiter.check("10.0.2.4").remaining).toBe(1);
+  });
+
+  it("fails closed when every tracked entry is locked", () => {
+    vi.useFakeTimers();
+    try {
+      limiter = createAuthRateLimiter({
+        maxAttempts: 1,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        maxEntries: 2,
+        pruneIntervalMs: 0,
+      });
+
+      limiter.recordFailure("10.0.3.1");
+      limiter.recordFailure("10.0.3.2");
+      limiter.recordFailure("10.0.3.3");
+
+      expect(limiter.size()).toBe(2);
+      expect(limiter.check("10.0.3.1").allowed).toBe(false);
+      expect(limiter.check("10.0.3.2").allowed).toBe(false);
+      const overflowResult = limiter.check("10.0.3.3");
+      expect(overflowResult.allowed).toBe(false);
+      expect(overflowResult.retryAfterMs).toBeGreaterThan(0);
+
+      vi.advanceTimersByTime(60_001);
+      expect(limiter.check("10.0.3.3").allowed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { value: 0, expectedSize: 1 },
+    { value: -2, expectedSize: 1 },
+    { value: 1.9, expectedSize: 1 },
+    { value: 2.9, expectedSize: 2 },
+    { value: Number.NaN, expectedSize: 2 },
+    { value: Number.POSITIVE_INFINITY, expectedSize: 2 },
+  ])("normalizes maxEntries value $value", ({ value, expectedSize }) => {
+    limiter = createAuthRateLimiter({
+      maxAttempts: 2,
+      windowMs: 60_000,
+      lockoutMs: 60_000,
+      maxEntries: value,
+      pruneIntervalMs: 0,
+    });
+
+    limiter.recordFailure("10.0.4.1");
+    limiter.recordFailure("10.0.4.2");
+
+    expect(limiter.size()).toBe(expectedSize);
   });
 
   it("treats ipv4 and ipv4-mapped ipv6 forms as the same client", () => {
@@ -178,6 +281,13 @@ describe("auth rate limiter", () => {
     });
     limiter.recordFailure("127.0.0.1");
     expect(limiter.check("127.0.0.1").allowed).toBe(false);
+  });
+
+  it("does not exempt opaque identity keys", () => {
+    limiter = createAuthRateLimiter({ maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 });
+    const key = buildRateLimitIdentityKey("node", "node-1");
+    limiter.recordFailure(key);
+    expect(limiter.check(key).allowed).toBe(false);
   });
 
   // ---------- reset ----------
@@ -233,6 +343,19 @@ describe("auth rate limiter", () => {
       vi.advanceTimersByTime(6_000);
       limiter.prune();
       expect(limiter.size()).toBe(1); // Still locked-out, not pruned.
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized positive auto-prune intervals", () => {
+    vi.useFakeTimers();
+    try {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+
+      limiter = createAuthRateLimiter({ pruneIntervalMs: Number.MAX_SAFE_INTEGER });
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       vi.useRealTimers();
     }

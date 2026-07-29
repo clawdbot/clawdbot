@@ -1,30 +1,9 @@
+// Tlon plugin module implements discovery behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import type { Foreigns } from "../urbit/foreigns.js";
-import { asRecord, formatChangesDate, formatErrorMessage } from "./utils.js";
+import { asRecord, formatErrorMessage } from "./utils.js";
 
-export async function fetchGroupChanges(
-  api: { scry: (path: string) => Promise<unknown> },
-  runtime: RuntimeEnv,
-  daysAgo = 5,
-) {
-  try {
-    const changeDate = formatChangesDate(daysAgo);
-    runtime.log?.(`[tlon] Fetching group changes since ${daysAgo} days ago (${changeDate})...`);
-    const changes = await api.scry(`/groups-ui/v5/changes/${changeDate}.json`);
-    if (changes) {
-      runtime.log?.("[tlon] Successfully fetched changes data");
-      return changes;
-    }
-    return null;
-  } catch (error: unknown) {
-    runtime.log?.(
-      `[tlon] Failed to fetch changes (falling back to full init): ${formatErrorMessage(error)}`,
-    );
-    return null;
-  }
-}
-
-export interface InitData {
+interface InitData {
   channels: string[];
   foreigns: Foreigns | null;
 }

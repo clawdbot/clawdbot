@@ -1,6 +1,8 @@
+// Resolves package version metadata for CLI and library callers.
 import { createRequire } from "node:module";
-import { normalizeOptionalString } from "./shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+// oxlint-disable-next-line eslint/no-underscore-dangle -- Bundled builds replace this compile-time define identifier.
 declare const __OPENCLAW_VERSION__: string | undefined;
 const CORE_PACKAGE_NAME = "openclaw";
 
@@ -48,11 +50,15 @@ function readVersionFromJsonCandidates(
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
   for (const value of values) {
     const trimmed = normalizeOptionalString(value);
-    if (trimmed) {
+    if (trimmed && trimmed.toLowerCase() !== "undefined" && trimmed.toLowerCase() !== "null") {
       return trimmed;
     }
   }
   return undefined;
+}
+
+function readInjectedVersion(): string | undefined {
+  return typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined;
 }
 
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
@@ -156,6 +162,6 @@ export function resolveCompatibilityHostVersion(
 // - Dev/npm builds: package.json.
 export const VERSION = resolveBinaryVersion({
   moduleUrl: import.meta.url,
-  injectedVersion: typeof __OPENCLAW_VERSION__ === "string" ? __OPENCLAW_VERSION__ : undefined,
+  injectedVersion: readInjectedVersion(),
   bundledVersion: process.env.OPENCLAW_BUNDLED_VERSION,
 });

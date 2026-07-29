@@ -1,8 +1,9 @@
+// Bundles MCP metadata exposed by plugins for package output.
 import fs from "node:fs";
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { isRecord } from "../utils.js";
 import {
   inspectBundleServerRuntimeSupport,
@@ -17,6 +18,7 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 
 export type BundleMcpServerConfig = Record<string, unknown>;
@@ -30,11 +32,11 @@ export type BundleMcpDiagnostic = {
   message: string;
 };
 
-export type EnabledBundleMcpConfigResult = {
+type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
-export type BundleMcpRuntimeSupport = {
+type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
@@ -162,40 +164,46 @@ function absolutizeBundleMcpServer(params: {
   return next;
 }
 
-function loadBundleFileBackedMcpConfig(params: {
-  rootDir: string;
-  relativePath: string;
-}): BundleMcpConfig {
+function loadBundleFileBackedMcpConfig(params: { rootDir: string; relativePath: string }): {
+  config: BundleMcpConfig;
+  diagnostics: string[];
+} {
   const rootDir = normalizeBundlePath(params.rootDir);
   const absolutePath = path.resolve(rootDir, params.relativePath);
-  const opened = openBoundaryFileSync({
-    absolutePath,
-    rootPath: rootDir,
+  const result = readRootJsonObjectSync({
+    rootDir,
+    relativePath: params.relativePath,
     boundaryLabel: "plugin root",
     rejectHardlinks: true,
   });
-  if (!opened.ok) {
-    return { mcpServers: {} };
-  }
-  try {
-    const stat = fs.fstatSync(opened.fd);
-    if (!stat.isFile()) {
-      return { mcpServers: {} };
+  if (!result.ok) {
+    if (result.reason === "open") {
+      return {
+        config: { mcpServers: {} },
+        diagnostics:
+          result.failure.reason === "path"
+            ? []
+            : [`unable to read ${params.relativePath}: ${result.failure.reason}`],
+      };
     }
-    const raw = JSON.parse(fs.readFileSync(opened.fd, "utf-8")) as unknown;
-    const servers = extractMcpServerMap(raw);
-    const baseDir = normalizeBundlePath(path.dirname(absolutePath));
     return {
+      config: { mcpServers: {} },
+      diagnostics: [`unable to read ${params.relativePath}: ${result.error}`],
+    };
+  }
+  const servers = extractMcpServerMap(result.value);
+  const baseDir = normalizeBundlePath(path.dirname(absolutePath));
+  return {
+    config: {
       mcpServers: Object.fromEntries(
         Object.entries(servers).map(([serverName, server]) => [
           serverName,
           absolutizeBundleMcpServer({ rootDir, baseDir, server }),
         ]),
       ),
-    };
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+    },
+    diagnostics: [],
+  };
 }
 
 function loadBundleInlineMcpConfig(params: {
@@ -214,6 +222,24 @@ function loadBundleInlineMcpConfig(params: {
         absolutizeBundleMcpServer({ rootDir: baseDir, baseDir, server }),
       ]),
     ),
+  };
+}
+
+function loadNativePluginMcpConfig(params: {
+  rootDir: string;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+}): { config: BundleMcpConfig; diagnostics: string[] } {
+  const rootDir = normalizeBundlePath(params.rootDir);
+  return {
+    config: {
+      mcpServers: Object.fromEntries(
+        Object.entries(params.mcpServers).map(([serverName, server]) => [
+          serverName,
+          absolutizeBundleMcpServer({ rootDir, baseDir: rootDir, server }),
+        ]),
+      ),
+    },
+    diagnostics: [],
   };
 }
 
@@ -243,14 +269,14 @@ function loadBundleMcpConfig(params: {
     rootDir: params.rootDir,
     bundleFormat: params.bundleFormat,
   });
+  const diagnostics: string[] = [];
   for (const relativePath of filePaths) {
-    merged = applyMergePatch(
-      merged,
-      loadBundleFileBackedMcpConfig({
-        rootDir: params.rootDir,
-        relativePath,
-      }),
-    ) as BundleMcpConfig;
+    const loaded = loadBundleFileBackedMcpConfig({
+      rootDir: params.rootDir,
+      relativePath,
+    });
+    diagnostics.push(...loaded.diagnostics);
+    merged = applyMergePatch(merged, loaded.config) as BundleMcpConfig;
   }
 
   merged = applyMergePatch(
@@ -261,7 +287,7 @@ function loadBundleMcpConfig(params: {
     }),
   ) as BundleMcpConfig;
 
-  return { config: merged, diagnostics: [] };
+  return { config: merged, diagnostics };
 }
 
 export function inspectBundleMcpRuntimeSupport(params: {
@@ -281,15 +307,40 @@ export function inspectBundleMcpRuntimeSupport(params: {
   };
 }
 
+export function inspectNativePluginMcpRuntimeSupport(params: {
+  rootDir: string;
+  mcpServers: Record<string, BundleMcpServerConfig>;
+}): BundleMcpRuntimeSupport {
+  const support = inspectBundleServerRuntimeSupport({
+    loaded: loadNativePluginMcpConfig(params),
+    resolveServers: (config) => config.mcpServers,
+  });
+  return {
+    hasSupportedStdioServer: support.hasSupportedServer,
+    supportedServerNames: support.supportedServerNames,
+    unsupportedServerNames: support.unsupportedServerNames,
+    diagnostics: support.diagnostics,
+  };
+}
+
 export function loadEnabledBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): EnabledBundleMcpConfigResult {
   return loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ mcpServers: {} }),
     loadBundleConfig: loadBundleMcpConfig,
+    loadNativePluginConfig: ({ record }) =>
+      record.mcpServers
+        ? loadNativePluginMcpConfig({
+            rootDir: record.rootDir,
+            mcpServers: record.mcpServers,
+          })
+        : undefined,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),
   });
 }

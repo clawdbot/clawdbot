@@ -1,8 +1,9 @@
-import type { Guild, Message, User } from "@buape/carbon";
+// Discord plugin module implements reply context behavior.
+import type { Guild, Message, User } from "../internal/discord.js";
 import { resolveTimestampMs } from "./format.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
-export type DiscordReplyContext = {
+type DiscordReplyContext = {
   id: string;
   channelId: string;
   sender: string;

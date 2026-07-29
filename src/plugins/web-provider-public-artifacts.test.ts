@@ -1,32 +1,41 @@
+// Covers web provider public artifact extraction from plugin metadata.
 import { describe, expect, it } from "vitest";
-import { resolveManifestContractPluginIds } from "./manifest-registry.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import {
-  hasBundledWebFetchProviderPublicArtifact,
-  hasBundledWebSearchProviderPublicArtifact,
+  loadBundledWebFetchProviderEntriesFromDir,
+  loadBundledWebSearchProviderEntriesFromDir,
 } from "./web-provider-public-artifacts.explicit.js";
 
-describe("web provider public artifacts", () => {
-  it("has a public artifact for every bundled web search provider declared in manifests", () => {
-    const pluginIds = resolveManifestContractPluginIds({
-      contract: "webSearchProviders",
-      origin: "bundled",
-    });
+const registry = loadPluginManifestRegistry();
+const webSearchPluginIds = bundledPluginIdsWithContract("webSearchProviders");
+const webFetchPluginIds = bundledPluginIdsWithContract("webFetchProviders");
 
-    expect(pluginIds).not.toHaveLength(0);
-    for (const pluginId of pluginIds) {
-      expect(hasBundledWebSearchProviderPublicArtifact(pluginId)).toBe(true);
-    }
+function bundledPluginIdsWithContract(
+  contract: "webSearchProviders" | "webFetchProviders",
+): string[] {
+  return registry.plugins
+    .filter(
+      (plugin) => plugin.origin === "bundled" && (plugin.contracts?.[contract]?.length ?? 0) > 0,
+    )
+    .map((plugin) => plugin.id)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+describe("web provider public artifacts", () => {
+  it("declares bundled web providers in manifests", () => {
+    expect(webSearchPluginIds).not.toHaveLength(0);
+    expect(webFetchPluginIds).not.toHaveLength(0);
   });
 
-  it("has a public artifact for every bundled web fetch provider declared in manifests", () => {
-    const pluginIds = resolveManifestContractPluginIds({
-      contract: "webFetchProviders",
-      origin: "bundled",
-    });
+  it.each(webSearchPluginIds)("loads public web-search artifacts for %s", (pluginId) => {
+    expect(
+      loadBundledWebSearchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+    ).not.toBeNull();
+  });
 
-    expect(pluginIds).not.toHaveLength(0);
-    for (const pluginId of pluginIds) {
-      expect(hasBundledWebFetchProviderPublicArtifact(pluginId)).toBe(true);
-    }
+  it.each(webFetchPluginIds)("loads public web-fetch artifacts for %s", (pluginId) => {
+    expect(
+      loadBundledWebFetchProviderEntriesFromDir({ dirName: pluginId, pluginId }),
+    ).not.toBeNull();
   });
 });

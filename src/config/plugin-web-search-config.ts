@@ -1,3 +1,6 @@
+// Normalizes plugin web-search configuration and defaults.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 type PluginWebSearchConfigCarrier = {
   plugins?: {
     entries?: Record<
@@ -9,10 +12,7 @@ type PluginWebSearchConfigCarrier = {
   };
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
+/** Resolve a plugin-owned `config.webSearch` object without interpreting provider fields. */
 export function resolvePluginWebSearchConfig(
   config: PluginWebSearchConfigCarrier | undefined,
   pluginId: string,

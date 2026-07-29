@@ -1,3 +1,4 @@
+// Tests inline reply directive parsing and whitespace-preserving behavior.
 import { describe, expect, it } from "vitest";
 import { extractInlineSimpleCommand, stripInlineStatus } from "./reply-inline.js";
 

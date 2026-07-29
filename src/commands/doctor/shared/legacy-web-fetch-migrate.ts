@@ -1,5 +1,5 @@
+// Legacy web-fetch config migration from tools.web.fetch to plugin-owned config.
 import { mergeMissing } from "../../../config/legacy.shared.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   cloneRecord,
   ensureRecord,
@@ -76,28 +76,7 @@ function migratePluginWebFetchConfig(params: {
   );
 }
 
-export function listLegacyWebFetchConfigPaths(raw: unknown): string[] {
-  const fetch = resolveLegacyFetchConfig(raw);
-  const firecrawl = fetch ? copyLegacyFirecrawlFetchConfig(fetch) : undefined;
-  if (!firecrawl) {
-    return [];
-  }
-  return Object.keys(firecrawl).map((key) => `tools.web.fetch.firecrawl.${key}`);
-}
-
-export function normalizeLegacyWebFetchConfig<T>(raw: T): T {
-  if (!isRecord(raw)) {
-    return raw;
-  }
-
-  const fetch = resolveLegacyFetchConfig(raw);
-  if (!fetch) {
-    return raw;
-  }
-
-  return normalizeLegacyWebFetchConfigRecord(raw).config;
-}
-
+/** Move legacy Firecrawl web-fetch config into plugins.entries.firecrawl.config.webFetch. */
 export function migrateLegacyWebFetchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw) || !hasMappedLegacyWebFetchConfig(raw)) {
     return { config: raw, changes: [] };
@@ -144,15 +123,4 @@ function normalizeLegacyWebFetchConfigRecord<T extends JsonRecord>(
   }
 
   return { config: nextRoot, changes };
-}
-
-export function resolvePluginWebFetchConfig(
-  config: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  const pluginConfig = config?.plugins?.entries?.[pluginId]?.config;
-  if (!isRecord(pluginConfig)) {
-    return undefined;
-  }
-  return isRecord(pluginConfig.webFetch) ? pluginConfig.webFetch : undefined;
 }

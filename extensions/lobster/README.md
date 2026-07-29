@@ -2,6 +2,14 @@
 
 Adds the `lobster` agent tool as an **optional** plugin tool.
 
+## Install
+
+```bash
+openclaw plugins install @openclaw/lobster
+```
+
+Restart the Gateway after installing or updating the plugin.
+
 ## What this is
 
 - Lobster is a standalone workflow shell (typed JSON-first pipelines + approvals/resume).
@@ -72,3 +80,14 @@ Notes:
 - Runs Lobster in process via the published `@clawdbot/lobster/core` runtime.
 - Does not manage OAuth/tokens.
 - Uses timeouts, stdout caps, and strict JSON envelope parsing.
+
+## Docs
+
+- https://docs.openclaw.ai/tools/lobster
+
+## Package
+
+- Plugin id: `lobster`
+- Tool: `lobster`
+- Package: `@openclaw/lobster`
+- Minimum OpenClaw host: `2026.4.25`

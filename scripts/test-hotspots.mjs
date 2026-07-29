@@ -1,3 +1,4 @@
+// Prints the slowest test files from a Vitest JSON report.
 import {
   formatMs,
   loadVitestReportFromArgs,
@@ -35,6 +36,10 @@ const report = loadVitestReportFromArgs(opts, "openclaw-vitest-hotspots");
 const fileResults = collectVitestFileDurations(report).toSorted(
   (a, b) => b.durationMs - a.durationMs,
 );
+if (fileResults.length === 0) {
+  console.error("[test-hotspots] Vitest JSON report contained no timed file results.");
+  process.exit(1);
+}
 
 const top = fileResults.slice(0, opts.limit);
 const totalDurationMs = fileResults.reduce((sum, item) => sum + item.durationMs, 0);

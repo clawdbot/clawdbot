@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+// Verifies default config values and environment-sensitive overrides.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+  DEFAULT_SUBAGENT_MAX_CONCURRENT,
+  resolveAgentMaxConcurrent,
+} from "./agent-limits.js";
 import {
   applyAgentDefaults,
   applyContextPruningDefaults,
@@ -21,6 +27,12 @@ vi.mock("./provider-policy.js", () => ({
 describe("config defaults", () => {
   beforeEach(() => {
     mocks.applyProviderConfigDefaultsForConfig.mockReset();
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("skips provider defaults when agent defaults are absent", () => {
@@ -38,8 +50,24 @@ describe("config defaults", () => {
     expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
   });
 
-  it("uses anthropic provider defaults when agent defaults exist", () => {
+  it("skips provider defaults when agent defaults have no Anthropic auth signal", () => {
     const cfg = {
+      agents: {
+        defaults: {},
+      },
+    };
+
+    expect(applyContextPruningDefaults(cfg as never)).toBe(cfg);
+    expect(mocks.applyProviderConfigDefaultsForConfig).not.toHaveBeenCalled();
+  });
+
+  it("uses anthropic provider defaults when agent defaults and auth signal exist", () => {
+    const cfg = {
+      auth: {
+        profiles: {
+          anthropic: { provider: "anthropic", mode: "api_key" },
+        },
+      },
       agents: {
         defaults: {},
       },
@@ -55,8 +83,18 @@ describe("config defaults", () => {
     };
     mocks.applyProviderConfigDefaultsForConfig.mockReturnValue(nextCfg);
 
-    expect(applyContextPruningDefaults(cfg as never)).toBe(nextCfg);
+    const manifestRegistry = { plugins: [] };
+    expect(applyContextPruningDefaults(cfg as never, { manifestRegistry })).toBe(nextCfg);
     expect(mocks.applyProviderConfigDefaultsForConfig).toHaveBeenCalledTimes(1);
+    const [defaultsParams] = expectDefined(
+      (
+        mocks.applyProviderConfigDefaultsForConfig.mock.calls as unknown as Array<
+          [{ manifestRegistry?: unknown }]
+        >
+      )[0],
+      "(mocks.applyProviderConfigDefaultsForConfig.mock.calls as unknown as Array<\n        [{ manifestRegistry?: unknown }]\n      >)[0] test invariant",
+    );
+    expect(defaultsParams.manifestRegistry).toBe(manifestRegistry);
   });
 
   it("defaults ackReactionScope without deriving other message fields", () => {
@@ -77,14 +115,26 @@ describe("config defaults", () => {
     } as never);
 
     expect(next.messages?.ackReactionScope).toBe("group-mentions");
-    expect(next.messages?.responsePrefix).toBeUndefined();
+    expect(next.messages).not.toHaveProperty("responsePrefix");
     expect(next.messages?.groupChat?.mentionPatterns).toBeUndefined();
   });
 
   it("fills missing agent concurrency defaults", () => {
     const next = applyAgentDefaults({ messages: {} } as never);
 
-    expect(next.agents?.defaults?.maxConcurrent).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
+    expect(next.agents?.defaults?.maxConcurrent).toBe(resolveAgentMaxConcurrent());
+    expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
+      DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
+    );
+  });
+
+  it("preserves explicit subagent archive default", () => {
+    const next = applyAgentDefaults({
+      agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
+    } as never);
+
+    expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(0);
     expect(next.agents?.defaults?.subagents?.maxConcurrent).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 });

@@ -1,11 +1,13 @@
+// Vitest plugins config wires the plugins test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 export function createPluginsVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(["src/plugins/**/*.test.ts"], {
     dir: "src/plugins",
     env,
-    exclude: ["src/plugins/contracts/**"],
-    isolate: true,
+    exclude: ["src/plugins/contracts/**", "src/plugins/loader.test.ts"],
+    fileParallelism: false,
+    isolate: false,
     name: "plugins",
     passWithNoTests: true,
   });

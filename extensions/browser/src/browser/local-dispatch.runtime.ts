@@ -1,3 +1,9 @@
+/**
+ * Local browser control dispatch bridge.
+ *
+ * Starts the browser control service when needed and dispatches requests
+ * through the in-process route dispatcher for local Browser tool calls.
+ */
 import {
   createBrowserControlContext,
   startBrowserControlServiceFromConfig,
@@ -8,6 +14,7 @@ import {
   type BrowserDispatchResponse,
 } from "./routes/dispatcher.js";
 
+/** Dispatch one browser-control request through the local in-process router. */
 export async function dispatchBrowserControlRequest(
   req: BrowserDispatchRequest,
 ): Promise<BrowserDispatchResponse> {

@@ -1,9 +1,39 @@
+// Slack plugin module implements reactions behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { allowListMatches, normalizeAllowListLower } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackReactionEvent } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+
+function shouldEmitSlackReactionNotification(params: {
+  ctx: SlackMonitorContext;
+  event: SlackReactionEvent;
+  actorName?: string;
+}) {
+  const { ctx, event, actorName } = params;
+  if (ctx.reactionMode === "off") {
+    return false;
+  }
+  if (ctx.reactionMode === "own") {
+    return Boolean(ctx.botUserId && event.item_user === ctx.botUserId);
+  }
+  if (ctx.reactionMode === "allowlist") {
+    const allowList = normalizeAllowListLower(ctx.reactionAllowlist);
+    if (allowList.length === 0) {
+      return false;
+    }
+    return allowListMatches({
+      allowList,
+      id: event.user,
+      name: actorName,
+      allowNameMatching: ctx.allowNameMatching,
+    });
+  }
+  return ctx.reactionMode === "all";
+}
 
 export function registerSlackReactionEvents(params: {
   ctx: SlackMonitorContext;
@@ -15,6 +45,12 @@ export function registerSlackReactionEvents(params: {
     try {
       const item = event.item;
       if (!item || item.type !== "message") {
+        return;
+      }
+      if (ctx.reactionMode === "off") {
+        return;
+      }
+      if (ctx.reactionMode === "own" && (!ctx.botUserId || event.item_user !== ctx.botUserId)) {
         return;
       }
       trackEvent?.();
@@ -36,6 +72,15 @@ export function registerSlackReactionEvents(params: {
         ? ctx.resolveUserName(event.item_user)
         : Promise.resolve(undefined);
       const [actorInfo, authorInfo] = await Promise.all([actorInfoPromise, authorInfoPromise]);
+      if (
+        !shouldEmitSlackReactionNotification({
+          ctx,
+          event,
+          actorName: actorInfo?.name,
+        })
+      ) {
+        return;
+      }
       const actorLabel = actorInfo?.name ?? event.user;
       const emojiLabel = event.reaction ?? "emoji";
       const authorLabel = authorInfo?.name ?? event.item_user;
@@ -46,7 +91,7 @@ export function registerSlackReactionEvents(params: {
         contextKey: `slack:reaction:${action}:${item.channel}:${item.ts}:${event.user}:${emojiLabel}`,
       });
     } catch (err) {
-      ctx.runtime.error?.(danger(`slack reaction handler failed: ${String(err)}`));
+      ctx.runtime.error?.(danger(`slack reaction handler failed: ${formatErrorMessage(err)}`));
     }
   };
 

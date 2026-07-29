@@ -1,3 +1,4 @@
+// Discord tests cover commands plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 

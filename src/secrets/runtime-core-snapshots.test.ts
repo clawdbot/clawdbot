@@ -1,7 +1,12 @@
+/** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot, loadConfig } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import {
+  getRuntimeConfig,
+  clearConfigCache,
+  clearRuntimeConfigSnapshot,
+} from "../config/config.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
@@ -42,11 +47,9 @@ function beginSecretsRuntimeIsolationForTest(): SecretsRuntimeEnvSnapshot {
   const envSnapshot = captureEnv([
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
     "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-    "OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE",
     "OPENCLAW_VERSION",
   ]);
   delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  process.env.OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE = "1";
   delete process.env.OPENCLAW_VERSION;
   return envSnapshot;
 }
@@ -78,7 +81,6 @@ describe("secrets runtime snapshot core lanes", () => {
     return withEnvAsync(
       {
         OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
         OPENCLAW_VERSION: undefined,
       },
       async () =>
@@ -157,14 +159,16 @@ describe("secrets runtime snapshot core lanes", () => {
   it("resolves env refs for memory, talk, and gateway surfaces", async () => {
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
-        agents: {
-          defaults: {
-            memorySearch: {
-              remote: {
-                apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
-              },
+        memory: {
+          search: {
+            remote: {
+              apiKey: { source: "env", provider: "default", id: "MEMORY_REMOTE_API_KEY" },
             },
           },
+        },
+
+        agents: {
+          defaults: {},
         },
         talk: {
           providers: {
@@ -192,7 +196,7 @@ describe("secrets runtime snapshot core lanes", () => {
       loadablePluginOrigins: new Map(),
     });
 
-    expect(snapshot.config.agents?.defaults?.memorySearch?.remote?.apiKey).toBe("mem-ref-key");
+    expect(snapshot.config.memory?.search?.remote?.apiKey).toBe("mem-ref-key");
     expect((snapshot.config.talk as { apiKey?: unknown } | undefined)?.apiKey).toBeUndefined();
     expect(snapshot.config.talk?.providers?.["acme-speech"]?.apiKey).toBe("talk-provider-ref-key");
     expect(snapshot.config.gateway?.remote?.token).toBe("remote-token-ref");
@@ -225,19 +229,62 @@ describe("secrets runtime snapshot core lanes", () => {
         }),
     });
 
-    expect(snapshot.warnings.map((warning) => warning.path)).toEqual(
-      expect.arrayContaining([
-        "/tmp/openclaw-agent-main.auth-profiles.openai:default.key",
-        "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
-      ]),
+    const warningPaths = snapshot.warnings.map((warning) => warning.path);
+    expect(warningPaths).toContain("/tmp/openclaw-agent-main.auth-profiles.openai:default.key");
+    expect(warningPaths).toContain(
+      "/tmp/openclaw-agent-main.auth-profiles.github-copilot:default.token",
     );
-    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
-      type: "api_key",
-      key: "sk-env-openai",
+    const openAiProfile = snapshot.authStores[0]?.store.profiles["openai:default"] as
+      | Record<string, unknown>
+      | undefined;
+    expect(openAiProfile?.type).toBe("api_key");
+    expect(openAiProfile?.key).toBe("sk-env-openai");
+    const copilotProfile = snapshot.authStores[0]?.store.profiles["github-copilot:default"] as
+      | Record<string, unknown>
+      | undefined;
+    expect(copilotProfile?.type).toBe("token");
+    expect(copilotProfile?.token).toBe("ghp-env-token");
+  });
+
+  it("can materialize auth stores without resolving unrelated config refs", async () => {
+    const resolvedApiKey = ["test", "auth", "profile", "value"].join("-");
+    const apiKeyRef = {
+      source: "env",
+      provider: "default",
+      id: "UNRELATED_PROVIDER_KEY",
+    } as const;
+    const config = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: apiKeyRef,
+            models: [],
+          },
+        },
+      },
     });
-    expect(snapshot.authStores[0]?.store.profiles["github-copilot:default"]).toMatchObject({
-      type: "token",
-      token: "ghp-env-token",
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      assignmentConfig: config,
+      env: { OPENAI_API_KEY: resolvedApiKey },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      includeConfigRefs: false,
+      loadablePluginOrigins: new Map(),
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: OPENAI_ENV_KEY_REF,
+          },
+        }),
+    });
+
+    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(apiKeyRef);
+    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      key: resolvedApiKey,
     });
   });
 
@@ -259,13 +306,11 @@ describe("secrets runtime snapshot core lanes", () => {
         }),
     });
 
-    expect(snapshot.authStores[0]?.store.profiles["openai:inline"]).toMatchObject({
-      type: "api_key",
-      key: "sk-env-openai",
-    });
     const inlineProfile = snapshot.authStores[0]?.store.profiles["openai:inline"] as
       | Record<string, unknown>
       | undefined;
+    expect(inlineProfile?.type).toBe("api_key");
+    expect(inlineProfile?.key).toBe("sk-env-openai");
     expect(inlineProfile?.keyRef).toEqual({
       source: "env",
       provider: "default",
@@ -277,18 +322,17 @@ describe("secrets runtime snapshot core lanes", () => {
     const prepared = await prepareOpenAiRuntimeSnapshot({ includeAuthStoreRefs: false });
     activateSecretsRuntimeSnapshot(prepared);
 
-    expect(loadConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
+    expect(getRuntimeConfig().models?.providers?.openai?.apiKey).toBe("sk-runtime");
   });
 
   it("activates runtime snapshots for ensureAuthProfileStore", async () => {
     const prepared = await prepareOpenAiRuntimeSnapshot();
     activateSecretsRuntimeSnapshot(prepared);
 
-    expect(
-      ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles["openai:default"],
-    ).toMatchObject({
-      type: "api_key",
-      key: "sk-runtime",
-    });
+    const runtimeProfile = ensureAuthProfileStore("/tmp/openclaw-agent-main").profiles[
+      "openai:default"
+    ] as Record<string, unknown> | undefined;
+    expect(runtimeProfile?.type).toBe("api_key");
+    expect(runtimeProfile?.key).toBe("sk-runtime");
   });
 });

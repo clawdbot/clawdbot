@@ -1,11 +1,16 @@
+// Telegram plugin module implements monitor behavior.
 import type { RunOptions } from "@grammyjs/runner";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
-import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/config-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolveAgentMaxConcurrent } from "openclaw/plugin-sdk/model-session-runtime";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  registerUncaughtExceptionHandler,
+  registerUnhandledRejectionHandler,
+  waitForAbortSignal,
+} from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveTelegramAccount } from "./accounts.js";
@@ -17,11 +22,14 @@ import {
   isRecoverableTelegramNetworkError,
   isTelegramPollingNetworkError,
 } from "./network-errors.js";
+import { acquireTelegramPollingLease } from "./polling-lease.js";
 import { makeProxyFetch } from "./proxy.js";
+import type {
+  TelegramOffsetRotationReason,
+  TelegramUpdateOffsetRotationInfo,
+} from "./update-offset-store.js";
 
-export type { MonitorTelegramOpts } from "./monitor.types.js";
-
-export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
+function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unknown> {
   return {
     sink: {
       concurrency: resolveAgentMaxConcurrent(cfg),
@@ -53,6 +61,21 @@ function normalizePersistedUpdateId(value: number | null): number | null {
   return value;
 }
 
+const TELEGRAM_OFFSET_ROTATION_LABELS: Record<TelegramOffsetRotationReason, string> = {
+  "bot-id-changed": "bot identity change",
+  "legacy-state": "legacy update offset",
+  "token-rotated": "token rotation",
+};
+
+function formatTelegramOffsetRotationMessage(
+  accountId: string,
+  info: TelegramUpdateOffsetRotationInfo,
+): string {
+  const previousLabel = info.previousBotId ?? "(legacy unscoped offset)";
+  const reasonLabel = TELEGRAM_OFFSET_ROTATION_LABELS[info.reason];
+  return `[telegram] Detected ${reasonLabel} for account "${accountId}" (was ${previousLabel}, now ${info.currentBotId}); discarding stale update offset ${info.staleLastUpdateId} and starting fresh.`;
+}
+
 /** Check if error is a Grammy HttpError (used to scope unhandled rejection handling) */
 const isGrammyHttpError = (err: unknown): boolean => {
   if (!err || typeof err !== "object") {
@@ -66,35 +89,29 @@ type TelegramPollingSessionInstance = InstanceType<
   TelegramMonitorPollingRuntime["TelegramPollingSession"]
 >;
 
-let telegramMonitorPollingRuntimePromise:
-  | Promise<typeof import("./monitor-polling.runtime.js")>
-  | undefined;
+const loadTelegramMonitorPollingRuntime = createLazyRuntimeModule(
+  () => import("./monitor-polling.runtime.js"),
+);
 
-async function loadTelegramMonitorPollingRuntime() {
-  telegramMonitorPollingRuntimePromise ??= import("./monitor-polling.runtime.js");
-  return await telegramMonitorPollingRuntimePromise;
-}
-
-let telegramMonitorWebhookRuntimePromise:
-  | Promise<typeof import("./monitor-webhook.runtime.js")>
-  | undefined;
-
-async function loadTelegramMonitorWebhookRuntime() {
-  telegramMonitorWebhookRuntimePromise ??= import("./monitor-webhook.runtime.js");
-  return await telegramMonitorWebhookRuntimePromise;
-}
+const loadTelegramMonitorWebhookRuntime = createLazyRuntimeModule(
+  () => import("./monitor-webhook.runtime.js"),
+);
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const log = opts.runtime?.error ?? console.error;
+  const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
+  const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
+  const log = (line: string) => {
+    if (line.includes("[telegram][diag]")) {
+      logInfo(line);
+      return;
+    }
+    logError(line);
+  };
   let pollingSession: TelegramPollingSessionInstance | undefined;
 
-  const unregisterHandler = registerUnhandledRejectionHandler((err) => {
+  const handlePollingNetworkFailure = (err: unknown, label: string) => {
     const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
     const isTelegramPollingError = isTelegramPollingNetworkError(err);
-    if (isGrammyHttpError(err) && isNetworkError && isTelegramPollingError) {
-      log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
-      return true;
-    }
 
     const activeRunner = pollingSession?.activeRunner;
     if (isNetworkError && isTelegramPollingError && activeRunner && activeRunner.isRunning()) {
@@ -103,17 +120,27 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       pollingSession?.abortActiveFetch();
       void activeRunner.stop().catch(() => {});
       log("[telegram][diag] marking transport dirty after polling network failure");
-      log(
-        `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
-      );
+      log(`[telegram] Restarting polling after ${label}: ${formatErrorMessage(err)}`);
+      return true;
+    }
+
+    if (isGrammyHttpError(err) && isNetworkError && isTelegramPollingError) {
+      log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true;
     }
 
     return false;
-  });
+  };
+
+  const unregisterUnhandledRejectionHandler = registerUnhandledRejectionHandler((err) =>
+    handlePollingNetworkFailure(err, "unhandled network error"),
+  );
+  const unregisterUncaughtExceptionHandler = registerUncaughtExceptionHandler((err) =>
+    handlePollingNetworkFailure(err, "uncaught network error"),
+  );
 
   try {
-    const cfg = opts.config ?? loadConfig();
+    const cfg = opts.config ?? getRuntimeConfig();
     const account = resolveTelegramAccount({
       cfg,
       accountId: opts.accountId,
@@ -153,83 +180,125 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
         webhookCertPath: opts.webhookCertPath,
+        setStatus: opts.setStatus,
       });
       await waitForAbortSignal(opts.abortSignal);
       return;
     }
 
-    const { TelegramPollingSession, readTelegramUpdateOffset, writeTelegramUpdateOffset } =
-      await loadTelegramMonitorPollingRuntime();
+    const {
+      TelegramPollingSession,
+      deleteTelegramUpdateOffset,
+      readTelegramUpdateOffset,
+      writeTelegramUpdateOffset,
+    } = await loadTelegramMonitorPollingRuntime();
 
-    if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
-      registerChannelRuntimeContext({
-        channelRuntime: opts.channelRuntime,
-        channelId: "telegram",
-        accountId: account.accountId,
-        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-        context: { token },
-        abortSignal: opts.abortSignal,
-      });
-    }
-
-    const persistedOffsetRaw = await readTelegramUpdateOffset({
+    const pollingLease = await acquireTelegramPollingLease({
+      token,
       accountId: account.accountId,
-      botToken: token,
+      abortSignal: opts.abortSignal,
     });
-    let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
-    if (persistedOffsetRaw !== null && lastUpdateId === null) {
+    if (pollingLease.waitedForPrevious) {
       log(
-        `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
+        `[telegram][diag] waited for previous polling session for bot token ${pollingLease.tokenFingerprint} before starting account "${account.accountId}".`,
+      );
+    }
+    if (pollingLease.replacedStoppingPrevious) {
+      log(
+        `[telegram][diag] previous polling session for bot token ${pollingLease.tokenFingerprint} did not stop within the lease wait; starting a replacement for account "${account.accountId}".`,
       );
     }
 
-    const persistUpdateId = async (updateId: number) => {
-      const normalizedUpdateId = normalizePersistedUpdateId(updateId);
-      if (normalizedUpdateId === null) {
-        log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
-        return;
-      }
-      if (lastUpdateId !== null && normalizedUpdateId <= lastUpdateId) {
-        return;
-      }
-      lastUpdateId = normalizedUpdateId;
-      try {
-        await writeTelegramUpdateOffset({
+    try {
+      if (isTelegramExecApprovalHandlerConfigured({ cfg, accountId: account.accountId })) {
+        registerChannelRuntimeContext({
+          channelRuntime: opts.channelRuntime,
+          channelId: "telegram",
           accountId: account.accountId,
-          updateId: normalizedUpdateId,
-          botToken: token,
+          capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+          context: { token },
+          abortSignal: opts.abortSignal,
         });
-      } catch (err) {
-        (opts.runtime?.error ?? console.error)(
-          `telegram: failed to persist update offset: ${String(err)}`,
+      }
+
+      const persistedOffsetRaw = await readTelegramUpdateOffset({
+        accountId: account.accountId,
+        botToken: token,
+        onRotationDetected: async (info) => {
+          log(formatTelegramOffsetRotationMessage(account.accountId, info));
+          try {
+            await deleteTelegramUpdateOffset({ accountId: account.accountId });
+          } catch (err) {
+            logError(
+              `telegram: failed to delete stale update offset after rotation: ${String(err)}`,
+            );
+          }
+        },
+      });
+      let lastUpdateId = normalizePersistedUpdateId(persistedOffsetRaw);
+      if (persistedOffsetRaw !== null && lastUpdateId === null) {
+        log(
+          `[telegram] Ignoring invalid persisted update offset (${String(persistedOffsetRaw)}); starting without offset confirmation.`,
         );
       }
-    };
 
-    // Preserve sticky IPv4 fallback state across clean/conflict restarts.
-    // Dirty polling cycles rebuild transport inside TelegramPollingSession.
-    const createTelegramTransportForPolling = () =>
-      resolveTelegramTransport(proxyFetch, {
-        network: account.config.network,
+      const persistUpdateId = async (updateId: number) => {
+        const normalizedUpdateId = normalizePersistedUpdateId(updateId);
+        if (normalizedUpdateId === null) {
+          log(`[telegram] Ignoring invalid update_id value: ${String(updateId)}`);
+          return;
+        }
+        if (lastUpdateId !== null && normalizedUpdateId <= lastUpdateId) {
+          return;
+        }
+        lastUpdateId = normalizedUpdateId;
+        try {
+          await writeTelegramUpdateOffset({
+            accountId: account.accountId,
+            updateId: normalizedUpdateId,
+            botToken: token,
+          });
+        } catch (err) {
+          logError(`telegram: failed to persist update offset: ${String(err)}`);
+        }
+      };
+
+      // Preserve sticky IPv4 fallback state across clean/conflict restarts.
+      // Dirty polling cycles rebuild transport inside TelegramPollingSession.
+      const createTelegramTransportForPolling = () =>
+        resolveTelegramTransport(proxyFetch, {
+          network: account.config.network,
+        });
+      const telegramTransport = createTelegramTransportForPolling();
+
+      pollingSession = new TelegramPollingSession({
+        token,
+        config: cfg,
+        accountId: account.accountId,
+        runtime: opts.runtime,
+        proxyFetch,
+        botInfo: opts.botInfo,
+        abortSignal: opts.abortSignal,
+        runnerOptions: createTelegramRunnerOptions(cfg),
+        getLastUpdateId: () => lastUpdateId,
+        persistUpdateId,
+        log,
+        telegramTransport,
+        createTelegramTransport: createTelegramTransportForPolling,
+        setStatus: opts.setStatus,
+        isolatedIngress: {
+          enabled: opts.isolatedIngress?.enabled ?? true,
+          apiRoot: account.config.apiRoot,
+          proxy: account.config.proxy,
+          network: account.config.network,
+        },
       });
-    const telegramTransport = createTelegramTransportForPolling();
-
-    pollingSession = new TelegramPollingSession({
-      token,
-      config: cfg,
-      accountId: account.accountId,
-      runtime: opts.runtime,
-      proxyFetch,
-      abortSignal: opts.abortSignal,
-      runnerOptions: createTelegramRunnerOptions(cfg),
-      getLastUpdateId: () => lastUpdateId,
-      persistUpdateId,
-      log,
-      telegramTransport,
-      createTelegramTransport: createTelegramTransportForPolling,
-    });
-    await pollingSession.runUntilAbort();
+      await pollingSession.runUntilAbort();
+    } finally {
+      pollingLease.release();
+    }
   } finally {
-    unregisterHandler();
+    unregisterUnhandledRejectionHandler();
+    unregisterUncaughtExceptionHandler();
   }
 }

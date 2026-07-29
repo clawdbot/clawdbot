@@ -1,3 +1,4 @@
+// Command bootstrap tests cover CLI command bootstrap sequencing and side effects.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureConfigReadyMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -9,9 +10,6 @@ vi.mock("./program/config-guard.js", () => ({
 
 vi.mock("./plugin-registry-loader.js", () => ({
   ensureCliPluginRegistryLoaded: ensureCliPluginRegistryLoadedMock,
-  resolvePluginRegistryScopeForCommandPath: vi.fn((commandPath: string[]) =>
-    commandPath[0] === "status" || commandPath[0] === "health" ? "channels" : "all",
-  ),
 }));
 
 describe("ensureCliCommandBootstrap", () => {
@@ -46,6 +44,25 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
+  it("forwards prepared pristine migration facts to the config guard", async () => {
+    const runtime = {} as never;
+
+    await ensureCliCommandBootstrap({
+      runtime,
+      commandPath: ["gateway"],
+      loadPlugins: false,
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
+    });
+
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime,
+      commandPath: ["gateway"],
+      skipPristineCoreStateMigrations: true,
+      skipPristineStartupStateMigrations: true,
+    });
+  });
+
   it("skips config guard without skipping plugin loading", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
@@ -59,6 +76,45 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
       routeLogsToStderr: true,
+    });
+  });
+
+  it("loads configured channel plugins with repair enabled for operational channel commands", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["channels", "send"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      routeLogsToStderr: undefined,
+    });
+  });
+
+  it("loads configured channel plugins without package-manager repair for read-only channel commands", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["channels", "resolve"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      routeLogsToStderr: undefined,
+    });
+  });
+
+  it("loads agent command plugins without package-manager repair", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["agent"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+      routeLogsToStderr: undefined,
     });
   });
 

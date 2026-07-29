@@ -1,6 +1,11 @@
 // Manual facade. Keep loader boundary explicit.
-type SecuritySurface = typeof import("@openclaw/feishu/security-contract-api.js");
+import type { OpenClawConfig } from "../config/types.js";
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
+
+type SecuritySurface = {
+  collectFeishuSecurityAuditFindings: (params: { cfg: OpenClawConfig }) => SecurityAuditFinding[];
+};
 
 function loadSecuritySurface(): SecuritySurface {
   return loadBundledPluginPublicSurfaceModuleSync<SecuritySurface>({
@@ -9,6 +14,7 @@ function loadSecuritySurface(): SecuritySurface {
   });
 }
 
+/** Collect Feishu plugin security findings through the lazy bundled-plugin facade. */
 export const collectFeishuSecurityAuditFindings: SecuritySurface["collectFeishuSecurityAuditFindings"] =
   ((...args) =>
     loadSecuritySurface().collectFeishuSecurityAuditFindings(

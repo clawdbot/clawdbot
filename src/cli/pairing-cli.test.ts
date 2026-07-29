@@ -1,11 +1,15 @@
+// Pairing CLI tests cover pairing command registration and pairing status output.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
 const mocks = vi.hoisted(() => ({
   listChannelPairingRequests: vi.fn(),
   approveChannelPairingCode: vi.fn(),
   notifyPairingApproved: vi.fn(),
+  readConfigFileSnapshotForWrite: vi.fn(),
+  replaceConfigFile: vi.fn(),
   normalizeChannelId: vi.fn((raw: string) => {
     if (!raw) {
       return null;
@@ -28,6 +32,8 @@ const {
   listChannelPairingRequests,
   approveChannelPairingCode,
   notifyPairingApproved,
+  readConfigFileSnapshotForWrite,
+  replaceConfigFile,
   normalizeChannelId,
   getPairingAdapter,
   listPairingChannels,
@@ -37,6 +43,14 @@ const pairingIdLabels: Record<string, string> = {
   telegram: "telegramUserId",
   discord: "discordUserId",
 };
+
+function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
+  const call = calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return call;
+}
 
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listChannelPairingRequests,
@@ -54,7 +68,10 @@ vi.mock("../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn().mockReturnValue({}),
   loadConfig: vi.fn().mockReturnValue({}),
+  readConfigFileSnapshotForWrite: mocks.readConfigFileSnapshotForWrite,
+  replaceConfigFile: mocks.replaceConfigFile,
 }));
 
 describe("pairing cli", () => {
@@ -72,6 +89,23 @@ describe("pairing cli", () => {
       },
     });
     notifyPairingApproved.mockClear();
+    readConfigFileSnapshotForWrite.mockClear();
+    readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        valid: true,
+        issues: [],
+        legacyIssues: [],
+        sourceConfig: {},
+        runtimeConfig: {},
+      },
+      writeOptions: {},
+    });
+    replaceConfigFile.mockClear();
+    replaceConfigFile.mockResolvedValue(undefined);
     normalizeChannelId.mockClear();
     getPairingAdapter.mockClear();
     listPairingChannels.mockClear();
@@ -102,7 +136,7 @@ describe("pairing cli", () => {
     });
   }
 
-  it("evaluates pairing channels when registering the CLI (not at import)", async () => {
+  it("evaluates pairing channels when registering the CLI (not at import)", () => {
     expect(listPairingChannels).not.toHaveBeenCalled();
 
     createProgram();
@@ -190,6 +224,30 @@ describe("pairing cli", () => {
     expect(listChannelPairingRequests).toHaveBeenCalledWith("slack");
   });
 
+  it("redirects to openclaw devices when no pairing channels are configured", async () => {
+    listPairingChannels.mockReturnValueOnce([]);
+
+    const error = await runPairing(["pairing", "list"]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("openclaw devices");
+    // Must not leak the empty enum that originally read like a bug.
+    expect(message).not.toContain("expected one of: )");
+    expect(message).not.toContain("()");
+    expect(listChannelPairingRequests).not.toHaveBeenCalled();
+  });
+
+  it("lists supported channels when one is required but omitted", async () => {
+    // Multiple channels configured (default mock) + no channel argument.
+    await expect(runPairing(["pairing", "list"])).rejects.toThrow(
+      "expected one of: telegram, discord, imessage",
+    );
+  });
+
   it("accepts channel as positional for approve (npm-run compatible)", async () => {
     mockApprovedPairing();
 
@@ -201,10 +259,42 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+      const replaceCall = requireFirstMockCall(
+        replaceConfigFile.mock.calls,
+        "config replace",
+      )[0] as { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } } | undefined;
+      expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
+      expect(log.mock.calls).toEqual([
+        [`${theme.success("Approved")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],
+        [
+          `${theme.success("Command owner configured")} ${theme.command("telegram:123")} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
+        ],
+      ]);
     } finally {
       log.mockRestore();
     }
+  });
+
+  it("does not overwrite an existing command owner when approving pairing", async () => {
+    readConfigFileSnapshotForWrite.mockResolvedValueOnce({
+      snapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: "{}",
+        parsed: {},
+        valid: true,
+        issues: [],
+        legacyIssues: [],
+        sourceConfig: { commands: { ownerAllowFrom: ["discord:999"] } },
+        runtimeConfig: { commands: { ownerAllowFrom: ["discord:999"] } },
+      },
+      writeOptions: {},
+    });
+    mockApprovedPairing();
+
+    await runPairing(["pairing", "approve", "telegram", "ABCDEFGH"]);
+
+    expect(replaceConfigFile).not.toHaveBeenCalled();
   });
 
   it("forwards --account for approve", async () => {

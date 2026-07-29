@@ -1,10 +1,17 @@
+// Matrix tests cover auto join plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixConfig } from "../../types.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
 
-type InviteHandler = (roomId: string, inviteEvent: unknown) => Promise<void>;
+type InviteHandler = (roomId: string, inviteEvent: unknown) => void;
+
+async function flushInviteTasks() {
+  for (let i = 0; i < 5; i += 1) {
+    await Promise.resolve();
+  }
+}
 
 function createClientStub() {
   let inviteHandler: InviteHandler | null = null;
@@ -59,8 +66,11 @@ async function triggerInvite(
   inviteEvent: unknown = {},
 ) {
   const inviteHandler = getInviteHandler();
-  expect(inviteHandler).toBeTruthy();
-  await inviteHandler!("!room:example.org", inviteEvent);
+  if (!inviteHandler) {
+    throw new Error("expected Matrix invite handler");
+  }
+  inviteHandler("!room:example.org", inviteEvent);
+  await flushInviteTasks();
 }
 
 describe("registerMatrixAutoJoin", () => {
@@ -83,7 +93,7 @@ describe("registerMatrixAutoJoin", () => {
     expect(joinRoom).toHaveBeenCalledWith("!room:example.org");
   });
 
-  it("does not auto-join invites by default", async () => {
+  it("does not auto-join invites by default", () => {
     const { getInviteHandler, joinRoom } = registerAutoJoinHarness({});
 
     expect(getInviteHandler()).toBeNull();
@@ -144,12 +154,15 @@ describe("registerMatrixAutoJoin", () => {
     resolveRoom.mockRejectedValue(new Error("temporary homeserver failure"));
 
     const inviteHandler = getInviteHandler();
-    expect(inviteHandler).toBeTruthy();
-    await expect(inviteHandler!("!room:example.org", {})).resolves.toBeUndefined();
+    if (!inviteHandler) {
+      throw new Error("expected Matrix invite handler");
+    }
+    inviteHandler("!room:example.org", {});
+    await flushInviteTasks();
 
     expect(joinRoom).not.toHaveBeenCalled();
     expect(error).toHaveBeenCalledWith(
-      expect.stringContaining("matrix: failed resolving allowlisted alias #allowed:example.org:"),
+      "matrix: failed resolving allowlisted alias #allowed:example.org: Error: temporary homeserver failure",
     );
   });
 

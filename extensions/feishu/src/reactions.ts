@@ -1,11 +1,12 @@
+// Feishu plugin module implements reactions behavior.
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 
-export type FeishuReaction = {
+type FeishuReaction = {
   reactionId: string;
   emojiType: string;
-  operatorType: "app" | "user";
+  operatorType: "app" | "user" | "unknown";
   operatorId: string;
 };
 
@@ -104,8 +105,10 @@ export async function listReactionsFeishu(params: {
       items?: Array<{
         reaction_id?: string;
         reaction_type?: { emoji_type?: string };
-        operator_type?: string;
-        operator_id?: { open_id?: string; user_id?: string; union_id?: string };
+        operator?: {
+          operator_type?: string;
+          operator_id?: string;
+        };
       }>;
     };
   };
@@ -116,38 +119,12 @@ export async function listReactionsFeishu(params: {
   return items.map((item) => ({
     reactionId: item.reaction_id ?? "",
     emojiType: item.reaction_type?.emoji_type ?? "",
-    operatorType: item.operator_type === "app" ? "app" : "user",
-    operatorId:
-      item.operator_id?.open_id ?? item.operator_id?.user_id ?? item.operator_id?.union_id ?? "",
+    operatorType:
+      item.operator?.operator_type === "app"
+        ? "app"
+        : item.operator?.operator_type === "user"
+          ? "user"
+          : "unknown",
+    operatorId: item.operator?.operator_id ?? "",
   }));
 }
-
-/**
- * Common Feishu emoji types for convenience.
- * @see https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
- */
-export const FeishuEmoji = {
-  // Common reactions
-  THUMBSUP: "THUMBSUP",
-  THUMBSDOWN: "THUMBSDOWN",
-  HEART: "HEART",
-  SMILE: "SMILE",
-  GRINNING: "GRINNING",
-  LAUGHING: "LAUGHING",
-  CRY: "CRY",
-  ANGRY: "ANGRY",
-  SURPRISED: "SURPRISED",
-  THINKING: "THINKING",
-  CLAP: "CLAP",
-  OK: "OK",
-  FIST: "FIST",
-  PRAY: "PRAY",
-  FIRE: "FIRE",
-  PARTY: "PARTY",
-  CHECK: "CHECK",
-  CROSS: "CROSS",
-  QUESTION: "QUESTION",
-  EXCLAMATION: "EXCLAMATION",
-} as const;
-
-export type FeishuEmojiType = (typeof FeishuEmoji)[keyof typeof FeishuEmoji];

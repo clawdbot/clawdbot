@@ -1,3 +1,4 @@
+// Status node-mode tests cover node host config and node status rendering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({

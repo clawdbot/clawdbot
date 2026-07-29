@@ -1,3 +1,4 @@
+// Allowlist policy repair tests cover doctor repair of unsafe or stale allowlist policy.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./allowlist-policy-repair.js";
 
@@ -32,5 +33,41 @@ describe("doctor allowlist-policy repair", () => {
     ]);
     expect(result.config.channels?.matrix?.allowFrom).toBeUndefined();
     expect(result.config.channels?.matrix?.dm?.allowFrom).toEqual(["@alice:example.org"]);
+  });
+
+  it("skips disabled channel and account entries", async () => {
+    readChannelAllowFromStoreMock.mockResolvedValue(["alice"]);
+
+    const result = await maybeRepairAllowlistPolicyAllowFrom({
+      channels: {
+        telegram: {
+          enabled: false,
+          dmPolicy: "allowlist",
+        },
+        signal: {
+          accounts: {
+            disabled: { enabled: false, dmPolicy: "allowlist" },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      config: {
+        channels: {
+          telegram: {
+            enabled: false,
+            dmPolicy: "allowlist",
+          },
+          signal: {
+            accounts: {
+              disabled: { enabled: false, dmPolicy: "allowlist" },
+            },
+          },
+        },
+      },
+      changes: [],
+    });
+    expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });

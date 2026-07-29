@@ -1,9 +1,11 @@
-import { type AddressInfo } from "node:net";
+// Nextcloud Talk plugin module implements monitor harness behavior.
+import type { AddressInfo } from "node:net";
 import { afterEach } from "vitest";
-import { createNextcloudTalkWebhookServer } from "./monitor.js";
+import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
 import type { NextcloudTalkWebhookServerOptions } from "./types.js";
+import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
 
-export type WebhookHarness = {
+type WebhookHarness = {
   webhookUrl: string;
   stop: () => Promise<void>;
 };
@@ -19,8 +21,13 @@ afterEach(async () => {
   }
 });
 
-export type StartWebhookServerParams = Omit<
-  NextcloudTalkWebhookServerOptions,
+type TestWebhookServerOptions = Omit<NextcloudTalkWebhookServerOptions, "onWebhook"> & {
+  onWebhook?: NextcloudTalkWebhookServerOptions["onWebhook"];
+  onMessage?: (rawBody: string) => void | Promise<void>;
+};
+
+type StartWebhookServerParams = Omit<
+  TestWebhookServerOptions,
   "port" | "host" | "path" | "secret"
 > & {
   path: string;
@@ -28,6 +35,25 @@ export type StartWebhookServerParams = Omit<
   host?: string;
   port?: number;
 };
+
+async function acceptLegacyTestWebhook(
+  rawBody: string,
+  onMessage?: StartWebhookServerParams["onMessage"],
+): Promise<"accepted" | "ignored"> {
+  if (!inspectNextcloudTalkWebhookEnvelope(rawBody)) {
+    return "ignored";
+  }
+  await onMessage?.(rawBody);
+  return "accepted";
+}
+
+function createNextcloudTalkWebhookServer(options: TestWebhookServerOptions) {
+  const { onMessage, onWebhook, ...serverOptions } = options;
+  return createRawNextcloudTalkWebhookServer({
+    ...serverOptions,
+    onWebhook: onWebhook ?? (async (rawBody) => await acceptLegacyTestWebhook(rawBody, onMessage)),
+  });
+}
 
 export async function startWebhookServer(
   params: StartWebhookServerParams,

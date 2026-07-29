@@ -5,10 +5,13 @@ import type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
 export {
   jsonResult,
+  readNonNegativeIntegerParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "../agents/tools/common.js";
@@ -23,6 +26,7 @@ export {
   normalizeFreshness,
   normalizeToIsoDate,
   parseIsoDateRange,
+  parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
   readProviderEnvValue,
@@ -32,6 +36,7 @@ export {
   resolveSiteName,
   postTrustedWebToolsJson,
   throwWebSearchApiError,
+  withSelfHostedWebSearchEndpoint,
   withTrustedWebSearchEndpoint,
   writeCachedSearchPayload,
 } from "../agents/tools/web-search-provider-common.js";
@@ -46,7 +51,10 @@ export {
 } from "../agents/tools/web-search-provider-config.js";
 export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
-export { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fetch.js";
+export {
+  withSelfHostedWebToolsEndpoint,
+  withTrustedWebToolsEndpoint,
+} from "../agents/tools/web-guarded-fetch.js";
 export { markdownToText, truncateText } from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
@@ -55,6 +63,7 @@ export {
   readCache,
   readResponseText,
   resolveCacheTtlMs,
+  resolvePositiveTimeoutSeconds,
   resolveTimeoutSeconds,
   writeCache,
 } from "../agents/tools/web-shared.js";
@@ -66,22 +75,5 @@ export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
 };
-
-/**
- * @deprecated Implement provider-owned `createTool(...)` directly on the
- * returned WebSearchProviderPlugin instead of routing through core.
- */
-export function createPluginBackedWebSearchProvider(
-  provider: WebSearchProviderPlugin,
-): WebSearchProviderPlugin {
-  return {
-    ...provider,
-    createTool: () => {
-      throw new Error(
-        `createPluginBackedWebSearchProvider(${provider.id}) is no longer supported. ` +
-          "Define provider-owned createTool(...) directly in the extension's WebSearchProviderPlugin.",
-      );
-    },
-  };
-}

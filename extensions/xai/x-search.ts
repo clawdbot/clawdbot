@@ -1,4 +1,4 @@
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
+// Xai plugin module implements x search behavior.
 import {
   jsonResult,
   readCache,
@@ -8,11 +8,17 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { isXaiToolEnabled, resolveXaiToolApiKey } from "./src/tool-auth-shared.js";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  isXaiToolEnabled,
+  resolveXaiToolApiKeyWithAuth,
+  type XaiToolAuthContext,
+} from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import {
   buildXaiXSearchPayload,
   requestXaiXSearch,
+  resolveXaiXSearchEndpoint,
   resolveXaiXSearchInlineCitations,
   resolveXaiXSearchMaxTurns,
   resolveXaiXSearchModel,
@@ -21,6 +27,7 @@ import {
 import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
+  X_SEARCH_HANDLE_LIMIT,
 } from "./x-search-tool-shared.js";
 
 class PluginToolInputError extends Error {
@@ -59,19 +66,22 @@ function resolveXSearchEnabled(params: {
   cfg?: unknown;
   config?: Record<string, unknown>;
   runtimeConfig?: unknown;
+  auth?: XaiToolAuthContext;
 }): boolean {
   return isXaiToolEnabled({
     enabled: params.config?.enabled as boolean | undefined,
     runtimeConfig: params.runtimeConfig as never,
     sourceConfig: params.cfg as never,
+    auth: params.auth,
   });
 }
 
-function resolveXSearchApiKey(params: {
+async function resolveXSearchApiKey(params: {
   sourceConfig?: unknown;
   runtimeConfig?: unknown;
-}): string | undefined {
-  return resolveXaiToolApiKey(params as never);
+  auth?: XaiToolAuthContext;
+}): Promise<string | undefined> {
+  return await resolveXaiToolApiKeyWithAuth(params as never);
 }
 
 function normalizeOptionalIsoDate(value: string | undefined, label: string): string | undefined {
@@ -85,7 +95,13 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
     throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
   }
-  const [year, month, day] = trimmed.split("-").map((entry) => Number.parseInt(entry, 10));
+  const [yearText, monthText, dayText] = trimmed.split("-");
+  if (yearText === undefined || monthText === undefined || dayText === undefined) {
+    throw new PluginToolInputError(`${label} must use YYYY-MM-DD`);
+  }
+  const year = Number.parseInt(yearText, 10);
+  const month = Number.parseInt(monthText, 10);
+  const day = Number.parseInt(dayText, 10);
   const date = new Date(Date.UTC(year, month - 1, day));
   if (
     date.getUTCFullYear() !== year ||
@@ -97,9 +113,31 @@ function normalizeOptionalIsoDate(value: string | undefined, label: string): str
   return trimmed;
 }
 
+function validateXSearchHandleFilters(params: {
+  allowedXHandles?: string[];
+  excludedXHandles?: string[];
+}): void {
+  if (params.allowedXHandles && params.excludedXHandles) {
+    throw new PluginToolInputError(
+      "allowed_x_handles and excluded_x_handles cannot be used together",
+    );
+  }
+  for (const [label, handles] of [
+    ["allowed_x_handles", params.allowedXHandles],
+    ["excluded_x_handles", params.excludedXHandles],
+  ] as const) {
+    if (handles && handles.length > X_SEARCH_HANDLE_LIMIT) {
+      throw new PluginToolInputError(
+        `${label} cannot contain more than ${X_SEARCH_HANDLE_LIMIT} handles`,
+      );
+    }
+  }
+}
+
 function buildXSearchCacheKey(params: {
   query: string;
   model: string;
+  endpoint: string;
   inlineCitations: boolean;
   maxTurns?: number;
   options: Omit<XaiXSearchOptions, "query">;
@@ -107,6 +145,7 @@ function buildXSearchCacheKey(params: {
   return JSON.stringify([
     "x_search",
     params.model,
+    params.endpoint,
     params.query,
     params.inlineCitations,
     params.maxTurns ?? null,
@@ -122,6 +161,7 @@ function buildXSearchCacheKey(params: {
 export function createXSearchTool(options?: {
   config?: unknown;
   runtimeConfig?: Record<string, unknown> | null;
+  auth?: XaiToolAuthContext;
 }) {
   const xSearchConfig = resolveXSearchConfig(options?.config);
   const runtimeConfig = options?.runtimeConfig ?? getRuntimeConfigSnapshot();
@@ -130,15 +170,17 @@ export function createXSearchTool(options?: {
       cfg: options?.config,
       config: xSearchConfig,
       runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
     })
   ) {
     return null;
   }
 
   return createXSearchToolDefinition(async (_toolCallId: string, args: Record<string, unknown>) => {
-    const apiKey = resolveXSearchApiKey({
+    const apiKey = await resolveXSearchApiKey({
       sourceConfig: options?.config,
       runtimeConfig: runtimeConfig ?? undefined,
+      auth: options?.auth,
     });
     if (!apiKey) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
@@ -147,6 +189,7 @@ export function createXSearchTool(options?: {
     const query = readStringParam(args, "query", { required: true });
     const allowedXHandles = readStringArrayParam(args, "allowed_x_handles");
     const excludedXHandles = readStringArrayParam(args, "excluded_x_handles");
+    validateXSearchHandleFilters({ allowedXHandles, excludedXHandles });
     const fromDate = normalizeOptionalIsoDate(readStringParam(args, "from_date"), "from_date");
     const toDate = normalizeOptionalIsoDate(readStringParam(args, "to_date"), "to_date");
     if (fromDate && toDate && fromDate > toDate) {
@@ -164,11 +207,13 @@ export function createXSearchTool(options?: {
     };
     const xSearchConfigRecord = xSearchConfig;
     const model = resolveXaiXSearchModel(xSearchConfigRecord);
+    const endpoint = resolveXaiXSearchEndpoint(xSearchConfigRecord);
     const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfigRecord);
     const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfigRecord);
     const cacheKey = buildXSearchCacheKey({
       query,
       model,
+      endpoint,
       inlineCitations,
       maxTurns,
       options: {
@@ -188,6 +233,7 @@ export function createXSearchTool(options?: {
     const startedAt = Date.now();
     const result = await requestXaiXSearch({
       apiKey,
+      endpoint,
       model,
       timeoutSeconds: resolveTimeoutSeconds(xSearchConfig?.timeoutSeconds, 30),
       inlineCitations,

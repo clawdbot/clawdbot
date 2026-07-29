@@ -1,8 +1,12 @@
 ---
 summary: "Redirect to /automation"
-title: "Cron vs Heartbeat"
+title: "Cron vs heartbeat"
 ---
 
-# Cron vs Heartbeat
+This page moved. See [Scheduled Tasks (Cron) vs Heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat) for the decision table.
 
-This page moved to [Automation & Tasks](/automation). See [Automation & Tasks](/automation) for the decision guide comparing cron and heartbeat.
+## Related
+
+- [Scheduled tasks](/automation/cron-jobs)
+- [Heartbeat](/gateway/heartbeat)
+- [Background tasks](/automation/tasks)

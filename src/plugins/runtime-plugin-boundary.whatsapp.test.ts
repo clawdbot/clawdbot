@@ -1,9 +1,11 @@
+// Verifies WhatsApp runtime imports respect plugin boundary rules.
 import fs from "node:fs";
 import path from "node:path";
+import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
-import { bundledDistPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
-import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
+import type { PluginModuleLoaderCache } from "./plugin-module-loader-cache.js";
+import { loadPluginBoundaryModule } from "./runtime/runtime-plugin-boundary.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 type LightModule = {
@@ -35,8 +37,8 @@ function createBundledWhatsAppRuntimeFixture() {
           openclaw: "openclaw.mjs",
         },
         exports: {
-          "./plugin-sdk": {
-            default: "./dist/plugin-sdk/index.js",
+          "./plugin-sdk/core": {
+            default: "./dist/plugin-sdk/core.js",
           },
         },
       },
@@ -44,6 +46,7 @@ function createBundledWhatsAppRuntimeFixture() {
       2,
     ),
     "openclaw.mjs": "export {};\n",
+    "dist/plugin-sdk/core.js": "export {};\n",
     [bundledDistPluginFile("whatsapp", "index.js")]: "export default {};\n",
     [bundledDistPluginFile("whatsapp", "light-runtime-api.js")]:
       'export { getActiveWebListener } from "../../active-listener.js";\n',
@@ -88,16 +91,50 @@ function createBundledWhatsAppRuntimeFixture() {
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
 }
 
+function createExternalTypeScriptRuntimePackageFixture() {
+  const rootDir = makeTrackedTempDir("openclaw-external-boundary-ts", tempDirs);
+  writeRuntimeFixtureText(
+    rootDir,
+    "package.json",
+    JSON.stringify(
+      {
+        name: "openclaw-external-ts-runtime",
+        type: "module",
+      },
+      null,
+      2,
+    ),
+  );
+  writeRuntimeFixtureText(
+    rootDir,
+    "runtime-api.ts",
+    [
+      'import { marker } from "./runtime-helper.js";',
+      "export const ok = true;",
+      "export const loadedVia = marker;",
+      "",
+    ].join("\n"),
+  );
+  writeRuntimeFixtureText(
+    rootDir,
+    "runtime-helper.ts",
+    'export const marker = "jiti-source-package";\n',
+  );
+  return path.join(rootDir, "runtime-api.ts");
+}
+
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
-  const loaders = new Map<boolean, ReturnType<typeof import("jiti").createJiti>>();
+  const loaders: PluginModuleLoaderCache = new Map();
   return {
-    light: loadPluginBoundaryModuleWithJiti<LightModule>(
+    light: loadPluginBoundaryModule<LightModule>(
       path.join(runtimePluginDir, "light-runtime-api.js"),
       loaders,
+      { origin: "bundled" },
     ),
-    heavy: loadPluginBoundaryModuleWithJiti<HeavyModule>(
+    heavy: loadPluginBoundaryModule<HeavyModule>(
       path.join(runtimePluginDir, "runtime-api.js"),
       loaders,
+      { origin: "bundled" },
     ),
   };
 }
@@ -124,5 +161,29 @@ afterEach(() => {
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
     expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
+  });
+
+  it("rejects bundled TypeScript runtime modules instead of using the source loader", () => {
+    const rootDir = makeTrackedTempDir("openclaw-bundled-boundary-ts", tempDirs);
+    const modulePath = path.join(rootDir, "runtime-api.ts");
+    writeRuntimeFixtureText(rootDir, "runtime-api.ts", "export const ok = true;\n");
+    const loaders: PluginModuleLoaderCache = new Map();
+
+    expect(() =>
+      loadPluginBoundaryModule<{ ok: boolean }>(modulePath, loaders, { origin: "bundled" }),
+    ).toThrow(/must be built JavaScript/u);
+    expect(loaders.size).toBe(0);
+  });
+
+  it("keeps the TypeScript source package fallback available for non-bundled plugins", () => {
+    const modulePath = createExternalTypeScriptRuntimePackageFixture();
+    const loaders: PluginModuleLoaderCache = new Map();
+
+    expect(
+      loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, loaders, {
+        origin: "workspace",
+      }),
+    ).toEqual({ ok: true, loadedVia: "jiti-source-package" });
+    expect(loaders.size).toBe(1);
   });
 });

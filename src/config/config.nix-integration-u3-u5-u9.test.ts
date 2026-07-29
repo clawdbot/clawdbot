@@ -1,3 +1,4 @@
+// Covers Nix integration config compatibility scenarios U3, U5, and U9.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

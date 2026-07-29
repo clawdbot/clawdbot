@@ -1,3 +1,5 @@
+// Auth modes suite covers password, token, none, Tailscale, and control-UI
+// origin behavior across gateway WebSocket authentication modes.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import {
   connectReq,
@@ -12,7 +14,7 @@ import {
   startGatewayServer,
   testState,
   testTailscaleWhois,
-} from "./server.auth.shared.js";
+} from "./server.auth.test-helpers.js";
 
 export function registerAuthModesSuite(): void {
   describe("password auth", () => {
@@ -145,9 +147,21 @@ export function registerAuthModesSuite(): void {
   describe("tailscale auth", () => {
     let server: Awaited<ReturnType<typeof startGatewayServer>>;
     let port: number;
+    const tailscaleOrigin = "https://gateway.tailnet.ts.net";
 
     beforeAll(async () => {
       testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
+      testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
+      const { replaceConfigFile } = await import("../config/config.js");
+      await replaceConfigFile({
+        nextConfig: {
+          gateway: {
+            auth: testState.gatewayAuth,
+            controlUi: testState.gatewayControlUi,
+          },
+        },
+        afterWrite: { mode: "auto" },
+      });
       port = await getFreePort();
       server = await startGatewayServer(port);
     });
@@ -158,6 +172,7 @@ export function registerAuthModesSuite(): void {
 
     beforeEach(() => {
       testState.gatewayAuth = { mode: "token", token: "secret", allowTailscale: true };
+      testState.gatewayControlUi = { allowedOrigins: [tailscaleOrigin] };
       testTailscaleWhois.value = { login: "peter", name: "Peter" };
     });
 
@@ -170,6 +185,20 @@ export function registerAuthModesSuite(): void {
       const res = await connectReq(ws, { skipDefaultAuth: true, device: null });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
+      ws.close();
+    });
+
+    test("skips pairing for tailscale-authenticated control ui with device identity", async () => {
+      const ws = await openTailscaleWs(port, { origin: tailscaleOrigin });
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        client: {
+          ...CONTROL_UI_CLIENT,
+        },
+      });
+      expect(res.ok, JSON.stringify(res)).toBe(true);
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(true);
       ws.close();
     });
 

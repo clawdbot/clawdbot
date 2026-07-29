@@ -1,49 +1,61 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// TTS integration tests cover text-to-speech command behavior.
+import { readFileSync } from "node:fs";
+import { afterEach, describe, expect, it } from "vitest";
+import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
 
-const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
-const loadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
-
-vi.mock("../plugin-sdk/facade-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugin-sdk/facade-runtime.js")>(
-    "../plugin-sdk/facade-runtime.js",
-  );
-  return {
-    ...actual,
-    loadActivatedBundledPluginPublicSurfaceModuleSync,
-    loadBundledPluginPublicSurfaceModuleSync,
-  };
-});
+function readSource(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
 
 describe("tts runtime facade", () => {
-  let ttsModulePromise: Promise<typeof import("./tts.js")> | undefined;
-
-  beforeEach(() => {
-    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
-    loadBundledPluginPublicSurfaceModuleSync.mockReset();
+  afterEach(() => {
+    setActiveDegradedSecretOwners([]);
   });
 
-  function importTtsModule() {
-    ttsModulePromise ??= import("./tts.js");
-    return ttsModulePromise;
-  }
+  it("routes public TTS helpers through the core speech package", () => {
+    const publicFacadeSource = readSource("./tts.ts");
+    const runtimeFacadeSource = readSource("../plugin-sdk/tts-runtime.ts");
 
-  it("does not load speech-core on module import", async () => {
-    await importTtsModule();
-
-    expect(loadBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
+    expect(publicFacadeSource).toContain('} from "../plugin-sdk/tts-runtime.js";');
+    expect(publicFacadeSource).toContain("setSpeechRuntimeAvailabilityGuard");
+    expect(runtimeFacadeSource).toContain('from "../../packages/speech-core/runtime-api.js";');
+    expect(runtimeFacadeSource).not.toContain('dirName: "speech-core"');
   });
 
-  it("loads speech-core lazily on first runtime access", async () => {
-    const buildTtsSystemPromptHint = vi.fn().mockReturnValue("hint");
-    loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
-      buildTtsSystemPromptHint,
+  it("keeps agent prompt TTS settings off the synthesis runtime chain", () => {
+    const agentConfigSource = readSource("../agents/system-prompt-config.ts");
+    const settingsFacadeSource = readSource("./tts-settings.ts");
+    const packageSettingsSource = readSource("../../packages/speech-core/src/tts-settings.ts");
+
+    expect(agentConfigSource).toContain('from "../tts/tts-settings.js";');
+    expect(settingsFacadeSource).toContain(
+      'from "../../packages/speech-core/src/tts-settings.js";',
+    );
+    expect(settingsFacadeSource).not.toContain("tts-runtime");
+    expect(packageSettingsSource).toContain('from "openclaw/plugin-sdk/speech-settings";');
+    expect(packageSettingsSource).not.toContain("plugin-sdk/media-runtime");
+  });
+
+  it("blocks explicit synthesis but preserves text delivery when TTS is cold", async () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: "tts",
+        state: "unavailable",
+        paths: ["tts.providers.elevenlabs.apiKey"],
+        refKeys: ["env:default:MISSING_TTS_KEY"],
+        reason: "secret reference was not found",
+      },
+    ]);
+    await import("./tts.js");
+    const { maybeApplyTtsToPayload, textToSpeech } = await import("../plugin-sdk/tts-runtime.js");
+    const payload = { text: "Keep this text." };
+
+    await expect(textToSpeech({ text: "Speak this.", cfg: {} })).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "tts",
     });
-
-    const tts = await importTtsModule();
-
-    expect(loadActivatedBundledPluginPublicSurfaceModuleSync).not.toHaveBeenCalled();
-    expect(tts.buildTtsSystemPromptHint({} as never)).toBe("hint");
-    expect(loadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledTimes(1);
-    expect(buildTtsSystemPromptHint).toHaveBeenCalledTimes(1);
+    await expect(maybeApplyTtsToPayload({ payload, cfg: {} })).resolves.toBe(payload);
   });
 });

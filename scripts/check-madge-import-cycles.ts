@@ -1,22 +1,105 @@
 #!/usr/bin/env node
+// Check Madge Import Cycles script supports OpenClaw repository automation.
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import madge from "madge";
+import ts from "typescript";
+import {
+  collectSourceFiles,
+  collectStronglyConnectedComponents,
+} from "./lib/import-cycle-graph.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = ["src", "extensions", "ui"] as const;
+const sourceExtensions = [".ts"] as const;
+const ignoredPathPartPattern =
+  /(^|\/)(node_modules|dist|build|coverage|\.artifacts|\.git|assets)(\/|$)/;
 
-function normalizeRepoPath(filePath: string): string {
-  return filePath.split(path.sep).join("/");
+function shouldSkipRepoPath(repoPath: string): boolean {
+  return ignoredPathPartPattern.test(repoPath);
 }
 
-async function main(): Promise<number> {
-  const result = await madge([...scanRoots], {
-    baseDir: repoRoot,
-    fileExtensions: ["ts"],
-    tsConfig: path.join(repoRoot, "tsconfig.json"),
-  });
-  const cycles = result.circular().map((cycle) => cycle.map((file) => normalizeRepoPath(file)));
+function loadCompilerOptions(): ts.CompilerOptions {
+  const configPath = path.join(repoRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, (filePath) => ts.sys.readFile(filePath));
+  if (config.error) {
+    throw new Error(ts.flattenDiagnosticMessageText(config.error.messageText, "\n"));
+  }
+  return ts.parseJsonConfigFileContent(config.config, ts.sys, repoRoot).options;
+}
+
+function collectStaticModuleSpecifiers(sourceFile: ts.SourceFile): string[] {
+  const specifiers: string[] = [];
+  const visit = (node: ts.Node) => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+      specifiers.push(node.moduleSpecifier.text);
+    } else if (
+      ts.isExportDeclaration(node) &&
+      node.moduleSpecifier &&
+      ts.isStringLiteral(node.moduleSpecifier)
+    ) {
+      specifiers.push(node.moduleSpecifier.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return specifiers;
+}
+
+function createImportGraph(files: readonly string[]): Map<string, string[]> {
+  const compilerOptions = loadCompilerOptions();
+  const compilerHost = ts.createCompilerHost(compilerOptions, false);
+  const resolutionCache = ts.createModuleResolutionCache(
+    repoRoot,
+    (value) => value,
+    compilerOptions,
+  );
+  const absoluteToRepoPath = new Map(
+    files.map((file): [string, string] => [path.resolve(repoRoot, file), file]),
+  );
+  const graph = new Map<string, string[]>();
+
+  for (const file of files) {
+    const absoluteFile = path.join(repoRoot, file);
+    const sourceFile = ts.createSourceFile(
+      file,
+      readFileSync(absoluteFile, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const imports = collectStaticModuleSpecifiers(sourceFile).flatMap((specifier) => {
+      const resolved = ts.resolveModuleName(
+        specifier,
+        absoluteFile,
+        compilerOptions,
+        compilerHost,
+        resolutionCache,
+      ).resolvedModule?.resolvedFileName;
+      if (!resolved) {
+        return [];
+      }
+      const repoPath = absoluteToRepoPath.get(path.resolve(resolved));
+      return repoPath ? [repoPath] : [];
+    });
+    graph.set(
+      file,
+      imports.toSorted((left, right) => left.localeCompare(right)),
+    );
+  }
+
+  return graph;
+}
+
+function main(): number {
+  const files = scanRoots.flatMap((root) =>
+    collectSourceFiles(path.join(repoRoot, root), {
+      repoRoot,
+      sourceExtensions,
+      shouldSkipRepoPath,
+    }),
+  );
+  const graph = createImportGraph(files);
+  const cycles = collectStronglyConnectedComponents(graph);
 
   console.log(`Madge import cycle check: ${cycles.length} cycle(s).`);
   if (cycles.length === 0) {
@@ -34,4 +117,4 @@ async function main(): Promise<number> {
   return 1;
 }
 
-process.exitCode = await main();
+process.exitCode = main();

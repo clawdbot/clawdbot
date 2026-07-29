@@ -1,4 +1,6 @@
-import { getMatrixRuntime } from "../runtime.js";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+// Matrix plugin module implements client bootstrap behavior.
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { CoreConfig } from "../types.js";
 import { getActiveMatrixClient } from "./active-client.js";
 import { isBunRuntime } from "./client/runtime.js";
@@ -11,32 +13,22 @@ type ResolvedRuntimeMatrixClient = {
 };
 
 type MatrixRuntimeClientReadiness = "none" | "prepared" | "started";
-type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist";
+type ResolvedRuntimeMatrixClientStopMode = "stop" | "persist" | "discard";
 
 type MatrixResolvedClientHook = (
   client: MatrixClient,
   context: { preparedByDefault: boolean },
 ) => Promise<void> | void;
 
-type MatrixSharedClientRuntimeDeps = Pick<
-  typeof import("./client.js"),
-  "acquireSharedMatrixClient" | "resolveMatrixAuthContext"
-> &
-  Pick<typeof import("./client/shared.js"), "releaseSharedClientInstance">;
-
-let matrixSharedClientRuntimeDepsPromise: Promise<MatrixSharedClientRuntimeDeps> | undefined;
-
-async function loadMatrixSharedClientRuntimeDeps(): Promise<MatrixSharedClientRuntimeDeps> {
-  matrixSharedClientRuntimeDepsPromise ??= Promise.all([
-    import("./client.js"),
-    import("./client/shared.js"),
-  ]).then(([clientModule, sharedModule]) => ({
-    acquireSharedMatrixClient: clientModule.acquireSharedMatrixClient,
-    resolveMatrixAuthContext: clientModule.resolveMatrixAuthContext,
-    releaseSharedClientInstance: sharedModule.releaseSharedClientInstance,
-  }));
-  return await matrixSharedClientRuntimeDepsPromise;
-}
+const loadMatrixSharedClientRuntimeDeps = createLazyRuntimeModule(() =>
+  Promise.all([import("./client.js"), import("./client/shared.js")]).then(
+    ([clientModule, sharedModule]) => ({
+      acquireSharedMatrixClient: clientModule.acquireSharedMatrixClient,
+      resolveMatrixAuthContext: clientModule.resolveMatrixAuthContext,
+      releaseSharedClientInstance: sharedModule.releaseSharedClientInstance,
+    }),
+  ),
+);
 
 async function ensureResolvedClientReadiness(params: {
   client: MatrixClient;
@@ -71,7 +63,12 @@ async function resolveRuntimeMatrixClient(opts: {
     return { client: opts.client, stopOnDone: false };
   }
 
-  const cfg = opts.cfg ?? (getMatrixRuntime().config.loadConfig() as CoreConfig);
+  if (!opts.cfg) {
+    throw new Error(
+      "Matrix runtime client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
+    );
+  }
+  const cfg = requireRuntimeConfig(opts.cfg, "Matrix runtime client") as CoreConfig;
   const { acquireSharedMatrixClient, releaseSharedClientInstance, resolveMatrixAuthContext } =
     await loadMatrixSharedClientRuntimeDeps();
   const authContext = resolveMatrixAuthContext({
@@ -126,7 +123,7 @@ export async function resolveRuntimeMatrixClientWithReadiness(opts: {
   });
 }
 
-export async function stopResolvedRuntimeMatrixClient(
+async function stopResolvedRuntimeMatrixClient(
   resolved: ResolvedRuntimeMatrixClient,
   mode: ResolvedRuntimeMatrixClientStopMode = "stop",
 ): Promise<void> {
@@ -139,6 +136,10 @@ export async function stopResolvedRuntimeMatrixClient(
   }
   if (mode === "persist") {
     await resolved.client.stopAndPersist();
+    return;
+  }
+  if (mode === "discard") {
+    resolved.client.stopWithoutPersist();
     return;
   }
   resolved.client.stop();

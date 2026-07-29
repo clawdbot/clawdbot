@@ -1,16 +1,19 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
+// Redacts runtime config snapshots before diagnostics or UI exposure.
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
-} from "../shared/net/redact-sensitive-url.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+} from "@openclaw/net-policy/redact-sensitive-url";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
 import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
-import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
+import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
 const log = createSubsystemLogger("config/redaction");
@@ -19,9 +22,8 @@ const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
 function isSensitivePath(path: string): boolean {
   if (path.endsWith("[]")) {
     return isSensitiveConfigPath(path.slice(0, -2));
-  } else {
-    return isSensitiveConfigPath(path);
   }
+  return isSensitiveConfigPath(path);
 }
 
 function isEnvVarPlaceholder(value: string): boolean {
@@ -42,10 +44,6 @@ function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string
     return false;
   }
   return paths.some((path) => hasSensitiveUrlHintTag(hints[path]));
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -106,7 +104,7 @@ function isSecretRefWithProvider(
 // the Set, as their first lookup is done before the code knows it's
 // an array.
 function buildRedactionLookup(hints: ConfigUiHints): Set<string> {
-  let result = new Set<string>();
+  const result = new Set<string>();
 
   for (const [path, hint] of Object.entries(hints)) {
     if (!hint.sensitive) {
@@ -146,9 +144,8 @@ function redactObject(obj: unknown, hints?: ConfigUiHints): unknown {
     return lookup.has("")
       ? redactObjectWithLookup(obj, lookup, "", [], hints)
       : redactObjectGuessing(obj, "", [], hints);
-  } else {
-    return redactObjectGuessing(obj, "", []);
   }
+  return redactObjectGuessing(obj, "", []);
 }
 
 /**
@@ -445,7 +442,7 @@ export function redactConfigSnapshot(
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
-      originalConfig: snapshot.config,
+      originalConfig: snapshot.parsed ?? snapshot.config,
       restoreParsed: (parsed) =>
         withRestoreWarningsSuppressed(() =>
           restoreRedactedValues(parsed, snapshot.config, uiHints),
@@ -456,9 +453,13 @@ export function redactConfigSnapshot(
   }
   // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactConfigObject(snapshot.resolved, uiHints);
+  const { pluginMetadataSnapshot: _pluginMetadataSnapshot, ...publicSnapshot } =
+    snapshot as typeof snapshot & {
+      pluginMetadataSnapshot?: unknown;
+    };
 
   return {
-    ...snapshot,
+    ...publicSnapshot,
     sourceConfig: redactedResolved,
     runtimeConfig: redactedConfig,
     config: redactedConfig,
@@ -468,7 +469,7 @@ export function redactConfigSnapshot(
   };
 }
 
-export type RedactionResult = {
+type RedactionResult = {
   ok: boolean;
   result?: unknown;
   error?: unknown;
@@ -537,7 +538,7 @@ function restoreOriginalValueOrThrow(params: {
   path: string;
   original: Record<string, unknown>;
 }): unknown {
-  if (params.key in params.original) {
+  if (Object.hasOwn(params.original, params.key)) {
     return params.original[params.key];
   }
   if (!suppressRestoreWarnings) {
@@ -580,6 +581,8 @@ function maybeRestoreSecretRefId(params: {
 
   const originalObj = toObjectRecord(params.original);
   if (!isSecretRefWithProvider(originalObj)) {
+    // Automatic restore needs provider as part of the identity; source+id alone can match the
+    // wrong secret provider after config edits.
     if (isSecretRefShape(originalObj)) {
       throw new RedactionError(
         params.path,
@@ -593,6 +596,8 @@ function maybeRestoreSecretRefId(params: {
   }
 
   if (!isSecretRefWithProvider(incomingObj)) {
+    // A redacted id is only restorable when the incoming object still carries the stable SecretRef
+    // identity fields that were visible in the redacted snapshot.
     throw new RedactionError(
       params.path,
       `SecretRef at ${params.path} must include source, provider, and id when redacted placeholders are present.`,
@@ -600,6 +605,8 @@ function maybeRestoreSecretRefId(params: {
   }
 
   if (incomingObj.source !== originalObj.source || incomingObj.provider !== originalObj.provider) {
+    // Changing source/provider while keeping a redacted id would silently bind the old secret id to
+    // a different backend. Require an explicit id for that edit.
     throw new RedactionError(
       params.path,
       `SecretRef at ${params.path} changed source/provider while id is redacted. Provide an explicit id when changing source/provider.`,
@@ -703,6 +710,59 @@ function restoreGuessingArray(
   });
 }
 
+function shouldRestoreSensitiveGuessingPath(
+  path: string,
+  hintPaths: string[],
+  hints?: ConfigUiHints,
+): boolean {
+  return (
+    !isExplicitlyNonSensitivePath(hints, hintPaths) &&
+    (isSensitivePath(path) || hasSensitiveUrlHintPath(hints, hintPaths) || isSensitiveUrlPath(path))
+  );
+}
+
+function restoreRedactedEntryGuessing(params: {
+  key: string;
+  value: unknown;
+  path: string;
+  wildcardPath: string;
+  original: Record<string, unknown>;
+  hints?: ConfigUiHints;
+}): unknown {
+  const hintPaths = [params.path, params.wildcardPath];
+  const canRestoreSecretRef = shouldRestoreSensitiveGuessingPath(
+    params.path,
+    hintPaths,
+    params.hints,
+  );
+  if (params.value === REDACTED_SENTINEL && canRestoreSecretRef) {
+    return restoreOriginalValueOrThrow({
+      key: params.key,
+      path: params.path,
+      original: params.original,
+    });
+  }
+  if (typeof params.value === "object" && params.value !== null) {
+    if (canRestoreSecretRef) {
+      const restoredSecretRef = maybeRestoreSecretRefId({
+        incoming: params.value,
+        original: params.original[params.key],
+        path: params.path,
+      });
+      if (restoredSecretRef.handled) {
+        return restoredSecretRef.value;
+      }
+    }
+    return restoreRedactedValuesGuessing(
+      params.value,
+      params.original[params.key],
+      params.path,
+      params.hints,
+    );
+  }
+  return params.value;
+}
+
 /**
  * Worker for restoreRedactedValues().
  * Used when there are ConfigUiHints available.
@@ -776,34 +836,14 @@ function restoreRedactedValuesWithLookup(
       }
     }
     if (!matched) {
-      const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
-      if (
-        !markedNonSensitive &&
-        value === REDACTED_SENTINEL &&
-        (isSensitivePath(path) ||
-          hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-          isSensitiveUrlPath(path))
-      ) {
-        result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
-      } else if (typeof value === "object" && value !== null) {
-        const canRestoreSecretRef =
-          !markedNonSensitive &&
-          (isSensitivePath(path) ||
-            hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-            isSensitiveUrlPath(path));
-        if (canRestoreSecretRef) {
-          const restoredSecretRef = maybeRestoreSecretRefId({
-            incoming: value,
-            original: orig[key],
-            path,
-          });
-          result[key] = restoredSecretRef.handled
-            ? restoredSecretRef.value
-            : restoreRedactedValuesGuessing(value, orig[key], path, hints);
-        } else {
-          result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
-        }
-      }
+      result[key] = restoreRedactedEntryGuessing({
+        key,
+        value,
+        path,
+        wildcardPath,
+        original: orig,
+        hints,
+      });
     }
   }
   return result;
@@ -837,35 +877,15 @@ function restoreRedactedValuesGuessing(
   for (const [key, value] of Object.entries(toObjectRecord(incoming))) {
     const path = prefix ? `${prefix}.${key}` : key;
     const wildcardPath = prefix ? `${prefix}.*` : "*";
-    if (
-      !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
-      value === REDACTED_SENTINEL &&
-      (isSensitivePath(path) ||
-        hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-        isSensitiveUrlPath(path))
-    ) {
-      result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
-    } else if (typeof value === "object" && value !== null) {
-      const canRestoreSecretRef =
-        !isExplicitlyNonSensitivePath(hints, [path, wildcardPath]) &&
-        (isSensitivePath(path) ||
-          hasSensitiveUrlHintPath(hints, [path, wildcardPath]) ||
-          isSensitiveUrlPath(path));
-      if (canRestoreSecretRef) {
-        const restoredSecretRef = maybeRestoreSecretRefId({
-          incoming: value,
-          original: orig[key],
-          path,
-        });
-        result[key] = restoredSecretRef.handled
-          ? restoredSecretRef.value
-          : restoreRedactedValuesGuessing(value, orig[key], path, hints);
-      } else {
-        result[key] = restoreRedactedValuesGuessing(value, orig[key], path, hints);
-      }
-    } else {
-      result[key] = value;
-    }
+    result[key] = restoreRedactedEntryGuessing({
+      key,
+      value,
+      path,
+      wildcardPath,
+      original: orig,
+      hints,
+    });
   }
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

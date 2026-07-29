@@ -1,3 +1,4 @@
+// Chat envelope tests cover parsing and formatting channel-prefixed chat text.
 import { describe, expect, it } from "vitest";
 import { stripEnvelope, stripMessageIdHints } from "./chat-envelope.js";
 

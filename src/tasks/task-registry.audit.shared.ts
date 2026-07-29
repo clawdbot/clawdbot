@@ -1,5 +1,7 @@
+// Shares task audit classification helpers across registry audit modules.
 import type { TaskRecord } from "./task-registry.types.js";
 
+/** Severity used by task registry audit findings. */
 export type TaskAuditSeverity = "warn" | "error";
 export type TaskAuditCode =
   | "stale_queued"
@@ -24,6 +26,12 @@ export type TaskAuditSummary = {
   byCode: Record<TaskAuditCode, number>;
 };
 
+type TaskAuditComparableFinding = {
+  severity: TaskAuditSeverity;
+  ageMs?: number;
+  createdAt: number;
+};
+
 export function createEmptyTaskAuditSummary(): TaskAuditSummary {
   return {
     total: 0,
@@ -38,4 +46,21 @@ export function createEmptyTaskAuditSummary(): TaskAuditSummary {
       inconsistent_timestamps: 0,
     },
   };
+}
+
+export function compareTaskAuditFindingSortKeys(
+  left: TaskAuditComparableFinding,
+  right: TaskAuditComparableFinding,
+): number {
+  const severityRank = (severity: TaskAuditSeverity) => (severity === "error" ? 0 : 1);
+  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
+  if (severityDiff !== 0) {
+    return severityDiff;
+  }
+  const leftAge = left.ageMs ?? -1;
+  const rightAge = right.ageMs ?? -1;
+  if (leftAge !== rightAge) {
+    return rightAge - leftAge;
+  }
+  return left.createdAt - right.createdAt;
 }

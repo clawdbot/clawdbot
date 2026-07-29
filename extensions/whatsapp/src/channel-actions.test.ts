@@ -1,3 +1,4 @@
+// Whatsapp tests cover channel actions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   describeWhatsAppMessageActions,
@@ -130,6 +131,7 @@ describe("whatsapp channel action helpers", () => {
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
       "react",
       "poll",
+      "upload-file",
     ]);
   });
 
@@ -151,6 +153,7 @@ describe("whatsapp channel action helpers", () => {
 
     expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
       "poll",
+      "upload-file",
     ]);
   });
 
@@ -172,6 +175,7 @@ describe("whatsapp channel action helpers", () => {
     expect(describeWhatsAppMessageActions({ cfg, accountId: "work" })?.actions).toEqual([
       "react",
       "poll",
+      "upload-file",
     ]);
   });
 
@@ -191,7 +195,11 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
     hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["react", "poll"]);
+    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
+      "react",
+      "poll",
+      "upload-file",
+    ]);
   });
 
   it("omits react in global discovery when only disabled accounts enable agent reactions", () => {
@@ -211,6 +219,6 @@ describe("whatsapp channel action helpers", () => {
     } as OpenClawConfig;
     hoisted.listWhatsAppAccountIds.mockReturnValue(["default", "work"]);
 
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll"]);
+    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll", "upload-file"]);
   });
 });

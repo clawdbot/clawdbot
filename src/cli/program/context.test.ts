@@ -1,3 +1,4 @@
+// Program context tests cover shared CLI context helpers and runtime injections.
 import { describe, expect, it, vi } from "vitest";
 import { createProgramContext } from "./context.js";
 

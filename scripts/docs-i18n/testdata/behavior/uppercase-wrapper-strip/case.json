@@ -1,0 +1,14 @@
+{
+  "name": "uppercase body wrapper is stripped",
+  "mode": "doc_body_chunked",
+  "rel_path": "help/testing.md",
+  "source_file": "source.txt",
+  "expected_file": "expected.txt",
+  "rules": [
+    {
+      "method": "raw",
+      "match_all": ["Regular paragraph."],
+      "response_file": "raw-uppercase-wrapper.txt"
+    }
+  ]
+}

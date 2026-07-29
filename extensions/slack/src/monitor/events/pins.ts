@@ -1,6 +1,8 @@
+// Slack plugin module implements pins behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackPinEvent } from "../types.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
@@ -45,7 +47,7 @@ async function handleSlackPinEvent(params: {
       },
     );
   } catch (err) {
-    ctx.runtime.error?.(danger(`slack ${errorLabel} handler failed: ${String(err)}`));
+    ctx.runtime.error?.(danger(`slack ${errorLabel} handler failed: ${formatErrorMessage(err)}`));
   }
 }
 

@@ -1,7 +1,18 @@
+// Verifies gateway auth selection audit behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayProbeAuthSafe, resolveGatewayProbeTarget } from "../gateway/probe-auth.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
+
+function requireProbeAuthWarning(findings: ReturnType<typeof collectDeepProbeFindings>) {
+  const warning = findings.find(
+    (finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable",
+  );
+  if (!warning) {
+    throw new Error("Expected gateway probe auth SecretRef warning");
+  }
+  return warning;
+}
 
 describe("security audit gateway auth selection", () => {
   it("applies gateway auth precedence across local and remote modes", async () => {
@@ -28,10 +39,10 @@ describe("security audit gateway auth selection", () => {
         expectedAuth: { token: "local-token-abc123" },
       },
       {
-        name: "prefers env token over local config token",
+        name: "prefers local config token over env token",
         cfg: { gateway: { mode: "local", auth: { token: "local-token" } } },
         env: { token: "env-token" },
-        expectedAuth: { token: "env-token" },
+        expectedAuth: { token: "local-token" },
       },
       {
         name: "uses local auth when gateway.mode is undefined (default)",
@@ -129,19 +140,21 @@ describe("security audit gateway auth selection", () => {
       mode: "local",
       env: {},
     });
-    const warning = collectDeepProbeFindings({
-      deep: {
-        gateway: {
-          attempted: true,
-          url: "ws://127.0.0.1:18789",
-          ok: true,
-          error: null,
-          close: null,
+    const warning = requireProbeAuthWarning(
+      collectDeepProbeFindings({
+        deep: {
+          gateway: {
+            attempted: true,
+            url: "ws://127.0.0.1:18789",
+            ok: true,
+            error: null,
+            close: null,
+          },
         },
-      },
-      authWarning: result.warning,
-    }).find((finding) => finding.checkId === "gateway.probe_auth_secretref_unavailable");
-    expect(warning?.severity).toBe("warn");
-    expect(warning?.detail).toContain("gateway.auth.token");
+        authWarning: result.warning,
+      }),
+    );
+    expect(warning.severity).toBe("warn");
+    expect(warning.detail).toContain("gateway.auth.token");
   });
 });

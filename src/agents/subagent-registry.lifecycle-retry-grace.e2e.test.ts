@@ -1,8 +1,12 @@
+// Lifecycle retry-grace e2e tests cover completion delivery retry behavior when
+// lifecycle events race gateway waits or transient announce failures.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
-import { __testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
-import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
-import * as mod from "./subagent-registry.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
+import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { testing as settleWakeTesting } from "./subagent-announce.requester-settle-wake.js";
+import * as announceRead from "./subagent-registry-announce-read.js";
+import * as mod from "./subagent-registry.test-helpers.js";
 
 const noop = () => {};
 const MAIN_REQUESTER_SESSION_KEY = "agent:main:main";
@@ -23,8 +27,8 @@ type LifecycleEvent = {
 };
 
 type SessionStoreEntry = {
-  sessionId?: string;
-  updatedAt?: number;
+  sessionId: string;
+  updatedAt: number;
   channel?: string;
   lastChannel?: string;
   to?: string;
@@ -87,11 +91,6 @@ const loadConfigMock = vi.fn(() => ({
   agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
   session: { mainKey: "main", scope: "per-sender" },
 }));
-const registryStoreMocks = vi.hoisted(() => ({
-  loadRegistryMock: vi.fn(() => new Map()),
-  saveRegistryMock: vi.fn(() => {}),
-}));
-
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: vi.fn(() => sessionStore),
   resolveAgentIdFromSessionKey: (key: string) => key.match(/^agent:([^:]+)/)?.[1] ?? "main",
@@ -100,17 +99,23 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),
 }));
 
+// The sqlite session accessor bypasses loadSessionStore, so serve session
+// entries (requester lookups included) from the same in-memory fixture.
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
+  loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+}));
+
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
-vi.mock("./subagent-depth.js", () => ({
-  getSubagentDepthFromSessionStore: () => 0,
+vi.mock("../browser-lifecycle-cleanup.js", () => ({
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
-vi.mock("./subagent-registry.store.js", () => ({
-  loadSubagentRegistryFromDisk: registryStoreMocks.loadRegistryMock,
-  saveSubagentRegistryToDisk: registryStoreMocks.saveRegistryMock,
+vi.mock("./subagent-depth.js", () => ({
+  getSubagentDepthFromSessionStore: () => 0,
 }));
 
 describe("subagent registry lifecycle error grace", () => {
@@ -122,8 +127,6 @@ describe("subagent registry lifecycle error grace", () => {
     vi.useFakeTimers();
     callGatewayMock.mockClear();
     onAgentEventMock.mockClear();
-    registryStoreMocks.loadRegistryMock.mockClear().mockReturnValue(new Map());
-    registryStoreMocks.saveRegistryMock.mockClear();
     loadConfigMock.mockClear().mockReturnValue({
       agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },
       session: { mainKey: "main", scope: "per-sender" },
@@ -153,35 +156,50 @@ describe("subagent registry lifecycle error grace", () => {
         },
       },
     );
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
     });
+    const loadSubagentRegistryRuntimeForTest = async () => ({
+      countActiveDescendantRuns: mod.countActiveDescendantRuns,
+      countPendingDescendantRuns: mod.countPendingDescendantRuns,
+      countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
+      hasDescendantRunAwaitingSettle: announceRead.hasDescendantRunAwaitingSettle,
+      getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
+      isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
+      listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
+      replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
+      resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
+      shouldIgnorePostCompletionAnnounceForSession:
+        mod.shouldIgnorePostCompletionAnnounceForSession,
+    });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
-      loadSubagentRegistryRuntime: async () => ({
-        countActiveDescendantRuns: mod.countActiveDescendantRuns,
-        countPendingDescendantRuns: mod.countPendingDescendantRuns,
-        countPendingDescendantRunsExcludingRun: mod.countPendingDescendantRunsExcludingRun,
-        getLatestSubagentRunByChildSessionKey: mod.getLatestSubagentRunByChildSessionKey,
-        isSubagentSessionRunActive: mod.isSubagentSessionRunActive,
-        listSubagentRunsForRequester: mod.listSubagentRunsForRequester,
-        replaceSubagentRunAfterSteer: mod.replaceSubagentRunAfterSteer,
-        resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
-        shouldIgnorePostCompletionAnnounceForSession:
-          mod.shouldIgnorePostCompletionAnnounceForSession,
-      }),
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
+    });
+    settleWakeTesting.setDepsForTest({
+      loadSubagentRegistryRuntime: loadSubagentRegistryRuntimeForTest,
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      getRequesterSessionActivity: (requesterSessionKey: string) => {
+        const entry = sessionStore[requesterSessionKey];
+        return {
+          sessionId: entry?.sessionId,
+          isActive: false,
+        };
+      },
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
-      loadConfig: loadConfigMock as typeof import("../config/config.js").loadConfig,
+      getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
+      readSessionEntry: (_storePath, sessionKey) => sessionStore[sessionKey],
+      resolveAgentIdFromSessionKey: (key) => key?.match(/^agent:([^:]+)/)?.[1] ?? "main",
+      resolveStorePath: () => "/tmp/test-store",
     });
   });
 
@@ -190,7 +208,8 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceTesting.setDepsForTest();
-    mod.__testing.setDepsForTest();
+    settleWakeTesting.setDepsForTest();
+    mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
     if (previousFastTestEnv === undefined) {
@@ -206,6 +225,8 @@ describe("subagent registry lifecycle error grace", () => {
   };
 
   const waitForCleanupHandledFalse = async (runId: string) => {
+    // Cleanup can be released asynchronously after announce failure; poll fake
+    // time until the retry-grace state is observable.
     for (let attempt = 0; attempt < 40; attempt += 1) {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
@@ -235,7 +256,7 @@ describe("subagent registry lifecycle error grace", () => {
       const run = mod
         .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
         .find((candidate) => candidate.runId === runId);
-      if (run?.frozenResultText === expectedText) {
+      if (run?.completion?.resultText === expectedText) {
         return run;
       }
       await vi.advanceTimersByTimeAsync(1);
@@ -418,7 +439,7 @@ describe("subagent registry lifecycle error grace", () => {
     const runBeforeRefresh = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-refresh");
-    const firstCapturedAt = runBeforeRefresh?.frozenResultCapturedAt ?? 0;
+    const firstCapturedAt = runBeforeRefresh?.completion?.capturedAt ?? 0;
 
     setAssistantOutput(
       "agent:main:subagent:refresh",
@@ -433,10 +454,10 @@ describe("subagent registry lifecycle error grace", () => {
       "run-refresh",
       "All 3 subagents complete. Here's the final summary.",
     );
-    expect(runAfterRefresh?.frozenResultText).toBe(
+    expect(runAfterRefresh?.completion?.resultText).toBe(
       "All 3 subagents complete. Here's the final summary.",
     );
-    expect((runAfterRefresh?.frozenResultCapturedAt ?? 0) >= firstCapturedAt).toBe(true);
+    expect((runAfterRefresh?.completion?.capturedAt ?? 0) >= firstCapturedAt).toBe(true);
 
     emitLifecycleEvent("run-refresh", { phase: "end", endedAt: endedAt + 300 });
     await flushAsync();
@@ -457,6 +478,7 @@ describe("subagent registry lifecycle error grace", () => {
     emitLifecycleEvent("run-refresh-silent", { phase: "end", endedAt });
     await flushAsync();
     await waitForCleanupHandledFalse("run-refresh-silent");
+    await waitForFrozenResultText("run-refresh-silent", "All work complete, final summary");
 
     setAssistantOutput("agent:main:subagent:refresh-silent", "NO_REPLY");
     emitLifecycleEvent(
@@ -469,7 +491,7 @@ describe("subagent registry lifecycle error grace", () => {
     const runAfterSilent = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-refresh-silent");
-    expect(runAfterSilent?.frozenResultText).toBe("All work complete, final summary");
+    expect(runAfterSilent?.completion?.resultText).toBe("All work complete, final summary");
 
     emitLifecycleEvent("run-refresh-silent", { phase: "end", endedAt: endedAt + 300 });
     await flushAsync();
@@ -497,13 +519,80 @@ describe("subagent registry lifecycle error grace", () => {
     const run = mod
       .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
       .find((candidate) => candidate.runId === "run-capped");
-    expect(run).toBeDefined();
     if (!run) {
       throw new Error("expected capped run to exist");
     }
-    expect(typeof run.frozenResultText).toBe("string");
-    expect(run.frozenResultText).toContain("[truncated: frozen completion output exceeded 100KB");
-    expect(run.frozenResultCapturedAt).toBeTypeOf("number");
+    expect(run.runId).toBe("run-capped");
+    expect(typeof run.completion?.resultText).toBe("string");
+    expect(run.completion?.resultText).toContain(
+      "[truncated: frozen completion output exceeded 100KB",
+    );
+    expect(run.completion?.capturedAt).toBeTypeOf("number");
+  });
+
+  it("completes with timeout status when aborted end event fires after grace window", async () => {
+    registerCompletionRun("run-timeout", "timeout", "timeout test");
+    setAssistantOutput("agent:main:subagent:timeout", "Partial output before timeout");
+
+    // Emit an end event with aborted=true which triggers the timeout grace path
+    emitLifecycleEvent("run-timeout", {
+      phase: "end",
+      aborted: true,
+      endedAt: 3_000,
+    } as LifecycleData & { aborted: boolean });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    // Advance past the lifecycle timeout retry grace window
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+
+    const run = mod
+      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
+      .find((candidate) => candidate.runId === "run-timeout");
+    expect(run?.outcome?.status).toBe("timeout");
+  });
+
+  it("cancels timeout grace when a successful end event arrives before the grace window expires", async () => {
+    registerCompletionRun("run-timeout-cancel", "timeout-cancel", "timeout cancel test");
+    setAssistantOutput("agent:main:subagent:timeout-cancel", "Final answer after recovery");
+
+    // Emit an aborted end event (starts timeout grace)
+    emitLifecycleEvent("run-timeout-cancel", {
+      phase: "end",
+      aborted: true,
+      endedAt: 4_000,
+    } as LifecycleData & { aborted: boolean });
+    await flushAsync();
+    expect(getAgentCalls()).toHaveLength(0);
+
+    // Before the grace window, the run successfully ends (non-aborted)
+    emitLifecycleEvent("run-timeout-cancel", { phase: "end", endedAt: 4_500 });
+    await flushAsync();
+
+    await waitForAgentCallCount(1);
+    expect(readFirstAnnounceOutcome()?.status).toBe("ok");
+
+    // Advance past the original grace window; no timeout completion should
+    // re-announce. The exhausted completion announce suspends its delivery,
+    // which fires the one-shot requester settle wake for the undelivered
+    // required completion — that wake is not a completion event.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await flushAsync();
+    const readIdempotencyKey = (request: GatewayRequest) => {
+      const key = (request.params as Record<string, unknown> | undefined)?.idempotencyKey;
+      return typeof key === "string" ? key : "";
+    };
+    expect(
+      getAgentCalls().filter((request) => readIdempotencyKey(request).startsWith("announce:v1:")),
+    ).toHaveLength(1);
+    expect(
+      getAgentCalls()
+        .map(readIdempotencyKey)
+        .filter((key) => key.startsWith("announce:requester-settle:")),
+    ).toEqual(["announce:requester-settle:agent:main:main:run-timeout-cancel"]);
   });
 
   it("keeps parallel child completion results frozen even when late traffic arrives", async () => {

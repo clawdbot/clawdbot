@@ -1,17 +1,48 @@
+// Xai plugin module implements responses tool shared behavior.
+import {
+  normalizeOptionalString as trimString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
-export const XAI_RESPONSES_ENDPOINT = "https://api.x.ai/v1/responses";
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function extractUrlCitations(annotations: unknown): string[] {
+  if (!Array.isArray(annotations)) {
+    return [];
+  }
+  return annotations
+    .filter(
+      (annotation) =>
+        isRecord(annotation) &&
+        annotation.type === "url_citation" &&
+        typeof annotation.url === "string",
+    )
+    .map((annotation) => annotation.url as string);
+}
+
+const XAI_RESPONSES_BASE_URL = "https://api.x.ai/v1";
+export const XAI_RESPONSES_ENDPOINT = `${XAI_RESPONSES_BASE_URL}/responses`;
+
+export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
+  return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
+}
 
 export function buildXaiResponsesToolBody(params: {
   model: string;
   inputText: string;
   tools: Array<Record<string, unknown>>;
   maxTurns?: number;
+  reasoningEffort?: "none" | "low" | "medium" | "high";
 }): Record<string, unknown> {
   return {
     model: params.model,
     input: [{ role: "user", content: params.inputText }],
     tools: params.tools,
+    store: false,
+    ...(params.reasoningEffort ? { reasoning: { effort: params.reasoningEffort } } : {}),
     ...(params.maxTurns ? { max_turns: params.maxTurns } : {}),
   };
 }
@@ -21,27 +52,25 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
   annotationCitations: string[];
 } {
   for (const output of data.output ?? []) {
+    if (!isRecord(output)) {
+      continue;
+    }
     if (output.type === "message") {
-      for (const block of output.content ?? []) {
+      const content = Array.isArray(output.content) ? output.content : [];
+      for (const block of content) {
+        if (!isRecord(block)) {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = (block.annotations ?? [])
-            .filter(
-              (annotation) =>
-                annotation.type === "url_citation" && typeof annotation.url === "string",
-            )
-            .map((annotation) => annotation.url as string);
-          return { text: block.text, annotationCitations: [...new Set(urls)] };
+          const urls = extractUrlCitations(block.annotations);
+          return { text: block.text, annotationCitations: uniqueStrings(urls) };
         }
       }
     }
 
     if (output.type === "output_text" && typeof output.text === "string" && output.text) {
-      const urls = (output.annotations ?? [])
-        .filter(
-          (annotation) => annotation.type === "url_citation" && typeof annotation.url === "string",
-        )
-        .map((annotation) => annotation.url as string);
-      return { text: output.text, annotationCitations: [...new Set(urls)] };
+      const urls = extractUrlCitations(output.annotations);
+      return { text: output.text, annotationCitations: uniqueStrings(urls) };
     }
   }
 
@@ -51,13 +80,19 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
   };
 }
 
-export function resolveXaiResponseTextAndCitations(data: XaiWebSearchResponse): {
+export function requireXaiResponseTextAndCitations(
+  data: XaiWebSearchResponse,
+  label: string,
+): {
   content: string;
   citations: string[];
 } {
   const { text, annotationCitations } = extractXaiWebSearchContent(data);
+  if (!text) {
+    throw new Error(`${label}: malformed JSON response`);
+  }
   return {
-    content: text ?? "No response",
+    content: text,
     citations:
       Array.isArray(data.citations) && data.citations.length > 0
         ? data.citations
@@ -65,15 +100,16 @@ export function resolveXaiResponseTextAndCitations(data: XaiWebSearchResponse): 
   };
 }
 
-export function resolveXaiResponseTextCitationsAndInline(
+export function requireXaiResponseTextCitationsAndInline(
   data: XaiWebSearchResponse,
+  label: string,
   inlineCitationsEnabled: boolean,
 ): {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
 } {
-  const { content, citations } = resolveXaiResponseTextAndCitations(data);
+  const { content, citations } = requireXaiResponseTextAndCitations(data, label);
   return {
     content,
     citations,
@@ -83,11 +119,3 @@ export function resolveXaiResponseTextCitationsAndInline(
         : undefined,
   };
 }
-
-export const __testing = {
-  buildXaiResponsesToolBody,
-  extractXaiWebSearchContent,
-  resolveXaiResponseTextCitationsAndInline,
-  resolveXaiResponseTextAndCitations,
-  XAI_RESPONSES_ENDPOINT,
-} as const;

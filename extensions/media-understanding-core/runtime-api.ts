@@ -1,3 +1,4 @@
+// Media Understanding Core API module exposes the plugin public contract.
 export {
   describeImageFile,
   describeImageFileWithModel,

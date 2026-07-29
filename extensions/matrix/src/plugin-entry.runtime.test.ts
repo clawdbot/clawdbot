@@ -1,5 +1,5 @@
+// Matrix tests cover plugin entry plugin behavior.
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -7,8 +7,10 @@ import { afterEach, expect, it } from "vitest";
 
 const tempDirs: string[] = [];
 const REPO_ROOT = process.cwd();
-const require = createRequire(import.meta.url);
-const JITI_ENTRY_PATH = require.resolve("jiti");
+const MATRIX_RUNTIME_WRAPPER_SOURCE = fs.readFileSync(
+  path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+  "utf8",
+);
 const PACKAGED_RUNTIME_STUB = [
   "export async function ensureMatrixCryptoRuntime() {}",
   "export async function handleVerifyRecoveryKey() {}",
@@ -29,14 +31,6 @@ function writeFixtureFile(fixtureRoot: string, relativePath: string, value: stri
   fs.writeFileSync(fullPath, value, "utf8");
 }
 
-function writeJitiFixture(fixtureRoot: string) {
-  writeFixtureFile(
-    fixtureRoot,
-    "node_modules/jiti/index.js",
-    `module.exports = require(${JSON.stringify(JITI_ENTRY_PATH)});\n`,
-  );
-}
-
 function writeOpenClawPackageFixture(fixtureRoot: string) {
   writeFixtureFile(
     fixtureRoot,
@@ -46,61 +40,73 @@ function writeOpenClawPackageFixture(fixtureRoot: string) {
         name: "openclaw",
         type: "module",
         exports: {
-          "./plugin-sdk": "./dist/plugin-sdk/index.js",
+          "./plugin-sdk/core": "./dist/plugin-sdk/core.js",
         },
       },
       null,
       2,
     ) + "\n",
   );
-  writeFixtureFile(fixtureRoot, "dist/plugin-sdk/index.js", "export {};\n");
+  writeFixtureFile(fixtureRoot, "openclaw.mjs", "export {};\n");
+  writeFixtureFile(fixtureRoot, "dist/plugin-sdk/core.js", "export {};\n");
+}
+
+function writeSourceRuntimeWrapperFixture(
+  fixtureRoot: string,
+  options: { runtimeExtension?: ".js" | ".ts" } = {},
+) {
+  const runtimeExtension = options.runtimeExtension ?? ".js";
+  writeFixtureFile(
+    fixtureRoot,
+    "extensions/matrix/src/plugin-entry.runtime.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
+  writeFixtureFile(
+    fixtureRoot,
+    `extensions/matrix/plugin-entry.handlers.runtime${runtimeExtension}`,
+    PACKAGED_RUNTIME_STUB,
+  );
+}
+
+function importFixtureModule(fixtureRoot: string, relativePath: string) {
+  const wrapperUrl = pathToFileURL(path.join(fixtureRoot, relativePath));
+  return import(`${wrapperUrl.href}?t=${Date.now()}`);
+}
+
+function expectRuntimeWrapperExports(mod: unknown) {
+  const exports = mod as Record<string, unknown>;
+  expect(exports.ensureMatrixCryptoRuntime).toBeTypeOf("function");
+  expect(exports.handleVerifyRecoveryKey).toBeTypeOf("function");
+  expect(exports.handleVerificationBootstrap).toBeTypeOf("function");
+  expect(exports.handleVerificationStatus).toBeTypeOf("function");
 }
 
 afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+  for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
 
 it("loads the source-checkout runtime wrapper through native ESM import", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-source-runtime-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   writeOpenClawPackageFixture(fixtureRoot);
-  writeJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js", wrapperSource);
-  writeFixtureFile(
-    fixtureRoot,
-    "extensions/matrix/plugin-entry.handlers.runtime.js",
-    PACKAGED_RUNTIME_STUB,
-  );
+  writeSourceRuntimeWrapperFixture(fixtureRoot);
 
-  const wrapperUrl = pathToFileURL(
-    path.join(fixtureRoot, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
+  expectRuntimeWrapperExports(
+    await importFixtureModule(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js"),
   );
-  const mod = await import(`${wrapperUrl.href}?t=${Date.now()}`);
-
-  expect(mod).toMatchObject({
-    ensureMatrixCryptoRuntime: expect.any(Function),
-    handleVerifyRecoveryKey: expect.any(Function),
-    handleVerificationBootstrap: expect.any(Function),
-    handleVerificationStatus: expect.any(Function),
-  });
 }, 240_000);
 
 it("loads the packaged runtime wrapper without recursing through the stable root alias", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-");
-  const wrapperSource = fs.readFileSync(
-    path.join(REPO_ROOT, "extensions", "matrix", "src", "plugin-entry.runtime.js"),
-    "utf8",
-  );
 
   writeOpenClawPackageFixture(fixtureRoot);
-  writeJitiFixture(fixtureRoot);
-  writeFixtureFile(fixtureRoot, "dist/plugin-entry.runtime-C88YIa_v.js", wrapperSource);
+  writeFixtureFile(
+    fixtureRoot,
+    "dist/plugin-entry.runtime-C88YIa_v.js",
+    MATRIX_RUNTIME_WRAPPER_SOURCE,
+  );
   writeFixtureFile(
     fixtureRoot,
     "dist/plugin-entry.runtime.js",
@@ -112,15 +118,18 @@ it("loads the packaged runtime wrapper without recursing through the stable root
     PACKAGED_RUNTIME_STUB,
   );
 
-  const wrapperUrl = pathToFileURL(
-    path.join(fixtureRoot, "dist", "plugin-entry.runtime-C88YIa_v.js"),
+  expectRuntimeWrapperExports(
+    await importFixtureModule(fixtureRoot, "dist/plugin-entry.runtime-C88YIa_v.js"),
   );
-  const mod = await import(`${wrapperUrl.href}?t=${Date.now()}`);
+}, 240_000);
 
-  expect(mod).toMatchObject({
-    ensureMatrixCryptoRuntime: expect.any(Function),
-    handleVerifyRecoveryKey: expect.any(Function),
-    handleVerificationBootstrap: expect.any(Function),
-    handleVerificationStatus: expect.any(Function),
-  });
+it("does not load when only a TypeScript Matrix runtime shim exists", async () => {
+  const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-ts-only-");
+
+  writeOpenClawPackageFixture(fixtureRoot);
+  writeSourceRuntimeWrapperFixture(fixtureRoot, { runtimeExtension: ".ts" });
+
+  await expect(
+    importFixtureModule(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js"),
+  ).rejects.toThrow("Cannot resolve matrix plugin runtime module plugin-entry.handlers.runtime");
 }, 240_000);

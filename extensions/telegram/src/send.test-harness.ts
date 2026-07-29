@@ -1,17 +1,40 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+// Telegram plugin module implements send harness behavior.
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   buildOutboundMediaLoadOptions,
   isGifMedia,
   kindFromMime,
   normalizePollInput,
 } from "openclaw/plugin-sdk/media-runtime";
-import type { MockFn } from "openclaw/plugin-sdk/testing";
+import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, vi } from "vitest";
+import { markdownToTelegramHtml } from "./format.js";
+import { inputRichBlocksToPlainText, type InputRichBlock } from "./rich-block-model.js";
 
-const { botApi, botCtorSpy } = vi.hoisted(() => ({
+function richMessagePlainTextForTest(richMessage: {
+  blocks?: InputRichBlock[];
+  markdown?: string;
+  html?: string;
+}): string {
+  if (richMessage.blocks) {
+    return inputRichBlocksToPlainText(richMessage.blocks);
+  }
+  if (richMessage.markdown !== undefined) {
+    return markdownToTelegramHtml(richMessage.markdown);
+  }
+  return richMessage.html ?? "";
+}
+
+const { botApi, botRawApi, botConfigUseSpy, botCtorSpy } = vi.hoisted(() => ({
+  botConfigUseSpy: vi.fn(),
+  botRawApi: {
+    editMessageText: vi.fn(),
+    sendRichMessage: vi.fn(),
+  },
   botApi: {
     deleteMessage: vi.fn(),
     editForumTopic: vi.fn(),
+    editMessageCaption: vi.fn(),
     editMessageText: vi.fn(),
     editMessageReplyMarkup: vi.fn(),
     pinChatMessage: vi.fn(),
@@ -40,6 +63,10 @@ const { imageMetadata } = vi.hoisted(() => ({
     width: 1200 as number | undefined,
     height: 800 as number | undefined,
   },
+}));
+
+const { probeVideoDimensions } = vi.hoisted(() => ({
+  probeVideoDimensions: vi.fn(),
 }));
 
 const { loadConfig, resolveStorePath } = vi.hoisted(() => ({
@@ -83,13 +110,16 @@ const {
 }));
 
 type TelegramSendTestMocks = {
-  botApi: Record<string, MockFn>;
+  botApi: typeof botApi;
+  botRawApi: typeof botRawApi;
+  botConfigUseSpy: MockFn;
   botCtorSpy: MockFn;
   loadConfig: MockFn;
   resolveStorePath: MockFn;
   loadWebMedia: MockFn;
   maybePersistResolvedTelegramTarget: MockFn;
   imageMetadata: { width: number | undefined; height: number | undefined };
+  probeVideoDimensions: MockFn;
 };
 
 vi.mock("openclaw/plugin-sdk/web-media", () => ({
@@ -102,7 +132,13 @@ vi.mock("grammy", () => ({
     ALL_UPDATE_TYPES: ["message"],
   },
   Bot: class {
-    api = botApi;
+    api = {
+      ...botApi,
+      raw: botRawApi,
+      config: {
+        use: botConfigUseSpy,
+      },
+    };
     catch = vi.fn();
     constructor(
       public token: string,
@@ -127,13 +163,27 @@ vi.mock("grammy", () => ({
   InputFile: function InputFile() {},
 }));
 
-vi.mock("undici", () => ({
-  Agent: undiciAgentCtor,
-  EnvHttpProxyAgent: undiciEnvHttpProxyAgentCtor,
-  ProxyAgent: undiciProxyAgentCtor,
-  fetch: undiciFetch,
-  setGlobalDispatcher: undiciSetGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: undiciAgentCtor,
+    EnvHttpProxyAgent: undiciEnvHttpProxyAgentCtor,
+    ProxyAgent: undiciProxyAgentCtor,
+    fetch: undiciFetch,
+    setGlobalDispatcher: undiciSetGlobalDispatcher,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
+    "openclaw/plugin-sdk/plugin-config-runtime",
+  );
+  return {
+    ...actual,
+    requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
+  };
+});
 
 vi.mock("./send.runtime.js", () => ({
   buildOutboundMediaLoadOptions,
@@ -143,6 +193,8 @@ vi.mock("./send.runtime.js", () => ({
   loadConfig,
   loadWebMedia,
   normalizePollInput,
+  probeVideoDimensions,
+  requireRuntimeConfig: vi.fn((cfg: unknown) => cfg ?? loadConfig()),
   resolveMarkdownTableMode,
   resolveStorePath,
 }));
@@ -154,12 +206,15 @@ vi.mock("./target-writeback.js", () => ({
 export function getTelegramSendTestMocks(): TelegramSendTestMocks {
   return {
     botApi,
+    botRawApi,
+    botConfigUseSpy,
     botCtorSpy,
     loadConfig,
     resolveStorePath,
     loadWebMedia,
     maybePersistResolvedTelegramTarget,
     imageMetadata,
+    probeVideoDimensions,
   };
 }
 
@@ -168,6 +223,8 @@ export function installTelegramSendTestHooks() {
     loadConfig.mockReturnValue({});
     resolveStorePath.mockReturnValue("/tmp/openclaw-telegram-send-tests.json");
     loadWebMedia.mockReset();
+    probeVideoDimensions.mockReset();
+    probeVideoDimensions.mockResolvedValue(undefined);
     imageMetadata.width = 1200;
     imageMetadata.height = 800;
     maybePersistResolvedTelegramTarget.mockReset();
@@ -178,9 +235,62 @@ export function installTelegramSendTestHooks() {
     undiciEnvHttpProxyAgentCtor.mockClear();
     undiciProxyAgentCtor.mockClear();
     botCtorSpy.mockReset();
+    botConfigUseSpy.mockReset();
     for (const fn of Object.values(botApi)) {
       fn.mockReset();
     }
+    for (const fn of Object.values(botRawApi)) {
+      fn.mockReset();
+    }
+    botRawApi.sendRichMessage.mockImplementation(
+      async (params: {
+        chat_id: string | number;
+        rich_message: { markdown?: string; html?: string; skip_entity_detection?: boolean };
+        [key: string]: unknown;
+      }) => {
+        const { chat_id, rich_message, ...richParams } = params;
+        const sendParams: Record<string, unknown> = {
+          parse_mode: "HTML",
+          ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
+          ...richParams,
+        };
+        const replyParameters = sendParams.reply_parameters;
+        if (
+          replyParameters &&
+          typeof replyParameters === "object" &&
+          !("quote" in replyParameters) &&
+          typeof (replyParameters as { message_id?: unknown }).message_id === "number"
+        ) {
+          sendParams.reply_to_message_id = (replyParameters as { message_id: number }).message_id;
+          sendParams.allow_sending_without_reply = true;
+          delete sendParams.reply_parameters;
+        }
+        const text = richMessagePlainTextForTest(rich_message);
+        const options = Object.keys(sendParams).length > 0 ? sendParams : undefined;
+        return await botApi.sendMessage(chat_id, text, options);
+      },
+    );
+    botRawApi.editMessageText.mockImplementation(
+      async (params: {
+        chat_id?: string | number;
+        message_id?: number;
+        rich_message: {
+          blocks?: InputRichBlock[];
+          markdown?: string;
+          html?: string;
+          skip_entity_detection?: boolean;
+        };
+        [key: string]: unknown;
+      }) => {
+        const { chat_id, message_id, rich_message, ...editParams } = params;
+        const text = richMessagePlainTextForTest(rich_message);
+        const options = {
+          ...(rich_message.skip_entity_detection === true ? { skip_entity_detection: true } : {}),
+          ...editParams,
+        };
+        return await botApi.editMessageText(chat_id, message_id, text, options);
+      },
+    );
   });
 }
 

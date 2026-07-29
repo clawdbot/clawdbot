@@ -1,93 +1,46 @@
+/**
+ * Browser plugin internal barrel that gathers runtime, SDK, CLI, and gateway
+ * APIs for modules that need a stable local import surface.
+ */
 export {
-  DEFAULT_AI_SNAPSHOT_MAX_CHARS,
-  DEFAULT_UPLOAD_DIR,
   applyBrowserProxyPaths,
-  browserAct,
-  browserArmDialog,
-  browserArmFileChooser,
-  browserCloseTab,
-  browserCreateProfile,
-  browserConsoleMessages,
-  browserDeleteProfile,
-  browserFocusTab,
-  browserNavigate,
-  browserOpenTab,
-  browserPdfSave,
-  browserProfiles,
-  browserResetProfile,
-  browserScreenshotAction,
-  browserSnapshot,
-  browserStart,
-  browserStatus,
-  browserStop,
-  browserTabAction,
-  browserTabs,
   createBrowserControlContext,
   createBrowserRouteDispatcher,
-  createBrowserRuntimeState,
-  createBrowserRouteContext,
-  ensureBrowserControlAuth,
-  getBrowserControlState,
-  getBrowserProfileCapabilities,
+  isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
-  installBrowserAuthMiddleware,
-  installBrowserCommonMiddleware,
   normalizeBrowserFormField,
   normalizeBrowserFormFieldValue,
-  normalizeBrowserRequestPath,
   persistBrowserProxyFiles,
   redactCdpUrl,
-  registerBrowserRoutes,
   resolveBrowserConfig,
-  resolveBrowserControlAuth,
-  resolveExistingPathsWithinRoot,
-  resolveProfile,
+  resolveExistingUploadPaths,
   resolveRequestedBrowserProfile,
   startBrowserControlServiceFromConfig,
-  stopBrowserControlService,
-  stopBrowserRuntime,
-  trackSessionBrowserTab,
-  untrackSessionBrowserTab,
 } from "./browser-runtime.js";
 export type {
   BrowserCreateProfileResult,
   BrowserDeleteProfileResult,
+  BrowserImportProfileResult,
   BrowserFormField,
   BrowserResetProfileResult,
-  BrowserRouteRegistrar,
-  BrowserServerState,
   BrowserStatus,
   BrowserTab,
   BrowserTransport,
   ProfileStatus,
+  SystemProfileInfo,
   SnapshotResult,
 } from "./browser-runtime.js";
 export {
-  callGatewayTool,
   danger,
-  detectMime,
   formatCliCommand,
   formatDocsLink,
   formatHelpExamples,
   inheritOptionFromParent,
   info,
-  imageResultFromFile,
-  jsonResult,
-  listNodes,
-  optionalStringEnum,
-  readStringParam,
   resolveNodeIdFromList,
-  selectDefaultNodeFromList,
-  stringEnum,
   theme,
-} from "openclaw/plugin-sdk/browser-setup-tools";
-export {
-  loadConfig,
-  normalizePluginsConfig,
-  parseBooleanValue,
-  resolveEffectiveEnableState,
-  shortenHomePath,
-} from "openclaw/plugin-sdk/browser-config-runtime";
+} from "./sdk-setup-tools.js";
+export { getRuntimeConfig, parseBooleanValue, shortenHomePath } from "./sdk-config.js";
 export {
   addGatewayClientOptions,
   callGatewayFromCli,
@@ -100,16 +53,6 @@ export {
   runCommandWithRuntime,
   safeParseJson,
   withTimeout,
-} from "openclaw/plugin-sdk/browser-node-runtime";
-export {
-  createSubsystemLogger,
-  wrapExternalContent,
-} from "openclaw/plugin-sdk/browser-security-runtime";
-export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/browser-setup-tools";
-export type { OpenClawConfig } from "openclaw/plugin-sdk/browser-config-runtime";
-export type {
-  GatewayRequestHandlers,
-  GatewayRpcOpts,
-  NodeSession,
-  OpenClawPluginService,
-} from "openclaw/plugin-sdk/browser-node-runtime";
+} from "./sdk-node-runtime.js";
+export type { OpenClawConfig } from "./sdk-config.js";
+export type { GatewayRequestHandlers, GatewayRpcOpts, NodeSession } from "./sdk-node-runtime.js";

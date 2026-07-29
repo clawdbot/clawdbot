@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for channel exec approval client helpers.
+ */
 export {
   createChannelExecApprovalProfile,
   getExecApprovalReplyMetadata,

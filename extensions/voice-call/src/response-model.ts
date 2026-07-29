@@ -1,6 +1,10 @@
+// Voice Call plugin module implements response model behavior.
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps } from "./core-bridge.js";
 
+// Resolves the model used for voice-call text response generation.
+
+/** Resolve provider/model fields from explicit voice config or agent defaults. */
 export function resolveVoiceResponseModel(params: {
   voiceConfig: VoiceCallConfig;
   agentRuntime: CoreAgentDeps;

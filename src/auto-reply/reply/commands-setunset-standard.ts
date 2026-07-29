@@ -1,3 +1,4 @@
+// Implements standard set/unset command handling for persisted config values.
 import { parseSlashCommandWithSetUnset } from "./commands-setunset.js";
 
 export function parseStandardSetUnsetSlashCommand<T>(params: {

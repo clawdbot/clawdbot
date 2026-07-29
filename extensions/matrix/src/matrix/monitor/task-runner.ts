@@ -1,3 +1,4 @@
+// Matrix plugin module implements task runner behavior.
 import type { RuntimeLogger } from "../../runtime-api.js";
 
 export function createMatrixMonitorTaskRunner(params: {
@@ -7,10 +8,9 @@ export function createMatrixMonitorTaskRunner(params: {
   const inFlight = new Set<Promise<void>>();
 
   const runDetachedTask = (label: string, task: () => Promise<void>): Promise<void> => {
-    let trackedTask!: Promise<void>;
-    trackedTask = Promise.resolve()
+    const trackedTask: Promise<void> = Promise.resolve()
       .then(task)
-      .catch((error) => {
+      .catch((error: unknown) => {
         const message = String(error);
         params.logVerboseMessage(`matrix: ${label} failed (${message})`);
         params.logger.warn("matrix background task failed", {

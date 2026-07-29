@@ -1,3 +1,6 @@
+// Normalized status overview surface shared by text and JSON status outputs.
+// It collects gateway/update/service fields into one shape before row or payload builders run.
+
 import type { OpenClawConfig } from "../config/types.js";
 import type { UpdateCheckResult } from "../infra/update-check.js";
 import {
@@ -17,6 +20,7 @@ type StatusGatewayConnection = {
 type StatusGatewayProbe = {
   connectLatencyMs?: number | null;
   error?: string | null;
+  health?: unknown;
 } | null;
 
 type StatusGatewayAuth = {
@@ -52,6 +56,7 @@ export type StatusOverviewSurface = {
   tailscaleMode: string;
   tailscaleDns?: string | null;
   tailscaleHttpsUrl?: string | null;
+  advertisedControlUiLinks?: { httpUrl: string; wsUrl: string };
   gatewayMode: "local" | "remote";
   remoteUrlMissing: boolean;
   gatewayConnection: StatusGatewayConnection;
@@ -65,6 +70,7 @@ export type StatusOverviewSurface = {
   nodeOnlyGateway?: NodeOnlyGatewayInfo | null;
 };
 
+/** Converts the full status scan result into the shared overview surface. */
 export function buildStatusOverviewSurfaceFromScan(params: {
   scan: Pick<
     StatusScanResult,
@@ -73,6 +79,7 @@ export function buildStatusOverviewSurfaceFromScan(params: {
     | "tailscaleMode"
     | "tailscaleDns"
     | "tailscaleHttpsUrl"
+    | "advertisedControlUiLinks"
     | "gatewayMode"
     | "remoteUrlMissing"
     | "gatewayConnection"
@@ -92,6 +99,9 @@ export function buildStatusOverviewSurfaceFromScan(params: {
     tailscaleMode: params.scan.tailscaleMode,
     tailscaleDns: params.scan.tailscaleDns,
     tailscaleHttpsUrl: params.scan.tailscaleHttpsUrl,
+    ...(params.scan.advertisedControlUiLinks
+      ? { advertisedControlUiLinks: params.scan.advertisedControlUiLinks }
+      : {}),
     gatewayMode: params.scan.gatewayMode,
     remoteUrlMissing: params.scan.remoteUrlMissing,
     gatewayConnection: params.scan.gatewayConnection,
@@ -106,10 +116,17 @@ export function buildStatusOverviewSurfaceFromScan(params: {
   };
 }
 
+/** Converts the lighter status-all overview scan into the shared overview surface. */
 export function buildStatusOverviewSurfaceFromOverview(params: {
   overview: Pick<
     StatusScanOverviewResult,
-    "cfg" | "update" | "tailscaleMode" | "tailscaleDns" | "tailscaleHttpsUrl" | "gatewaySnapshot"
+    | "cfg"
+    | "update"
+    | "tailscaleMode"
+    | "tailscaleDns"
+    | "tailscaleHttpsUrl"
+    | "advertisedControlUiLinks"
+    | "gatewaySnapshot"
   >;
   gatewayService: StatusServiceSummary;
   nodeService: StatusServiceSummary;
@@ -121,6 +138,9 @@ export function buildStatusOverviewSurfaceFromOverview(params: {
     tailscaleMode: params.overview.tailscaleMode,
     tailscaleDns: params.overview.tailscaleDns,
     tailscaleHttpsUrl: params.overview.tailscaleHttpsUrl,
+    ...(params.overview.advertisedControlUiLinks
+      ? { advertisedControlUiLinks: params.overview.advertisedControlUiLinks }
+      : {}),
     gatewayMode: params.overview.gatewaySnapshot.gatewayMode,
     remoteUrlMissing: params.overview.gatewaySnapshot.remoteUrlMissing,
     gatewayConnection: params.overview.gatewaySnapshot.gatewayConnection,
@@ -135,6 +155,7 @@ export function buildStatusOverviewSurfaceFromOverview(params: {
   };
 }
 
+/** Builds overview rows from an already-normalized surface. */
 export function buildStatusOverviewRowsFromSurface(params: {
   surface: StatusOverviewSurface;
   prefixRows?: StatusOverviewRow[];
@@ -159,6 +180,9 @@ export function buildStatusOverviewRowsFromSurface(params: {
     tailscaleMode: params.surface.tailscaleMode,
     tailscaleDns: params.surface.tailscaleDns,
     tailscaleHttpsUrl: params.surface.tailscaleHttpsUrl,
+    ...(params.surface.advertisedControlUiLinks
+      ? { advertisedControlUiLinks: params.surface.advertisedControlUiLinks }
+      : {}),
     tailscaleBackendState: params.tailscaleBackendState,
     includeBackendStateWhenOff: params.includeBackendStateWhenOff,
     includeBackendStateWhenOn: params.includeBackendStateWhenOn,
@@ -188,6 +212,7 @@ export function buildStatusOverviewRowsFromSurface(params: {
   });
 }
 
+/** Builds the gateway JSON payload from the gateway portion of an overview surface. */
 export function buildStatusGatewayJsonPayloadFromSurface(params: {
   surface: Pick<
     StatusOverviewSurface,

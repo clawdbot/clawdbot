@@ -1,9 +1,12 @@
+// Audits channel configuration for exposure, auth, and trust risks.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../channels/account-snapshot-fields.js";
+import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { listChannelPlugins } from "../channels/plugins/index.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -11,8 +14,8 @@ import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matchin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
-import { resolveDmAllowState } from "./dm-policy-shared.js";
 
+/** Classify free-form channel warnings into audit severities. */
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
   if (
@@ -77,10 +80,11 @@ function formatChannelAccountNote(params: {
     : "";
 }
 
+/** Collect channel-specific security findings across active channel plugins/accounts. */
 export async function collectChannelSecurityFindings(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
-  plugins: ReturnType<typeof listChannelPlugins>;
+  plugins: ChannelPlugin[];
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const sourceConfig = params.sourceConfig ?? params.cfg;
@@ -89,13 +93,16 @@ export async function collectChannelSecurityFindings(params: {
     plugin: (typeof params.plugins)[number],
     cfg: OpenClawConfig,
     accountId: string,
-  ) =>
-    plugin.config.inspectAccount?.(cfg, accountId) ??
-    (await inspectReadOnlyChannelAccount({
+  ) => {
+    if (plugin.config.inspectAccount) {
+      return await plugin.config.inspectAccount(cfg, accountId);
+    }
+    return await inspectReadOnlyChannelAccount({
       channelId: plugin.id,
       cfg,
       accountId,
-    }));
+    });
+  };
 
   const asAccountRecord = (value: unknown): Record<string, unknown> | null =>
     value && typeof value === "object" && !Array.isArray(value)
@@ -139,6 +146,9 @@ export async function collectChannelSecurityFindings(params: {
       };
     }
     const useSourceUnavailableAccount = Boolean(
+      // Secret resolution can replace a configured account with an unresolved
+      // placeholder. Use source config when needed so audits still explain the
+      // originally configured credential surface.
       sourceInspectedAccount &&
       hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
       (!hasResolvedCredentialValue(resolvedAccount) ||
@@ -203,10 +213,13 @@ export async function collectChannelSecurityFindings(params: {
     normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
-    const { hasWildcard, isMultiUserDm } = await resolveDmAllowState({
+    // DM allowlist audit may need channel-specific normalization and async
+    // account ownership checks before classifying open/multi-user exposure.
+    const { hasWildcard, isMultiUserDm } = await resolveDmAllowAuditState({
       provider: input.provider,
       accountId: input.accountId,
       allowFrom: input.allowFrom,
+      dmPolicy: input.dmPolicy,
       normalizeEntry: input.normalizeEntry,
     });
     const dmScope = params.cfg.session?.dmScope ?? "main";
@@ -265,7 +278,7 @@ export async function collectChannelSecurityFindings(params: {
       cfg: sourceConfig,
       accountIds,
     });
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+    const orderedAccountIds = uniqueStrings([defaultAccountId, ...accountIds]);
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(

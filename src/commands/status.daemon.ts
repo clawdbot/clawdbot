@@ -1,3 +1,6 @@
+// Daemon service summary helpers for status output.
+// Gateway and node service state share the same normalized shape.
+
 import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { formatDaemonRuntimeShort } from "./status.format.js";
@@ -12,14 +15,17 @@ type DaemonStatusSummary = {
   loadedText: string;
   runtime: Awaited<ReturnType<typeof readServiceStatusSummary>>["runtime"];
   runtimeShort: string | null;
+  layout: Awaited<ReturnType<typeof readServiceStatusSummary>>["layout"];
+  wrapperPath: Awaited<ReturnType<typeof readServiceStatusSummary>>["wrapperPath"];
 };
 
 async function buildDaemonStatusSummary(
   serviceLabel: "gateway" | "node",
+  timeoutMs?: number,
 ): Promise<DaemonStatusSummary> {
   const service = serviceLabel === "gateway" ? resolveGatewayService() : resolveNodeService();
   const fallbackLabel = serviceLabel === "gateway" ? "Daemon" : "Node";
-  const summary = await readServiceStatusSummary(service, fallbackLabel);
+  const summary = await readServiceStatusSummary(service, fallbackLabel, timeoutMs);
   return {
     label: summary.label,
     installed: summary.installed,
@@ -29,13 +35,17 @@ async function buildDaemonStatusSummary(
     loadedText: summary.loadedText,
     runtime: summary.runtime,
     runtimeShort: formatDaemonRuntimeShort(summary.runtime),
+    layout: summary.layout,
+    wrapperPath: summary.wrapperPath,
   };
 }
 
-export async function getDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("gateway");
+/** Returns the gateway daemon status summary. */
+export async function getDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+  return await buildDaemonStatusSummary("gateway", timeoutMs);
 }
 
-export async function getNodeDaemonStatusSummary(): Promise<DaemonStatusSummary> {
-  return await buildDaemonStatusSummary("node");
+/** Returns the node service status summary. */
+export async function getNodeDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
+  return await buildDaemonStatusSummary("node", timeoutMs);
 }

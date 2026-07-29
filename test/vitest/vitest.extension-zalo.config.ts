@@ -1,3 +1,4 @@
+// Vitest extension zalo config wires the extension zalo test shard.
 import { zaloExtensionTestRoots } from "./vitest.extension-zalo-paths.mjs";
 import { loadPatternListFromEnv } from "./vitest.pattern-file.ts";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";

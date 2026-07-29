@@ -1,6 +1,7 @@
+// Lmstudio tests cover runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER } from "./defaults.js";
 import {
   buildLmstudioAuthHeaders,
@@ -17,6 +18,11 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
     ...actual,
     resolveApiKeyForProvider: (...args: unknown[]) => resolveApiKeyForProviderMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
+  vi.resetModules();
 });
 
 function buildLmstudioConfig(overrides?: {
@@ -131,6 +137,24 @@ describe("lmstudio-runtime", () => {
             Authorization: "Bearer proxy-token",
           },
         }),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("allows header-only runtime auth when an api key env template is unset", async () => {
+    resolveApiKeyForProviderMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+    );
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
+        }),
+        env: {},
       }),
     ).resolves.toBeUndefined();
   });
@@ -254,6 +278,30 @@ describe("lmstudio-runtime", () => {
         },
       }),
     ).resolves.toBe("template-lmstudio-key");
+  });
+
+  it("resolves arbitrary env-template api keys from config", async () => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+        }),
+        env: {
+          LMSTUDIO_API_KEY: "custom-template-lmstudio-key",
+        },
+      }),
+    ).resolves.toBe("custom-template-lmstudio-key");
+  });
+
+  it("throws a path-specific error when an env-template api key cannot be resolved", async () => {
+    await expect(
+      resolveLmstudioConfiguredApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+        }),
+        env: {},
+      }),
+    ).rejects.toThrow(/models\.providers\.lmstudio\.apiKey/i);
   });
 
   it("throws a path-specific error when a SecretRef header cannot be resolved", async () => {

@@ -1,3 +1,4 @@
+// Discord plugin module implements interactive dispatch behavior.
 import type { ChannelStructuredComponents } from "openclaw/plugin-sdk/channel-contract";
 import {
   createInteractiveConversationBindingHelpers,
@@ -51,7 +52,7 @@ export type DiscordInteractiveHandlerRegistration = PluginInteractiveRegistratio
   "discord"
 >;
 
-export type DiscordInteractiveDispatchContext = Omit<
+type DiscordInteractiveDispatchContext = Omit<
   DiscordInteractiveHandlerContext,
   | "interaction"
   | "respond"

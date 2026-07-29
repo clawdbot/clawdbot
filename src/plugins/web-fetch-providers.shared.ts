@@ -1,4 +1,4 @@
-import { type NormalizedPluginsConfig } from "./config-state.js";
+// Shares web fetch provider loading helpers across provider plugins.
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {
@@ -23,10 +23,8 @@ export function resolveBundledWebFetchResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
 }): {
   config: PluginLoadOptions["config"];
-  normalized: NormalizedPluginsConfig;
   activationSourceConfig?: PluginLoadOptions["config"];
   autoEnabledReasons: Record<string, string[]>;
 } {
@@ -35,6 +33,5 @@ export function resolveBundledWebFetchResolutionConfig(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-    bundledAllowlistCompat: params.bundledAllowlistCompat,
   });
 }

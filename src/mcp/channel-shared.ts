@@ -1,9 +1,20 @@
+// Shared MCP channel helpers normalize channel tool payloads and responses.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString as toText,
+} from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { normalizeOptionalString as toText } from "../shared/string-coerce.js";
-import { normalizeMessageChannel } from "../utils/message-channel.js";
 
+/**
+ * Shared channel MCP contracts and normalization helpers.
+ *
+ * These shapes are intentionally smaller than raw Gateway payloads so MCP tools
+ * can return stable structured content without exposing every session detail.
+ */
+/** Controls whether the MCP server advertises Claude channel extensions. */
 export type ClaudeChannelMode = "off" | "on" | "auto";
 
+/** Conversation route information required to read and reply through a channel session. */
 export type ConversationDescriptor = {
   sessionKey: string;
   channel: string;
@@ -17,7 +28,7 @@ export type ConversationDescriptor = {
   updatedAt?: number | null;
 };
 
-export type SessionRow = {
+type SessionRow = {
   key: string;
   channel?: string;
   lastChannel?: string;
@@ -42,16 +53,25 @@ export type SessionRow = {
   updatedAt?: number | null;
 };
 
+/** Minimal Gateway response shape used by conversation listing. */
 export type SessionListResult = {
   sessions?: SessionRow[];
 };
 
+/** Minimal Gateway response shape used by conversation lookup. */
+export type SessionDescribeResult = {
+  session?: SessionRow | null;
+};
+
+/** Minimal Gateway response shape used by message reads. */
 export type ChatHistoryResult = {
   messages?: Array<{ id?: string; role?: string; content?: unknown; [key: string]: unknown }>;
 };
 
+/** Gateway session.message payload fields consumed by the MCP event bridge. */
 export type SessionMessagePayload = {
   sessionKey?: string;
+  senderIsOwner?: boolean;
   messageId?: string;
   messageSeq?: number;
   message?: { role?: string; content?: unknown; [key: string]: unknown };
@@ -62,9 +82,12 @@ export type SessionMessagePayload = {
   [key: string]: unknown;
 };
 
+/** Gateway approval family exposed through MCP. */
 export type ApprovalKind = "exec" | "plugin";
+/** Decision values accepted by Gateway approval resolvers. */
 export type ApprovalDecision = "allow-once" | "allow-always" | "deny";
 
+/** Approval request tracked locally while waiting for an MCP client decision. */
 export type PendingApproval = {
   kind: ApprovalKind;
   id: string;
@@ -73,6 +96,7 @@ export type PendingApproval = {
   expiresAtMs?: number;
 };
 
+/** Cursor-addressed event returned by MCP event polling and waiting tools. */
 export type QueueEvent =
   | {
       cursor: number;
@@ -104,17 +128,13 @@ export type QueueEvent =
       raw: Record<string, unknown>;
     };
 
-export type ClaudePermissionRequest = {
-  toolName: string;
-  description: string;
-  inputPreview: string;
-};
-
+/** Cursor and optional session filter used by event polling and waiting. */
 export type WaitFilter = {
   afterCursor: number;
   sessionKey?: string;
 };
 
+/** Raw MCP notification schema emitted by Claude channel clients for permission prompts. */
 export const ClaudePermissionRequestSchema = z.object({
   method: z.literal("notifications/claude/channel/permission_request"),
   params: z.object({
@@ -127,15 +147,17 @@ export const ClaudePermissionRequestSchema = z.object({
 
 export { toText };
 
+/** Resolve the visible message id, including OpenClaw metadata attached to raw entries. */
 export function resolveMessageId(entry: Record<string, unknown>): string | undefined {
   return (
     toText(entry.id) ??
-    (entry.__openclaw && typeof entry.__openclaw === "object"
-      ? toText((entry.__openclaw as { id?: unknown }).id)
+    (entry["__openclaw"] && typeof entry["__openclaw"] === "object"
+      ? toText((entry["__openclaw"] as { id?: unknown }).id)
       : undefined)
   );
 }
 
+/** Build the text summary format expected by simple MCP tool results. */
 export function summarizeResult(
   label: string,
   count: number,
@@ -145,8 +167,19 @@ export function summarizeResult(
   };
 }
 
-export function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeMessageChannel(
+/** Build a text summary plus pretty JSON payload for MCP clients without structured rendering. */
+export function summarizeStructuredResult(
+  label: string,
+  count: number,
+  payload: unknown,
+): { content: Array<{ type: "text"; text: string }> } {
+  return {
+    content: [{ type: "text", text: `${label}: ${count}\n\n${JSON.stringify(payload, null, 2)}` }],
+  };
+}
+
+function resolveConversationChannel(row: SessionRow): string | undefined {
+  return normalizeOptionalLowercaseString(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??
@@ -154,6 +187,7 @@ export function resolveConversationChannel(row: SessionRow): string | undefined 
   );
 }
 
+/** Convert a Gateway session row into a reply-capable conversation descriptor. */
 export function toConversation(row: SessionRow): ConversationDescriptor | null {
   const channel = resolveConversationChannel(row);
   const to = toText(row.deliveryContext?.to) ?? toText(row.lastTo);
@@ -177,6 +211,7 @@ export function toConversation(row: SessionRow): ConversationDescriptor | null {
   };
 }
 
+/** Check whether a queued event should be visible to a poll or wait call. */
 export function matchEventFilter(event: QueueEvent, filter: WaitFilter): boolean {
   if (event.cursor <= filter.afterCursor) {
     return false;
@@ -187,6 +222,7 @@ export function matchEventFilter(event: QueueEvent, filter: WaitFilter): boolean
   return "sessionKey" in event && event.sessionKey === filter.sessionKey;
 }
 
+/** Return non-text content blocks from a raw message payload. */
 export function extractAttachmentsFromMessage(message: unknown): unknown[] {
   if (!message || typeof message !== "object") {
     return [];
@@ -203,6 +239,7 @@ export function extractAttachmentsFromMessage(message: unknown): unknown[] {
   });
 }
 
+/** Normalize approval identifiers before local tracking or resolution. */
 export function normalizeApprovalId(value: unknown): string | undefined {
   const id = toText(value);
   return id ? id.trim() : undefined;

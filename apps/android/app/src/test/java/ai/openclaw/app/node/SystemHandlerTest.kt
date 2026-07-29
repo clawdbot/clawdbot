@@ -1,10 +1,21 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.MainActivity
+import android.content.Context
+import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
 class SystemHandlerTest {
   @Test
   fun handleSystemNotify_rejectsUnauthorized() {
@@ -65,6 +76,26 @@ class SystemHandlerTest {
   }
 
   @Test
+  fun buildSystemNotificationSetsImmutableAppLaunchIntent() {
+    val context: Context = RuntimeEnvironment.getApplication()
+    val notification =
+      buildSystemNotification(
+        appContext = context,
+        channelId = "test",
+        request = SystemNotifyRequest("OpenClaw", "done", sound = null, priority = null),
+      )
+
+    val pendingIntent = notification.contentIntent
+    assertNotNull(pendingIntent)
+    assertTrue(pendingIntent.isImmutable)
+
+    val savedIntent = Shadows.shadowOf(pendingIntent).savedIntent
+    assertEquals(MainActivity::class.java.name, savedIntent.component?.className)
+    val expectedFlags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    assertEquals(expectedFlags, savedIntent.flags and expectedFlags)
+  }
+
+  @Test
   fun handleSystemNotify_returnsUnauthorizedWhenPostFailsPermission() {
     val handler = SystemHandler.forTesting(poster = ThrowingPoster(authorized = true, error = SecurityException("denied")))
 
@@ -108,7 +139,5 @@ private class ThrowingPoster(
 ) : SystemNotificationPoster {
   override fun isAuthorized(): Boolean = authorized
 
-  override fun post(request: SystemNotifyRequest) {
-    throw error
-  }
+  override fun post(request: SystemNotifyRequest): Unit = throw error
 }

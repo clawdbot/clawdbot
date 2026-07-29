@@ -1,5 +1,7 @@
-export { asOptionalRecord as asRecord } from "../../shared/record-coerce.js";
-
+/**
+ * Small normalization helpers shared by gateway request handlers.
+ */
+/** Returns a non-empty trimmed string, or `undefined` for non-string input. */
 export function normalizeTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;

@@ -1,6 +1,7 @@
 export const runNodeWatchedPaths: string[];
 export function isBuildRelevantRunNodePath(repoPath: string): boolean;
 export function isRestartRelevantRunNodePath(repoPath: string): boolean;
+export function listRequiredRuntimePostBuildOutputs(deps: Record<string, unknown>): string[];
 export function resolveBuildRequirement(deps: {
   cwd: string;
   env: NodeJS.ProcessEnv;
@@ -12,6 +13,24 @@ export function resolveBuildRequirement(deps: {
   sourceRoots: Array<{ name: string; path: string }>;
   configFiles: string[];
 }): { shouldBuild: boolean; reason: string };
+
+export function resolveRuntimePostBuildRequirement(deps: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  fs: unknown;
+  spawnSync: unknown;
+  buildStampPath: string;
+  runtimePostBuildStampPath: string;
+}): { shouldSync: boolean; reason: string };
+
+export function acquireRunNodeBuildLock(deps: {
+  cwd: string;
+  args: readonly string[];
+  env: NodeJS.ProcessEnv;
+  fs: unknown;
+  process: NodeJS.Process;
+  stderr: { write: (value: string) => void };
+}): Promise<() => void>;
 
 export function runNodeMain(params?: {
   spawn?: (
@@ -29,9 +48,14 @@ export function runNodeMain(params?: {
   fs?: unknown;
   stderr?: { write: (value: string) => void };
   process?: NodeJS.Process;
+  signalProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean | void;
   execPath?: string;
   cwd?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
   platform?: NodeJS.Platform;
 }): Promise<number>;

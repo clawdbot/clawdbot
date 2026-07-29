@@ -1,6 +1,7 @@
+// Covers plugin hooks that run before agent replies are emitted.
 import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
+import { createMockPluginRegistry, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 
 const EVENT = { cleanedBody: "hello world" };
 
@@ -107,7 +108,7 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
 
     expect(result).toEqual({ handled: true, reply: { text: "ok" } });
     expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("before_agent_reply handler from test-plugin failed: Error: boom"),
+      "[hooks] before_agent_reply handler from test-plugin failed: boom",
     );
   });
 
@@ -118,6 +119,45 @@ describe("before_agent_reply hook runner (claiming pattern)", () => {
     const runner = createHookRunner(registry);
 
     expect(runner.hasHooks("before_agent_reply")).toBe(true);
-    expect(runner.hasHooks("before_agent_start")).toBe(false);
+  });
+
+  it("enforces trigger eligibility before invoking handlers", async () => {
+    const scheduled = vi.fn().mockResolvedValue({ handled: true, reply: { text: "scheduled" } });
+    const unrestricted = vi
+      .fn()
+      .mockResolvedValue({ handled: true, reply: { text: "unrestricted" } });
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "before_agent_reply",
+        handler: scheduled,
+        eligibleTriggers: ["heartbeat", "cron"],
+      },
+      { hookName: "before_agent_reply", handler: unrestricted },
+    ]);
+    const runner = createHookRunner(registry);
+
+    await expect(
+      runner.runBeforeAgentReply(EVENT, { ...TEST_PLUGIN_AGENT_CTX, trigger: "user" }),
+    ).resolves.toEqual({ handled: true, reply: { text: "unrestricted" } });
+    expect(scheduled).not.toHaveBeenCalled();
+    expect(unrestricted).toHaveBeenCalledOnce();
+
+    expect(runner.hasHooks("before_agent_reply", { trigger: "user" })).toBe(true);
+    expect(runner.hasHooks("before_agent_reply", { trigger: "heartbeat" })).toBe(true);
+  });
+
+  it("keeps context-free checks fail-closed for trigger-scoped hooks", () => {
+    const registry = createMockPluginRegistry([
+      {
+        hookName: "before_agent_reply",
+        handler: vi.fn(),
+        eligibleTriggers: ["heartbeat", "cron"],
+      },
+    ]);
+    const runner = createHookRunner(registry);
+
+    expect(runner.hasHooks("before_agent_reply")).toBe(true);
+    expect(runner.hasHooks("before_agent_reply", { trigger: "user" })).toBe(false);
+    expect(runner.hasHooks("before_agent_reply", { trigger: "cron" })).toBe(true);
   });
 });

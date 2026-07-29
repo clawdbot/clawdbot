@@ -1,11 +1,14 @@
-import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+// Committer tests cover committer script behavior.
+import { execFileSync, spawnSync } from "node:child_process";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const scriptPath = path.join(process.cwd(), "scripts", "committer");
 const { createTempDir } = createScriptTestHarness();
+let templateRepo: string;
 
 function run(cwd: string, command: string, args: string[]) {
   return execFileSync(command, args, {
@@ -20,7 +23,12 @@ function git(cwd: string, ...args: string[]) {
 
 function createRepo() {
   const repo = createTempDir("committer-test-");
+  cpSync(templateRepo, repo, { recursive: true });
+  return repo;
+}
 
+function createTemplateRepo() {
+  const repo = mkdtempSync(path.join(tmpdir(), "committer-template-"));
   git(repo, "init", "-q");
   git(repo, "config", "user.email", "test@example.com");
   git(repo, "config", "user.name", "Test User");
@@ -55,9 +63,19 @@ function commitWithHelperArgs(repo: string, ...args: string[]) {
   return run(repo, "bash", [scriptPath, ...args]);
 }
 
+function commitWithHelperFailure(repo: string, ...args: string[]) {
+  return spawnSync("bash", [scriptPath, ...args], { cwd: repo, encoding: "utf8" });
+}
+
 function committedPaths(repo: string) {
   const output = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD");
-  return output.split("\n").filter(Boolean).toSorted();
+  const paths: string[] = [];
+  for (const line of output.split("\n")) {
+    if (line) {
+      paths.push(line);
+    }
+  }
+  return paths.toSorted();
 }
 
 function committedFileContents(repo: string, relativePath: string) {
@@ -65,6 +83,14 @@ function committedFileContents(repo: string, relativePath: string) {
 }
 
 describe("scripts/committer", () => {
+  beforeAll(() => {
+    templateRepo = createTemplateRepo();
+  });
+
+  afterAll(() => {
+    rmSync(templateRepo, { recursive: true, force: true });
+  });
+
   it("accepts supported path argument shapes", () => {
     const cases = [
       {
@@ -150,18 +176,72 @@ describe("scripts/committer", () => {
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 
-  it("passes FAST_COMMIT through to git hooks when using --fast", () => {
+  it("fails before staging when formatting dependencies are missing", () => {
     const repo = createRepo();
-    installHook(
+    writeRepoFile(repo, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeRepoFile(
       repo,
-      ".githooks/pre-commit",
-      '#!/usr/bin/env bash\nset -euo pipefail\n[ "${FAST_COMMIT:-}" = "1" ] || exit 91\n',
+      "scripts/pre-commit/filter-staged-files.mjs",
+      "for (const file of process.argv.slice(4)) { if (file.endsWith('.ts')) process.stdout.write(file + '\\0'); }\n",
     );
+    writeRepoFile(repo, "note.ts", "export const note = true;\n");
+
+    const result = commitWithHelperFailure(repo, "test: missing formatter", "note.ts");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("cannot run oxfmt without node_modules");
+    expect(result.stderr).toContain("--no-verify-formatted");
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(git(repo, "log", "-1", "--pretty=%s")).toBe("seed");
+  });
+
+  it("commits dependency-less formatted work only with the explicit assertion", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeRepoFile(
+      repo,
+      "scripts/pre-commit/filter-staged-files.mjs",
+      "for (const file of process.argv.slice(4)) { if (file.endsWith('.ts')) process.stdout.write(file + '\\0'); }\n",
+    );
+    writeRepoFile(repo, "note.ts", "export const note = true;\n");
+
+    const output = commitWithHelperArgs(
+      repo,
+      "--no-verify-formatted",
+      "test: formatted assertion",
+      "note.ts",
+    );
+
+    expect(output).toContain("asserts separate formatting proof; committing with --no-verify");
+    expect(committedPaths(repo)).toEqual(["note.ts"]);
+  });
+
+  it("fails before staging when formatter applicability cannot be determined", () => {
+    const repo = createRepo();
+    writeRepoFile(repo, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeRepoFile(
+      repo,
+      "scripts/pre-commit/filter-staged-files.mjs",
+      "process.stderr.write('fixture filter failure\\n'); process.exit(7);\n",
+    );
+    writeRepoFile(repo, "note.ts", "export const note = true;\n");
+
+    const result = commitWithHelperFailure(repo, "test: failed formatter filter", "note.ts");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unable to determine formatter applicability");
+    expect(git(repo, "diff", "--cached", "--name-only")).toBe("");
+    expect(git(repo, "log", "-1", "--pretty=%s")).toBe("seed");
+  });
+
+  it("bypasses git hooks when using --fast", () => {
+    const repo = createRepo();
+    installHook(repo, ".githooks/pre-commit", "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n");
     writeRepoFile(repo, "note.txt", "hello\n");
 
-    const output = commitWithHelperArgs(repo, "--fast", "test: fast hook env", "note.txt");
+    const output = commitWithHelperArgs(repo, "--fast", "test: fast no verify", "note.txt");
 
-    expect(output).toContain('Committed "test: fast hook env" with 1 files');
+    expect(output).toContain('Committed "test: fast no verify" with 1 files');
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 
@@ -193,7 +273,7 @@ describe("scripts/committer", () => {
     const output = commitWithHelperArgs(repo, "--help");
 
     expect(output).toContain(
-      'Usage: committer [--force] [--fast] "commit message" "file" ["file" ...]',
+      'Usage: committer [--force] [--fast] [--no-verify-formatted] "commit message" "file" ["file" ...]',
     );
   });
 });

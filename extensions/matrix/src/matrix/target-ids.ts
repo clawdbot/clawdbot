@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Matrix plugin module implements target ids behavior.
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type MatrixTarget = { kind: "room"; id: string } | { kind: "user"; id: string };
 const MATRIX_PREFIX = "matrix:";
@@ -60,29 +61,6 @@ export function normalizeMatrixMessagingTarget(raw: string): string | undefined 
     USER_PREFIX,
   ]);
   return normalized || undefined;
-}
-
-export function normalizeMatrixDirectoryUserId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX, USER_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  return isMatrixQualifiedUserId(normalized) ? `user:${normalized}` : normalized;
-}
-
-export function normalizeMatrixDirectoryGroupId(raw: string): string | undefined {
-  const normalized = stripKnownPrefixes(raw, [MATRIX_PREFIX]);
-  if (!normalized || normalized === "*") {
-    return undefined;
-  }
-  const lowered = normalizeLowercaseStringOrEmpty(normalized);
-  if (lowered.startsWith(ROOM_PREFIX) || lowered.startsWith(CHANNEL_PREFIX)) {
-    return normalized;
-  }
-  if (normalized.startsWith("!")) {
-    return `room:${normalized}`;
-  }
-  return normalized;
 }
 
 export function resolveMatrixDirectUserId(params: {

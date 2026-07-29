@@ -1,4 +1,5 @@
-import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
+// Builds base config schema metadata shared across generated config surfaces.
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigUiHints } from "./schema.hints.js";
@@ -11,14 +12,10 @@ import {
 import { FIELD_LABELS } from "./schema.labels.js";
 import { asSchemaObject, cloneSchema } from "./schema.shared.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 type ConfigSchema = Record<string, unknown>;
-
-type FieldDocumentation = {
-  titles: Record<string, string>;
-  descriptions: Record<string, string>;
-};
 
 type JsonSchemaObject = Record<string, unknown> & {
   title?: string;
@@ -35,36 +32,14 @@ type JsonSchemaObject = Record<string, unknown> & {
 const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
-  asSchemaObject<JsonSchemaObject>(value);
-
-function buildFieldDocumentation(): FieldDocumentation {
-  const titles: Record<string, string> = {};
-  for (const [key, value] of Object.entries(FIELD_LABELS)) {
-    if (value) {
-      titles[key] = value;
-    }
-  }
-
-  const descriptions: Record<string, string> = {};
-  for (const [key, value] of Object.entries(FIELD_HELP)) {
-    if (value) {
-      descriptions[key] = value;
-    }
-  }
-
-  return { titles, descriptions };
-}
+  asSchemaObject(value) as JsonSchemaObject | null;
 
 /**
  * Recursively walk a JSON Schema object and apply field docs using dot-path
  * matching. Existing titles/descriptions (for example from Zod metadata) are
  * preserved.
  */
-function applyFieldDocumentation(
-  node: JsonSchemaObject,
-  documentation: FieldDocumentation,
-  prefixes: readonly string[] = [""],
-): void {
+function applyFieldDocumentation(node: JsonSchemaObject, prefixes: readonly string[] = [""]): void {
   const props = node.properties;
   if (props) {
     for (const [key, child] of Object.entries(props)) {
@@ -73,8 +48,8 @@ function applyFieldDocumentation(
         continue;
       }
       const childPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.${key}` : key));
-      applyNodeDocumentation(childObj, documentation, childPrefixes);
-      applyFieldDocumentation(childObj, documentation, childPrefixes);
+      applyNodeDocumentation(childObj, childPrefixes);
+      applyFieldDocumentation(childObj, childPrefixes);
     }
   }
   // Handle additionalProperties (wildcard keys like "models.providers.*")
@@ -82,8 +57,8 @@ function applyFieldDocumentation(
     const addObj = asJsonSchemaObject(node.additionalProperties);
     if (addObj) {
       const wildcardPrefixes = prefixes.map((prefix) => (prefix ? `${prefix}.*` : "*"));
-      applyNodeDocumentation(addObj, documentation, wildcardPrefixes);
-      applyFieldDocumentation(addObj, documentation, wildcardPrefixes);
+      applyNodeDocumentation(addObj, wildcardPrefixes);
+      applyFieldDocumentation(addObj, wildcardPrefixes);
     }
   }
   // Handle array items. Help/labels may use either "[]" notation
@@ -100,8 +75,8 @@ function applyFieldDocumentation(
           }),
         ),
       );
-      applyNodeDocumentation(itemsObj, documentation, itemPrefixes);
-      applyFieldDocumentation(itemsObj, documentation, itemPrefixes);
+      applyNodeDocumentation(itemsObj, itemPrefixes);
+      applyFieldDocumentation(itemsObj, itemPrefixes);
     }
   }
   // Recurse into composition branches (anyOf, oneOf, allOf) using the same
@@ -112,40 +87,27 @@ function applyFieldDocumentation(
       for (const branch of branches) {
         const branchObj = asJsonSchemaObject(branch);
         if (branchObj) {
-          applyFieldDocumentation(branchObj, documentation, prefixes);
+          applyFieldDocumentation(branchObj, prefixes);
         }
       }
     }
   }
 }
 
-function applyNodeDocumentation(
-  node: JsonSchemaObject,
-  documentation: FieldDocumentation,
-  pathCandidates: readonly string[],
-): void {
-  if (!node.title) {
-    for (const path of pathCandidates) {
-      const title = documentation.titles[path];
-      if (title) {
-        node.title = title;
-        break;
-      }
+function applyNodeDocumentation(node: JsonSchemaObject, pathCandidates: readonly string[]): void {
+  for (const path of pathCandidates) {
+    const title = FIELD_LABELS[path];
+    if (!node.title && title) {
+      node.title = title;
     }
-  }
-
-  if (!node.description) {
-    for (const path of pathCandidates) {
-      const description = documentation.descriptions[path];
-      if (description) {
-        node.description = description;
-        break;
-      }
+    const description = FIELD_HELP[path];
+    if (!node.description && description) {
+      node.description = description;
     }
   }
 }
 
-export type BaseConfigSchemaResponse = {
+type BaseConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
   version: string;
@@ -230,13 +192,14 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     };
   }
   const schema = OpenClawSchema.toJSONSchema({
+    io: "input",
     target: "draft-07",
     unrepresentable: "any",
   });
   schema.title = "OpenClawConfig";
   const schemaRoot = asJsonSchemaObject(schema);
   if (schemaRoot) {
-    applyFieldDocumentation(schemaRoot, buildFieldDocumentation());
+    applyFieldDocumentation(schemaRoot);
   }
   const baseHints = mapSensitivePaths(OpenClawSchema, "", buildBaseHints());
   const sensitiveUrlPaths = collectMatchingSchemaPaths(
@@ -244,10 +207,16 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
     "",
     isSensitiveUrlConfigPath,
   );
+  const publicSchema = stripLegacyCompatSchemaPaths(stripChannelSchema(schema));
   const stablePayload = {
-    schema: stripLegacyCompatSchemaPaths(stripChannelSchema(schema)),
-    uiHints: stripLegacyCompatHints(
-      applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
+    schema: publicSchema,
+    uiHints: applyDerivedTags(
+      applyResolvedConfigTierHints(
+        publicSchema,
+        stripLegacyCompatHints(
+          applyDerivedTags(applySensitiveUrlHints(baseHints, sensitiveUrlPaths)),
+        ),
+      ),
     ),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;

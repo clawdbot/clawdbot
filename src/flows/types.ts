@@ -1,13 +1,14 @@
-export type FlowDocsLink = {
+// Shared option/contribution contracts for setup, onboarding, and doctor flow UIs.
+type FlowDocsLink = {
   path: string;
   label?: string;
 };
 
-export type FlowContributionKind = "channel" | "core" | "provider" | "search";
+type FlowContributionKind = "channel" | "core" | "provider" | "search";
 
-export type FlowContributionSurface = "auth-choice" | "health" | "model-picker" | "setup";
+type FlowContributionSurface = "auth-choice" | "health" | "model-picker" | "setup";
 
-export type FlowOptionGroup = {
+type FlowOptionGroup = {
   id: string;
   label: string;
   hint?: string;
@@ -23,6 +24,7 @@ export type FlowOption<Value extends string = string> = {
   assistantVisibility?: "visible" | "manual-only";
 };
 
+/** Generic contribution envelope used by plugin/core setup surfaces. */
 export type FlowContribution<Value extends string = string> = {
   id: string;
   kind: FlowContributionKind;
@@ -31,22 +33,7 @@ export type FlowContribution<Value extends string = string> = {
   source?: string;
 };
 
-export function mergeFlowContributions<T extends FlowContribution>(params: {
-  primary: readonly T[];
-  fallbacks?: readonly T[];
-}): T[] {
-  const contributionByValue = new Map<string, T>();
-  for (const contribution of params.primary) {
-    contributionByValue.set(contribution.option.value, contribution);
-  }
-  for (const contribution of params.fallbacks ?? []) {
-    if (!contributionByValue.has(contribution.option.value)) {
-      contributionByValue.set(contribution.option.value, contribution);
-    }
-  }
-  return [...contributionByValue.values()];
-}
-
+/** Sorts UI flow contributions deterministically by visible label, then value. */
 export function sortFlowContributionsByLabel<T extends FlowContribution>(
   contributions: readonly T[],
 ): T[] {

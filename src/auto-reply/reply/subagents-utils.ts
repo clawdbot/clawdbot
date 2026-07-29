@@ -1,8 +1,9 @@
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+// Shared subagent helpers for routing, labels, and transcript text.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import { sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
@@ -46,6 +47,7 @@ export function resolveSubagentTargetFromRuns(params: {
   token: string | undefined;
   recentWindowMinutes: number;
   label: (entry: SubagentRunRecord) => string;
+  aliases?: (entry: SubagentRunRecord) => string[];
   isActive?: (entry: SubagentRunRecord) => boolean;
   errors: {
     missingTarget: string;
@@ -79,7 +81,7 @@ export function resolveSubagentTargetFromRuns(params: {
   const numericOrder = [
     ...deduped.filter((entry) => isActive(entry)),
     ...deduped.filter(
-      (entry) => !isActive(entry) && !!entry.endedAt && (entry.endedAt ?? 0) >= recentCutoff,
+      (entry) => !isActive(entry) && Boolean(entry.endedAt) && (entry.endedAt ?? 0) >= recentCutoff,
     ),
   ];
   if (/^\d+$/.test(trimmed)) {
@@ -96,6 +98,16 @@ export function resolveSubagentTargetFromRuns(params: {
       : { error: params.errors.unknownSession(trimmed) };
   }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const aliases = params.aliases ?? (() => []);
+  const byExactAlias = numericOrder.filter((entry) =>
+    aliases(entry).some((alias) => normalizeLowercaseStringOrEmpty(alias) === lowered),
+  );
+  if (byExactAlias.length === 1) {
+    return { entry: byExactAlias[0] };
+  }
+  if (byExactAlias.length > 1) {
+    return { error: params.errors.ambiguousLabel(trimmed) };
+  }
   const byExactLabel = deduped.filter(
     (entry) => normalizeLowercaseStringOrEmpty(params.label(entry)) === lowered,
   );
@@ -104,6 +116,15 @@ export function resolveSubagentTargetFromRuns(params: {
   }
   if (byExactLabel.length > 1) {
     return { error: params.errors.ambiguousLabel(trimmed) };
+  }
+  const byAliasPrefix = numericOrder.filter((entry) =>
+    aliases(entry).some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lowered)),
+  );
+  if (byAliasPrefix.length === 1) {
+    return { entry: byAliasPrefix[0] };
+  }
+  if (byAliasPrefix.length > 1) {
+    return { error: params.errors.ambiguousLabelPrefix(trimmed) };
   }
   const byLabelPrefix = deduped.filter((entry) =>
     normalizeLowercaseStringOrEmpty(params.label(entry)).startsWith(lowered),

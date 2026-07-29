@@ -1,3 +1,4 @@
+// API-provider auth-choice tests cover built-in provider config, API keys, and provider plugin setup.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-providers.js";
@@ -5,9 +6,11 @@ import { normalizeApiKeyTokenProviderAuthChoice } from "./auth-choice.apply.api-
 const resolvePluginProviders = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/provider-auth-choice.runtime.js").resolvePluginProviders>(),
 );
+const resolvePluginSetupProvider = vi.hoisted(() => vi.fn(() => undefined));
 
 vi.mock("../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders,
+  resolvePluginSetupProvider,
 }));
 
 function createProvider(params: {

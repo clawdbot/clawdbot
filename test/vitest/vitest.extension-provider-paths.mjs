@@ -1,6 +1,7 @@
+// Test routing roots for model provider extension suites.
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
-export const providerExtensionIds = [
+const providerExtensionIds = [
   "amazon-bedrock",
   "amazon-bedrock-mantle",
   "anthropic",
@@ -14,6 +15,7 @@ export const providerExtensionIds = [
   "groq",
   "huggingface",
   "kimi-coding",
+  "lmstudio",
   "microsoft",
   "microsoft-foundry",
   "minimax",
@@ -22,7 +24,6 @@ export const providerExtensionIds = [
   "moonshot",
   "nvidia",
   "ollama",
-  "openai",
   "openrouter",
   "qianfan",
   "stepfun",
@@ -33,8 +34,17 @@ export const providerExtensionIds = [
   "zai",
 ];
 
+const providerOpenAiExtensionIds = ["openai"];
+
 export const providerExtensionTestRoots = providerExtensionIds.map((id) => bundledPluginRoot(id));
+export const providerOpenAiExtensionTestRoots = providerOpenAiExtensionIds.map((id) =>
+  bundledPluginRoot(id),
+);
 
 export function isProviderExtensionRoot(root) {
   return providerExtensionTestRoots.includes(root);
+}
+
+export function isProviderOpenAiExtensionRoot(root) {
+  return providerOpenAiExtensionTestRoots.includes(root);
 }

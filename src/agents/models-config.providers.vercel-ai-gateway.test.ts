@@ -1,9 +1,11 @@
+// Verifies Vercel AI Gateway auth marker resolution from env and profiles.
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
 let createProviderAuthResolver: typeof import("./models-config.providers.secrets.js").createProviderAuthResolver;
 
 async function loadModules() {
+  // This file needs the real auth resolver after other provider tests install mocks.
   vi.doUnmock("../plugins/manifest-registry.js");
   vi.doUnmock("../plugins/provider-runtime.js");
   vi.doUnmock("../secrets/provider-env-vars.js");
@@ -27,11 +29,10 @@ describe("vercel-ai-gateway provider resolution", () => {
       { version: 1, profiles: {} },
     );
 
-    expect(resolveAuth("vercel-ai-gateway")).toMatchObject({
-      apiKey: "AI_GATEWAY_API_KEY",
-      mode: "api_key",
-      source: "env",
-    });
+    const auth = resolveAuth("vercel-ai-gateway");
+    expect(auth.apiKey).toBe("AI_GATEWAY_API_KEY");
+    expect(auth.mode).toBe("api_key");
+    expect(auth.source).toBe("env");
   });
 
   it("prefers env keyRef markers over runtime plaintext in auth profiles", () => {
@@ -47,12 +48,12 @@ describe("vercel-ai-gateway provider resolution", () => {
       },
     });
 
-    expect(resolveAuth("vercel-ai-gateway")).toMatchObject({
-      apiKey: "AI_GATEWAY_API_KEY",
-      mode: "api_key",
-      source: "profile",
-      profileId: "vercel-ai-gateway:default",
-    });
+    const auth = resolveAuth("vercel-ai-gateway");
+    // Persist the env marker, not the resolved plaintext profile key.
+    expect(auth.apiKey).toBe("AI_GATEWAY_API_KEY");
+    expect(auth.mode).toBe("api_key");
+    expect(auth.source).toBe("profile");
+    expect(auth.profileId).toBe("vercel-ai-gateway:default");
   });
 
   it("uses non-env markers for non-env keyRef vercel profiles", () => {
@@ -68,11 +69,10 @@ describe("vercel-ai-gateway provider resolution", () => {
       },
     });
 
-    expect(resolveAuth("vercel-ai-gateway")).toMatchObject({
-      apiKey: NON_ENV_SECRETREF_MARKER,
-      mode: "api_key",
-      source: "profile",
-      profileId: "vercel-ai-gateway:default",
-    });
+    const auth = resolveAuth("vercel-ai-gateway");
+    expect(auth.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(auth.mode).toBe("api_key");
+    expect(auth.source).toBe("profile");
+    expect(auth.profileId).toBe("vercel-ai-gateway:default");
   });
 });

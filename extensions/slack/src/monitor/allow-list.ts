@@ -1,14 +1,15 @@
+// Slack plugin module implements allow list behavior.
 import {
   compileAllowlist,
   resolveCompiledAllowlistMatch,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeHyphenSlug,
   normalizeStringEntries,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-normalization-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 
 const SLACK_SLUG_CACHE_MAX = 512;
 const slackSlugCache = new Map<string, string>();
@@ -53,7 +54,7 @@ export type SlackAllowListMatch = AllowlistMatch<
 type SlackAllowListSource = Exclude<SlackAllowListMatch["matchSource"], undefined>;
 
 export function resolveSlackAllowListMatch(params: {
-  allowList: string[];
+  allowList: readonly string[];
   id?: string;
   name?: string;
   allowNameMatching?: boolean;

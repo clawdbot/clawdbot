@@ -1,3 +1,7 @@
+/**
+ * Shared writable-target resolution for sandbox fs bridge rename operations.
+ */
+/** Resolves both rename endpoints and verifies write access before command execution. */
 export function resolveWritableRenameTargets<T extends { containerPath: string }>(params: {
   from: string;
   to: string;
@@ -14,6 +18,7 @@ export function resolveWritableRenameTargets<T extends { containerPath: string }
   return { from, to };
 }
 
+/** Adapter used by bridge implementations that pass resolver callbacks separately. */
 export function resolveWritableRenameTargetsForBridge<T extends { containerPath: string }>(
   params: {
     from: string;
@@ -31,6 +36,7 @@ export function resolveWritableRenameTargetsForBridge<T extends { containerPath:
   });
 }
 
+/** Creates a reusable resolver bound to a bridge's target and permission helpers. */
 export function createWritableRenameTargetResolver<T extends { containerPath: string }>(
   resolveTarget: (params: { filePath: string; cwd?: string }) => T,
   ensureWritable: (target: T, action: string) => void,

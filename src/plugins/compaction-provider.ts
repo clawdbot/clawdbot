@@ -14,7 +14,7 @@
  * A pluggable compaction provider that can replace the built-in
  * summarizeInStages pipeline.
  */
-export type CompactionProviderSummarizationInstructions = {
+type CompactionProviderSummarizationInstructions = {
   identifierPolicy?: "strict" | "off" | "custom";
   identifierInstructions?: string;
 };
@@ -38,7 +38,7 @@ export interface CompactionProvider {
 // ---------------------------------------------------------------------------
 
 /** A compaction provider with its owning plugin id for lifecycle tracking. */
-export type RegisteredCompactionProvider = {
+type RegisteredCompactionProvider = {
   provider: CompactionProvider;
   ownerPluginId?: string;
 };
@@ -99,11 +99,6 @@ export function getRegisteredCompactionProvider(
   id: string,
 ): RegisteredCompactionProvider | undefined {
   return getCompactionProviderRegistryState().providers.get(id);
-}
-
-/** List all registered compaction provider ids. */
-export function listCompactionProviderIds(): string[] {
-  return [...getCompactionProviderRegistryState().providers.keys()];
 }
 
 /** List all registered entries with owner metadata (for snapshot/restore). */

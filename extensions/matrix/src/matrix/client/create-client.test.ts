@@ -1,3 +1,4 @@
+// Matrix tests cover create client plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());
@@ -33,7 +34,6 @@ describe("createMatrixClient", () => {
     storagePath: "/tmp/openclaw-matrix-create-client-test/storage.json",
     recoveryKeyPath: "/tmp/openclaw-matrix-create-client-test/recovery.key",
     idbSnapshotPath: "/tmp/openclaw-matrix-create-client-test/idb.snapshot",
-    metaPath: "/tmp/openclaw-matrix-create-client-test/storage-meta.json",
     accountKey: "default",
     tokenHash: "token-hash",
   };
@@ -76,10 +76,89 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storagePath: storagePaths.storagePath,
+      storageRootDir: storagePaths.rootDir,
       recoveryKeyPath: storagePaths.recoveryKeyPath,
       idbSnapshotPath: storagePaths.idbSnapshotPath,
       cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: undefined,
+      dispatcherPolicy: undefined,
+    });
+  });
+
+  it("derives ssrfPolicy from allowPrivateNetwork when no explicit policy is provided", async () => {
+    await createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+      persistStorage: false,
+      allowPrivateNetwork: true,
+    });
+
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storageRootDir: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: { allowPrivateNetwork: true },
+      dispatcherPolicy: undefined,
+    });
+  });
+
+  it("prefers explicit ssrfPolicy over allowPrivateNetwork", async () => {
+    const explicitPolicy = { allowPrivateNetwork: true, customField: "test" };
+    await createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+      persistStorage: false,
+      allowPrivateNetwork: false,
+      ssrfPolicy: explicitPolicy as never,
+    });
+
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storageRootDir: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
+      autoBootstrapCrypto: undefined,
+      ssrfPolicy: explicitPolicy,
+      dispatcherPolicy: undefined,
+    });
+  });
+
+  it("leaves ssrfPolicy undefined when allowPrivateNetwork is falsy and no explicit policy", async () => {
+    await createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+      persistStorage: false,
+    });
+
+    expect(MatrixClientMock).toHaveBeenCalledWith("https://matrix.example.org", "tok", {
+      userId: "@bot:example.org",
+      password: undefined,
+      deviceId: undefined,
+      encryption: undefined,
+      localTimeoutMs: undefined,
+      initialSyncLimit: undefined,
+      storageRootDir: undefined,
+      recoveryKeyPath: undefined,
+      idbSnapshotPath: undefined,
+      cryptoDatabasePrefix: undefined,
       autoBootstrapCrypto: undefined,
       ssrfPolicy: undefined,
       dispatcherPolicy: undefined,
@@ -103,7 +182,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storagePath: undefined,
+      storageRootDir: undefined,
       recoveryKeyPath: undefined,
       idbSnapshotPath: undefined,
       cryptoDatabasePrefix: undefined,

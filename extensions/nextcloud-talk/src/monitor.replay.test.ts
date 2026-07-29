@@ -1,45 +1,93 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createMockIncomingRequest } from "../../../test/helpers/mock-incoming-request.js";
-import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "../runtime-api.js";
-import {
-  NextcloudTalkRetryableWebhookError,
-  processNextcloudTalkReplayGuardedMessage,
-  readNextcloudTalkWebhookBody,
-} from "./monitor.js";
+// Nextcloud Talk tests cover monitor.replay plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it, vi } from "vitest";
+import { createNextcloudTalkWebhookServer as createRawNextcloudTalkWebhookServer } from "./monitor.js";
 import { createSignedCreateMessageRequest } from "./monitor.test-fixtures.js";
 import { startWebhookServer } from "./monitor.test-harness.js";
-import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-import type { NextcloudTalkInboundMessage } from "./types.js";
+import type { NextcloudTalkInboundMessage, NextcloudTalkWebhookServerOptions } from "./types.js";
+import { inspectNextcloudTalkWebhookEnvelope } from "./webhook-spool-state.js";
 
-const tempDirs: string[] = [];
+type TestWebhookServerOptions = Omit<NextcloudTalkWebhookServerOptions, "onWebhook"> & {
+  onMessage: (rawBody: string) => void | Promise<void>;
+};
 
-afterEach(() => {
-  while (tempDirs.length > 0) {
-    const dir = tempDirs.pop();
-    if (dir) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+function createNextcloudTalkWebhookServer(options: TestWebhookServerOptions) {
+  const { onMessage, ...serverOptions } = options;
+  return createRawNextcloudTalkWebhookServer({
+    ...serverOptions,
+    onWebhook: async (rawBody) => {
+      await onMessage(rawBody);
+      return "accepted";
+    },
+  });
+}
+
+async function invokeWebhookServerRequest(params: {
+  body: string;
+  headers: Record<string, string>;
+  maxBodyBytes: number;
+}) {
+  const { server } = createNextcloudTalkWebhookServer({
+    host: "127.0.0.1",
+    port: 0,
+    path: "/nextcloud-body-limit",
+    secret: "nextcloud-secret", // pragma: allowlist secret
+    maxBodyBytes: params.maxBodyBytes,
+    onMessage: vi.fn(),
+  });
+  const listener = server.listeners("request")[0] as
+    | ((req: IncomingMessage, res: ServerResponse) => void)
+    | undefined;
+  if (!listener) {
+    throw new Error("expected Nextcloud Talk request listener");
   }
-});
+  const req = Object.assign(createMockIncomingRequest([params.body]), {
+    method: "POST",
+    url: "/nextcloud-body-limit",
+    headers: params.headers,
+    socket: { remoteAddress: "127.0.0.1" },
+  }) as unknown as IncomingMessage;
 
-describe("readNextcloudTalkWebhookBody", () => {
-  it("reads valid body within max bytes", async () => {
-    const req = createMockIncomingRequest(['{"type":"Create"}']);
-    const body = await readNextcloudTalkWebhookBody(req, 1024);
-    expect(body).toBe('{"type":"Create"}');
+  return await new Promise<{ body: string; status: number }>((resolve) => {
+    let status = 0;
+    const res = {
+      headersSent: false,
+      writeHead(code: number) {
+        status = code;
+        this.headersSent = true;
+        return this;
+      },
+      end(body?: string) {
+        resolve({ body: body ?? "", status });
+        return this;
+      },
+    };
+    listener(req, res as unknown as ServerResponse);
   });
-
-  it("rejects when payload exceeds max bytes", async () => {
-    const req = createMockIncomingRequest(["x".repeat(300)]);
-    await expect(readNextcloudTalkWebhookBody(req, 128)).rejects.toThrow("PayloadTooLarge");
-  });
-});
+}
 
 describe("createNextcloudTalkWebhookServer auth order", () => {
+  it("closes when abort races with listener startup", async () => {
+    const abortController = new AbortController();
+    const webhook = createRawNextcloudTalkWebhookServer({
+      host: "127.0.0.1",
+      port: 0,
+      path: "/nextcloud-abort-startup",
+      secret: "test-secret",
+      onWebhook: async () => "accepted",
+      abortSignal: abortController.signal,
+    });
+
+    const starting = webhook.start();
+    abortController.abort();
+    await starting;
+
+    expect(webhook.server.listening).toBe(false);
+    await webhook.stop();
+  });
+
   it("rejects missing signature headers before reading request body", async () => {
     const readBody = vi.fn(async () => {
       throw new Error("should not be called for missing signature headers");
@@ -62,6 +110,19 @@ describe("createNextcloudTalkWebhookServer auth order", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: "Missing signature headers" });
     expect(readBody).not.toHaveBeenCalled();
+  });
+
+  it("rejects signed payloads over the configured body limit", async () => {
+    const { body, headers } = createSignedCreateMessageRequest();
+
+    const response = await invokeWebhookServerRequest({
+      body,
+      headers,
+      maxBodyBytes: 128,
+    });
+
+    expect(response.status).toBe(413);
+    expect(JSON.parse(response.body)).toEqual({ error: "Payload too large" });
   });
 });
 
@@ -89,150 +150,114 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
   });
 });
 
-describe("createNextcloudTalkWebhookServer replay handling", () => {
-  function createReplayAwareProcessMessage(params: {
-    stateDir: string;
-    accountId?: string;
-    handleMessage: (message: NextcloudTalkInboundMessage) => Promise<void>;
-  }) {
-    const replayGuard = createNextcloudTalkReplayGuard({
-      stateDir: params.stateDir,
-    });
-
-    return async (message: NextcloudTalkInboundMessage): Promise<void> => {
-      await processNextcloudTalkReplayGuardedMessage({
-        replayGuard,
-        accountId: params.accountId ?? "acct",
-        message,
-        handleMessage: () => params.handleMessage(message),
-      });
+describe("Nextcloud Talk replay identity fixture", () => {
+  function buildInboundMessage(): NextcloudTalkInboundMessage {
+    return {
+      messageId: "msg-1",
+      roomToken: "room-token",
+      roomName: "Room 1",
+      senderId: "alice",
+      senderName: "Alice",
+      text: "hello",
+      mediaType: "text/plain",
+      timestamp: 1_700_000_000_000,
+      isGroupChat: true,
     };
   }
 
-  it("acknowledges replayed requests and skips onMessage side effects", async () => {
-    const seen = new Set<string>();
-    const onMessage = vi.fn(async () => {});
-    const shouldProcessMessage = vi.fn(async (message: NextcloudTalkInboundMessage) => {
-      if (seen.has(message.messageId)) {
-        return false;
-      }
-      seen.add(message.messageId);
-      return true;
+  it("keeps the retired guard identity fields represented", () => {
+    const message = buildInboundMessage();
+    const rawBody = JSON.stringify({
+      type: "Create",
+      actor: { type: "Person", id: message.senderId, name: message.senderName },
+      object: {
+        type: "Note",
+        id: message.messageId,
+        name: message.text,
+        content: message.text,
+        mediaType: message.mediaType,
+      },
+      target: { type: "Collection", id: message.roomToken, name: message.roomName },
     });
-    const harness = await startWebhookServer({
-      path: "/nextcloud-replay",
-      shouldProcessMessage,
-      onMessage,
+    expect(inspectNextcloudTalkWebhookEnvelope(rawBody)).toEqual({
+      eventId: message.messageId,
+      laneKey: `room:${message.roomToken}`,
     });
-
-    const { body, headers } = createSignedCreateMessageRequest();
-
-    const first = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-    const second = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(shouldProcessMessage).toHaveBeenCalledTimes(2);
-    expect(onMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it("allows a retry after processMessage fails before replay commit", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-replay-"));
-    tempDirs.push(stateDir);
-    let attempts = 0;
-    const onError = vi.fn();
-    const handleMessage = vi.fn(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new NextcloudTalkRetryableWebhookError("transient nextcloud failure");
-      }
-    });
-    const processMessage = vi.fn(
-      createReplayAwareProcessMessage({
-        stateDir,
-        handleMessage,
-      }),
-    );
-    const harness = await startWebhookServer({
-      path: "/nextcloud-replay-process",
-      processMessage,
-      onMessage: vi.fn(),
-      onError,
-    });
-
-    const { body, headers } = createSignedCreateMessageRequest();
-
-    const first = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    const second = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    await vi.waitFor(() => expect(handleMessage).toHaveBeenCalledTimes(2));
-    expect(onError).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps replay committed after a non-retryable processMessage failure", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-replay-"));
-    tempDirs.push(stateDir);
-    const onError = vi.fn();
-    const visibleSideEffect = vi.fn();
-    const handleMessage = vi.fn(async () => {
-      visibleSideEffect();
-      throw new Error("post-send failure");
-    });
-    const processMessage = vi.fn(
-      createReplayAwareProcessMessage({
-        stateDir,
-        handleMessage,
-      }),
-    );
-    const harness = await startWebhookServer({
-      path: "/nextcloud-replay-post-send",
-      processMessage,
-      onMessage: vi.fn(),
-      onError,
-    });
-
-    const { body, headers } = createSignedCreateMessageRequest();
-
-    const first = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-    const second = await fetch(harness.webhookUrl, {
-      method: "POST",
-      headers,
-      body,
-    });
-
-    expect(first.status).toBe(200);
-    expect(second.status).toBe(200);
-    expect(handleMessage).toHaveBeenCalledTimes(1);
-    expect(visibleSideEffect).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("createNextcloudTalkWebhookServer payload validation", () => {
+  it("acknowledges signed non-message Create events instead of rejecting them", async () => {
+    const payload = {
+      type: "Create",
+      actor: { type: "Person", id: "alice", name: "Alice" },
+      object: {
+        type: "Document",
+        id: "file-1",
+        name: "report.pdf",
+        content: "",
+        mediaType: "application/pdf",
+      },
+      target: { type: "Collection", id: "room-1", name: "Room 1" },
+    };
+    const body = JSON.stringify(payload);
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-non-message-event",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges signed non-Create Talk events instead of rejecting them", async () => {
+    const payload = {
+      type: "Join",
+      actor: { type: "Application", id: "bots/bot-1", name: "Bot" },
+      object: { type: "Collection", id: "room-1", name: "Room 1" },
+    };
+    const body = JSON.stringify(payload);
+    const { random, signature } = generateNextcloudTalkSignature({
+      body,
+      secret: "nextcloud-secret", // pragma: allowlist secret
+    });
+    const onMessage = vi.fn();
+    const harness = await startWebhookServer({
+      path: "/nextcloud-lifecycle-event",
+      onMessage,
+    });
+
+    const response = await fetch(harness.webhookUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-nextcloud-talk-random": random,
+        "x-nextcloud-talk-signature": signature,
+        "x-nextcloud-talk-backend": "https://nextcloud.example",
+      },
+      body,
+    });
+
+    expect(response.status).toBe(200);
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
   it("rejects malformed webhook payloads after signature verification", async () => {
     const payload = {
       type: "Create",
@@ -274,8 +299,10 @@ describe("createNextcloudTalkWebhookServer payload validation", () => {
 
 describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
   it("rate limits repeated invalid signature attempts from the same source", async () => {
+    const maxRequests = 1;
     const harness = await startWebhookServer({
       path: "/nextcloud-auth-rate-limit",
+      authRateLimit: { maxRequests },
       onMessage: vi.fn(),
     });
     const { body, headers } = createSignedCreateMessageRequest();
@@ -286,7 +313,7 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
 
     let firstResponse: Response | undefined;
     let lastResponse: Response | undefined;
-    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRequests; attempt += 1) {
       const response = await fetch(harness.webhookUrl, {
         method: "POST",
         headers: invalidHeaders,
@@ -298,22 +325,22 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       lastResponse = response;
     }
 
-    expect(firstResponse).toBeDefined();
     expect(firstResponse?.status).toBe(401);
-    expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(429);
     expect(await lastResponse?.text()).toBe("Too Many Requests");
   });
 
   it("does not rate limit valid signed webhook bursts from the same source", async () => {
+    const maxRequests = 1;
     const harness = await startWebhookServer({
       path: "/nextcloud-auth-rate-limit-valid",
+      authRateLimit: { maxRequests },
       onMessage: vi.fn(),
     });
     const { body, headers } = createSignedCreateMessageRequest();
 
     let lastResponse: Response | undefined;
-    for (let attempt = 0; attempt <= WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests; attempt += 1) {
+    for (let attempt = 0; attempt <= maxRequests; attempt += 1) {
       lastResponse = await fetch(harness.webhookUrl, {
         method: "POST",
         headers,
@@ -321,7 +348,6 @@ describe("createNextcloudTalkWebhookServer auth rate limiting", () => {
       });
     }
 
-    expect(lastResponse).toBeDefined();
     expect(lastResponse?.status).toBe(200);
   });
 });

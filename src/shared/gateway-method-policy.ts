@@ -1,16 +1,19 @@
-export const RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES = [
+// Gateway method policy helpers classify reserved and operator-only gateway methods.
+const RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES = [
   "exec.approvals.",
   "config.",
   "wizard.",
   "update.",
 ] as const;
 
-export const RESERVED_ADMIN_GATEWAY_METHOD_SCOPE = "operator.admin" as const;
+const RESERVED_ADMIN_GATEWAY_METHOD_SCOPE = "operator.admin" as const;
 
-export function isReservedAdminGatewayMethod(method: string): boolean {
+/** Return whether a gateway method is reserved for operator admin calls. */
+function isReservedAdminGatewayMethod(method: string): boolean {
   return RESERVED_ADMIN_GATEWAY_METHOD_PREFIXES.some((prefix) => method.startsWith(prefix));
 }
 
+/** Resolve the mandatory scope for reserved gateway methods. */
 export function resolveReservedGatewayMethodScope(
   method: string,
 ): typeof RESERVED_ADMIN_GATEWAY_METHOD_SCOPE | undefined {
@@ -20,6 +23,7 @@ export function resolveReservedGatewayMethodScope(
   return RESERVED_ADMIN_GATEWAY_METHOD_SCOPE;
 }
 
+/** Coerce plugin-declared scopes away from unsafe reserved gateway method scopes. */
 export function normalizePluginGatewayMethodScope<TScope extends string>(
   method: string,
   scope: TScope | undefined,

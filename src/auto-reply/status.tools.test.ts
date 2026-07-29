@@ -1,3 +1,4 @@
+/** Tests /tools status output for compact and verbose tool inventory modes. */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { buildCommandsMessage, buildHelpMessage, buildToolsMessage } from "./status.js";
@@ -70,6 +71,40 @@ describe("tools product copy", () => {
     expect(text).toContain("docs_lookup (docs)");
     expect(text).toContain("Use /tools verbose for descriptions.");
     expect(text).not.toContain("unavailable right now");
+  });
+
+  it("renders effective tool inventory notices", () => {
+    const text = buildToolsMessage({
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "web_fetch",
+              label: "Web Fetch",
+              description: "Fetch web content",
+              rawDescription: "Fetch web content",
+              source: "core",
+            },
+          ],
+        },
+      ],
+      notices: [
+        {
+          id: "browser-filtered-by-profile",
+          severity: "info",
+          message:
+            'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"].',
+        },
+      ],
+    });
+
+    expect(text).toContain("Notes");
+    expect(text).toContain('Add tools.alsoAllow: ["browser"].');
   });
 
   it("keeps detailed descriptions in verbose mode", () => {

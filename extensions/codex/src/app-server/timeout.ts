@@ -1,22 +1,18 @@
+/**
+ * Thin Codex app-server timeout adapter around OpenClaw's shared security
+ * runtime timeout helper.
+ */
+import { withTimeout as withSharedTimeout } from "openclaw/plugin-sdk/security-runtime";
+
+/** Awaits a promise with a Codex-specific timeout error message. */
 export async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
   timeoutMessage: string,
+  createError?: () => Error,
 ): Promise<T> {
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return await promise;
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(timeoutMessage)), Math.max(1, timeoutMs));
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  return await withSharedTimeout(promise, timeoutMs, {
+    message: timeoutMessage,
+    ...(createError ? { createError } : {}),
+  });
 }

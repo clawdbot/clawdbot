@@ -1,5 +1,9 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { listBundledChannelPluginIds } from "./bundled-ids.js";
+/**
+ * Bundled channel bootstrap registry.
+ *
+ * Provides channel plugin metadata before the full runtime registry is installed.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   getBundledChannelPlugin,
   getBundledChannelSecrets,
@@ -9,14 +13,9 @@ import {
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
-type CachedBootstrapPlugins = {
-  sortedIds: string[];
-  byId: Map<string, ChannelPlugin>;
-  secretsById: Map<string, ChannelPlugin["secrets"] | null>;
-  missingIds: Set<string>;
-};
-
-let cachedBootstrapPlugins: CachedBootstrapPlugins | null = null;
+function resolveBootstrapChannelId(id: ChannelId): string {
+  return normalizeOptionalString(id) ?? "";
+}
 
 function mergePluginSection<T>(
   runtimeValue: T | undefined,
@@ -28,6 +27,8 @@ function mergePluginSection<T>(
     typeof runtimeValue === "object" &&
     typeof setupValue === "object"
   ) {
+    // Setup artifacts can add lightweight setup/docs/secrets fields on top of
+    // runtime artifacts; undefined setup values should not erase runtime data.
     const merged = {
       ...(runtimeValue as Record<string, unknown>),
     };
@@ -63,84 +64,44 @@ function mergeBootstrapPlugin(
   } as ChannelPlugin;
 }
 
-function buildBootstrapPlugins(): CachedBootstrapPlugins {
-  return {
-    sortedIds: listBundledChannelPluginIds(),
-    byId: new Map(),
-    secretsById: new Map(),
-    missingIds: new Set(),
-  };
-}
-
-function getBootstrapPlugins(): CachedBootstrapPlugins {
-  cachedBootstrapPlugins ??= buildBootstrapPlugins();
-  return cachedBootstrapPlugins;
-}
-
-export function listBootstrapChannelPluginIds(): readonly string[] {
-  return getBootstrapPlugins().sortedIds;
-}
-
-export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
-  for (const id of listBootstrapChannelPluginIds()) {
-    const plugin = getBootstrapChannelPlugin(id);
-    if (plugin) {
-      yield plugin;
-    }
-  }
-}
-
-export function listBootstrapChannelPlugins(): readonly ChannelPlugin[] {
-  return [...iterateBootstrapChannelPlugins()];
-}
-
+/**
+ * Loads a bundled channel plugin for bootstrap, merging runtime and setup artifacts.
+ */
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
+  const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {
     return undefined;
   }
-  const registry = getBootstrapPlugins();
-  const cached = registry.byId.get(resolvedId);
-  if (cached) {
-    return cached;
-  }
-  if (registry.missingIds.has(resolvedId)) {
+  let runtimePlugin: ChannelPlugin | undefined;
+  let setupPlugin: ChannelPlugin | undefined;
+  try {
+    runtimePlugin = getBundledChannelPlugin(resolvedId);
+    setupPlugin = getBundledChannelSetupPlugin(resolvedId);
+  } catch {
+    // Bootstrap discovery treats broken/missing bundled channel artifacts as
+    // absent so install/doctor flows can continue scanning other channels.
     return undefined;
   }
-  const runtimePlugin = getBundledChannelPlugin(resolvedId);
-  const setupPlugin = getBundledChannelSetupPlugin(resolvedId);
   const merged =
     runtimePlugin && setupPlugin
       ? mergeBootstrapPlugin(runtimePlugin, setupPlugin)
       : (setupPlugin ?? runtimePlugin);
-  if (!merged) {
-    registry.missingIds.add(resolvedId);
-    return undefined;
-  }
-  registry.byId.set(resolvedId, merged);
   return merged;
 }
 
+/**
+ * Loads bootstrap secret metadata from bundled runtime and setup artifacts.
+ */
 export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
-  const resolvedId = normalizeOptionalString(id) ?? "";
+  const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {
     return undefined;
   }
-  const registry = getBootstrapPlugins();
-  const cached = registry.secretsById.get(resolvedId);
-  if (cached) {
-    return cached;
-  }
-  if (registry.secretsById.has(resolvedId)) {
+  try {
+    const runtimeSecrets = getBundledChannelSecrets(resolvedId);
+    const setupSecrets = getBundledChannelSetupSecrets(resolvedId);
+    return mergePluginSection(runtimeSecrets, setupSecrets);
+  } catch {
     return undefined;
   }
-  const runtimeSecrets = getBundledChannelSecrets(resolvedId);
-  const setupSecrets = getBundledChannelSetupSecrets(resolvedId);
-  const merged = mergePluginSection(runtimeSecrets, setupSecrets);
-  registry.secretsById.set(resolvedId, merged ?? null);
-  return merged;
-}
-
-export function clearBootstrapChannelPluginCache(): void {
-  cachedBootstrapPlugins = null;
 }

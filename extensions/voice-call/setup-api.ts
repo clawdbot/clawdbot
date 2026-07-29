@@ -1,8 +1,12 @@
+// Voice Call API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { isRecord } from "openclaw/plugin-sdk/text-runtime";
-import { migrateVoiceCallLegacyConfigInput } from "./config-api.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { migrateVoiceCallLegacyConfigInput } from "./src/config-migration.js";
 
+// Setup-time entrypoint for voice-call config migrations.
+
+/** Migrate voice-call plugin config inside the full OpenClaw config object. */
 function migrateVoiceCallPluginConfig(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -37,6 +41,7 @@ function migrateVoiceCallPluginConfig(config: OpenClawConfig): {
   };
 }
 
+/** Setup plugin entry that registers voice-call config migrations. */
 export default definePluginEntry({
   id: "voice-call",
   name: "Voice Call Setup",

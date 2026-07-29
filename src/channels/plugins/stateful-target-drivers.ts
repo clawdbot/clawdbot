@@ -1,3 +1,8 @@
+/**
+ * Stateful binding target driver registry.
+ *
+ * Stores lifecycle drivers for binding targets that carry mutable external session state.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ConfiguredBindingResolution,
@@ -9,9 +14,10 @@ export type StatefulBindingTargetSessionResult =
   | { ok: true; sessionKey: string }
   | { ok: false; sessionKey: string; error: string };
 export type StatefulBindingTargetResetResult =
-  | { ok: true }
+  | { ok: true; sessionKey?: string; sessionId?: string; storePath?: string }
   | { ok: false; skipped?: boolean; error?: string };
 
+/** Driver contract for lifecycle operations on one stateful target family. */
 export type StatefulBindingTargetDriver = {
   id: string;
   ensureReady: (params: {
@@ -41,7 +47,9 @@ function listStatefulBindingTargetDrivers(): StatefulBindingTargetDriver[] {
   return [...registeredStatefulBindingTargetDrivers.values()];
 }
 
-export function registerStatefulBindingTargetDriver(driver: StatefulBindingTargetDriver): void {
+export function registerStatefulBindingTargetDriver(
+  driver: StatefulBindingTargetDriver,
+): () => void {
   const id = driver.id.trim();
   if (!id) {
     throw new Error("Stateful binding target driver id is required");
@@ -49,13 +57,17 @@ export function registerStatefulBindingTargetDriver(driver: StatefulBindingTarge
   const normalized = { ...driver, id };
   const existing = registeredStatefulBindingTargetDrivers.get(id);
   if (existing) {
-    return;
+    // Builtins and tests may register through multiple load paths. First writer
+    // wins so process-local sessions keep using the same driver instance.
+    return () => {};
   }
   registeredStatefulBindingTargetDrivers.set(id, normalized);
-}
-
-export function unregisterStatefulBindingTargetDriver(id: string): void {
-  registeredStatefulBindingTargetDrivers.delete(id.trim());
+  return () => {
+    // Cleanup owns only this registration; a later replacement must survive stale disposal.
+    if (registeredStatefulBindingTargetDrivers.get(id) === normalized) {
+      registeredStatefulBindingTargetDrivers.delete(id);
+    }
+  };
 }
 
 export function getStatefulBindingTargetDriver(id: string): StatefulBindingTargetDriver | null {
@@ -74,6 +86,8 @@ export function resolveStatefulBindingTargetBySessionKey(params: {
   if (!sessionKey) {
     return null;
   }
+  // Session keys are globally opaque to callers. Ask each registered driver so
+  // channel-specific encodings stay private to their owner.
   for (const driver of listStatefulBindingTargetDrivers()) {
     const bindingTarget = driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,

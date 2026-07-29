@@ -1,6 +1,7 @@
+// Covers heartbeat active-hours evaluation.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { createActiveHoursPredicate, isWithinActiveHours } from "./heartbeat-active-hours.js";
 
 function cfgWithUserTimezone(userTimezone = "UTC"): OpenClawConfig {
   return {
@@ -74,6 +75,16 @@ describe("isWithinActiveHours", () => {
 
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 15, 0, 0))).toBe(true);
     expect(isWithinActiveHours(cfg, heartbeat, Date.UTC(2025, 0, 1, 23, 30, 0))).toBe(false);
+  });
+
+  it("evaluates repeated schedule probes with a prepared predicate", () => {
+    const isActive = createActiveHoursPredicate(
+      cfgWithUserTimezone("UTC"),
+      heartbeatWindow("09:00", "17:00", "America/New_York"),
+    );
+
+    expect(isActive(Date.UTC(2025, 0, 1, 15, 0, 0))).toBe(true);
+    expect(isActive(Date.UTC(2025, 0, 1, 23, 30, 0))).toBe(false);
   });
 
   it("falls back to user timezone when activeHours timezone is invalid", () => {

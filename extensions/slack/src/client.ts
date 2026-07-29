@@ -1,103 +1,131 @@
-import { type RetryOptions, type WebClientOptions, WebClient } from "@slack/web-api";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import { resolveEnvHttpProxyUrl } from "openclaw/plugin-sdk/infra-runtime";
+// Slack plugin module implements client behavior.
+import { createHash } from "node:crypto";
+import { type WebClientOptions, WebClient } from "@slack/web-api";
+import type { SlackLookupClientOptions } from "./client-options.js";
+import {
+  resolveSlackLookupClientOptions,
+  resolveSlackReadClientOptions,
+  resolveSlackWebClientOptions,
+  resolveSlackWriteClientOptions,
+  SLACK_WRITE_RETRY_OPTIONS,
+} from "./client-options.js";
 
-export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
-  retries: 2,
-  factor: 2,
-  minTimeout: 500,
-  maxTimeout: 3000,
-  randomize: true,
-};
+const SLACK_WRITE_CLIENT_CACHE_MAX = 32;
+const slackWriteClientCache = new Map<string, WebClient>();
+let slackListenerUploadCompletionClientCache = new WeakMap<
+  WebClient,
+  { teamId: string; client: WebClient }
+>();
 
-export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
-  retries: 0,
-};
+type SlackWriteClientCacheOptions = Pick<WebClientOptions, "slackApiUrl">;
 
-/**
- * Check whether a hostname is excluded from proxying by `NO_PROXY` / `no_proxy`.
- * Supports comma-separated entries with optional leading dots (e.g. `.slack.com`).
- */
-function isHostExcludedByNoProxy(hostname: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env.no_proxy ?? env.NO_PROXY;
-  if (!raw) {
-    return false;
-  }
-  const entries = raw
-    .split(/[,\s]+/)
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  const lower = hostname.toLowerCase();
-  for (const entry of entries) {
-    if (entry === "*") {
-      return true;
-    }
-    // Strip optional wildcard/leading dot so `*.slack.com` and `.slack.com`
-    // match both `slack.com` (apex) and Slack subdomains.
-    const bare = entry.startsWith("*.")
-      ? entry.slice(2)
-      : entry.startsWith(".")
-        ? entry.slice(1)
-        : entry;
-    if (lower === bare || lower.endsWith(`.${bare}`)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Build an HTTPS proxy agent from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
- * for use as the `agent` option in Slack WebClient and Socket Mode connections.
- *
- * When set, this agent is forwarded through @slack/bolt → @slack/socket-mode →
- * SlackWebSocket as the `httpAgent`, which the `ws` library uses to tunnel the
- * WebSocket upgrade request through the proxy.  This fixes Socket Mode in
- * environments where outbound traffic must go through an HTTP CONNECT proxy.
- *
- * Respects `NO_PROXY` / `no_proxy` — if `*.slack.com` (or a matching pattern)
- * appears in the exclusion list, returns `undefined` so the connection is direct.
- *
- * Returns `undefined` when no proxy env var is configured or when Slack hosts
- * are excluded by `NO_PROXY`.
- */
-function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl = resolveEnvHttpProxyUrl("https");
-  if (!proxyUrl) {
-    return undefined;
-  }
-  // Slack Socket Mode connects to these hosts; skip proxy if excluded.
-  if (isHostExcludedByNoProxy("slack.com")) {
-    return undefined;
-  }
-  try {
-    return new HttpsProxyAgent(proxyUrl);
-  } catch {
-    // Malformed proxy URL — degrade gracefully to direct connection.
-    return undefined;
-  }
-}
-
-export function resolveSlackWebClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_DEFAULT_RETRY_OPTIONS,
-  };
-}
-
-export function resolveSlackWriteClientOptions(options: WebClientOptions = {}): WebClientOptions {
-  return {
-    ...options,
-    agent: options.agent ?? resolveSlackProxyAgent(),
-    retryConfig: options.retryConfig ?? SLACK_WRITE_RETRY_OPTIONS,
-  };
-}
+export {
+  resolveSlackWebClientOptions,
+  resolveSlackWriteClientOptions,
+  SLACK_DEFAULT_RETRY_OPTIONS,
+  SLACK_WRITE_RETRY_OPTIONS,
+} from "./client-options.js";
 
 export function createSlackWebClient(token: string, options: WebClientOptions = {}) {
+  // Shared or mixed-operation clients stay timeout-free unless the caller opts in.
+  // Slack can commit a mutation before a late response, so a default deadline is unsafe here.
   return new WebClient(token, resolveSlackWebClientOptions(options));
+}
+
+export function createSlackReadClient(token: string, options: WebClientOptions = {}) {
+  return new WebClient(token, resolveSlackReadClientOptions(options));
+}
+
+export function createSlackStartupAuthClient(token: string, options: WebClientOptions = {}) {
+  // Startup degrades after auth.test fails, so terminate this one-shot request without
+  // imposing the same short deadline on Bolt's long-lived client.
+  return createSlackWebClient(token, {
+    ...options,
+    rejectRateLimitedCalls: true,
+    retryConfig: { retries: 0 },
+    timeout: 10_000,
+  });
+}
+
+export function createSlackLookupClient(token: string, options: SlackLookupClientOptions = {}) {
+  return new WebClient(token, resolveSlackLookupClientOptions(options));
 }
 
 export function createSlackWriteClient(token: string, options: WebClientOptions = {}) {
   return new WebClient(token, resolveSlackWriteClientOptions(options));
+}
+
+export function createSlackTokenCacheKey(token: string): string {
+  return `sha256:${createHash("sha256").update(token).digest("base64url")}`;
+}
+
+function slackWriteClientCacheKey(token: string, options: SlackWriteClientCacheOptions): string {
+  const tokenKey = createSlackTokenCacheKey(token);
+  return options.slackApiUrl ? `${tokenKey}:api:${options.slackApiUrl}` : tokenKey;
+}
+
+export function getSlackWriteClient(
+  token: string,
+  options: SlackWriteClientCacheOptions = {},
+): WebClient {
+  const resolvedOptions = resolveSlackWriteClientOptions(options);
+  const tokenKey = slackWriteClientCacheKey(token, resolvedOptions);
+  const cached = slackWriteClientCache.get(tokenKey);
+  if (cached) {
+    slackWriteClientCache.delete(tokenKey);
+    slackWriteClientCache.set(tokenKey, cached);
+    return cached;
+  }
+  const client = new WebClient(token, resolvedOptions);
+  if (slackWriteClientCache.size >= SLACK_WRITE_CLIENT_CACHE_MAX) {
+    const oldestTokenKey = slackWriteClientCache.keys().next().value;
+    if (oldestTokenKey) {
+      slackWriteClientCache.delete(oldestTokenKey);
+    }
+  }
+  slackWriteClientCache.set(tokenKey, client);
+  return client;
+}
+
+export function getSlackListenerUploadCompletionClient(params: {
+  listenerClient: WebClient;
+  teamId: string;
+  clientOptions?: WebClientOptions;
+}): WebClient | undefined {
+  const token = params.listenerClient.token?.trim();
+  const teamId = params.teamId.trim().toUpperCase();
+  if (!token || !teamId) {
+    return undefined;
+  }
+  const cached = slackListenerUploadCompletionClientCache.get(params.listenerClient);
+  if (cached) {
+    // Bolt pools listener clients by authorized team. Reusing one for a
+    // different team is invalid scope, not another completion-client key.
+    return cached.teamId === teamId ? cached.client : undefined;
+  }
+  const headers = Object.fromEntries(
+    Object.entries(params.clientOptions?.headers ?? {}).filter(
+      ([name]) => name.toLowerCase() !== "authorization",
+    ),
+  );
+  // Completion is one-shot. Clone Bolt's public transport options and team
+  // scope, but never inherit its retry policy or request deadline.
+  const client = new WebClient(
+    token,
+    resolveSlackWriteClientOptions({
+      ...params.clientOptions,
+      headers,
+      slackApiUrl: params.listenerClient.slackApiUrl,
+      teamId,
+      retryConfig: SLACK_WRITE_RETRY_OPTIONS,
+      timeout: 0,
+    }),
+  );
+  slackListenerUploadCompletionClientCache.set(params.listenerClient, { teamId, client });
+  return client;
+}
+
+export function clearSlackWriteClientCacheForTest(): void {
+  slackWriteClientCache.clear();
+  slackListenerUploadCompletionClientCache = new WeakMap();
 }

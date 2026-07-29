@@ -1,17 +1,16 @@
+// Matrix plugin module implements session route behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelOutboundSessionRoute,
+  buildThreadAwareOutboundSessionRoute,
   type ChannelOutboundSessionRouteParams,
 } from "openclaw/plugin-sdk/channel-core";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/config-runtime";
+import { parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/account-config.js";
 import { resolveDefaultMatrixAccountId } from "./matrix/accounts.js";
 import { resolveMatrixStoredSessionMeta } from "./matrix/session-store-metadata.js";
-import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
+import { isMatrixQualifiedUserId, resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 
 function resolveEffectiveMatrixAccountId(
   params: Pick<ChannelOutboundSessionRouteParams, "cfg" | "accountId">,
@@ -38,7 +37,9 @@ function resolveMatrixCurrentDmRoomId(params: {
   currentSessionKey?: string;
   targetUserId: string;
 }): string | undefined {
-  const sessionKey = params.currentSessionKey?.trim();
+  const sessionKey =
+    parseThreadSessionSuffix(params.currentSessionKey).baseSessionKey ??
+    params.currentSessionKey?.trim();
   if (!sessionKey) {
     return undefined;
   }
@@ -46,11 +47,10 @@ function resolveMatrixCurrentDmRoomId(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, {
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const existing = resolveSessionStoreEntry({
-      store,
+    const existing = getSessionEntry({
+      storePath,
       sessionKey,
-    }).existing;
+    });
     const currentSession = resolveMatrixStoredSessionMeta(existing);
     if (!currentSession) {
       return undefined;
@@ -75,12 +75,12 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
     return null;
   }
   const effectiveAccountId = resolveEffectiveMatrixAccountId(params);
+  const dmSessionScope = resolveMatrixDmSessionScope({
+    cfg: params.cfg,
+    accountId: effectiveAccountId,
+  });
   const roomScopedDmId =
-    target.kind === "user" &&
-    resolveMatrixDmSessionScope({
-      cfg: params.cfg,
-      accountId: effectiveAccountId,
-    }) === "per-room"
+    target.kind === "user" && dmSessionScope === "per-room"
       ? resolveMatrixCurrentDmRoomId({
           cfg: params.cfg,
           agentId: params.agentId,
@@ -100,14 +100,29 @@ export function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSession
   const from = target.kind === "user" ? `matrix:${target.id}` : `matrix:channel:${target.id}`;
   const to = `room:${roomScopedDmId ?? target.id}`;
 
-  return buildChannelOutboundSessionRoute({
+  const baseRoute = buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "matrix",
     accountId: effectiveAccountId,
+    recipientSessionExact:
+      target.kind === "room"
+        ? dmSessionScope === "per-room" && target.id.startsWith("!") && target.id.includes(":")
+        : dmSessionScope === "per-user"
+          ? isMatrixQualifiedUserId(target.id)
+          : roomScopedDmId !== undefined,
     peer,
     chatType,
     from,
     to,
+  });
+  return buildThreadAwareOutboundSessionRoute({
+    route: baseRoute,
+    replyToId: params.replyToId,
+    threadId: params.threadId,
+    currentSessionKey: params.currentSessionKey,
+    normalizeThreadId: (threadId) => threadId,
+    canRecoverCurrentThread: ({ route }) =>
+      route.peer.kind !== "direct" || (params.cfg.session?.dmScope ?? "main") !== "main",
   });
 }

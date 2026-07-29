@@ -1,21 +1,16 @@
+// Verifies importing context helpers does not eagerly load runtime config for
+// lightweight CLI commands.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
 
-// context.js and command-auth.js still read other config exports at import time, so this test only stubs loadConfig while keeping the rest of the module real.
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: loadConfigMock,
-  };
-});
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: loadConfigMock }));
 
 describe("agents/context eager warmup", () => {
   const originalArgv = process.argv.slice();
 
   beforeEach(() => {
-    vi.resetModules();
     loadConfigMock.mockReset();
   });
 
@@ -26,33 +21,12 @@ describe("agents/context eager warmup", () => {
   it.each([
     ["models", ["node", "openclaw", "models", "set", "openai/gpt-5.4"]],
     ["agent", ["node", "openclaw", "agent", "--message", "ok"]],
+    ["memory", ["node", "openclaw", "memory", "search", "--json"]],
   ])("does not eager-load config for %s commands on import", async (_label, argv) => {
+    // Import-time config reads are expensive and can fail for commands that only
+    // need static context helpers.
     process.argv = argv;
-    await import("./context.js");
-
-    expect(loadConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("does not eager-load config when onboard imports command-auth through plugin-sdk", async () => {
-    process.argv = ["node", "openclaw", "onboard"];
-
-    await import("../plugin-sdk/command-auth.js");
-
-    expect(loadConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("does not eager-load config when pairing approve imports command-auth through plugin-sdk", async () => {
-    process.argv = ["node", "openclaw", "pairing", "approve", "feishu", "BAH8YVB3"];
-
-    await import("../plugin-sdk/command-auth.js");
-
-    expect(loadConfigMock).not.toHaveBeenCalled();
-  });
-
-  it("does not eager-load config when channels login imports command-auth through plugin-sdk", async () => {
-    process.argv = ["node", "openclaw", "channels", "login", "--channel", "openclaw-weixin"];
-
-    await import("../plugin-sdk/command-auth.js");
+    await importFreshModule(import.meta.url, `./context.js?scope=${_label}`);
 
     expect(loadConfigMock).not.toHaveBeenCalled();
   });

@@ -1,3 +1,4 @@
+// Anthropic Vertex tests cover region plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveAnthropicVertexRegion, resolveAnthropicVertexRegionFromBaseUrl } from "./api.js";
 

@@ -1,18 +1,28 @@
-import {
-  fetchWithRuntimeDispatcher,
-  type PinnedDispatcherPolicy,
-} from "openclaw/plugin-sdk/infra-runtime";
+// Matrix plugin module implements transport behavior.
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import { MatrixMediaSizeLimitError } from "../media-errors.js";
+import { readResponseWithLimit } from "./read-response-with-limit.js";
 import {
   buildTimeoutAbortSignal,
   closeDispatcher,
   createPinnedDispatcher,
+  fetchWithRuntimeDispatcherOrMockedGlobal,
   resolvePinnedHostnameWithPolicy,
   type SsrFPolicy,
-} from "../../runtime-api.js";
-import { MatrixMediaSizeLimitError } from "../media-errors.js";
-import { readResponseWithLimit } from "./read-response-with-limit.js";
+  type PinnedDispatcherPolicy,
+} from "./transport-runtime-api.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+// Default ceiling for non-raw JSON control-plane responses (whoami, receipts,
+// directory search, key-backup status, generic doRequest). Matrix homeservers
+// are untrusted, so bound the body the same way the raw media path is bounded
+// instead of buffering an unbounded stream via response.text().
+const MATRIX_JSON_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
+
+// matrix-js-sdk also uses the injected fetch for raw encrypted key bundles.
+// Keep that path bounded without applying the tighter control-plane JSON cap.
+const MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
 type QueryValue =
   | string
@@ -70,9 +80,27 @@ function toFetchUrl(resource: RequestInfo | URL): string {
   return resource.url;
 }
 
+const MATRIX_STATE_AFTER_SYNC_PARAM = "org.matrix.msc4222.use_state_after";
+
+function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+
+  if (!url.pathname.endsWith("/sync") || !url.searchParams.has(MATRIX_STATE_AFTER_SYNC_PARAM)) {
+    return rawUrl;
+  }
+
+  url.searchParams.delete(MATRIX_STATE_AFTER_SYNC_PARAM);
+  return url.toString();
+}
+
 function buildBufferedResponse(params: {
   source: Response;
-  body: ArrayBuffer;
+  body: BodyInit;
   url: string;
 }): Response {
   const response = new Response(params.body, {
@@ -91,11 +119,30 @@ function buildBufferedResponse(params: {
   return response;
 }
 
-function isMockedFetch(fetchImpl: typeof fetch | undefined): boolean {
-  if (typeof fetchImpl !== "function") {
-    return false;
+async function enforceDeclaredResponseSize(params: {
+  response: Response;
+  maxBytes: number;
+  createError: (length: number) => Error;
+}): Promise<void> {
+  const contentLength = params.response.headers.get("content-length");
+  if (!contentLength) {
+    return;
   }
-  return typeof (fetchImpl as typeof fetch & { mock?: unknown }).mock === "object";
+
+  let length: number | null;
+  try {
+    length = parseMediaContentLength(contentLength);
+  } catch (error) {
+    await params.response.body?.cancel(error).catch(() => undefined);
+    throw error;
+  }
+  if (length === null || length <= params.maxBytes) {
+    return;
+  }
+
+  const error = params.createError(length);
+  await params.response.body?.cancel(error).catch(() => undefined);
+  throw error;
 }
 
 async function fetchWithMatrixDispatcher(params: {
@@ -106,10 +153,7 @@ async function fetchWithMatrixDispatcher(params: {
   // fetches must stay fail-closed unless a retry path can preserve the
   // validated pinned-address binding. Route dispatcher-attached requests
   // through undici runtime fetch so the pinned dispatcher is preserved.
-  if (params.init.dispatcher && !isMockedFetch(globalThis.fetch)) {
-    return await fetchWithRuntimeDispatcher(params.url, params.init);
-  }
-  return await fetch(params.url, params.init);
+  return await fetchWithRuntimeDispatcherOrMockedGlobal(params.url, params.init);
 }
 
 async function fetchWithMatrixGuardedRedirects(params: {
@@ -129,6 +173,8 @@ async function fetchWithMatrixGuardedRedirects(params: {
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    operation: "matrix.guarded-redirect-fetch",
+    url: params.url,
   });
 
   for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
@@ -204,7 +250,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
         headers.delete("content-length");
       }
 
-      void response.body?.cancel();
+      void response.body?.cancel().catch(() => undefined);
       await closeDispatcher(dispatcher);
       currentUrl = nextUrl;
     } catch (error) {
@@ -223,7 +269,7 @@ export function createMatrixGuardedFetch(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
-    const url = toFetchUrl(resource);
+    const url = withoutMatrixStateAfterSyncParam(toFetchUrl(resource));
     const { signal, ...requestInit } = init ?? {};
     const { response, release } = await fetchWithMatrixGuardedRedirects({
       url,
@@ -234,10 +280,21 @@ export function createMatrixGuardedFetch(params: {
     });
 
     try {
-      const body = await response.arrayBuffer();
+      await enforceDeclaredResponseSize({
+        response,
+        maxBytes: MATRIX_SDK_RESPONSE_MAX_BYTES,
+        createError: (length) =>
+          new Error(
+            `Matrix SDK response exceeds size limit (${length} bytes > ${MATRIX_SDK_RESPONSE_MAX_BYTES} bytes)`,
+          ),
+      });
+      const body = await readResponseWithLimit(response, MATRIX_SDK_RESPONSE_MAX_BYTES, {
+        onOverflow: ({ maxBytes, size }) =>
+          new Error(`Matrix SDK response exceeds size limit (${size} bytes > ${maxBytes} bytes)`),
+      });
       return buildBufferedResponse({
         source: response,
-        body,
+        body: Uint8Array.from(body),
         url,
       });
     } finally {
@@ -271,7 +328,7 @@ export async function performMatrixRequest(params: {
 
   const baseUrl = isAbsoluteEndpoint
     ? new URL(params.endpoint)
-    : new URL(normalizeEndpoint(params.endpoint), params.homeserver);
+    : new URL(`${params.homeserver.replace(/\/+$/u, "")}${normalizeEndpoint(params.endpoint)}`);
   applyQuery(baseUrl, params.qs);
 
   const headers = new Headers();
@@ -308,35 +365,50 @@ export async function performMatrixRequest(params: {
 
   try {
     if (params.raw) {
-      const contentLength = response.headers.get("content-length");
-      if (params.maxBytes && contentLength) {
-        const length = Number(contentLength);
-        if (Number.isFinite(length) && length > params.maxBytes) {
-          throw new MatrixMediaSizeLimitError(
-            `Matrix media exceeds configured size limit (${length} bytes > ${params.maxBytes} bytes)`,
-          );
-        }
-      }
-      const bytes = params.maxBytes
-        ? await readResponseWithLimit(response, params.maxBytes, {
-            onOverflow: ({ maxBytes, size }) =>
-              new MatrixMediaSizeLimitError(
-                `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
-              ),
-            chunkTimeoutMs: params.readIdleTimeoutMs,
-          })
-        : Buffer.from(await response.arrayBuffer());
+      const rawMaxBytes = params.maxBytes ?? MATRIX_SDK_RESPONSE_MAX_BYTES;
+      await enforceDeclaredResponseSize({
+        response,
+        maxBytes: rawMaxBytes,
+        createError: (length) =>
+          new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${length} bytes > ${rawMaxBytes} bytes)`,
+          ),
+      });
+      const bytes = await readResponseWithLimit(response, rawMaxBytes, {
+        onOverflow: ({ maxBytes, size }) =>
+          new MatrixMediaSizeLimitError(
+            `Matrix media exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
+          ),
+        chunkTimeoutMs: params.readIdleTimeoutMs,
+      });
       return {
         response,
         text: bytes.toString("utf8"),
         buffer: bytes,
       };
     }
-    const text = await response.text();
+    const jsonMaxBytes = params.maxBytes ?? MATRIX_JSON_RESPONSE_MAX_BYTES;
+    await enforceDeclaredResponseSize({
+      response,
+      maxBytes: jsonMaxBytes,
+      createError: (length) =>
+        new Error(
+          `Matrix JSON response exceeds configured size limit (${length} bytes > ${jsonMaxBytes} bytes)`,
+        ),
+    });
+    const buffer = await readResponseWithLimit(response, jsonMaxBytes, {
+      onOverflow: ({ maxBytes, size }) =>
+        new Error(
+          `Matrix JSON response exceeds configured size limit (${size} bytes > ${maxBytes} bytes)`,
+        ),
+      chunkTimeoutMs: params.readIdleTimeoutMs,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new Error(`Matrix JSON response stalled: no data received for ${chunkTimeoutMs}ms`),
+    });
     return {
       response,
-      text,
-      buffer: Buffer.from(text, "utf8"),
+      text: buffer.toString("utf8"),
+      buffer,
     };
   } finally {
     await release();

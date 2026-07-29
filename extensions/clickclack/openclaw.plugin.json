@@ -1,0 +1,15 @@
+{
+  "id": "clickclack",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": ["clickclack"],
+  "contracts": {
+    "tools": ["discussion"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,12 +1,11 @@
+// Test helper for asserting bundled plugin public surface files.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-loader.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { loadBundledPluginPublicSurfaceModule } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import {
-  findBundledPluginMetadataById,
-  type BundledPluginMetadata,
-} from "../plugins/bundled-plugin-metadata.js";
+import { findBundledPluginMetadataById } from "../plugins/bundled-plugin-metadata.js";
 import { normalizeBundledPluginArtifactSubpath } from "../plugins/public-surface-runtime.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 
@@ -16,8 +15,10 @@ const OPENCLAW_PACKAGE_ROOT =
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 
-type BundledPluginPublicSurfaceMetadata = Pick<BundledPluginMetadata, "dirName">;
-
+type BundledPluginPublicSurfaceMetadata = Pick<
+  NonNullable<ReturnType<typeof findBundledPluginMetadataById>>,
+  "dirName"
+>;
 function isSafeBundledPluginDirName(pluginId: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/u.test(pluginId);
 }
@@ -38,14 +39,13 @@ function findBundledPluginMetadataFast(
   if (!isSafeBundledPluginDirName(pluginId)) {
     return undefined;
   }
-  const roots = [
+  const rawRoots = [
     resolveBundledPluginsDir(),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist-runtime", "extensions"),
     path.resolve(OPENCLAW_PACKAGE_ROOT, "dist", "extensions"),
-  ].filter(
-    (entry, index, values): entry is string => Boolean(entry) && values.indexOf(entry) === index,
-  );
+  ].filter((entry): entry is string => Boolean(entry));
+  const roots = uniqueStrings(rawRoots);
 
   for (const root of roots) {
     const pluginDir = path.join(root, pluginId);
@@ -65,44 +65,18 @@ function findBundledPluginMetadata(pluginId: string): BundledPluginPublicSurface
   return metadata;
 }
 
-export function loadBundledPluginPublicSurfaceSync<T extends object>(params: {
+type AsyncBundledPluginPublicSurfaceLoader = <T extends object>(params: {
   pluginId: string;
   artifactBasename: string;
-}): T {
+}) => Promise<T>;
+
+export const loadBundledPluginPublicSurface: AsyncBundledPluginPublicSurfaceLoader = (params) => {
   const metadata = findBundledPluginMetadata(params.pluginId);
-  return loadBundledPluginPublicSurfaceModuleSync<T>({
+  return loadBundledPluginPublicSurfaceModule({
     dirName: metadata.dirName,
     artifactBasename: normalizeBundledPluginArtifactSubpath(params.artifactBasename),
   });
-}
-
-export function loadBundledPluginApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
-    pluginId,
-    artifactBasename: "api.js",
-  });
-}
-
-export function loadBundledPluginContractApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
-    pluginId,
-    artifactBasename: "contract-api.js",
-  });
-}
-
-export function loadBundledPluginRuntimeApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
-    pluginId,
-    artifactBasename: "runtime-api.js",
-  });
-}
-
-export function loadBundledPluginTestApiSync<T extends object>(pluginId: string): T {
-  return loadBundledPluginPublicSurfaceSync<T>({
-    pluginId,
-    artifactBasename: "test-api.js",
-  });
-}
+};
 
 export function resolveBundledPluginPublicModulePath(params: {
   pluginId: string;

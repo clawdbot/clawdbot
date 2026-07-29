@@ -1,3 +1,4 @@
+// Runtime model auth tests cover provider auth resolution inside plugin runtime loading.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -15,7 +16,9 @@ vi.mock("../provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuth,
 }));
 
+let getApiKeyForModel: typeof import("./runtime-model-auth.runtime.js").getApiKeyForModel;
 let getRuntimeAuthForModel: typeof import("./runtime-model-auth.runtime.js").getRuntimeAuthForModel;
+let resolveApiKeyForProvider: typeof import("./runtime-model-auth.runtime.js").resolveApiKeyForProvider;
 
 const MODEL = {
   id: "github-copilot/gpt-4o",
@@ -26,7 +29,8 @@ const MODEL = {
 
 describe("runtime-model-auth.runtime", () => {
   beforeAll(async () => {
-    ({ getRuntimeAuthForModel } = await import("./runtime-model-auth.runtime.js"));
+    ({ getApiKeyForModel, getRuntimeAuthForModel, resolveApiKeyForProvider } =
+      await import("./runtime-model-auth.runtime.js"));
   });
 
   beforeEach(() => {
@@ -60,16 +64,23 @@ describe("runtime-model-auth.runtime", () => {
       baseUrl: "https://api.individual.githubcopilot.com",
       expiresAt: 123,
     });
-    expect(hoisted.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(hoisted.prepareProviderRuntimeAuth).toHaveBeenCalledWith({
+      provider: "github-copilot",
+      config: undefined,
+      workspaceDir: undefined,
+      env: process.env,
+      context: {
+        config: undefined,
+        workspaceDir: undefined,
+        env: process.env,
         provider: "github-copilot",
-        context: expect.objectContaining({
-          apiKey: "github-device-token",
-          modelId: "github-copilot/gpt-4o",
-          provider: "github-copilot",
-        }),
-      }),
-    );
+        modelId: "github-copilot/gpt-4o",
+        model: MODEL,
+        apiKey: "github-device-token",
+        authMode: "token",
+        profileId: "github-copilot:github",
+      },
+    });
   });
 
   it("falls back to raw auth when the provider has no runtime auth hook", async () => {
@@ -114,5 +125,29 @@ describe("runtime-model-auth.runtime", () => {
       mode: "aws-sdk",
     });
     expect(hoisted.prepareProviderRuntimeAuth).not.toHaveBeenCalled();
+  });
+
+  it("keeps direct model auth exports available for bundled runtime facades", async () => {
+    hoisted.getApiKeyForModel.mockResolvedValue({
+      apiKey: "model-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+    hoisted.resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "provider-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+
+    await expect(getApiKeyForModel({ model: MODEL as never })).resolves.toEqual({
+      apiKey: "model-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
+    await expect(resolveApiKeyForProvider({ provider: "openai" })).resolves.toEqual({
+      apiKey: "provider-key",
+      source: "env:OPENAI_API_KEY",
+      mode: "api-key",
+    });
   });
 });

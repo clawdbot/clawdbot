@@ -1,3 +1,4 @@
+// Google plugin module implements oauth.shared behavior.
 export const CLIENT_ID_KEYS = ["OPENCLAW_GEMINI_OAUTH_CLIENT_ID", "GEMINI_CLI_OAUTH_CLIENT_ID"];
 export const CLIENT_SECRET_KEYS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -8,8 +9,8 @@ export const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const USERINFO_URL = "https://www.googleapis.com/oauth2/v1/userinfo?alt=json";
 export const CODE_ASSIST_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
-export const CODE_ASSIST_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
-export const CODE_ASSIST_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
+const CODE_ASSIST_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+const CODE_ASSIST_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
 export const LOAD_CODE_ASSIST_ENDPOINTS = [
   CODE_ASSIST_ENDPOINT_PROD,
   CODE_ASSIST_ENDPOINT_DAILY,
@@ -41,4 +42,5 @@ export type GeminiCliOAuthContext = {
   note: (message: string, title?: string) => Promise<void>;
   prompt: (message: string) => Promise<string>;
   progress: { update: (msg: string) => void; stop: (msg?: string) => void };
+  signal?: AbortSignal;
 };

@@ -1,4 +1,5 @@
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+// Zalo plugin module implements channel behavior.
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import {
@@ -53,7 +54,7 @@ export async function startZaloGatewayAccount(
   const fetcher = resolveZaloProxyFetch(account.config.proxy);
   try {
     const probe = await probeZalo(token, 2500, fetcher);
-    const name = probe.ok ? probe.bot?.name?.trim() : null;
+    const name = probe.ok ? probe.bot?.account_name?.trim() : null;
     if (name) {
       zaloBotLabel = ` (${name})`;
     }

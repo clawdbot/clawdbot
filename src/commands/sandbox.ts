@@ -1,3 +1,9 @@
+/**
+ * Sandbox runtime management commands.
+ *
+ * Supports listing active sandbox containers/browsers and recreating them by
+ * session, agent, or all scopes.
+ */
 import { confirm as clackConfirm } from "@clack/prompts";
 import {
   listSandboxBrowsers,
@@ -7,6 +13,8 @@ import {
   type SandboxBrowserInfo,
   type SandboxContainerInfo,
 } from "../agents/sandbox.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import {
   displayBrowsers,
@@ -38,8 +46,7 @@ type FilteredContainers = {
   browsers: SandboxBrowserInfo[];
 };
 
-// --- List Command ---
-
+/** Lists active sandbox containers or browser containers. */
 export async function sandboxListCommand(
   opts: SandboxListOptions,
   runtime: RuntimeEnv,
@@ -61,8 +68,7 @@ export async function sandboxListCommand(
   displaySummary(containers, browsers, runtime);
 }
 
-// --- Recreate Command ---
-
+/** Stops and removes sandbox runtimes matching the requested scope. */
 export async function sandboxRecreateCommand(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,
@@ -74,7 +80,9 @@ export async function sandboxRecreateCommand(
   const filtered = await fetchAndFilterContainers(opts);
 
   if (filtered.containers.length + filtered.browsers.length === 0) {
-    runtime.log("No sandbox runtimes found matching the criteria.");
+    runtime.log(
+      `No sandbox runtimes found matching the criteria. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes.`,
+    );
     return;
   }
 
@@ -93,26 +101,24 @@ export async function sandboxRecreateCommand(
   }
 }
 
-// --- Validation ---
-
 function validateRecreateOptions(opts: SandboxRecreateOptions, runtime: RuntimeEnv): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
-    runtime.error("Please specify --all, --session <key>, or --agent <id>");
+    runtime.error(
+      `Choose the sandbox scope: --all, --session <key>, or --agent <id>. Run ${formatCliCommand("openclaw sandbox list")} to inspect active runtimes first.`,
+    );
     runtime.exit(1);
     return false;
   }
 
   const exclusiveCount = [opts.all, opts.session, opts.agent].filter(Boolean).length;
   if (exclusiveCount > 1) {
-    runtime.error("Please specify only one of: --all, --session, --agent");
+    runtime.error("Choose only one sandbox scope: --all, --session, or --agent.");
     runtime.exit(1);
     return false;
   }
 
   return true;
 }
-
-// --- Filtering ---
 
 async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<FilteredContainers> {
   const allContainers = await listSandboxContainers().catch(() => []);
@@ -125,6 +131,8 @@ async function fetchAndFilterContainers(opts: SandboxRecreateOptions): Promise<F
     containers = containers.filter((c) => c.sessionKey === opts.session);
     browsers = browsers.filter((b) => b.sessionKey === opts.session);
   } else if (opts.agent) {
+    // Agent-scoped cleanup removes both the agent root session and its child
+    // session keys while leaving unrelated agent containers untouched.
     const matchesAgent = createAgentMatcher(opts.agent);
     containers = containers.filter(matchesAgent);
     browsers = browsers.filter(matchesAgent);
@@ -139,15 +147,13 @@ function createAgentMatcher(agentId: string) {
     item.sessionKey === agentPrefix || item.sessionKey.startsWith(`${agentPrefix}:`);
 }
 
-// --- Container Operations ---
-
 async function confirmRecreate(): Promise<boolean> {
   const result = await clackConfirm({
     message: "This will stop and remove these containers. Continue?",
     initialValue: false,
   });
 
-  return result !== false && result !== Symbol.for("clack:cancel");
+  return result === true;
 }
 
 async function removeContainers(
@@ -159,6 +165,8 @@ async function removeContainers(
   let successCount = 0;
   let failCount = 0;
 
+  // Remove normal sandboxes first, then browser containers; reporting keeps one
+  // aggregate fail count so callers can exit non-zero on partial cleanup.
   for (const container of filtered.containers) {
     const result = await removeContainer(container.containerName, removeSandboxContainer, runtime);
     if (result.success) {
@@ -194,7 +202,9 @@ async function removeContainer(
     runtime.log(`✓ Removed ${containerName}`);
     return { success: true };
   } catch (err) {
-    runtime.error(`✗ Failed to remove ${containerName}: ${String(err)}`);
+    runtime.error(
+      `Failed to remove ${containerName}: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw sandbox list")} to inspect what remains.`,
+    );
     return { success: false };
   }
 }

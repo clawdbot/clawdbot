@@ -1,7 +1,26 @@
 import Foundation
 import OpenClawKit
+#if canImport(Darwin)
+import Darwin
+#endif
 
 enum GatewayRemoteConfig {
+    static let directGatewayUrlValidationMessage =
+        "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, private/LAN, " +
+        "link-local, .local, and Tailnet hosts."
+
+    enum TransportSource: Equatable {
+        case explicit
+        case inferredRemoteURL
+        case legacySSH
+    }
+
+    struct TransportResolution: Equatable {
+        let transport: AppState.RemoteTransport
+        let source: TransportSource
+        let directURL: URL?
+    }
+
     enum TokenValue: Equatable {
         case missing
         case plaintext(String)
@@ -25,14 +44,49 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
+        self.resolveTransportResolution(root: root).transport
+    }
+
+    static func resolveTransportResolution(root: [String: Any]) -> TransportResolution {
+        let explicit = self.resolveExplicitTransport(root: root)
+        switch explicit {
+        case .direct:
+            return TransportResolution(
+                transport: .direct,
+                source: .explicit,
+                directURL: self.resolveGatewayUrl(root: root))
+        case .ssh:
+            return TransportResolution(transport: .ssh, source: .explicit, directURL: nil)
+        case nil:
+            break
+        }
+
+        if let url = self.resolveGatewayUrl(root: root),
+           let host = url.host,
+           !LoopbackHost.isLoopbackHost(host)
+        {
+            return TransportResolution(transport: .direct, source: .inferredRemoteURL, directURL: url)
+        }
+
+        return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+    }
+
+    private static func resolveExplicitTransport(root: [String: Any]) -> AppState.RemoteTransport? {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
               let raw = remote["transport"] as? String
         else {
-            return .ssh
+            return nil
         }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed == AppState.RemoteTransport.direct.rawValue ? .direct : .ssh
+        switch trimmed {
+        case AppState.RemoteTransport.direct.rawValue:
+            return .direct
+        case AppState.RemoteTransport.ssh.rawValue:
+            return .ssh
+        default:
+            return .ssh
+        }
     }
 
     static func resolveUrlString(root: [String: Any]) -> String? {
@@ -69,9 +123,52 @@ enum GatewayRemoteConfig {
         }
     }
 
+    static func resolvePasswordString(root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["password"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    static func resolveTLSFingerprint(root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["tlsFingerprint"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func resolveGatewayUrl(root: [String: Any]) -> URL? {
         guard let raw = self.resolveUrlString(root: root) else { return nil }
         return self.normalizeGatewayUrl(raw)
+    }
+
+    static func resolveRemotePort(root: [String: Any]) -> Int? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any]
+        else {
+            return nil
+        }
+        let value = remote["remotePort"]
+        let port: Int? = switch value {
+        case let raw as Int:
+            raw
+        case let raw as NSNumber:
+            raw.intValue
+        case let raw as String:
+            Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            nil
+        }
+        guard let port, port > 0, port <= 65535 else { return nil }
+        return port
     }
 
     static func normalizeGatewayUrlString(_ raw: String) -> String? {
@@ -85,7 +182,7 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
-        if scheme == "ws", !LoopbackHost.isLoopbackHost(host) {
+        if scheme == "ws", !self.allowsPlaintextGatewayHost(host) {
             return nil
         }
         if scheme == "ws", url.port == nil {
@@ -96,6 +193,66 @@ enum GatewayRemoteConfig {
             return components.url
         }
         return url
+    }
+
+    static func allowsPlaintextGatewayHost(_ host: String) -> Bool {
+        LoopbackHost.isLoopbackHost(host) || self.isTrustedPlaintextRemoteHost(host)
+    }
+
+    static func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
+        let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return false }
+        if lower == "localhost" || lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
+            return true
+        }
+        let ipv6Literal = lower.hasPrefix("[") && lower.hasSuffix("]")
+            ? String(lower.dropFirst().dropLast())
+            : lower
+        if self.isPrivateIPv6Literal(ipv6Literal) {
+            return true
+        }
+        guard let parts = self.ipv4Parts(lower) else { return false }
+        switch (parts[0], parts[1]) {
+        case (10, _), (192, 168), (169, 254):
+            return true
+        case (172, 16...31):
+            return true
+        case (100, 64...127):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func ipv4Parts(_ value: String) -> [Int]? {
+        let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count == 4 else { return nil }
+        var parts: [Int] = []
+        parts.reserveCapacity(4)
+        for label in labels {
+            guard !label.isEmpty,
+                  label.allSatisfy(\.isNumber),
+                  let part = Int(label),
+                  part >= 0,
+                  part <= 255
+            else {
+                return nil
+            }
+            parts.append(part)
+        }
+        return parts
+    }
+
+    private static func isPrivateIPv6Literal(_ value: String) -> Bool {
+        #if canImport(Darwin)
+        var addr = in6_addr()
+        guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
+            return false
+        }
+        return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
+        #else
+        return false
+        #endif
     }
 
     static func defaultPort(for url: URL) -> Int? {

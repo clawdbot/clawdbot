@@ -1,22 +1,30 @@
-import { access, mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
+// Msteams tests cover monitor handler.feedback authz plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
-import {
-  type MSTeamsActivityHandler,
-  type MSTeamsMessageHandlerDeps,
-  registerMSTeamsHandlers,
-} from "./monitor-handler.js";
-import {
-  createActivityHandler,
-  createMSTeamsMessageHandlerDeps,
-} from "./monitor-handler.test-helpers.js";
+import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
+import { createMSTeamsMessageHandlerDeps } from "./monitor-handler.test-helpers.js";
+import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 const feedbackReflectionMockState = vi.hoisted(() => ({
   runFeedbackReflection: vi.fn(),
+}));
+const channelInboundMockState = vi.hoisted(() => ({
+  recordChannelFeedbackEvent: vi.fn(async () => true),
+}));
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
+  recordChannelFeedbackEvent: channelInboundMockState.recordChannelFeedbackEvent,
+}));
+
+vi.mock("./monitor-handler/message-handler.js", () => ({
+  createMSTeamsMessageHandler: () => async () => {},
+}));
+
+vi.mock("./monitor-handler/reaction-handler.js", () => ({
+  createMSTeamsReactionHandler: () => async () => {},
 }));
 
 vi.mock("./feedback-reflection.js", async () => {
@@ -39,6 +47,9 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
         resolveInboundDebounceMs: () => 0,
         createInboundDebouncer: () => ({
           enqueue: async () => {},
+          flushKey: async () => {},
+          cancelKey: () => false,
+          drain: async () => {},
         }),
       },
       pairing: {
@@ -52,7 +63,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
         }),
       },
       session: {
-        resolveStorePath: (storePath?: string) => storePath ?? tmpdir(),
+        resolveStorePath: (storePath?: string) => storePath ?? "/tmp",
       },
     },
   } as unknown as PluginRuntime;
@@ -121,41 +132,21 @@ function createFeedbackInvokeContext(params: {
   } as unknown as MSTeamsTurnContext;
 }
 
-async function expectFileMissing(filePath: string) {
-  await expect(access(filePath)).rejects.toThrow();
-}
-
 async function withFeedbackHandler(params: {
   cfg: OpenClawConfig;
   context: Parameters<typeof createFeedbackInvokeContext>[0];
-  assertResult: (args: { tmpDir: string; originalRun: ReturnType<typeof vi.fn> }) => Promise<void>;
+  assertResult: () => Promise<void>;
 }) {
-  const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
-  try {
-    const originalRun = vi.fn(async () => undefined);
-    const handler = registerMSTeamsHandlers(
-      createActivityHandler(originalRun),
-      createDeps({
-        cfg: {
-          ...params.cfg,
-          session: { store: tmpDir },
-        },
-      }),
-    ) as MSTeamsActivityHandler & {
-      run: NonNullable<MSTeamsActivityHandler["run"]>;
-    };
-
-    await handler.run(createFeedbackInvokeContext(params.context));
-    await params.assertResult({ tmpDir, originalRun });
-  } finally {
-    await rm(tmpDir, { recursive: true, force: true });
-  }
+  const deps = createDeps({ cfg: params.cfg });
+  await runMSTeamsFeedbackInvokeHandler(createFeedbackInvokeContext(params.context), deps);
+  await params.assertResult();
 }
 
 describe("msteams feedback invoke authz", () => {
   beforeEach(() => {
     feedbackReflectionMockState.runFeedbackReflection.mockReset();
     feedbackReflectionMockState.runFeedbackReflection.mockResolvedValue(undefined);
+    channelInboundMockState.recordChannelFeedbackEvent.mockClear();
   });
 
   it("records feedback for an allowlisted DM sender", async () => {
@@ -176,20 +167,23 @@ describe("msteams feedback invoke authz", () => {
         senderName: "Owner",
         comment: "allowed feedback",
       },
-      assertResult: async ({ tmpDir, originalRun }) => {
-        const transcript = await readFile(
-          path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
-          "utf-8",
-        );
-        expect(JSON.parse(transcript.trim())).toMatchObject({
-          event: "feedback",
-          messageId: "bot-msg-1",
-          value: "positive",
-          comment: "allowed feedback",
+      assertResult: async () => {
+        expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith({
+          cfg: expect.any(Object),
+          agentId: "default",
           sessionKey: "msteams:direct:owner-aad",
-          conversationId: "a:personal-chat",
+          event: {
+            type: "custom",
+            event: "feedback",
+            ts: expect.any(Number),
+            messageId: "bot-msg-1",
+            value: "positive",
+            comment: "allowed feedback",
+            sessionKey: "msteams:direct:owner-aad",
+            agentId: "default",
+            conversationId: "a:personal-chat",
+          },
         });
-        expect(originalRun).not.toHaveBeenCalled();
       },
     });
   });
@@ -219,18 +213,14 @@ describe("msteams feedback invoke authz", () => {
         senderName: "Owner",
         comment: "allowed dm feedback",
       },
-      assertResult: async ({ tmpDir, originalRun }) => {
-        const transcript = await readFile(
-          path.join(tmpDir, "msteams_direct_owner-aad.jsonl"),
-          "utf-8",
+      assertResult: async () => {
+        expect(channelInboundMockState.recordChannelFeedbackEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "default",
+            sessionKey: "msteams:direct:owner-aad",
+            event: expect.objectContaining({ comment: "allowed dm feedback" }),
+          }),
         );
-        expect(JSON.parse(transcript.trim())).toMatchObject({
-          event: "feedback",
-          value: "positive",
-          comment: "allowed dm feedback",
-          sessionKey: "msteams:direct:owner-aad",
-        });
-        expect(originalRun).not.toHaveBeenCalled();
       },
     });
   });
@@ -253,54 +243,41 @@ describe("msteams feedback invoke authz", () => {
         senderName: "Attacker",
         comment: "blocked feedback",
       },
-      assertResult: async ({ tmpDir, originalRun }) => {
-        await expectFileMissing(path.join(tmpDir, "msteams_direct_attacker-aad.jsonl"));
+      assertResult: async () => {
+        expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
         expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
-        expect(originalRun).not.toHaveBeenCalled();
       },
     });
   });
 
   it("does not trigger reflection for a group sender outside groupAllowFrom", async () => {
-    const tmpDir = await mkdtemp(path.join(tmpdir(), "openclaw-msteams-feedback-"));
-    try {
-      const originalRun = vi.fn(async () => undefined);
-      const handler = registerMSTeamsHandlers(
-        createActivityHandler(originalRun),
-        createDeps({
-          cfg: {
-            session: { store: tmpDir },
-            channels: {
-              msteams: {
-                groupPolicy: "allowlist",
-                groupAllowFrom: ["owner-aad"],
-                feedbackReflection: true,
-              },
-            },
-          } as OpenClawConfig,
-        }),
-      ) as MSTeamsActivityHandler & {
-        run: NonNullable<MSTeamsActivityHandler["run"]>;
-      };
+    const deps = createDeps({
+      cfg: {
+        channels: {
+          msteams: {
+            groupPolicy: "allowlist",
+            groupAllowFrom: ["owner-aad"],
+            feedbackReflection: true,
+          },
+        },
+      } as OpenClawConfig,
+    });
 
-      await handler.run(
-        createFeedbackInvokeContext({
-          reaction: "dislike",
-          conversationId: "19:group@thread.tacv2;messageid=bot-msg-1",
-          conversationType: "groupChat",
-          senderId: "attacker-aad",
-          senderName: "Attacker",
-          teamId: "team-1",
-          channelName: "General",
-          comment: "blocked reflection",
-        }),
-      );
+    await runMSTeamsFeedbackInvokeHandler(
+      createFeedbackInvokeContext({
+        reaction: "dislike",
+        conversationId: "19:group@thread.tacv2;messageid=bot-msg-1",
+        conversationType: "groupChat",
+        senderId: "attacker-aad",
+        senderName: "Attacker",
+        teamId: "team-1",
+        channelName: "General",
+        comment: "blocked reflection",
+      }),
+      deps,
+    );
 
-      await expectFileMissing(path.join(tmpDir, "msteams_group_19_group_thread_tacv2.jsonl"));
-      expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
-      expect(originalRun).not.toHaveBeenCalled();
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
+    expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
+    expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
   });
 });

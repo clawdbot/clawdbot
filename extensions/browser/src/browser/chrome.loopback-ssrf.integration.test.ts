@@ -1,3 +1,4 @@
+// Browser tests cover chrome.loopback ssrf.integration plugin behavior.
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
@@ -42,14 +43,12 @@ async function startLoopbackCdpServer(): Promise<RunningServer> {
 
 afterEach(async () => {
   await Promise.all(
-    runningServers
-      .splice(0)
-      .map(
-        (server) =>
-          new Promise<void>((resolve, reject) =>
-            server.close((err) => (err ? reject(err) : resolve())),
-          ),
-      ),
+    runningServers.splice(0).map(
+      (server) =>
+        new Promise<void>((resolve, reject) => {
+          server.close((err) => (err ? reject(err) : resolve()));
+        }),
+    ),
   );
 });
 

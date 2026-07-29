@@ -1,23 +1,25 @@
 ---
-title: "Plugin SDK Overview"
-sidebarTitle: "SDK Overview"
 summary: "Import map, registration API reference, and SDK architecture"
+title: "Plugin SDK overview"
+sidebarTitle: "Plugin SDK overview"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
   - You are looking up a specific SDK export
 ---
 
-# Plugin SDK Overview
-
 The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
 
+<Note>
+  This page is for plugin authors using `openclaw/plugin-sdk/*` inside
+  OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
+  that want to run agents through the Gateway, use
+  [Gateway integrations for external apps](/gateway/external-apps) instead.
+</Note>
+
 <Tip>
-  **Looking for a how-to guide?**
-  - First plugin? Start with [Getting Started](/plugins/building-plugins)
-  - Channel plugin? See [Channel Plugins](/plugins/sdk-channel-plugins)
-  - Provider plugin? See [Provider Plugins](/plugins/sdk-provider-plugins)
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins). Use [Channel plugins](/plugins/sdk-channel-plugins) for channels, [Provider plugins](/plugins/sdk-provider-plugins) for model providers, [CLI backend plugins](/plugins/cli-backend-plugins) for local AI CLI backends, [Agent harness plugins](/plugins/sdk-agent-harness) for native agent executors, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hooks.
 </Tip>
 
 ## Import convention
@@ -35,322 +37,488 @@ prefer `openclaw/plugin-sdk/channel-core`; keep `openclaw/plugin-sdk/core` for
 the broader umbrella surface and shared helpers such as
 `buildChannelConfigSchema`.
 
-Do not add or depend on provider-named convenience seams such as
-`openclaw/plugin-sdk/slack`, `openclaw/plugin-sdk/discord`,
-`openclaw/plugin-sdk/signal`, `openclaw/plugin-sdk/whatsapp`, or
-channel-branded helper seams. Bundled plugins should compose generic
-SDK subpaths inside their own `api.ts` or `runtime-api.ts` barrels, and core
-should either use those plugin-local barrels or add a narrow generic SDK
-contract when the need is truly cross-channel.
+For channel config, publish the channel-owned JSON Schema through
+`openclaw.plugin.json#channelConfigs`. The `plugin-sdk/channel-config-schema`
+subpath is for shared schema primitives and the generic builder. OpenClaw's
+bundled plugins use `plugin-sdk/bundled-channel-config-schema` for retained
+bundled-channel schemas. That bundled schema subpath is not a pattern for new
+plugins.
 
-The generated export map still contains a small set of bundled-plugin helper
-seams such as `plugin-sdk/feishu`, `plugin-sdk/feishu-setup`,
-`plugin-sdk/zalo`, `plugin-sdk/zalo-setup`, and `plugin-sdk/matrix*`. Those
-subpaths exist for bundled-plugin maintenance and compatibility only; they are
-intentionally omitted from the common table below and are not the recommended
-import path for new third-party plugins.
+<Warning>
+  Do not import provider- or channel-branded convenience seams (for example
+  `openclaw/plugin-sdk/slack`, `.../discord`, `.../signal`, `.../whatsapp`).
+  Bundled plugins compose generic SDK subpaths inside their own `api.ts` /
+  `runtime-api.ts` barrels; core consumers should either use those plugin-local
+  barrels or add a narrow generic SDK contract when a need is truly
+  cross-channel.
+
+A small set of bundled-plugin helper seams still appear in the generated export
+map when they have tracked owner usage. They exist for bundled-plugin
+maintenance only and are not recommended import paths for new third-party
+plugins.
+
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
+also kept as deprecated compatibility facades for tracked owner usage. Do not
+copy those import paths into new plugins; use injected runtime helpers and
+generic channel SDK subpaths instead.
+</Warning>
 
 ## Subpath reference
 
-The most commonly used subpaths, grouped by purpose. The generated full list of
-200+ subpaths lives in `scripts/lib/plugin-sdk-entrypoints.json`.
+The plugin SDK is exposed as a set of narrow subpaths grouped by area (plugin
+entry, channel, provider, auth, runtime, capability, memory, and reserved
+bundled-plugin helpers). For the full catalog — grouped and linked — see
+[Plugin SDK subpaths](/plugins/sdk-subpaths).
 
-Reserved bundled-plugin helper subpaths still appear in that generated list.
-Treat those as implementation detail/compatibility surfaces unless a doc page
-explicitly promotes one as public.
-
-### Plugin entry
-
-| Subpath                     | Key exports                                                                                                                            |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry`   | `definePluginEntry`                                                                                                                    |
-| `plugin-sdk/core`           | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema` |
-| `plugin-sdk/config-schema`  | `OpenClawSchema`                                                                                                                       |
-| `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry`                                                                                                      |
-
-<AccordionGroup>
-  <Accordion title="Channel subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
-    | `plugin-sdk/config-schema` | Root `openclaw.json` Zod schema export (`OpenClawSchema`) |
-    | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
-    | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
-    | `plugin-sdk/setup-runtime` | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-    | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
-    | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
-    | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
-    | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
-    | `plugin-sdk/account-resolution` | Account lookup + default-fallback helpers |
-    | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
-    | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
-    | `plugin-sdk/channel-reply-pipeline` | `createChannelReplyPipeline` |
-    | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter` |
-    | `plugin-sdk/channel-config-schema` | Channel config schema types |
-    | `plugin-sdk/telegram-command-config` | Telegram custom-command normalization/validation helpers with bundled-contract fallback |
-    | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink` |
-    | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
-    | `plugin-sdk/inbound-reply-dispatch` | Shared inbound record-and-dispatch helpers |
-    | `plugin-sdk/messaging-targets` | Target parsing/matching helpers |
-    | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
-    | `plugin-sdk/outbound-runtime` | Outbound identity/send delegate helpers |
-    | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
-    | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
-    | `plugin-sdk/conversation-runtime` | Conversation/thread binding, pairing, and configured-binding helpers |
-    | `plugin-sdk/runtime-config-snapshot` | Runtime config snapshot helper |
-    | `plugin-sdk/runtime-group-policy` | Runtime group-policy resolution helpers |
-    | `plugin-sdk/channel-status` | Shared channel status snapshot/summary helpers |
-    | `plugin-sdk/channel-config-primitives` | Narrow channel config-schema primitives |
-    | `plugin-sdk/channel-config-writes` | Channel config-write authorization helpers |
-    | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
-    | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
-    | `plugin-sdk/group-access` | Shared group-access decision helpers |
-    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
-    | `plugin-sdk/interactive-runtime` | Interactive reply payload normalization/reduction helpers |
-    | `plugin-sdk/channel-inbound` | Inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
-    | `plugin-sdk/channel-send-result` | Reply result types |
-    | `plugin-sdk/channel-actions` | `createMessageToolButtonsSchema`, `createMessageToolCardSchema` |
-    | `plugin-sdk/channel-targets` | Target parsing/matching helpers |
-    | `plugin-sdk/channel-contract` | Channel contract types |
-    | `plugin-sdk/channel-feedback` | Feedback/reaction wiring |
-    | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract helpers such as `collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, and secret target types |
-  </Accordion>
-
-  <Accordion title="Provider subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/provider-entry` | `defineSingleProviderPluginEntry` |
-    | `plugin-sdk/provider-setup` | Curated local/self-hosted provider setup helpers |
-    | `plugin-sdk/self-hosted-provider-setup` | Focused OpenAI-compatible self-hosted provider setup helpers |
-    | `plugin-sdk/cli-backend` | CLI backend defaults + watchdog constants |
-    | `plugin-sdk/provider-auth-runtime` | Runtime API-key resolution helpers for provider plugins |
-    | `plugin-sdk/provider-auth-api-key` | API-key onboarding/profile-write helpers such as `upsertApiKeyProfile` |
-    | `plugin-sdk/provider-auth-result` | Standard OAuth auth-result builder |
-    | `plugin-sdk/provider-auth-login` | Shared interactive login helpers for provider plugins |
-    | `plugin-sdk/provider-env-vars` | Provider auth env-var lookup helpers |
-    | `plugin-sdk/provider-auth` | `createProviderApiKeyAuthMethod`, `ensureApiKeyFromOptionEnvOrPrompt`, `upsertAuthProfile`, `upsertApiKeyProfile`, `writeOAuthCredentials` |
-    | `plugin-sdk/provider-model-shared` | `ProviderReplayFamily`, `buildProviderReplayFamilyHooks`, `normalizeModelCompat`, shared replay-policy builders, provider-endpoint helpers, and model-id normalization helpers such as `normalizeNativeXaiModelId` |
-    | `plugin-sdk/provider-catalog-shared` | `findCatalogTemplate`, `buildSingleProviderApiKeyCatalog`, `supportsNativeStreamingUsageCompat`, `applyProviderNativeStreamingUsageCompat` |
-    | `plugin-sdk/provider-http` | Generic provider HTTP/endpoint capability helpers |
-    | `plugin-sdk/provider-web-fetch-contract` | Narrow web-fetch config/selection contract helpers such as `enablePluginInConfig` and `WebFetchProviderPlugin` |
-    | `plugin-sdk/provider-web-fetch` | Web-fetch provider registration/cache helpers |
-    | `plugin-sdk/provider-web-search-config-contract` | Narrow web-search config/credential helpers for providers that do not need plugin-enable wiring |
-    | `plugin-sdk/provider-web-search-contract` | Narrow web-search config/credential contract helpers such as `createWebSearchProviderContractFields`, `enablePluginInConfig`, `resolveProviderWebSearchPluginConfig`, and scoped credential setters/getters |
-    | `plugin-sdk/provider-web-search` | Web-search provider registration/cache/runtime helpers |
-    | `plugin-sdk/provider-tools` | `ProviderToolCompatFamily`, `buildProviderToolCompatFamilyHooks`, Gemini schema cleanup + diagnostics, and xAI compat helpers such as `resolveXaiModelCompatPatch` / `applyXaiModelCompat` |
-    | `plugin-sdk/provider-usage` | `fetchClaudeUsage` and similar |
-    | `plugin-sdk/provider-stream` | `ProviderStreamFamily`, `buildProviderStreamFamilyHooks`, `composeProviderStreamWrappers`, stream wrapper types, and shared Anthropic/Bedrock/Google/Kilocode/Moonshot/OpenAI/OpenRouter/Z.A.I/MiniMax/Copilot wrapper helpers |
-    | `plugin-sdk/provider-onboard` | Onboarding config patch helpers |
-    | `plugin-sdk/global-singleton` | Process-local singleton/map/cache helpers |
-  </Accordion>
-
-  <Accordion title="Auth and security subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/command-auth` | `resolveControlCommandGate`, command registry helpers, sender-authorization helpers |
-    | `plugin-sdk/command-status` | Command/help message builders such as `buildCommandsMessagePaginated` and `buildHelpMessage` |
-    | `plugin-sdk/approval-auth-runtime` | Approver resolution and same-chat action-auth helpers |
-    | `plugin-sdk/approval-client-runtime` | Native exec approval profile/filter helpers |
-    | `plugin-sdk/approval-delivery-runtime` | Native approval capability/delivery adapters |
-    | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
-    | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
-    | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
-    | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
-    | `plugin-sdk/command-auth-native` | Native command auth + native session-target helpers |
-    | `plugin-sdk/command-detection` | Shared command detection helpers |
-    | `plugin-sdk/command-surface` | Command-body normalization and command-surface helpers |
-    | `plugin-sdk/allow-from` | `formatAllowFromLowercase` |
-    | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract collection helpers for channel/plugin secret surfaces |
-    | `plugin-sdk/secret-ref-runtime` | Narrow `coerceSecretRef` and SecretRef typing helpers for secret-contract/config parsing |
-    | `plugin-sdk/security-runtime` | Shared trust, DM gating, external-content, and secret-collection helpers |
-    | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
-    | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, and SSRF policy helpers |
-    | `plugin-sdk/secret-input` | Secret input parsing helpers |
-    | `plugin-sdk/webhook-ingress` | Webhook request/target helpers |
-    | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers |
-  </Accordion>
-
-  <Accordion title="Runtime and storage subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
-    | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
-    | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
-    | `plugin-sdk/runtime-store` | `createPluginRuntimeStore` |
-    | `plugin-sdk/plugin-runtime` | Shared plugin command/hook/http/interactive helpers |
-    | `plugin-sdk/hook-runtime` | Shared webhook/internal hook pipeline helpers |
-    | `plugin-sdk/lazy-runtime` | Lazy runtime import/binding helpers such as `createLazyRuntimeModule`, `createLazyRuntimeMethod`, and `createLazyRuntimeSurface` |
-    | `plugin-sdk/process-runtime` | Process exec helpers |
-    | `plugin-sdk/cli-runtime` | CLI formatting, wait, and version helpers |
-    | `plugin-sdk/gateway-runtime` | Gateway client and channel-status patch helpers |
-    | `plugin-sdk/config-runtime` | Config load/write helpers |
-    | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
-    | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers |
-    | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
-    | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize helpers |
-    | `plugin-sdk/reply-history` | Shared short-window reply-history helpers such as `buildHistoryContext`, `recordPendingHistoryEntry`, and `clearHistoryEntriesIfEnabled` |
-    | `plugin-sdk/reply-reference` | `createReplyReferencePlanner` |
-    | `plugin-sdk/reply-chunking` | Narrow text/markdown chunking helpers |
-    | `plugin-sdk/session-store-runtime` | Session store path + updated-at helpers |
-    | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
-    | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
-    | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
-    | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
-    | `plugin-sdk/string-normalization-runtime` | Slug/string normalization helpers |
-    | `plugin-sdk/request-url` | Extract string URLs from fetch/request-like inputs |
-    | `plugin-sdk/run-command` | Timed command runner with normalized stdout/stderr results |
-    | `plugin-sdk/param-readers` | Common tool/CLI param readers |
-    | `plugin-sdk/tool-payload` | Extract normalized payloads from tool result objects |
-    | `plugin-sdk/tool-send` | Extract canonical send target fields from tool args |
-    | `plugin-sdk/temp-path` | Shared temp-download path helpers |
-    | `plugin-sdk/logging-core` | Subsystem logger and redaction helpers |
-    | `plugin-sdk/markdown-table-runtime` | Markdown table mode helpers |
-    | `plugin-sdk/json-store` | Small JSON state read/write helpers |
-    | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
-    | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
-    | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
-    | `plugin-sdk/agent-config-primitives` | Narrow agent runtime config-schema primitives |
-    | `plugin-sdk/boolean-param` | Loose boolean param reader |
-    | `plugin-sdk/dangerous-name-runtime` | Dangerous-name matching resolution helpers |
-    | `plugin-sdk/device-bootstrap` | Device bootstrap and pairing token helpers |
-    | `plugin-sdk/extension-shared` | Shared passive-channel, status, and ambient proxy helper primitives |
-    | `plugin-sdk/models-provider-runtime` | `/models` command/provider reply helpers |
-    | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
-    | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
-    | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, and attempt result utilities |
-    | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
-    | `plugin-sdk/infra-runtime` | System event/heartbeat helpers |
-    | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
-    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag and event helpers |
-    | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
-    | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, and pinned lookup helpers |
-    | `plugin-sdk/host-runtime` | Hostname and SCP host normalization helpers |
-    | `plugin-sdk/retry-runtime` | Retry config and retry runner helpers |
-    | `plugin-sdk/agent-runtime` | Agent dir/identity/workspace helpers |
-    | `plugin-sdk/directory-runtime` | Config-backed directory query/dedup |
-    | `plugin-sdk/keyed-async-queue` | `KeyedAsyncQueue` |
-  </Accordion>
-
-  <Accordion title="Capability and testing subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/media-runtime` | Shared media fetch/transform/store helpers plus media payload builders |
-    | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio helper exports |
-    | `plugin-sdk/text-runtime` | Shared text/markdown/logging helpers such as assistant-visible-text stripping, markdown render/chunking/table helpers, redaction helpers, directive-tag helpers, and safe-text utilities |
-    | `plugin-sdk/text-chunking` | Outbound text chunking helper |
-    | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, and validation helpers |
-    | `plugin-sdk/speech-core` | Shared speech provider types, registry, directive, and normalization helpers |
-    | `plugin-sdk/realtime-transcription` | Realtime transcription provider types and registry helpers |
-    | `plugin-sdk/realtime-voice` | Realtime voice provider types and registry helpers |
-    | `plugin-sdk/image-generation` | Image generation provider types |
-    | `plugin-sdk/image-generation-core` | Shared image-generation types, failover, auth, and registry helpers |
-    | `plugin-sdk/music-generation` | Music generation provider/request/result types |
-    | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/video-generation` | Video generation provider/request/result types |
-    | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
-    | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
-    | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
-    | `plugin-sdk/zod` | Re-exported `zod` for plugin SDK consumers |
-    | `plugin-sdk/testing` | `installCommonResolveTargetErrorCases`, `shouldAckReaction` |
-  </Accordion>
-
-  <Accordion title="Memory subpaths">
-    | Subpath | Key exports |
-    | --- | --- |
-    | `plugin-sdk/memory-core` | Bundled memory-core helper surface for manager/config/file/CLI helpers |
-    | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
-    | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine exports |
-    | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
-    | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
-    | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
-    | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
-    | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
-    | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers |
-    | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
-    | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
-    | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
-    | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
-    | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
-    | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
-    | `plugin-sdk/memory-host-files` | Vendor-neutral alias for memory host file/runtime helpers |
-    | `plugin-sdk/memory-host-markdown` | Shared managed-markdown helpers for memory-adjacent plugins |
-    | `plugin-sdk/memory-host-search` | Active memory runtime facade for search-manager access |
-    | `plugin-sdk/memory-host-status` | Vendor-neutral alias for memory host status helpers |
-    | `plugin-sdk/memory-lancedb` | Bundled memory-lancedb helper surface |
-  </Accordion>
-
-  <Accordion title="Reserved bundled-helper subpaths">
-    | Family | Current subpaths | Intended use |
-    | --- | --- | --- |
-    | Browser | `plugin-sdk/browser-cdp`, `plugin-sdk/browser-config-runtime`, `plugin-sdk/browser-config-support`, `plugin-sdk/browser-control-auth`, `plugin-sdk/browser-node-runtime`, `plugin-sdk/browser-profiles`, `plugin-sdk/browser-security-runtime`, `plugin-sdk/browser-setup-tools`, `plugin-sdk/browser-support` | Bundled browser plugin support helpers (`browser-support` remains the compatibility barrel) |
-    | Matrix | `plugin-sdk/matrix`, `plugin-sdk/matrix-helper`, `plugin-sdk/matrix-runtime-heavy`, `plugin-sdk/matrix-runtime-shared`, `plugin-sdk/matrix-runtime-surface`, `plugin-sdk/matrix-surface`, `plugin-sdk/matrix-thread-bindings` | Bundled Matrix helper/runtime surface |
-    | Line | `plugin-sdk/line`, `plugin-sdk/line-core`, `plugin-sdk/line-runtime`, `plugin-sdk/line-surface` | Bundled LINE helper/runtime surface |
-    | IRC | `plugin-sdk/irc`, `plugin-sdk/irc-surface` | Bundled IRC helper surface |
-    | Channel-specific helpers | `plugin-sdk/googlechat`, `plugin-sdk/zalouser`, `plugin-sdk/bluebubbles`, `plugin-sdk/bluebubbles-policy`, `plugin-sdk/mattermost`, `plugin-sdk/mattermost-policy`, `plugin-sdk/feishu-conversation`, `plugin-sdk/msteams`, `plugin-sdk/nextcloud-talk`, `plugin-sdk/nostr`, `plugin-sdk/tlon`, `plugin-sdk/twitch` | Bundled channel compatibility/helper seams |
-    | Auth/plugin-specific helpers | `plugin-sdk/github-copilot-login`, `plugin-sdk/github-copilot-token`, `plugin-sdk/diagnostics-otel`, `plugin-sdk/diffs`, `plugin-sdk/llm-task`, `plugin-sdk/thread-ownership`, `plugin-sdk/voice-call` | Bundled feature/plugin helper seams; `plugin-sdk/github-copilot-token` currently exports `DEFAULT_COPILOT_API_BASE_URL`, `deriveCopilotApiBaseUrlFromToken`, and `resolveCopilotApiToken` |
-  </Accordion>
-</AccordionGroup>
+The compiler entrypoint inventory lives in
+`scripts/lib/plugin-sdk-entrypoints.json`; typed public exports exclude the
+internal subpaths listed in
+`scripts/lib/plugin-sdk-private-local-only-subpaths.json`. Production entries
+on that list retain JavaScript-only host runtime exports for separately
+published official plugins, while test-only entries remain unexported. Run
+`pnpm plugin-sdk:surface` to audit the public export count. Deprecated public
+subpaths that are old enough and unused by bundled extension production code are
+tracked in `scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; broad
+deprecated re-export barrels are tracked in
+`scripts/lib/plugin-sdk-deprecated-barrel-subpaths.json`.
 
 ## Registration API
 
 The `register(api)` callback receives an `OpenClawPluginApi` object with these
 methods:
 
+Plugins that provide an external team-chat surface for a session can register
+the single process-wide provider exported by
+`openclaw/plugin-sdk/session-discussion`. Its `info({ sessionKey })` method
+reports whether a discussion is unavailable, ready to open, or already open;
+`open({ sessionKey })` creates or resolves the discussion and returns its embed
+and external URLs. Registering another provider replaces the current provider.
+
 ### Capability registration
 
-| Method                                           | What it registers                     |
-| ------------------------------------------------ | ------------------------------------- |
-| `api.registerProvider(...)`                      | Text inference (LLM)                  |
-| `api.registerAgentHarness(...)`                  | Experimental low-level agent executor |
-| `api.registerCliBackend(...)`                    | Local CLI inference backend           |
-| `api.registerChannel(...)`                       | Messaging channel                     |
-| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis        |
-| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription      |
-| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions        |
-| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis            |
-| `api.registerImageGenerationProvider(...)`       | Image generation                      |
-| `api.registerMusicGenerationProvider(...)`       | Music generation                      |
-| `api.registerVideoGenerationProvider(...)`       | Video generation                      |
-| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider           |
-| `api.registerWebSearchProvider(...)`             | Web search                            |
+| Method                                           | What it registers                                                                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerProvider(...)`                      | Text inference (LLM)                                                                                                                      |
+| `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                                                                             |
+| `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                                                                          |
+| `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot)                                                         |
+| `api.registerCliBackend(...)`                    | Local CLI inference backend                                                                                                               |
+| `api.registerChannel(...)`                       | Messaging channel                                                                                                                         |
+| `api.registerEmbeddingProvider(...)`             | Reusable vector embedding provider                                                                                                        |
+| `api.registerSpeechProvider(...)`                | Text-to-speech / STT synthesis                                                                                                            |
+| `api.registerRealtimeTranscriptionProvider(...)` | Streaming realtime transcription                                                                                                          |
+| `api.registerRealtimeVoiceProvider(...)`         | Duplex realtime voice sessions                                                                                                            |
+| `api.registerMediaUnderstandingProvider(...)`    | Image/audio/video analysis                                                                                                                |
+| `api.registerTranscriptSourceProvider(...)`      | Live or imported meeting transcript source; meeting plugins can use `createMeetingTranscriptSourceProvider` from `plugin-sdk/transcripts` |
+| `api.registerImageGenerationProvider(...)`       | Image generation                                                                                                                          |
+| `api.registerMusicGenerationProvider(...)`       | Music generation                                                                                                                          |
+| `api.registerVideoGenerationProvider(...)`       | Video generation                                                                                                                          |
+| `api.registerWebFetchProvider(...)`              | Web fetch / scrape provider                                                                                                               |
+| `api.registerWebSearchProvider(...)`             | Web search                                                                                                                                |
+| `api.registerCompactionProvider(...)`            | Pluggable transcript-compaction backend                                                                                                   |
+
+Worker providers must also declare their id in `contracts.workerProviders`.
+Core persists durable intent before `provision(profile, operationId)`. Providers validate settings before external allocation and throw `WorkerProviderError` for permanent profile rejection. `provision` must adopt the same lease when the operation id repeats.
+Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
+Providers with renewable leases can also implement `renew(leaseId)`.
+`inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core marks an active local record orphaned, or treats the absence as teardown completion after a persisted destroy request.
+
+Embedding providers registered with `api.registerEmbeddingProvider(...)` must
+also be listed in `contracts.embeddingProviders` in the plugin manifest. This
+is the generic embedding surface for reusable vector generation. Memory search
+can consume this generic provider surface. The older
+`api.registerMemoryEmbeddingProvider(...)` and
+`contracts.memoryEmbeddingProviders` seam is deprecated compatibility while
+existing memory-specific providers migrate.
+
+Memory-specific providers that still expose a runtime `batchEmbed(...)` stay on
+the existing per-file batching contract unless their runtime explicitly sets
+`sourceWideBatchEmbed: true`. That opt-in lets the memory host submit chunks from
+multiple dirty memory files and enabled sources in one `batchEmbed(...)` call up
+to the host batch limits. Batch adapters that upload JSONL request files must
+split provider jobs before their upload-size cap as well as their request-count
+cap. The provider must return one embedding per input chunk in the same order as
+`batch.chunks`; omit the flag when the provider expects file-local batches or
+cannot preserve input ordering across a larger source-wide job.
 
 ### Tools and commands
 
-| Method                          | What it registers                             |
-| ------------------------------- | --------------------------------------------- |
-| `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |
-| `api.registerCommand(def)`      | Custom command (bypasses the LLM)             |
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
+
+| Method                                 | What it registers                                                                                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerTool(tool, opts?)`        | Agent tool (required or `{ optional: true }`)                                                                                            |
+| `api.registerCommand(def)`             | Custom command (bypasses the LLM)                                                                                                        |
+| `api.registerNodeHostCommand(command)` | Command handled by `openclaw node run`; optional `agentTool` metadata can expose it as an agent-visible tool while the node is connected |
+
+Plugin commands can set `agentPromptGuidance` when the agent needs a short,
+command-owned routing hint. Keep that text about the command itself; do not add
+provider- or plugin-specific policy to core prompt builders.
+
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main OpenClaw prompt.", surfaces: ["openclaw_main"] },
+];
+```
+
+Structured `surfaces` may include `openclaw_main`, `codex_app_server`,
+`cli_backend`, `acp_backend`, or `subagent`. `pi_main` remains a deprecated alias
+for `openclaw_main`. Omit `surfaces` for intentional all-surface guidance. Do
+not pass an empty `surfaces` array; it is rejected so accidental scope loss does
+not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
+
+Node-host commands run on the connected node host, not inside the Gateway
+process. If `agentTool` is present, the node publishes a descriptor after a
+successful Gateway connect; the Gateway exposes it to agent runs only while that
+node is connected and only if the descriptor's `command` is in the node's
+approved command surface. Set `agentTool.defaultPlatforms` to opt a
+non-dangerous command into the default node command allowlist; otherwise require
+explicit `gateway.nodes.commands.allow` or a node-invoke policy. `agentTool.name`
+must be provider-safe: start with a letter, use only letters, digits,
+underscores, or hyphens, and stay within 64 characters. MCP-backed node tools
+can set `agentTool.mcp` metadata so catalog and tool-search surfaces can show
+the remote MCP server/tool identity, but execution still goes through the
+advertised node command.
 
 ### Infrastructure
 
-| Method                                         | What it registers                       |
-| ---------------------------------------------- | --------------------------------------- |
-| `api.registerHook(events, handler, opts?)`     | Event hook                              |
-| `api.registerHttpRoute(params)`                | Gateway HTTP endpoint                   |
-| `api.registerGatewayMethod(name, handler)`     | Gateway RPC method                      |
-| `api.registerCli(registrar, opts?)`            | CLI subcommand                          |
-| `api.registerService(service)`                 | Background service                      |
-| `api.registerInteractiveHandler(registration)` | Interactive handler                     |
-| `api.registerMemoryPromptSupplement(builder)`  | Additive memory-adjacent prompt section |
-| `api.registerMemoryCorpusSupplement(adapter)`  | Additive memory search/read corpus      |
+| Method                                          | What it registers                                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------------- |
+| `api.registerHook(events, handler, opts?)`      | Event hook                                                             |
+| `api.registerHttpRoute(params)`                 | Gateway HTTP endpoint                                                  |
+| `api.registerGatewayMethod(name, handler)`      | Gateway RPC method                                                     |
+| `api.registerGatewayDiscoveryService(service)`  | Local Gateway discovery advertiser                                     |
+| `api.registerCli(registrar, opts?)`             | CLI subcommand                                                         |
+| `api.registerNodeCliFeature(registrar, opts?)`  | Node feature CLI under `openclaw nodes`                                |
+| `api.registerService(service)`                  | Background service                                                     |
+| `api.registerInteractiveHandler(registration)`  | Interactive handler                                                    |
+| `api.registerAgentToolResultMiddleware(...)`    | Runtime tool-result middleware                                         |
+| `api.registerMemoryPromptSupplement(builder)`   | Additive memory-adjacent prompt section                                |
+| `api.registerMemoryPromptPreparation(prepare)`  | Async preparation for a memory-adjacent prompt section                 |
+| `api.registerMemoryCorpusSupplement(adapter)`   | Additive memory search/read corpus                                     |
+| `api.registerHostedMediaResolver(resolver)`     | Resolver for browser-style hosted media URLs                           |
+| `api.registerMcpServerConnectionResolver(...)`  | Per-requester MCP transport (`url`/`headers`) for a static server name |
+| `api.registerTextTransforms(transforms)`        | Plugin-owned prompt/message compatibility text rewrites                |
+| `api.registerConfigMigration(migrate)`          | Lightweight config migration run before plugin runtime loads           |
+| `api.registerMigrationProvider(provider)`       | Importer for `openclaw migrate`                                        |
+| `api.registerAutoEnableProbe(probe)`            | Config probe that can auto-enable this plugin                          |
+| `api.registerReload(registration)`              | Restart/hot/noop config-prefix policy for reload handling              |
+| `api.registerNodeHostCommand(command)`          | Command handler exposed to paired nodes                                |
+| `api.registerNodeInvokePolicy(policy)`          | Allowlist/approval policy for node-invoked commands                    |
+| `api.registerSecurityAuditCollector(collector)` | Findings collector for `openclaw security audit`                       |
 
-Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
-`update.*`) always stay `operator.admin`, even if a plugin tries to assign a
-narrower gateway method scope. Prefer plugin-specific prefixes for
-plugin-owned methods.
+#### Post-ack webhook work
+
+Webhook routes that acknowledge a request before processing finishes must move
+that detached work onto its own tracked admission root:
+
+```typescript
+import { runDetachedWebhookWork } from "openclaw/plugin-sdk/webhook-request-guards";
+
+void runDetachedWebhookWork(() => processWebhookEvent(event)).catch((error) => {
+  runtime.error?.(`webhook dispatch failed: ${String(error)}`);
+});
+```
+
+Call `runDetachedWebhookWork(...)` synchronously while the HTTP request is still
+admitted. The helper reserves an independent root immediately, then starts the
+callback in the next microtask so the request handler can write its
+acknowledgement first. The returned promise adopts the callback result; callers
+still own rejection handling. This keeps post-ack queue work accepted and makes
+restart or suspension drains wait for it. Handlers that await all processing
+before returning do not need this helper.
+
+#### Requester-scoped MCP connections
+
+Keep the MCP server **identity** static (name, tool filter) in `mcp.servers`, a
+native plugin's `mcpServers` manifest field, or a bundle manifest. Optionally register a connection resolver so each trusted
+message requester gets their own transport:
+
+```ts
+api.registerMcpServerConnectionResolver({
+  serverName: "user-email",
+  resolve: async (ctx) => {
+    // ctx.requesterSenderId is host-trusted; never invent sender identity here.
+    const token = await lookupUserToken(ctx.requesterSenderId);
+    if (!token) {
+      return null; // omit this server for the current run
+    }
+    return {
+      url: "https://mcp.example.com/email",
+      headers: { Authorization: `Bearer ${token}` },
+    };
+  },
+});
+```
+
+Contract notes:
+
+- Resolver context carries trusted host identity only (`requesterSenderId`,
+  optional `agentAccountId` / `messageChannel`). Future trusted fields (for
+  example cron/subagent user context) can be added additively.
+- One plugin owns one server name: a duplicate
+  `registerMcpServerConnectionResolver` for the same `serverName` from another
+  plugin is rejected with an error diagnostic (first registration wins), so
+  connection ownership never depends on plugin load order.
+- Tool names are derived from the full declared server set so partial resolution
+  never changes safe server names between requesters or turns. Core does not
+  verify that different requester endpoints serve identical tool schemas; a
+  resolver must point every requester at the same logical service, or tool
+  schemas (and prompt-cache stability) diverge per requester.
+- Runs without a trusted `requesterSenderId` (cron, subagent, heartbeat, public
+  gateway) never materialize requester-scoped servers. There is no shared
+  fallback connection.
+- `resolve` is bounded at 10 seconds per server; a timeout or throw omits that
+  server for the run without failing static MCP.
+- Resolved connections are revalidated at most every 5 minutes per requester:
+  rotation rebuilds the transport with fresh credentials, and a `null` result
+  revokes it (the cached runtime is disposed even mid-session). A revoked or
+  rotated credential can therefore stay in use for up to 5 minutes.
+- Resolved `headers` are never logged or persisted; core keeps only an ephemeral
+  in-memory keyed digest (process-local HMAC) to detect credential rotation, and
+  registers resolved header/URL credential values with the log/debug-capture
+  redaction registry.
+- Requester-scoped servers do not mint MCP App views: a view outlives the
+  requester-authenticated run and the gateway view boundary has no requester
+  identity, so app previews stay fail-closed for these servers. Tool results
+  are unaffected.
+- Static servers without a resolver keep the existing session-scoped lifecycle.
+- **Harness delivery rule:** requester-scoped servers never enter harness-native
+  MCP client config (Codex thread `mcp_servers`, CLI `-c mcp_servers=…`, or any
+  other session-shared MCP projection). Harnesses deliver them as run-scoped
+  tools instead:
+  - Embedded runner: session MCP runtime + bundle tools (static + scoped).
+  - Codex app-server: dynamic tools via
+    `materializeRequesterScopedMcpToolsForHarnessRun` (scoped-only; static
+    servers stay on Codex's native MCP client).
+- Scoped tool **specs** are session-stable after the first successful resolve in
+  that session, so shared-thread harnesses (Codex) do not rotate threads when
+  senders change. Before any requester resolves, no scoped specs are advertised.
+- Unauthenticated requesters on a shared-thread harness still see the advertised
+  scoped tools; calling one returns a clean not-connected tool error for that
+  requester. OpenClaw never falls back to another requester's credentials.
+
+Memory prompt supplement builders receive optional `agentId`,
+`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
+agent-owned storage should resolve that storage for each call instead of
+capturing one global path during registration. If an agent id is required but
+missing in a multi-agent operation, fail closed rather than choosing an
+arbitrary agent.
+
+Use `registerMemoryPromptPreparation(...)` when prompt text depends on async
+plugin state. The callback runs once before each full agent prompt and receives
+the same tool, agent, session, and sandbox context as synchronous memory prompt
+builders. Validate the current storage-owner instance before loading persisted
+state, then return only lines for that run. OpenClaw freezes those lines and
+hands the immutable result to synchronous prompt assembly. Keep persistence,
+atomic replacement, and owner-removal deletion inside the owning plugin; do not
+poll or read files from a prompt builder.
+
+Telegram interactive handlers can return `{ submitText }` to route text through
+Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
+the callback button when inbound policy skips the text or processing fails, so
+the user can retry after the blocking condition changes. This result field is
+Telegram-specific; other channels keep their own interactive result contracts.
+
+### Host hooks for workflow plugins
+
+Host hooks are the SDK seams for plugins that need to participate in the host
+lifecycle rather than only adding a provider, channel, or tool. They are
+generic contracts; Plan Mode can use them, but so can approval workflows,
+workspace policy gates, background monitors, setup wizards, and UI companion
+plugins.
+
+| Method                                                                               | Contract it owns                                                                                                                                           |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                             |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, settings, or tab surfaces                                                                      |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
+
+A `surface: "tab"` descriptor adds a sidebar tab to the Control UI. Active
+plugins' tab descriptors are advertised to dashboard clients in the gateway
+hello (`controlUiTabs`), so the tab appears only while the plugin is enabled.
+Bundled plugins may ship a first-class dashboard view for their tab; other
+plugins can set `path` to a plugin HTTP route (see
+`api.registerHttpRoute(...)`) that the dashboard renders in a sandboxed frame.
+`icon` is a dashboard icon name hint, `group` picks the sidebar section
+(`control` or `agent`), `order` sorts among plugin tabs, and `requiredScopes`
+hides the tab from connections lacking those operator scopes:
+
+For a gateway-protected external tab, register the descriptor `path` under a
+same-plugin `auth: "gateway"` HTTP route. After authenticated bootstrap, the browser gets a
+short-lived, HttpOnly grant scoped to that plugin and route root so the
+sandboxed frame can load without copying the Gateway bearer token into its URL
+or JavaScript. The authenticated parent renews the grant while the external tab
+is active and before mounting it after navigation or browser resume. It also
+probes the grant from the same opaque sandbox before mounting, so browser
+privacy modes that block the cookie fail closed with an unavailable panel.
+The frame grant accepts only `GET` and `HEAD` and always carries
+`operator.read`; `requiredScopes` controls tab visibility but never widens the
+cookie grant. Mutations remain on explicit Gateway-authenticated parent or
+bearer surfaces. External tabs require HTTPS/Tailscale Serve or a
+browser-trusted loopback origin; plain HTTP on a LAN host shows the
+secure-context error instead of mounting a panel that cannot authenticate.
+Full third-party-cookie blocking also makes gateway-protected tabs unavailable.
+As with all native plugin surfaces, the frame remains inside the installed
+plugin trust boundary; OpenClaw does not treat installed plugins as mutually
+isolated browser security principals.
+Cookie grants use the browser's hostname boundary, not its port boundary. Do
+not cohost mutually untrusted services on the Gateway hostname, even on other
+ports.
+Tabs backed by plugin-managed auth keep their direct iframe behavior and do not
+request or require this Gateway grant.
+
+```typescript
+api.session.controls.registerControlUiDescriptor({
+  surface: "tab",
+  id: "logbook",
+  label: "Logbook",
+  description: "Your day as a timeline, built from screen snapshots.",
+  icon: "sun",
+  group: "control",
+  requiredScopes: ["operator.write"],
+});
+```
+
+Use the grouped namespaces for new plugin code:
+
+- `api.session.state.registerSessionExtension(...)`
+- `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.registerSessionSchedulerJob(...)`
+- `api.session.workflow.sendSessionAttachment(...)`
+- `api.session.workflow.scheduleSessionTurn(...)`
+- `api.session.workflow.unscheduleSessionTurnsByTag(...)`
+- `api.session.controls.registerSessionAction(...)`
+- `api.session.controls.registerControlUiDescriptor(...)`
+- `api.agent.events.registerAgentEventSubscription(...)`
+- `api.agent.events.emitAgentEvent(...)`
+- `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
+- `api.lifecycle.registerRuntimeLifecycle(...)`
+
+The equivalent flat methods remain available as deprecated compatibility
+aliases for existing plugins. Do not add new plugin code that calls
+`api.registerSessionExtension`, `api.enqueueNextTurnInjection`,
+`api.registerControlUiDescriptor`, `api.registerRuntimeLifecycle`,
+`api.registerAgentEventSubscription`, `api.emitAgentEvent`,
+`api.setRunContext`, `api.getRunContext`, `api.clearRunContext`,
+`api.registerSessionSchedulerJob`, `api.registerSessionAction`,
+`api.sendSessionAttachment`, `api.scheduleSessionTurn`, or
+`api.unscheduleSessionTurnsByTag` directly.
+
+`scheduleSessionTurn(...)` is a session-scoped convenience over the Gateway
+Cron scheduler. Cron owns timing and creates the background task record when the
+turn runs; the Plugin SDK only constrains the target session, plugin-owned
+naming, and cleanup. Use `api.runtime.tasks.managedFlows` inside the scheduled
+turn when the work itself needs durable multi-step Task Flow state.
+
+The contracts intentionally split authority:
+
+- External plugins can own session extensions, UI descriptors, commands, tool
+  metadata, next-turn injections, and normal hooks.
+- Trusted tool policies run before ordinary `before_tool_call` hooks and are
+  host-trusted. Bundled policies run first; installed-plugin policies require
+  explicit enablement plus their local ids in
+  `contracts.trustedToolPolicies`, and run next in plugin-load order. Policy ids
+  are scoped to the registering plugin.
+- Reserved command ownership is bundled-only. External plugins should use their
+  own command names or aliases.
+- `allowPromptInjection=false` disables prompt-mutating hooks including
+  `agent_turn_prepare`, `before_prompt_build`, `heartbeat_prompt_contribution`,
+  and `enqueueNextTurnInjection`.
+
+Examples of non-Plan consumers:
+
+| Plugin archetype             | Hooks used                                                                                                                             |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Approval workflow            | Session extension, command continuation, next-turn injection, UI descriptor                                                            |
+| Budget/workspace policy gate | Trusted tool policy, tool metadata, session projection                                                                                 |
+| Background lifecycle monitor | Runtime lifecycle cleanup, agent event subscription, session scheduler ownership/cleanup, heartbeat prompt contribution, UI descriptor |
+| Setup or onboarding wizard   | Session extension, scoped commands, Control UI descriptor                                                                              |
+
+<Note>
+  Reserved core admin namespaces (`config.*`, `exec.approvals.*`, `wizard.*`,
+  `update.*`) always stay `operator.admin`, even if a plugin tries to assign a
+  narrower gateway method scope. Prefer plugin-specific prefixes for
+  plugin-owned methods.
+</Note>
+
+<Accordion title="When to use tool-result middleware">
+  Bundled plugins and explicitly enabled installed plugins with matching
+  manifest contracts can use `api.registerAgentToolResultMiddleware(...)` when
+  they need to rewrite a tool result after execution and before the runtime
+  feeds that result back into the model. This is the trusted runtime-neutral
+  seam for async output reducers such as tokenjuice.
+
+Plugins must declare `contracts.agentToolResultMiddleware` for each targeted
+runtime, for example `["openclaw", "codex"]`. Installed plugins without that
+contract, or without explicit enablement, cannot register this middleware; keep
+normal OpenClaw plugin hooks for work that does not need pre-model tool-result
+timing. The old
+embedded-runner-only extension factory registration path has been removed.
+</Accordion>
+
+### Gateway discovery registration
+
+`api.registerGatewayDiscoveryService(...)` lets a plugin advertise the active
+Gateway on a local discovery transport such as mDNS/Bonjour. OpenClaw calls the
+service during Gateway startup when local discovery is enabled, passes the
+current Gateway ports and non-secret TXT hint data, and calls the returned
+`stop` handler during Gateway shutdown.
+
+```typescript
+api.registerGatewayDiscoveryService({
+  id: "my-discovery",
+  async advertise(ctx) {
+    const handle = await startMyAdvertiser({
+      gatewayPort: ctx.gatewayPort,
+      tls: ctx.gatewayTlsEnabled,
+      displayName: ctx.machineDisplayName,
+    });
+    return { stop: () => handle.stop() };
+  },
+});
+```
+
+Gateway discovery plugins must not treat advertised TXT values as secrets or
+authentication. Discovery is a routing hint; Gateway auth and TLS pinning still
+own trust.
 
 ### CLI registration metadata
 
-`api.registerCli(registrar, opts?)` accepts two kinds of top-level metadata:
+`api.registerCli(registrar, opts?)` accepts two kinds of command metadata:
 
-- `commands`: explicit command roots owned by the registrar
-- `descriptors`: parse-time command descriptors used for root CLI help,
+- `commands`: explicit command names owned by the registrar
+- `descriptors`: parse-time command descriptors used for CLI help,
   routing, and lazy plugin CLI registration
+- `parentPath`: optional parent command path for nested command groups, such as
+  `["nodes"]`
+
+For paired-node features, prefer
+`api.registerNodeCliFeature(registrar, opts?)`. It is a small wrapper around
+`api.registerCli(..., { parentPath: ["nodes"] })` and makes commands such as
+`openclaw nodes canvas` explicit plugin-owned node features.
 
 If you want a plugin command to stay lazy-loaded in the normal root CLI path,
 provide `descriptors` that cover every top-level command root exposed by that
@@ -374,6 +542,40 @@ api.registerCli(
 );
 ```
 
+A root descriptor can also declare `machineOutput({ argv, stdoutIsTTY })` when
+the command reserves stdout for JSON, JSONL, or another machine-readable format
+without relying exclusively on a literal `--json` flag. OpenClaw evaluates this
+resolver before plugin activation so startup diagnostics can be routed to
+stderr. The resolver must be synchronous, pure, and dependency-light: inspect
+only the supplied raw argv and stdout TTY state. Reuse the same resolver in
+lightweight CLI metadata and full registration so discovery and execution do
+not disagree. Use `getRootOptionAwareCommandPath` from
+`openclaw/plugin-sdk/cli-argv` when the resolver needs command-path tokens; it
+accepts supported root options before or after the command root. `machineOutput`
+is root metadata; nested descriptors cannot use it because their owning root
+must already be active before they are visible.
+
+Nested commands receive the resolved parent command as `program`:
+
+```typescript
+api.registerCli(
+  async ({ program }) => {
+    const { registerNodesCanvasCommands } = await import("./src/cli.js");
+    registerNodesCanvasCommands(program);
+  },
+  {
+    parentPath: ["nodes"],
+    descriptors: [
+      {
+        name: "canvas",
+        description: "Capture or render canvas content from a paired node",
+        hasSubcommands: true,
+      },
+    ],
+  },
+);
+```
+
 Use `commands` by itself only when you do not need lazy root CLI registration.
 That eager compatibility path remains supported, but it does not install
 descriptor-backed placeholders for parse-time lazy loading.
@@ -381,44 +583,67 @@ descriptor-backed placeholders for parse-time lazy loading.
 ### CLI backend registration
 
 `api.registerCliBackend(...)` lets a plugin own the default config for a local
-AI CLI backend such as `codex-cli`.
+AI CLI backend such as `claude-cli` or `my-cli`.
 
-- The backend `id` becomes the provider prefix in model refs like `codex-cli/gpt-5`.
-- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
-- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
-  plugin default before running the CLI.
-- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
-  (for example normalizing old flag shapes).
+- The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
+- The backend `config` is the authoritative command adapter: argv, environment,
+  parser, session, image, and reliability behavior live in plugin code.
+- Users select the backend through model refs or model-scoped `agentRuntime.id`;
+  `openclaw.json` does not rewrite the adapter.
+- Use `normalizeConfig` when registered static fields need a runtime-aware
+  normalization pass.
+- Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
+  the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
+  flag. The hook receives `ctx.executionMode`; use `"side-question"` to add
+  backend-native isolation flags for ephemeral `/btw` calls. If those flags
+  reliably disable native tools for an otherwise always-on CLI, declare
+  `sideQuestionToolMode: "disabled"` too.
+- Use `prepareExecution` for backend-owned launch environment or temporary
+  auth/config bridges. Its `ctx.contextTokenBudget` is the effective token
+  limit selected for the run, so native-compaction backends can align their
+  own threshold without provider-specific core branches. It also receives the
+  core-prepared `ctx.env` when backend staging must extend bundled MCP settings.
+- Backends that can disable all native tools for a specific run may declare
+  `nativeToolMode: "selectable"`. Restricted calls pass an exact
+  `ctx.toolAvailability.native` list plus canonical
+  `ctx.toolAvailability.openClaw` names. Declare
+  `toolAvailabilityEnforcement: "execution-args"` and enforce the contract in
+  final fresh/resume argv, or declare `"prepare-execution"`, enforce it in
+  staged policy, and return `toolAvailabilityEnforced: true`. OpenClaw disables
+  native tools for runtime caps such as cron `toolsAllow` and fails closed when
+  the declared enforcement path is incomplete.
+
+For an end-to-end authoring guide, see
+[CLI backend plugins](/plugins/cli-backend-plugins).
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                         |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
+| Method                                     | What it registers                                                                                                                                                                                                             |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Declare accepted host-added lifecycle fields with `info.acceptedHostParams`; undeclared engines receive the legacy field set through 2026-08-12, then receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                     |
 
-### Memory embedding adapters
+### Deprecated memory embedding adapters
 
 | Method                                         | What it registers                              |
 | ---------------------------------------------- | ---------------------------------------------- |
 | `api.registerMemoryEmbeddingProvider(adapter)` | Memory embedding adapter for the active plugin |
 
-- `registerMemoryCapability` is the preferred exclusive memory-plugin API.
+- `registerMemoryCapability` is the exclusive memory-plugin API.
 - `registerMemoryCapability` may also expose `publicArtifacts.listArtifacts(...)`
-  so companion plugins can consume exported memory artifacts through
-  `openclaw/plugin-sdk/memory-host-core` instead of reaching into a specific
-  memory plugin's private layout.
-- `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
-  `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
-- `registerMemoryEmbeddingProvider` lets the active memory plugin register one
-  or more embedding adapter ids (for example `openai`, `gemini`, or a custom
-  plugin-defined id).
-- User config such as `agents.defaults.memorySearch.provider` and
-  `agents.defaults.memorySearch.fallback` resolves against those registered
-  adapter ids.
+  for host-managed exports. Companion plugins that enumerate those declared
+  artifacts still use `listActiveMemoryPublicArtifacts(...)` from the retained
+  `openclaw/plugin-sdk/memory-host-core` facade until a focused public consumer
+  API exists; they must not reach into another plugin's private layout.
+- `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
+  reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
+  chain.
+- `registerMemoryEmbeddingProvider` is deprecated. New embedding providers
+  should use `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`.
+- Existing memory-specific providers continue to work during the migration
+  window, but plugin inspection reports this as compatibility debt for
+  non-bundled plugins.
 
 ### Events and lifecycle
 
@@ -427,7 +652,14 @@ AI CLI backend such as `codex-cli`.
 | `api.on(hookName, handler, opts?)`           | Typed lifecycle hook          |
 | `api.onConversationBindingResolved(handler)` | Conversation binding callback |
 
+See [Plugin hooks](/plugins/hooks) for examples, common hook names, and guard
+semantics.
+
 ### Hook decision semantics
+
+`before_install` is a plugin-runtime lifecycle hook, not the operator install
+policy surface. Use `security.installPolicy` when an allow/block decision must
+cover CLI and Gateway-backed install or update paths.
 
 - `before_tool_call`: returning `{ block: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `before_tool_call`: returning `{ block: false }` is treated as no decision (same as omitting `block`), not as an override.
@@ -436,6 +668,25 @@ AI CLI backend such as `codex-cli`.
 - `reply_dispatch`: returning `{ handled: true, ... }` is terminal. Once any handler claims dispatch, lower-priority handlers and the default model dispatch path are skipped.
 - `message_sending`: returning `{ cancel: true }` is terminal. Once any handler sets it, lower-priority handlers are skipped.
 - `message_sending`: returning `{ cancel: false }` is treated as no decision (same as omitting `cancel`), not as an override.
+- `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
+- `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
+- `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks. Cron may still be loading at this point.
+- `cron_reconciled`: rebuild a full external cron projection after startup or scheduler reload. It includes `reason` and the effective `enabled` state, including `enabled: false`, while `ctx.getCron?.()` returns the exact reconciled scheduler. Pass `ctx.abortSignal` into durable projection work; it aborts when that scheduler snapshot is superseded or the Gateway closes.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. `scheduled` and `removed` events are post-commit reconciliation hints, not an ordered delta log. A scheduled event's `event.nextRunAtMs` is absent when the job has no next wake; a removed event still carries the deleted job snapshot.
+
+External wake schedulers should debounce or coalesce `cron_changed` events,
+then reread the full durable view from the scheduler last captured by
+`cron_reconciled`. Do not adopt the scheduler from a `cron_changed` context: a
+detached hint from an older scheduler can overlap a later reload.
+
+Use `cron_reconciled` as the full-snapshot trigger for durable state loaded at
+Gateway startup or scheduler replacement. It is not replayed for a plugin-only
+hot reload. Observation handlers run in parallel, and fire-and-forget
+dispatches can overlap, so consumers must not depend on event completion order.
+Keep OpenClaw as the source of truth for due checks and execution.
+
+For a single-flight adapter with durable replacement, retry/backoff, and clean
+shutdown, see [Safe external cron projection](/plugins/hooks#safe-external-cron-projection).
 
 ### API object fields
 
@@ -458,7 +709,7 @@ AI CLI backend such as `codex-cli`.
 
 Within your plugin, use local barrel files for internal imports:
 
-```
+```text
 my-plugin/
   api.ts            # Public exports for external consumers
   runtime-api.ts    # Internal-only runtime exports
@@ -473,23 +724,23 @@ my-plugin/
 </Warning>
 
 Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
-`index.ts`, `setup-entry.ts`, and similar public entry files) now prefer the
+`index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
+Packaged bundled plugin facades should be loaded through OpenClaw's plugin
+facade loaders; direct imports from `dist/extensions/...` bypass the manifest
+and runtime sidecar checks that packaged installs use for plugin-owned code.
 
-Provider plugins can also expose a narrow plugin-local contract barrel when a
+Provider plugins can expose a narrow plugin-local contract barrel when a
 helper is intentionally provider-specific and does not belong in a generic SDK
-subpath yet. Current bundled example: the Anthropic provider keeps its Claude
-stream helpers in its own public `api.ts` / `contract-api.ts` seam instead of
-promoting Anthropic beta-header and `service_tier` logic into a generic
-`plugin-sdk/*` contract.
+subpath yet. Bundled examples:
 
-Other current bundled examples:
-
-- `@openclaw/openai-provider`: `api.ts` exports provider builders,
-  default-model helpers, and realtime provider builders
-- `@openclaw/openrouter-provider`: `api.ts` exports the provider builder plus
-  onboarding/config helpers
+- **Anthropic**: public `api.ts` / `contract-api.ts` seam for Claude
+  beta-header and `service_tier` stream helpers.
+- **`@openclaw/openai-provider`**: `api.ts` exports provider builders,
+  default-model helpers, and realtime provider builders.
+- **`@openclaw/openrouter-provider`**: `api.ts` exports the provider builder
+  plus onboarding/config helpers.
 
 <Warning>
   Extension production code should also avoid `openclaw/plugin-sdk/<other-plugin>`
@@ -500,9 +751,23 @@ Other current bundled examples:
 
 ## Related
 
-- [Entry Points](/plugins/sdk-entrypoints) — `definePluginEntry` and `defineChannelPluginEntry` options
-- [Runtime Helpers](/plugins/sdk-runtime) — full `api.runtime` namespace reference
-- [Setup and Config](/plugins/sdk-setup) — packaging, manifests, config schemas
-- [Testing](/plugins/sdk-testing) — test utilities and lint rules
-- [SDK Migration](/plugins/sdk-migration) — migrating from deprecated surfaces
-- [Plugin Internals](/plugins/architecture) — deep architecture and capability model
+<CardGroup cols={2}>
+  <Card title="Entry points" icon="door-open" href="/plugins/sdk-entrypoints">
+    `definePluginEntry` and `defineChannelPluginEntry` options.
+  </Card>
+  <Card title="Runtime helpers" icon="gears" href="/plugins/sdk-runtime">
+    Full `api.runtime` namespace reference.
+  </Card>
+  <Card title="Setup and config" icon="sliders" href="/plugins/sdk-setup">
+    Packaging, manifests, and config schemas.
+  </Card>
+  <Card title="Testing" icon="vial" href="/plugins/sdk-testing">
+    Test utilities and lint rules.
+  </Card>
+  <Card title="SDK migration" icon="arrows-turn-right" href="/plugins/sdk-migration">
+    Migrating from deprecated surfaces.
+  </Card>
+  <Card title="Plugin internals" icon="diagram-project" href="/plugins/architecture">
+    Deep architecture and capability model.
+  </Card>
+</CardGroup>

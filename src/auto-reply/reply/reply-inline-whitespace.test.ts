@@ -1,3 +1,4 @@
+// Tests inline reply directive handling without corrupting surrounding whitespace.
 import { describe, expect, it } from "vitest";
 import { collapseInlineHorizontalWhitespace } from "./reply-inline-whitespace.js";
 

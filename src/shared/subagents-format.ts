@@ -1,6 +1,9 @@
+// Subagent formatting helpers expose compact durations and status text.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 export { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 
-export function formatTokenShort(value?: number) {
+/** Formats token counts using compact k/m suffixes for subagent summaries. */
+function formatTokenShort(value?: number) {
   if (!value || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
@@ -12,24 +15,37 @@ export function formatTokenShort(value?: number) {
     return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
   }
   if (n < 1_000_000) {
-    return `${Math.round(n / 1_000)}k`;
+    const thousands = Math.round(n / 1_000);
+    // Rounding can reach 1000 (e.g. 999_500 -> 1000); fall through to the
+    // million branch instead of emitting an out-of-scheme "1000k".
+    if (thousands < 1_000) {
+      return `${thousands}k`;
+    }
   }
   return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}m`;
 }
 
+/** Truncates a single-line display string without preserving trailing whitespace. */
 export function truncateLine(value: string, maxLength: number) {
-  if (value.length <= maxLength) {
-    return value;
+  const limit = Math.max(0, Math.floor(maxLength));
+  const trimmed = value.trimEnd();
+  if (trimmed.length <= limit) {
+    return trimmed;
   }
-  return `${value.slice(0, maxLength).trimEnd()}...`;
+  const marker = "...";
+  if (limit <= marker.length) {
+    return marker.slice(0, limit);
+  }
+  return `${truncateUtf16Safe(trimmed, limit - marker.length).trimEnd()}${marker}`;
 }
 
-export type TokenUsageLike = {
+type TokenUsageLike = {
   totalTokens?: unknown;
   inputTokens?: unknown;
   outputTokens?: unknown;
 };
 
+/** Resolves total token usage, falling back to input+output when no explicit total exists. */
 export function resolveTotalTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
@@ -43,7 +59,8 @@ export function resolveTotalTokens(entry?: TokenUsageLike) {
   return total > 0 ? total : undefined;
 }
 
-export function resolveIoTokens(entry?: TokenUsageLike) {
+/** Resolves finite input/output token usage and the derived total. */
+function resolveIoTokens(entry?: TokenUsageLike) {
   if (!entry || typeof entry !== "object") {
     return undefined;
   }
@@ -62,6 +79,7 @@ export function resolveIoTokens(entry?: TokenUsageLike) {
   return { input, output, total };
 }
 
+/** Formats token usage for compact subagent list/detail displays. */
 export function formatTokenUsageDisplay(entry?: TokenUsageLike) {
   const io = resolveIoTokens(entry);
   const promptCache = resolveTotalTokens(entry);

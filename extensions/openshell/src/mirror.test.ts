@@ -1,3 +1,4 @@
+// Openshell tests cover mirror plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,17 @@ async function makeTmpDir(): Promise<string> {
   return dir;
 }
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await fs.access(targetPath);
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 afterEach(async () => {
   await Promise.all(dirs.map((d) => fs.rm(d, { recursive: true, force: true })));
   dirs.length = 0;
@@ -31,7 +43,7 @@ describe("replaceDirectoryContents", () => {
     await replaceDirectoryContents({ sourceDir: source, targetDir: target });
 
     expect(await fs.readFile(path.join(target, "a.txt"), "utf8")).toBe("hello");
-    await expect(fs.access(path.join(target, "old.txt"))).rejects.toThrow();
+    await expectPathMissing(path.join(target, "old.txt"));
   });
 
   // Mirrored OpenShell sandbox content must never overwrite trusted workspace
@@ -63,13 +75,13 @@ describe("replaceDirectoryContents", () => {
     expect(await fs.readFile(path.join(target, "code.txt"), "utf8")).toBe("legit");
 
     // Old non-excluded content is removed
-    await expect(fs.access(path.join(target, "existing.txt"))).rejects.toThrow();
+    await expectPathMissing(path.join(target, "existing.txt"));
 
     // hooks/ directory is preserved as-is — not replaced by attacker content
     expect(await fs.readFile(path.join(target, "hooks", "trusted", "handler.js"), "utf8")).toBe(
       "// trusted code",
     );
-    await expect(fs.access(path.join(target, "hooks", "evil"))).rejects.toThrow();
+    await expectPathMissing(path.join(target, "hooks", "evil"));
   });
 
   it("excludeDirs matching is case-insensitive", async () => {
@@ -91,7 +103,7 @@ describe("replaceDirectoryContents", () => {
     expect(await fs.readFile(path.join(target, "data.txt"), "utf8")).toBe("ok");
 
     // "Hooks" (variant case) must still be excluded
-    await expect(fs.access(path.join(target, "Hooks"))).rejects.toThrow();
+    await expectPathMissing(path.join(target, "Hooks"));
   });
 
   it("preserves default excluded directories and repository metadata", async () => {
@@ -125,7 +137,7 @@ describe("replaceDirectoryContents", () => {
     expect(await fs.readFile(path.join(target, ".git", "HEAD"), "utf8")).toBe(
       "ref: refs/heads/main\n",
     );
-    await expect(fs.access(path.join(target, ".git", "hooks", "post-checkout"))).rejects.toThrow();
+    await expectPathMissing(path.join(target, ".git", "hooks", "post-checkout"));
   });
 
   it("skips symbolic links when copying into the host workspace", async () => {
@@ -142,8 +154,8 @@ describe("replaceDirectoryContents", () => {
 
     expect(await fs.readFile(path.join(target, "safe.txt"), "utf8")).toBe("ok");
     expect(await fs.readFile(path.join(target, "nested", "file.txt"), "utf8")).toBe("nested");
-    await expect(fs.lstat(path.join(target, "escaped-link"))).rejects.toThrow();
-    await expect(fs.lstat(path.join(target, "nested", "escaped-dir"))).rejects.toThrow();
+    await expectPathMissing(path.join(target, "escaped-link"));
+    await expectPathMissing(path.join(target, "nested", "escaped-dir"));
   });
 
   it("preserves existing trusted host symlinks", async () => {
@@ -152,12 +164,13 @@ describe("replaceDirectoryContents", () => {
 
     await fs.writeFile(path.join(source, "safe.txt"), "ok");
     await fs.writeFile(path.join(source, "linked-entry"), "remote-plain-file");
-    await fs.symlink("/tmp/trusted-host-target", path.join(target, "linked-entry"));
+    const trustedTarget = path.resolve("/tmp/trusted-host-target");
+    await fs.symlink(trustedTarget, path.join(target, "linked-entry"));
 
     await replaceDirectoryContents({ sourceDir: source, targetDir: target });
 
     expect(await fs.readFile(path.join(target, "safe.txt"), "utf8")).toBe("ok");
-    expect(await fs.readlink(path.join(target, "linked-entry"))).toBe("/tmp/trusted-host-target");
+    expect(await fs.readlink(path.join(target, "linked-entry"))).toBe(trustedTarget);
   });
 });
 
@@ -176,7 +189,7 @@ describe("stageDirectoryContents", () => {
 
     expect(await fs.readFile(path.join(staged, "safe.txt"), "utf8")).toBe("ok");
     expect(await fs.readFile(path.join(staged, "nested", "file.txt"), "utf8")).toBe("nested");
-    await expect(fs.lstat(path.join(staged, "escaped-link"))).rejects.toThrow();
-    await expect(fs.lstat(path.join(staged, "nested", "escaped-dir"))).rejects.toThrow();
+    await expectPathMissing(path.join(staged, "escaped-link"));
+    await expectPathMissing(path.join(staged, "nested", "escaped-dir"));
   });
 });

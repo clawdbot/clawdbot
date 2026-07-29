@@ -1,21 +1,45 @@
+// Covers config path resolution across env, home, and agent roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveLegacyOAuthPath } from "../agents/auth-profiles/legacy-source-diagnostic.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isDefaultStateDir,
+  isNixMode,
+  normalizeStateDirEnv,
+  pinRuntimePaths,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
   resolveGatewayPort,
+  resolveIncludeRoots,
   resolveOAuthDir,
-  resolveOAuthPath,
   resolveStateDir,
+  STATE_DIR,
 } from "./paths.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
   return { ...overrides };
 }
+
+describe("default state directory", () => {
+  it("matches filesystem aliases of the default state directory", async () => {
+    await withTempDir({ prefix: "openclaw-default-state-" }, async (root) => {
+      const home = path.join(root, "home");
+      const defaultStateDir = path.join(home, ".openclaw");
+      const stateAlias = path.join(home, "state-alias");
+      await fs.mkdir(defaultStateDir, { recursive: true });
+      await fs.symlink(defaultStateDir, stateAlias, "dir");
+
+      expect(isDefaultStateDir({ HOME: home, OPENCLAW_STATE_DIR: stateAlias }, () => home)).toBe(
+        true,
+      );
+    });
+  });
+});
 
 describe("oauth paths", () => {
   it("prefers OPENCLAW_OAUTH_DIR over OPENCLAW_STATE_DIR", () => {
@@ -25,7 +49,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.resolve("/custom/oauth"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join(path.resolve("/custom/oauth"), "oauth.json"),
     );
   });
@@ -36,7 +60,7 @@ describe("oauth paths", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveOAuthDir(env, "/custom/state")).toBe(path.join("/custom/state", "credentials"));
-    expect(resolveOAuthPath(env, "/custom/state")).toBe(
+    expect(resolveLegacyOAuthPath(env)).toBe(
       path.join("/custom/state", "credentials", "oauth.json"),
     );
   });
@@ -85,6 +109,24 @@ describe("gateway port resolution", () => {
     ).toBe(19003);
   });
 
+  it("falls back to config when env ports exceed TCP bounds", () => {
+    expect(
+      resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "65536" })),
+    ).toBe(19003);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19004 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "127.0.0.1:65536" }),
+      ),
+    ).toBe(19004);
+    expect(
+      resolveGatewayPort(
+        { gateway: { port: 19005 } },
+        envWith({ OPENCLAW_GATEWAY_PORT: "[::1]:65536" }),
+      ),
+    ).toBe(19005);
+  });
+
   it("falls back when malformed IPv6 inputs do not provide an explicit port", () => {
     expect(
       resolveGatewayPort({ gateway: { port: 19003 } }, envWith({ OPENCLAW_GATEWAY_PORT: "::1" })),
@@ -120,6 +162,61 @@ describe("state + config path candidates", () => {
     } as NodeJS.ProcessEnv;
 
     expect(resolveStateDir(env, () => "/home/test")).toBe(path.resolve("/new/state"));
+  });
+
+  it("normalizes relative OPENCLAW_STATE_DIR overrides to absolute paths", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: ".",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+
+    expect(env.OPENCLAW_STATE_DIR).toBe(path.resolve("."));
+  });
+
+  it("pins a relative state-dir override before later resolution", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "relative-state",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+    } as NodeJS.ProcessEnv;
+
+    normalizeStateDirEnv(env);
+    const normalized = env.OPENCLAW_STATE_DIR;
+
+    expect(normalized).toBe(path.resolve("relative-state"));
+    expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
+  });
+
+  it("re-pins exported runtime paths after startup environment selection", () => {
+    const originalConfigPath = CONFIG_PATH;
+    const originalNixMode = isNixMode;
+    const originalStateDir = STATE_DIR;
+    const selectedStateDir = path.resolve("/tmp/openclaw-selected-runtime-state");
+    const selectedConfigPath = path.join(selectedStateDir, "selected.json");
+    try {
+      const pinned = pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: selectedConfigPath,
+        OPENCLAW_NIX_MODE: "1",
+        OPENCLAW_STATE_DIR: selectedStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+
+      expect(pinned).toEqual({
+        configPath: selectedConfigPath,
+        stateDir: selectedStateDir,
+      });
+      expect(CONFIG_PATH).toBe(selectedConfigPath);
+      expect(isNixMode).toBe(true);
+      expect(STATE_DIR).toBe(selectedStateDir);
+    } finally {
+      pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: originalConfigPath,
+        OPENCLAW_NIX_MODE: originalNixMode ? "1" : undefined,
+        OPENCLAW_STATE_DIR: originalStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+    }
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {
@@ -192,5 +289,39 @@ describe("state + config path candidates", () => {
       const resolved = resolveConfigPath(env, overrideDir, () => root);
       expect(resolved).toBe(path.join(overrideDir, "openclaw.json"));
     });
+  });
+});
+
+describe("resolveIncludeRoots", () => {
+  const HOME = path.parse(process.cwd()).root + "fakehome";
+
+  it("returns an empty list when OPENCLAW_INCLUDE_ROOTS is unset or blank", () => {
+    expect(resolveIncludeRoots(envWith({}), () => HOME)).toStrictEqual([]);
+    expect(resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "" }), () => HOME)).toStrictEqual(
+      [],
+    );
+    expect(
+      resolveIncludeRoots(envWith({ OPENCLAW_INCLUDE_ROOTS: "   " }), () => HOME),
+    ).toStrictEqual([]);
+  });
+
+  it("splits on the platform path delimiter and resolves each entry to an absolute path", () => {
+    const a = path.resolve(path.parse(process.cwd()).root, "shared", "a");
+    const b = path.resolve(path.parse(process.cwd()).root, "shared", "b");
+    const env = envWith({ OPENCLAW_INCLUDE_ROOTS: [a, b].join(path.delimiter) });
+    expect(resolveIncludeRoots(env, () => HOME)).toEqual([a, b]);
+  });
+
+  it("expands a leading tilde in each entry using the resolved home dir", () => {
+    const env = envWith({ OPENCLAW_INCLUDE_ROOTS: "~/share/openclaw" });
+    expect(resolveIncludeRoots(env, () => HOME)).toEqual([path.join(HOME, "share", "openclaw")]);
+  });
+
+  it("drops empty entries and preserves de-duplicated order for repeated roots", () => {
+    const a = path.resolve(path.parse(process.cwd()).root, "shared", "a");
+    const env = envWith({
+      OPENCLAW_INCLUDE_ROOTS: ["", a, "  ", a].join(path.delimiter),
+    });
+    expect(resolveIncludeRoots(env, () => HOME)).toEqual([a]);
   });
 });

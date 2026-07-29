@@ -1,3 +1,4 @@
+// Credentials module supports OpenClaw QA credential workflows.
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
@@ -11,7 +12,9 @@ const MAX_LEASE_TTL_MS = 2 * 60 * 60 * 1_000;
 const MIN_HEARTBEAT_INTERVAL_MS = 5_000;
 const MIN_LEASE_TTL_MS = 30_000;
 const MAX_LIST_LIMIT = 500;
+const PAYLOAD_CHUNK_SIZE = 256_000;
 const MIN_LIST_LIMIT = 1;
+const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_LEASE_TTL_MS = 20 * 60 * 1_000;
@@ -58,6 +61,25 @@ type CredentialSetRecord = {
   lastLeasedAtMs: number;
   note?: string;
   lease?: CredentialLease;
+};
+
+type ChunkedCredentialPayloadMarker = {
+  [CHUNKED_PAYLOAD_MARKER]: true;
+  byteLength: number;
+  chunkCount: number;
+};
+
+type CredentialPayloadChunkRecord = {
+  _id: unknown;
+  credentialId: Id<"credential_sets">;
+  index: number;
+  data: string;
+  createdAtMs: number;
+};
+
+type CredentialPayloadStorage = {
+  chunks: string[];
+  payload: unknown;
 };
 
 type EventInsertCtx = {
@@ -111,9 +133,90 @@ function leaseIsActive(lease: CredentialLease | undefined, nowMs: number) {
   return Boolean(lease && lease.expiresAtMs > nowMs);
 }
 
-function toCredentialSummary(row: CredentialSetRecord, includePayload: boolean) {
+function isChunkedCredentialPayloadMarker(
+  payload: unknown,
+): payload is ChunkedCredentialPayloadMarker {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as Record<string, unknown>;
+  return (
+    record[CHUNKED_PAYLOAD_MARKER] === true &&
+    typeof record.byteLength === "number" &&
+    typeof record.chunkCount === "number"
+  );
+}
+
+async function readCredentialPayload(
+  ctx: {
+    db: {
+      query: (table: "credential_payload_chunks") => {
+        withIndex: (
+          indexName: "by_credential_index",
+          range: (q: {
+            eq: (
+              field: "credentialId",
+              value: Id<"credential_sets">,
+            ) => {
+              eq: (field: "index", value: number) => unknown;
+            };
+          }) => unknown,
+        ) => {
+          collect: () => Promise<CredentialPayloadChunkRecord[]>;
+        };
+      };
+    };
+  },
+  row: CredentialSetRecord,
+) {
+  if (!isChunkedCredentialPayloadMarker(row.payload)) {
+    return row.payload;
+  }
+  const chunks: string[] = [];
+  for (let index = 0; index < row.payload.chunkCount; index += 1) {
+    const rows = await ctx.db
+      .query("credential_payload_chunks")
+      .withIndex("by_credential_index", (q) => q.eq("credentialId", row["_id"]).eq("index", index))
+      .collect();
+    const chunk = rows[0];
+    if (!chunk) {
+      throw new Error(`Credential payload chunk ${index} is missing.`);
+    }
+    chunks.push(chunk.data);
+  }
+  const serialized = chunks.join("");
+  if (serialized.length !== row.payload.byteLength) {
+    throw new Error("Credential payload chunk length mismatch.");
+  }
+  return JSON.parse(serialized) as unknown;
+}
+
+function createCredentialPayloadStorage(payload: unknown): CredentialPayloadStorage {
+  const serializedPayload = JSON.stringify(payload);
+  const chunks: string[] = [];
+  for (let offset = 0; offset < serializedPayload.length; offset += PAYLOAD_CHUNK_SIZE) {
+    chunks.push(serializedPayload.slice(offset, offset + PAYLOAD_CHUNK_SIZE));
+  }
+  if (chunks.length <= 1) {
+    return { payload, chunks: [] };
+  }
   return {
-    credentialId: row._id,
+    payload: {
+      [CHUNKED_PAYLOAD_MARKER]: true,
+      byteLength: serializedPayload.length,
+      chunkCount: chunks.length,
+    },
+    chunks,
+  };
+}
+
+function toCredentialSummary(
+  row: CredentialSetRecord,
+  includePayload: boolean,
+  resolvedPayload?: unknown,
+) {
+  return {
+    credentialId: row["_id"],
     kind: row.kind,
     status: row.status,
     createdAtMs: row.createdAtMs,
@@ -131,7 +234,7 @@ function toCredentialSummary(row: CredentialSetRecord, includePayload: boolean) 
           },
         }
       : {}),
-    ...(includePayload ? { payload: row.payload } : {}),
+    ...(includePayload ? { payload: resolvedPayload ?? row.payload } : {}),
   };
 }
 
@@ -191,8 +294,8 @@ function sortByLeastRecentlyLeasedThenId(
     if (left.lastLeasedAtMs !== right.lastLeasedAtMs) {
       return left.lastLeasedAtMs - right.lastLeasedAtMs;
     }
-    const leftId = String(left._id);
-    const rightId = String(right._id);
+    const leftId = String(left["_id"]);
+    const rightId = String(right["_id"]);
     return leftId.localeCompare(rightId);
   });
 }
@@ -210,7 +313,7 @@ function sortCredentialRowsForList(rows: CredentialSetRecord[]) {
     if (left.updatedAtMs !== right.updatedAtMs) {
       return right.updatedAtMs - left.updatedAtMs;
     }
-    return String(left._id).localeCompare(String(right._id));
+    return String(left["_id"]).localeCompare(String(right["_id"]));
   });
 }
 
@@ -283,7 +386,7 @@ export const acquireLease = internalMutation({
     const selected = availableRows[0];
     const leaseToken = crypto.randomUUID();
 
-    await ctx.db.patch(selected._id, {
+    await ctx.db.patch(selected["_id"], {
       lease: {
         ownerId: args.ownerId,
         actorRole: args.actorRole,
@@ -303,17 +406,70 @@ export const acquireLease = internalMutation({
       actorRole: args.actorRole,
       ownerId: args.ownerId,
       occurredAtMs: nowMs,
-      credentialId: selected._id,
+      credentialId: selected["_id"],
     });
 
     return {
       status: "ok",
-      credentialId: selected._id,
+      credentialId: selected["_id"],
       leaseToken,
       payload: selected.payload,
       leaseTtlMs,
       heartbeatIntervalMs,
     };
+  },
+});
+
+export const getPayloadChunk = internalQuery({
+  args: {
+    kind: v.string(),
+    ownerId: v.string(),
+    actorRole,
+    credentialId: v.id("credential_sets"),
+    leaseToken: v.string(),
+    index: v.number(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<BrokerErrorResult | { status: "ok"; data: string; index: number }> => {
+    const nowMs = Date.now();
+    const row = (await ctx.db.get(args.credentialId)) as CredentialSetRecord | null;
+    if (!row) {
+      return brokerError("CREDENTIAL_NOT_FOUND", "Credential record does not exist.");
+    }
+    if (row.kind !== args.kind) {
+      return brokerError("KIND_MISMATCH", "Credential kind did not match this payload request.");
+    }
+    if (row.status !== "active") {
+      return brokerError("CREDENTIAL_DISABLED", "Credential is disabled.");
+    }
+    if (!row.lease || row.lease.expiresAtMs < nowMs) {
+      return brokerError("LEASE_NOT_FOUND", "Credential is not currently leased.");
+    }
+    if (row.lease.ownerId !== args.ownerId || row.lease.leaseToken !== args.leaseToken) {
+      return brokerError("LEASE_NOT_OWNER", "Credential lease owner/token mismatch.");
+    }
+    if (row.lease.actorRole !== args.actorRole) {
+      return brokerError("AUTH_ROLE_MISMATCH", "Credential lease actor role mismatch.");
+    }
+    if (!isChunkedCredentialPayloadMarker(row.payload)) {
+      return brokerError("PAYLOAD_NOT_CHUNKED", "Credential payload is not chunked.");
+    }
+    if (!Number.isInteger(args.index) || args.index < 0 || args.index >= row.payload.chunkCount) {
+      return brokerError("INVALID_CHUNK_INDEX", "Credential payload chunk index is out of range.");
+    }
+    const chunks = (await ctx.db
+      .query("credential_payload_chunks")
+      .withIndex("by_credential_index", (q) =>
+        q.eq("credentialId", args.credentialId).eq("index", args.index),
+      )
+      .collect()) as CredentialPayloadChunkRecord[];
+    const chunk = chunks[0];
+    if (!chunk) {
+      return brokerError("PAYLOAD_CHUNK_MISSING", "Credential payload chunk is missing.");
+    }
+    return { status: "ok", data: chunk.data, index: args.index };
   },
 });
 
@@ -431,15 +587,25 @@ export const addCredentialSet = internalMutation({
     const actorId = normalizeActorId(args.actorId);
     const status = args.status ?? "active";
     const note = args.note?.trim();
+    const storage = createCredentialPayloadStorage(args.payload);
     const credentialId = await ctx.db.insert("credential_sets", {
       kind: args.kind,
       status,
-      payload: args.payload,
+      payload: storage.payload,
       createdAtMs: nowMs,
       updatedAtMs: nowMs,
       lastLeasedAtMs: 0,
       ...(note ? { note } : {}),
     });
+
+    for (const [index, data] of storage.chunks.entries()) {
+      await ctx.db.insert("credential_payload_chunks", {
+        credentialId,
+        index,
+        data,
+        createdAtMs: nowMs,
+      });
+    }
 
     await insertAdminEvent({
       ctx,
@@ -455,7 +621,7 @@ export const addCredentialSet = internalMutation({
       _id: credentialId,
       kind: args.kind,
       status,
-      payload: args.payload,
+      payload: storage.payload,
       createdAtMs: nowMs,
       updatedAtMs: nowMs,
       lastLeasedAtMs: 0,
@@ -497,7 +663,7 @@ export const disableCredentialSet = internalMutation({
         actorRole: "maintainer",
         actorId,
         occurredAtMs: nowMs,
-        credentialId: row._id,
+        credentialId: row["_id"],
         kind: row.kind,
         code: "LEASE_ACTIVE",
         message: "Credential is currently leased and cannot be disabled yet.",
@@ -524,7 +690,7 @@ export const disableCredentialSet = internalMutation({
       actorRole: "maintainer",
       actorId,
       occurredAtMs: nowMs,
-      credentialId: row._id,
+      credentialId: row["_id"],
       kind: row.kind,
     });
 
@@ -560,7 +726,7 @@ export const listCredentialSets = internalQuery({
       );
     }
 
-    let rows: CredentialSetRecord[] = [];
+    let rows: CredentialSetRecord[];
     const kind = args.kind?.trim();
     if (kind) {
       if (normalizedStatus === "all") {
@@ -583,9 +749,18 @@ export const listCredentialSets = internalQuery({
 
     sortCredentialRowsForList(rows);
     const selected = rows.slice(0, limit);
+    const summaries = await Promise.all(
+      selected.map(async (row) =>
+        toCredentialSummary(
+          row,
+          includePayload,
+          includePayload ? await readCredentialPayload(ctx, row) : undefined,
+        ),
+      ),
+    );
     return {
       status: "ok",
-      credentials: selected.map((row) => toCredentialSummary(row, includePayload)),
+      credentials: summaries,
       count: selected.length,
     };
   },
@@ -601,7 +776,7 @@ export const cleanupLeaseEvents = internalMutation({
       .take(EVENT_RETENTION_BATCH_SIZE);
 
     for (const row of staleRows) {
-      await ctx.db.delete(row._id);
+      await ctx.db.delete(row["_id"]);
     }
 
     if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {
@@ -626,7 +801,7 @@ export const cleanupAdminEvents = internalMutation({
       .take(EVENT_RETENTION_BATCH_SIZE);
 
     for (const row of staleRows) {
-      await ctx.db.delete(row._id);
+      await ctx.db.delete(row["_id"]);
     }
 
     if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {

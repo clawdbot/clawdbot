@@ -1,5 +1,2 @@
-export {
-  detectZaiEndpoint,
-  type ZaiDetectedEndpoint,
-  type ZaiEndpointId,
-} from "openclaw/plugin-sdk/provider-zai-endpoint";
+// Zai API module exposes the plugin public contract.
+export { detectZaiEndpoint, type ZaiDetectedEndpoint, type ZaiEndpointId } from "./detect.js";

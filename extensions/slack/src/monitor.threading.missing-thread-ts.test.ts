@@ -1,3 +1,4 @@
+// Slack tests cover monitor.threading.missing thread ts plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createSlackThreadTsResolver } from "./monitor/thread-resolution.js";
 import type { SlackMessageEvent } from "./types.js";
@@ -42,7 +43,16 @@ describe("Slack missing thread_ts recovery", () => {
     const message = await runMissingThreadScenario({
       historyResponse: { messages: [{ ts: "456", thread_ts: "111.222" }] },
     });
-    expect(message).toMatchObject({ thread_ts: "111.222" });
+    expect(message).toEqual({
+      type: "message",
+      user: "U1",
+      text: "hello",
+      ts: "456",
+      parent_user_id: "U2",
+      channel: "C1",
+      channel_type: "channel",
+      thread_ts: "111.222",
+    });
   });
 
   it("continues without thread_ts when history lookup returns no thread result", async () => {
@@ -50,6 +60,7 @@ describe("Slack missing thread_ts recovery", () => {
       historyResponse: { messages: [{ ts: "456" }] },
     });
     expect(message.thread_ts).toBeUndefined();
+    expect(message["_ambiguousThreadReply"]).toBe(true);
   });
 
   it("continues without thread_ts when history lookup throws", async () => {
@@ -57,5 +68,6 @@ describe("Slack missing thread_ts recovery", () => {
       historyError: new Error("history failed"),
     });
     expect(message.thread_ts).toBeUndefined();
+    expect(message["_ambiguousThreadReply"]).toBe(true);
   });
 });

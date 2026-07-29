@@ -1,15 +1,24 @@
-export async function clearAllIndexedDbState(): Promise<void> {
+// Matrix helper module supports idb persistence helpers behavior.
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+
+export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {
   const databases = await indexedDB.databases();
+  const expectedPrefix = params?.databasePrefix ? `${params.databasePrefix}::` : null;
   await Promise.all(
     databases
       .map((entry) => entry.name)
       .filter((name): name is string => Boolean(name))
+      .filter((name) => !expectedPrefix || name.startsWith(expectedPrefix))
       .map(
         (name) =>
           new Promise<void>((resolve, reject) => {
             const req = indexedDB.deleteDatabase(name);
             req.addEventListener("success", () => resolve(), { once: true });
-            req.addEventListener("error", () => reject(req.error), { once: true });
+            req.addEventListener(
+              "error",
+              () => reject(toErrorObject(req.error, "Non-Error rejection")),
+              { once: true },
+            );
             req.addEventListener("blocked", () => resolve(), { once: true });
           }),
       ),
@@ -41,9 +50,13 @@ export async function seedDatabase(params: {
         db.close();
         resolve();
       });
-      tx.addEventListener("error", () => reject(tx.error), { once: true });
+      tx.addEventListener("error", () => reject(toErrorObject(tx.error, "Non-Error rejection")), {
+        once: true,
+      });
     });
-    req.addEventListener("error", () => reject(req.error), { once: true });
+    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+      once: true,
+    });
   });
 }
 
@@ -80,9 +93,19 @@ export async function readDatabaseRecords(params: {
         values = valuesReq.result;
         maybeResolve();
       });
-      keysReq.addEventListener("error", () => reject(keysReq.error), { once: true });
-      valuesReq.addEventListener("error", () => reject(valuesReq.error), { once: true });
+      keysReq.addEventListener(
+        "error",
+        () => reject(toErrorObject(keysReq.error, "Non-Error rejection")),
+        { once: true },
+      );
+      valuesReq.addEventListener(
+        "error",
+        () => reject(toErrorObject(valuesReq.error, "Non-Error rejection")),
+        { once: true },
+      );
     });
-    req.addEventListener("error", () => reject(req.error), { once: true });
+    req.addEventListener("error", () => reject(toErrorObject(req.error, "Non-Error rejection")), {
+      once: true,
+    });
   });
 }

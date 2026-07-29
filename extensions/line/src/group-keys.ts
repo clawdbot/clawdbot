@@ -1,3 +1,4 @@
+// Line plugin module implements group keys behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
@@ -51,11 +52,10 @@ export function resolveLineGroupsConfig(
 }
 
 export function resolveExactLineGroupConfigKey(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
+  groups: Record<string, unknown> | undefined;
   groupId?: string | null;
 }): string | undefined {
-  const groups = resolveLineGroupsConfig(params.cfg, params.accountId);
+  const { groups } = params;
   if (!groups) {
     return undefined;
   }

@@ -1,8 +1,9 @@
+// Verifies runtime live-state guardrails stay documented and enforced.
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { bundledPluginFile } from "../../test/helpers/bundled-plugin-paths.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -13,35 +14,44 @@ const LIVE_RUNTIME_STATE_GUARDS: Record<
     forbidden: readonly string[];
   }
 > = {
-  [bundledPluginFile("whatsapp", "src/connection-controller-registry.ts")]: {
-    required: ["globalThis", 'Symbol.for("openclaw.whatsapp.connectionControllerRegistry")'],
-    forbidden: ["resolveGlobalSingleton"],
+  [bundledPluginFile("whatsapp", "src/connection-controller-runtime-context.ts")]: {
+    required: ["getChannelRuntimeContext", "WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY"],
+    forbidden: ["globalThis", "resolveGlobalSingleton"],
   },
 };
 
-function guardAssertions() {
-  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) => [
-    ...guard.required.map((needle) => ({
-      relativePath,
-      type: "required" as const,
-      needle,
-      message: `${relativePath} missing ${needle}`,
-    })),
-    ...guard.forbidden.map((needle) => ({
-      relativePath,
-      type: "forbidden" as const,
-      needle,
-      message: `${relativePath} must not contain ${needle}`,
-    })),
-  ]);
-}
-
-function expectGuardState(params: {
-  source: string;
+type GuardAssertion = {
+  relativePath: string;
   type: "required" | "forbidden";
   needle: string;
   message: string;
-}) {
+};
+
+function guardAssertions(): GuardAssertion[] {
+  return Object.entries(LIVE_RUNTIME_STATE_GUARDS).flatMap(([relativePath, guard]) =>
+    guard.required
+      .map<GuardAssertion>((needle) => ({
+        relativePath,
+        type: "required",
+        needle,
+        message: `${relativePath} missing ${needle}`,
+      }))
+      .concat(
+        guard.forbidden.map<GuardAssertion>((needle) => ({
+          relativePath,
+          type: "forbidden",
+          needle,
+          message: `${relativePath} must not contain ${needle}`,
+        })),
+      ),
+  );
+}
+
+function expectGuardState(
+  params: {
+    source: string;
+  } & Pick<GuardAssertion, "message" | "needle" | "type">,
+) {
   if (params.type === "required") {
     expect(params.source, params.message).toContain(params.needle);
     return;

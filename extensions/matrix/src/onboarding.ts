@@ -1,45 +1,40 @@
+// Matrix setup module handles plugin onboarding behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import {
-  type ChannelSetupDmPolicy,
   type ChannelSetupWizardAdapter,
+  formatDocsLink,
+  hasConfiguredSecretInput,
+  mergeAllowFromEntries,
+  normalizeAccountId,
+  promptAccountId,
+  promptChannelAccessConfig,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-policy";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { listMatrixDirectoryGroupsLive } from "./directory-live.js";
 import {
   listMatrixAccountIds,
   resolveDefaultMatrixAccountId,
   resolveMatrixAccount,
   resolveMatrixAccountConfig,
 } from "./matrix/accounts.js";
+import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
+import { isPrivateOrLoopbackHost } from "./matrix/client/private-network-host.js";
 import {
   resolveValidatedMatrixHomeserverUrl,
   validateMatrixHomeserverUrl,
-} from "./matrix/client.js";
-import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
+} from "./matrix/client/url-validation.js";
 import { resolveMatrixConfigFieldPath, updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./matrix/deps.js";
-import { resolveMatrixTargets } from "./resolve-targets.js";
-import type { DmPolicy } from "./runtime-api.js";
-import {
-  addWildcardAllowFrom,
-  formatDocsLink,
-  hasConfiguredSecretInput,
-  isPrivateOrLoopbackHost,
-  mergeAllowFromEntries,
-  normalizeAccountId,
-  promptAccountId,
-  promptChannelAccessConfig,
-  splitSetupEntries,
-  type RuntimeEnv,
-  type WizardPrompter,
-} from "./runtime-api.js";
+import type { RuntimeEnv, WizardPrompter } from "./runtime-api.js";
 import { moveSingleMatrixAccountConfigToNamedAccount } from "./setup-config.js";
+import { resolveMatrixSetupDmAllowFrom } from "./setup-dm-policy.js";
 import type { CoreConfig, MatrixConfig } from "./types.js";
 
 const channel = "matrix" as const;
@@ -80,22 +75,6 @@ function resolveMatrixOnboardingAccountId(cfg: CoreConfig, accountId?: string): 
   return normalizeAccountId(
     normalizeOptionalString(accountId) || resolveDefaultMatrixAccountId(cfg) || DEFAULT_ACCOUNT_ID,
   );
-}
-
-function setMatrixDmPolicy(cfg: CoreConfig, policy: DmPolicy, accountId?: string) {
-  const resolvedAccountId = resolveMatrixOnboardingAccountId(cfg, accountId);
-  const existing = resolveMatrixAccountConfig({
-    cfg,
-    accountId: resolvedAccountId,
-  });
-  const allowFrom = policy === "open" ? addWildcardAllowFrom(existing.dm?.allowFrom) : undefined;
-  return updateMatrixAccountConfig(cfg, resolvedAccountId, {
-    dm: {
-      ...existing.dm,
-      policy,
-      ...(allowFrom ? { allowFrom } : {}),
-    },
-  });
 }
 
 async function noteMatrixAuthHelp(prompter: WizardPrompter): Promise<void> {
@@ -161,6 +140,7 @@ async function promptMatrixAllowFrom(params: {
     }
 
     if (pending.length > 0) {
+      const { resolveMatrixTargets } = await import("./resolve-targets.js");
       const results = await resolveMatrixTargets({
         cfg,
         accountId,
@@ -362,6 +342,7 @@ async function configureMatrixAccessPrompts(params: {
               resolvedIds.push(cleaned);
               continue;
             }
+            const { listMatrixDirectoryGroupsLive } = await import("./directory-live.js");
             const matches = await listMatrixDirectoryGroupsLive({
               cfg: next,
               accountId: params.accountId,
@@ -418,30 +399,43 @@ async function configureMatrixAccessPrompts(params: {
   });
 }
 
-const dmPolicy: ChannelSetupDmPolicy = {
+const dmPolicy = createChannelDmPolicy({
   label: "Matrix",
   channel,
-  policyKey: "channels.matrix.dm.policy",
-  allowFromKey: "channels.matrix.dm.allowFrom",
-  resolveConfigKeys: (cfg, accountId) => {
-    const effectiveAccountId = resolveMatrixOnboardingAccountId(cfg as CoreConfig, accountId);
+  policyPath: "dm.policy",
+  allowFromPath: "dm.allowFrom",
+  resolveAccount: (cfg, accountId) => {
+    const accountIdResolved = resolveMatrixOnboardingAccountId(cfg as CoreConfig, accountId);
+    const config = resolveMatrixAccountConfig({
+      cfg: cfg as CoreConfig,
+      accountId: accountIdResolved,
+    });
     return {
-      policyKey: resolveMatrixConfigFieldPath(cfg as CoreConfig, effectiveAccountId, "dm.policy"),
-      allowFromKey: resolveMatrixConfigFieldPath(
-        cfg as CoreConfig,
-        effectiveAccountId,
-        "dm.allowFrom",
-      ),
+      accountId: accountIdResolved,
+      config: { dmPolicy: config.dm?.policy, allowFrom: config.dm?.allowFrom, dm: config.dm },
     };
   },
-  getCurrent: (cfg, accountId) =>
-    resolveMatrixAccountConfig({
-      cfg: cfg as CoreConfig,
-      accountId: resolveMatrixOnboardingAccountId(cfg as CoreConfig, accountId),
-    }).dm?.policy ?? "pairing",
-  setPolicy: (cfg, policy, accountId) => setMatrixDmPolicy(cfg as CoreConfig, policy, accountId),
+  resolveConfigKeys: ({ cfg, account }) => ({
+    policyKey: resolveMatrixConfigFieldPath(cfg as CoreConfig, account.accountId, "dm.policy"),
+    allowFromKey: resolveMatrixConfigFieldPath(
+      cfg as CoreConfig,
+      account.accountId,
+      "dm.allowFrom",
+    ),
+  }),
+  resolveAllowFrom: ({ policy, account }) =>
+    resolveMatrixSetupDmAllowFrom(policy, account.config.allowFrom),
+  buildPatch: ({ account, policy, allowFrom }) => ({
+    dm: { ...account.config.dm, policy, allowFrom },
+  }),
+  applyPatch: ({ cfg, account, patch }) =>
+    updateMatrixAccountConfig(
+      cfg as CoreConfig,
+      account.accountId,
+      patch as Parameters<typeof updateMatrixAccountConfig>[2],
+    ),
   promptAllowFrom: promptMatrixAllowFrom,
-};
+});
 
 type MatrixConfigureIntent = "update" | "add-account";
 
@@ -594,6 +588,7 @@ async function runMatrixConfigure(params: {
         normalizeStringifiedOptionalString(
           await params.prompter.text({
             message: "Matrix access token",
+            sensitive: true,
             validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
           }),
         ) ?? "";
@@ -624,6 +619,7 @@ async function runMatrixConfigure(params: {
         normalizeStringifiedOptionalString(
           await params.prompter.text({
             message: "Matrix password",
+            sensitive: true,
             validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
           }),
         ) ?? "";
@@ -771,3 +767,4 @@ export const matrixOnboardingAdapter: ChannelSetupWizardAdapter = {
     },
   }),
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

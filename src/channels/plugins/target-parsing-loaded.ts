@@ -1,83 +1,33 @@
 import {
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
-} from "../../shared/string-coerce.js";
-import type { ChatType } from "../chat-type.js";
-import { getLoadedChannelPluginForRead } from "./registry-loaded-read.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { ChannelRouteParsedTarget } from "../../plugin-sdk/channel-route.js";
+import { normalizeChannelId } from "./index.js";
+import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 
-export type ParsedChannelExplicitTarget = {
-  to: string;
-  threadId?: string | number;
-  chatType?: ChatType;
-};
-
-export type ComparableChannelTarget = {
-  rawTo: string;
-  to: string;
-  threadId?: string | number;
-  chatType?: ChatType;
-};
-
-export function parseExplicitTargetForLoadedChannel(
-  channel: string,
-  rawTarget: string,
-): ParsedChannelExplicitTarget | null {
-  const resolvedChannel = normalizeOptionalString(channel);
-  if (!resolvedChannel) {
-    return null;
-  }
-  return (
-    getLoadedChannelPluginForRead(resolvedChannel)?.messaging?.parseExplicitTarget?.({
-      raw: rawTarget,
-    }) ?? null
-  );
-}
-
-export function resolveComparableTargetForLoadedChannel(params: {
+/** Preserves the shipped `parseExplicitTarget` SDK contract until its deprecation window ends. */
+export function resolveExplicitDeliveryTargetCompat(params: {
   channel: string;
   rawTarget?: string | null;
   fallbackThreadId?: string | number | null;
-}): ComparableChannelTarget | null {
+}): ChannelRouteParsedTarget | null {
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   const rawTo = normalizeOptionalString(params.rawTarget);
-  if (!rawTo) {
+  if (!channel || !rawTo) {
     return null;
   }
-  const parsed = parseExplicitTargetForLoadedChannel(params.channel, rawTo);
-  const fallbackThreadId = normalizeOptionalThreadValue(params.fallbackThreadId);
+  const normalizedChannel = normalizeChannelId(channel) ?? channel;
+  // This deprecated hook belongs to the active plugin. Source-loading a bundled
+  // plugin here turns every target parse into broad runtime discovery.
+  const plugin = getLoadedChannelPluginForRead(normalizedChannel);
+  const parsed = plugin?.messaging?.parseExplicitTarget?.({ raw: rawTo });
   return {
+    channel,
     rawTo,
     to: parsed?.to ?? rawTo,
-    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? fallbackThreadId),
+    threadId: normalizeOptionalThreadValue(parsed?.threadId ?? params.fallbackThreadId),
     chatType: parsed?.chatType,
   };
-}
-
-export function comparableChannelTargetsMatch(params: {
-  left?: ComparableChannelTarget | null;
-  right?: ComparableChannelTarget | null;
-}): boolean {
-  const left = params.left;
-  const right = params.right;
-  if (!left || !right) {
-    return false;
-  }
-  return left.to === right.to && left.threadId === right.threadId;
-}
-
-export function comparableChannelTargetsShareRoute(params: {
-  left?: ComparableChannelTarget | null;
-  right?: ComparableChannelTarget | null;
-}): boolean {
-  const left = params.left;
-  const right = params.right;
-  if (!left || !right) {
-    return false;
-  }
-  if (left.to !== right.to) {
-    return false;
-  }
-  if (left.threadId == null || right.threadId == null) {
-    return true;
-  }
-  return left.threadId === right.threadId;
 }

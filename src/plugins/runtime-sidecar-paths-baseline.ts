@@ -1,5 +1,7 @@
+// Loads runtime sidecar path baselines for bundled plugin checks.
 import fs from "node:fs";
 import path from "node:path";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 
 const NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
@@ -8,14 +10,44 @@ function buildBundledDistArtifactPath(dirName: string, artifact: string): string
   return ["dist", "extensions", dirName, artifact].join("/");
 }
 
-export function collectBundledRuntimeSidecarPaths(params?: {
-  rootDir?: string;
-}): readonly string[] {
+function collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir: string): Set<string> {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  if (!fs.existsSync(packageJsonPath)) {
+    return new Set();
+  }
+  const packageJson = tryReadJsonSync<{ files?: unknown }>(packageJsonPath);
+  if (!Array.isArray(packageJson?.files)) {
+    return new Set();
+  }
+  const excluded = new Set<string>();
+  for (const entry of packageJson.files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    // The root package intentionally excludes externalized official plugin
+    // runtime trees. Do not put their runtime sidecars in the root package
+    // baseline: packaged installs must load those files from the plugin's own
+    // npm package-local dist directory instead.
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+    if (match?.[1]) {
+      excluded.add(match[1]);
+    }
+  }
+  return excluded;
+}
+
+/** Collects bundled runtime sidecar paths that should ship with the root package. */
+function collectBundledRuntimeSidecarPaths(params?: { rootDir?: string }): readonly string[] {
+  const rootDir = params?.rootDir ?? process.cwd();
+  const excludedRuntimeSidecarPluginDirs = new Set([
+    ...NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS,
+    ...collectRootPackageExcludedRuntimeSidecarPluginDirs(rootDir),
+  ]);
   return listBundledPluginMetadata({
-    rootDir: params?.rootDir,
+    rootDir,
     includeChannelConfigs: false,
   })
-    .filter((entry) => !NON_PACKAGED_RUNTIME_SIDECAR_PLUGIN_DIRS.has(entry.dirName))
+    .filter((entry) => !excludedRuntimeSidecarPluginDirs.has(entry.dirName))
     .flatMap((entry) =>
       (entry.runtimeSidecarArtifacts ?? []).map((artifact) =>
         buildBundledDistArtifactPath(entry.dirName, artifact),
@@ -24,6 +56,7 @@ export function collectBundledRuntimeSidecarPaths(params?: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Writes or checks the bundled runtime sidecar path baseline JSON file. */
 export async function writeBundledRuntimeSidecarPathBaseline(params: {
   repoRoot: string;
   check: boolean;
@@ -34,7 +67,11 @@ export async function writeBundledRuntimeSidecarPathBaseline(params: {
     "lib",
     "bundled-runtime-sidecar-paths.json",
   );
-  const expectedJson = `${JSON.stringify(collectBundledRuntimeSidecarPaths(), null, 2)}\n`;
+  const expectedJson = `${JSON.stringify(
+    collectBundledRuntimeSidecarPaths({ rootDir: params.repoRoot }),
+    null,
+    2,
+  )}\n`;
   const currentJson = fs.existsSync(jsonPath) ? fs.readFileSync(jsonPath, "utf8") : "";
   const changed = currentJson !== expectedJson;
 

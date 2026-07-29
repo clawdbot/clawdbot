@@ -1,8 +1,47 @@
+// Whatsapp tests cover inbound context plugin behavior.
 import { describe, expect, it } from "vitest";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
 } from "./inbound-context.js";
+
+type ReplyContextParams = Parameters<typeof resolveVisibleWhatsAppReplyContext>[0];
+
+const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] =>
+  createTestWebInboundMessage({
+    event: { id },
+    payload: { body: "Current message" },
+    platform: {
+      chatJid: "123@g.us",
+      recipientJid: "+2000",
+      senderName: "Alice",
+      senderJid: "111@s.whatsapp.net",
+      senderE164: "+111",
+      selfE164: "+999",
+    },
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "group",
+        id: "123@g.us",
+      },
+      sender: {
+        id: "111@s.whatsapp.net",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
+    quote: {
+      id: "blocked-reply",
+      body: "Blocked quoted text",
+      sender: {
+        displayName: "Mallory (+999)",
+        jid: "999@s.whatsapp.net",
+      },
+    },
+  });
 
 describe("whatsapp inbound context visibility", () => {
   it("filters non-allowlisted group history from supplemental context", () => {
@@ -25,68 +64,64 @@ describe("whatsapp inbound context visibility", () => {
     });
 
     expect(history).toEqual([
-      expect.objectContaining({
+      {
         sender: "Alice (+111)",
         body: "Allowed context",
-      }),
+        senderJid: "111@s.whatsapp.net",
+      },
     ]);
   });
 
   it("redacts blocked quoted replies in allowlist mode", () => {
     const reply = resolveVisibleWhatsAppReplyContext({
-      msg: {
-        id: "msg-reply-1",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        to: "+2000",
-        chatType: "group",
-        body: "Current message",
-        senderName: "Alice",
-        senderJid: "111@s.whatsapp.net",
-        senderE164: "+111",
-        selfE164: "+999",
-        replyToId: "blocked-reply",
-        replyToBody: "Blocked quoted text",
-        replyToSender: "Mallory (+999)",
-        replyToSenderJid: "999@s.whatsapp.net",
-      },
+      msg: makeBlockedQuotedReplyMessage("msg-reply-1"),
       mode: "allowlist",
       groupPolicy: "allowlist",
       groupAllowFrom: ["+111"],
-    } as Parameters<typeof resolveVisibleWhatsAppReplyContext>[0]);
+    });
 
     expect(reply).toBeNull();
   });
 
   it("keeps blocked quoted replies in allowlist_quote mode", () => {
     const reply = resolveVisibleWhatsAppReplyContext({
-      msg: {
-        id: "msg-reply-2",
-        from: "123@g.us",
-        conversationId: "123@g.us",
-        to: "+2000",
-        chatType: "group",
-        body: "Current message",
-        senderName: "Alice",
-        senderJid: "111@s.whatsapp.net",
-        senderE164: "+111",
-        selfE164: "+999",
-        replyToId: "blocked-reply",
-        replyToBody: "Blocked quoted text",
-        replyToSender: "Mallory (+999)",
-        replyToSenderJid: "999@s.whatsapp.net",
-      },
+      msg: makeBlockedQuotedReplyMessage("msg-reply-2"),
       mode: "allowlist_quote",
       groupPolicy: "allowlist",
       groupAllowFrom: ["+111"],
-    } as Parameters<typeof resolveVisibleWhatsAppReplyContext>[0]);
+    });
 
-    expect(reply).toMatchObject({
+    expect(reply).toEqual({
       id: "blocked-reply",
       body: "Blocked quoted text",
-      sender: expect.objectContaining({
+      sender: {
+        jid: "999@s.whatsapp.net",
+        lid: null,
+        e164: "+999",
         label: "Mallory (+999)",
-      }),
+      },
     });
+  });
+
+  it("renders structured quoted media only at the visible preview boundary", () => {
+    const msg = makeBlockedQuotedReplyMessage("msg-reply-media");
+    msg.quote = {
+      context: {
+        id: "quoted-sticker",
+        body: "",
+        media: { contentType: "image/webp", kind: "sticker" },
+        sender: { jid: "111@s.whatsapp.net", label: "Alice (+111)" },
+      },
+    };
+
+    const reply = resolveVisibleWhatsAppReplyContext({
+      msg,
+      mode: "allowlist",
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+111"],
+    });
+
+    expect(reply?.body).toBe("<media:sticker>");
+    expect(reply?.media).toEqual({ contentType: "image/webp", kind: "sticker" });
   });
 });

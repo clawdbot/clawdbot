@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Runs the closed-loop voice-call test slice through the repo Vitest wrapper.
 import { execFileSync } from "node:child_process";
 import { bundledPluginFile } from "./lib/bundled-plugin-paths.mjs";
 

@@ -1,3 +1,4 @@
+// Shared Vitest runtime capture helpers for CLI command output assertions.
 import { vi } from "vitest";
 import type { OutputRuntimeEnv } from "../runtime.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
@@ -23,15 +24,22 @@ type MockCallsWithFirstArg = {
   };
 };
 
-export function normalizeRuntimeStdout(value: string): string {
+type MockCalls = {
+  mock: {
+    calls: unknown[][];
+  };
+};
+
+function normalizeRuntimeStdout(value: string): string {
   return value.endsWith("\n") ? value.slice(0, -1) : value;
 }
 
-export function stringifyRuntimeJson(value: unknown, space = 2): string {
+function stringifyRuntimeJson(value: unknown, space = 2): string {
   return JSON.stringify(value, null, space > 0 ? space : undefined);
 }
 
 export function createCliRuntimeCapture(): CliRuntimeCapture {
+  // Capture output in arrays while preserving vi mock call inspection.
   const runtimeLogs: string[] = [];
   const runtimeErrors: string[] = [];
   const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
@@ -89,6 +97,11 @@ export function spyRuntimeJson(runtime: Pick<OutputRuntimeEnv, "writeJson">) {
   return vi.spyOn(runtime, "writeJson").mockImplementation(() => {});
 }
 
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets callers ascribe captured JSON shape.
 export function firstWrittenJsonArg<T>(writeJson: MockCallsWithFirstArg): T | null {
-  return (writeJson.mock.calls[0]?.[0] ?? null) as T | null;
+  return (writeJson.mock.calls.at(0)?.[0] ?? null) as T | null;
+}
+
+export function getMockCallOutput(mockFn: MockCalls): string {
+  return mockFn.mock.calls.map((call) => String(call[0])).join("\n");
 }

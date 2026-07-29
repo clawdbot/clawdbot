@@ -1,3 +1,4 @@
+// QA channel tests cover QA channel runtime behavior and mocked message delivery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

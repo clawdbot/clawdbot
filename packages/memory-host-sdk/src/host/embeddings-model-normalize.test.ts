@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover embeddings model normalize behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeEmbeddingModelWithPrefixes } from "./embeddings-model-normalize.js";
 

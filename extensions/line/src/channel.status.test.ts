@@ -1,3 +1,4 @@
+// Line tests cover channel.status plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { ChannelAccountSnapshot } from "../api.js";
 import { lineStatusAdapter } from "./status.js";
@@ -20,7 +21,7 @@ describe("linePlugin status.collectStatusIssues", () => {
           tokenSource: "env",
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("reports missing access token when the snapshot is unconfigured and tokenSource is none", () => {

@@ -1,3 +1,4 @@
+// Verifies PDF tool factory output is included in OpenClaw tool registration.
 import { describe, expect, it } from "vitest";
 import { collectPresentOpenClawTools } from "./openclaw-tools.registration.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -16,6 +17,6 @@ describe("createOpenClawTools PDF registration", () => {
     });
 
     expect(pdfTool?.name).toBe("pdf");
-    expect(collectPresentOpenClawTools([pdfTool]).map((tool) => tool.name)).toContain("pdf");
+    expect(collectPresentOpenClawTools([pdfTool]).map((tool) => tool.name)).toEqual(["pdf"]);
   });
 });

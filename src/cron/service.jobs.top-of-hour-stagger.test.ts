@@ -1,8 +1,10 @@
+// Top-of-hour stagger tests cover spreading jobs that would otherwise collide.
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { computeJobNextRunAtMs } from "./service/jobs.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
 import type { CronJob } from "./types.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function stableOffsetMs(jobId: string, windowMs: number) {
   const digest = crypto.createHash("sha256").update(jobId).digest();

@@ -1,0 +1,212 @@
+{
+  "id": "gmi",
+  "name": "GMI Cloud",
+  "description": "OpenClaw GMI Cloud provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["gmi", "gmi-cloud", "gmicloud"],
+  "providerAuthAliases": {
+    "gmi-cloud": "gmi",
+    "gmicloud": "gmi"
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "gmi-native",
+      "hosts": ["api.gmi-serving.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "gmi": {
+        "family": "gmi"
+      },
+      "gmi-cloud": {
+        "family": "gmi"
+      },
+      "gmicloud": {
+        "family": "gmi"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "gmi",
+        "envVars": ["GMI_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "gmi",
+      "method": "api-key",
+      "choiceId": "gmi-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "GMI Cloud API key",
+      "choiceHint": "OpenAI-compatible GMI Cloud endpoint",
+      "groupId": "gmi",
+      "groupLabel": "GMI Cloud",
+      "groupHint": "OpenAI-compatible GMI Cloud endpoint",
+      "optionKey": "gmiApiKey",
+      "cliFlag": "--gmi-api-key",
+      "cliOption": "--gmi-api-key <key>",
+      "cliDescription": "GMI Cloud API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "aliases": {
+      "gmi-cloud": {
+        "provider": "gmi"
+      },
+      "gmicloud": {
+        "provider": "gmi"
+      }
+    },
+    "providers": {
+      "gmi": {
+        "baseUrl": "https://api.gmi-serving.com/v1",
+        "api": "openai-completions",
+        "defaultModel": "openai/gpt-5.6-sol",
+        "models": [
+          {
+            "id": "zai-org/GLM-5.2-FP8",
+            "name": "GLM-5.2 FP8",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0.923,
+              "output": 2.903,
+              "cacheRead": 0.171,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/GLM-5.1-FP8",
+            "name": "GLM-5.1 FP8",
+            "status": "deprecated",
+            "replacedBy": "zai-org/GLM-5.2-FP8",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.979,
+              "output": 3.08,
+              "cacheRead": 0.182,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V4-Pro",
+            "name": "DeepSeek V4 Pro",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 384000,
+            "cost": {
+              "input": 0.678,
+              "output": 1.357,
+              "cacheRead": 0.056,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V3.2",
+            "name": "DeepSeek V3.2",
+            "status": "deprecated",
+            "replacedBy": "deepseek-ai/DeepSeek-V4-Pro",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.29,
+              "output": 0.43,
+              "cacheRead": 0.03,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "google/gemini-3.5-flash-lite",
+            "name": "Gemini 3.5 Flash Lite",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0.3,
+              "output": 2.5,
+              "cacheRead": 0.03,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "anthropic/claude-sonnet-5",
+            "name": "Claude Sonnet 5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 409600,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 2,
+              "output": 10,
+              "cacheRead": 0.2,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          },
+          {
+            "id": "anthropic/claude-sonnet-4.6",
+            "name": "Claude Sonnet 4.6",
+            "status": "deprecated",
+            "replacedBy": "anthropic/claude-sonnet-5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 409600,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "openai/gpt-5.6-sol",
+            "name": "GPT-5.6 Sol",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 5,
+              "output": 30,
+              "cacheRead": 0.5,
+              "cacheWrite": 6.25
+            },
+            "compat": {
+              "codeMode": "capable"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "gmi": "refreshable"
+    }
+  }
+}

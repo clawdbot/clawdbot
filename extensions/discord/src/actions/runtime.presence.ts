@@ -1,6 +1,7 @@
-import type { Activity, UpdatePresenceData } from "@buape/carbon/gateway";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+// Discord plugin module implements runtime.presence behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { Activity, UpdatePresenceData } from "../internal/gateway.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 import {
   type ActionGate,
@@ -106,11 +107,12 @@ export async function handleDiscordPresenceAction(
   return jsonResult({
     ok: true,
     status,
-    activities: activities.map((a) => ({
-      type: a.type,
-      name: a.name,
-      ...(a.url ? { url: a.url } : {}),
-      ...(a.state ? { state: a.state } : {}),
-    })),
+    activities: activities.map((a) =>
+      Object.assign(
+        { type: a.type, name: a.name },
+        a.url ? { url: a.url } : {},
+        a.state ? { state: a.state } : {},
+      ),
+    ),
   });
 }

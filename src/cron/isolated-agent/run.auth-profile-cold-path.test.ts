@@ -1,3 +1,4 @@
+// Auth profile cold-path tests cover auth loading for isolated cron runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);

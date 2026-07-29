@@ -1,7 +1,8 @@
+// Tests ACP context command output and session metadata handling.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
-  __testing as sessionBindingTesting,
+  testing as sessionBindingTesting,
   getSessionBindingService,
   registerSessionBindingAdapter,
   type SessionBindingRecord,
@@ -12,11 +13,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
-import {
-  resolveAcpCommandBindingContext,
-  resolveAcpCommandConversationId,
-  resolveAcpCommandParentConversationId,
-} from "./context.js";
+import { resolveAcpCommandBindingContext, resolveAcpCommandConversationId } from "./context.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -73,15 +70,6 @@ function parseFeishuDirectConversationIdForTest(raw?: string | null): string | u
     return undefined;
   }
   return trimmed.replace(/^(user|dm):/i, "").trim() || undefined;
-}
-
-function parseBlueBubblesConversationIdFromTargetForTest(raw?: string | null): string | undefined {
-  const trimmed = raw?.trim().replace(/^bluebubbles:/i, "");
-  if (!trimmed) {
-    return undefined;
-  }
-  const prefixed = /^(chat_guid|chat_identifier|chat_id):(.+)$/i.exec(trimmed);
-  return (prefixed?.[2] ?? trimmed).trim() || undefined;
 }
 
 function parseIMessageConversationIdFromTargetForTest(raw?: string | null): string | undefined {
@@ -289,30 +277,6 @@ function setMinimalAcpContextRegistryForTests(): void {
                 parseFeishuDirectConversationIdForTest(originatingTo) ??
                 parseFeishuDirectConversationIdForTest(commandTo) ??
                 parseFeishuDirectConversationIdForTest(fallbackTo);
-              return conversationId ? { conversationId } : null;
-            },
-          },
-        },
-      },
-      {
-        pluginId: "bluebubbles",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "bluebubbles", label: "BlueBubbles" }),
-          bindings: {
-            resolveCommandConversation: ({
-              originatingTo,
-              commandTo,
-              fallbackTo,
-            }: {
-              originatingTo?: string;
-              commandTo?: string;
-              fallbackTo?: string;
-            }) => {
-              const conversationId =
-                parseBlueBubblesConversationIdFromTargetForTest(originatingTo) ??
-                parseBlueBubblesConversationIdFromTargetForTest(commandTo) ??
-                parseBlueBubblesConversationIdFromTargetForTest(fallbackTo);
               return conversationId ? { conversationId } : null;
             },
           },
@@ -695,44 +659,6 @@ describe("commands-acp context", () => {
       parentConversationId: "!room:example.org",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
-    expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
-  });
-
-  it("resolves BlueBubbles DM conversation ids from current targets", () => {
-    const params = buildCommandTestParams("/acp status", baseCfg, {
-      Provider: "bluebubbles",
-      Surface: "bluebubbles",
-      OriginatingChannel: "bluebubbles",
-      OriginatingTo: "bluebubbles:+15555550123",
-    });
-
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "bluebubbles",
-      accountId: "default",
-      threadId: undefined,
-      conversationId: "+15555550123",
-      parentConversationId: undefined,
-    });
-    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
-  });
-
-  it("resolves BlueBubbles group conversation ids from explicit chat targets", () => {
-    const params = buildCommandTestParams("/acp status", baseCfg, {
-      Provider: "bluebubbles",
-      Surface: "bluebubbles",
-      OriginatingChannel: "bluebubbles",
-      OriginatingTo: "bluebubbles:chat_guid:iMessage;+;chat123",
-      AccountId: "work",
-    });
-
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "bluebubbles",
-      accountId: "work",
-      threadId: undefined,
-      conversationId: "iMessage;+;chat123",
-      parentConversationId: undefined,
-    });
-    expect(resolveAcpCommandConversationId(params)).toBe("iMessage;+;chat123");
   });
 
   it("resolves iMessage DM conversation ids from current targets", () => {
@@ -751,6 +677,25 @@ describe("commands-acp context", () => {
       parentConversationId: undefined,
     });
     expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
+  });
+
+  it("resolves iMessage group conversation ids from explicit chat targets", () => {
+    const params = buildCommandTestParams("/acp status", baseCfg, {
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat_guid:iMessage;+;chat123",
+      AccountId: "work",
+    });
+
+    expect(resolveAcpCommandBindingContext(params)).toEqual({
+      channel: "imessage",
+      accountId: "work",
+      threadId: undefined,
+      conversationId: "iMessage;+;chat123",
+      parentConversationId: undefined,
+    });
+    expect(resolveAcpCommandConversationId(params)).toBe("iMessage;+;chat123");
   });
 
   it("resolves iMessage group conversation ids from chat_id targets", () => {
@@ -924,7 +869,6 @@ describe("commands-acp context", () => {
       AccountId: "work",
     });
 
-    expect(resolveAcpCommandParentConversationId(params)).toBeUndefined();
     expect(resolveAcpCommandBindingContext(params)).toEqual({
       channel: "feishu",
       accountId: "work",

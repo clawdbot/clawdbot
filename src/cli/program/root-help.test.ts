@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+// Root help tests cover top-level help rendering and command visibility.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderRootHelpText } from "./root-help.js";
 
 const getPluginCliCommandDescriptorsMock = vi.fn(
-  async (_config?: unknown, _env?: unknown, _loaderOptions?: unknown) => [
+  async (_configForTest?: unknown, _env?: unknown, _loaderOptions?: unknown) => [
     {
       name: "matrix",
       description: "Matrix channel utilities",
@@ -12,6 +13,13 @@ const getPluginCliCommandDescriptorsMock = vi.fn(
 );
 
 vi.mock("./core-command-descriptors.js", () => ({
+  CORE_CLI_COMMAND_DESCRIPTORS: [
+    {
+      name: "status",
+      description: "Show status",
+      hasSubcommands: false,
+    },
+  ],
   getCoreCliCommandDescriptors: () => [
     {
       name: "status",
@@ -23,6 +31,13 @@ vi.mock("./core-command-descriptors.js", () => ({
 }));
 
 vi.mock("./subcli-descriptors.js", () => ({
+  SUB_CLI_DESCRIPTORS: [
+    {
+      name: "config",
+      description: "Manage config",
+      hasSubcommands: true,
+    },
+  ],
   getSubCliEntries: () => [
     {
       name: "config",
@@ -39,6 +54,10 @@ vi.mock("../../plugins/cli.js", () => ({
 }));
 
 describe("root help", () => {
+  beforeEach(() => {
+    getPluginCliCommandDescriptorsMock.mockClear();
+  });
+
   it("passes isolated config and env through to plugin CLI descriptor loading", async () => {
     const config = {
       agents: {
@@ -57,11 +76,18 @@ describe("root help", () => {
   });
 
   it("includes plugin CLI descriptors alongside core and sub-CLI commands", async () => {
-    const text = await renderRootHelpText();
+    const text = await renderRootHelpText({ includePluginDescriptors: true });
 
     expect(text).toContain("status");
     expect(text).toContain("config");
     expect(text).toContain("matrix");
+    expect(text).toContain("matrix *");
     expect(text).toContain("Matrix channel utilities");
+  });
+
+  it("does not load plugin CLI descriptors by default", async () => {
+    await renderRootHelpText();
+
+    expect(getPluginCliCommandDescriptorsMock).not.toHaveBeenCalled();
   });
 });

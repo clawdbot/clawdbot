@@ -1,6 +1,13 @@
+/**
+ * Alibaba Model Studio video provider adapter. It resolves DashScope auth and
+ * HTTP policy before delegating task polling to the shared video helper.
+ */
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import { resolveProviderHttpRequestConfig } from "openclaw/plugin-sdk/provider-http";
+import {
+  resolveProviderHttpRequestConfig,
+  sanitizeConfiguredModelProviderRequest,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_MODELS,
@@ -25,6 +32,7 @@ function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/u, "");
 }
 
+/** Build the Alibaba/DashScope video generation provider descriptor. */
 export function buildAlibabaVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "alibaba",
@@ -49,6 +57,7 @@ export function buildAlibabaVideoGenerationProvider(): VideoGenerationProvider {
         throw new Error("Alibaba Model Studio API key missing");
       }
 
+      const providerConfig = req.cfg?.models?.providers?.alibaba;
       const requestBaseUrl = resolveAlibabaVideoBaseUrl(req);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
@@ -62,6 +71,7 @@ export function buildAlibabaVideoGenerationProvider(): VideoGenerationProvider {
           provider: "alibaba",
           capability: "video",
           transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(providerConfig?.request),
         });
 
       const model = req.model?.trim() || DEFAULT_ALIBABA_VIDEO_MODEL;

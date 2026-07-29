@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Audits repo ownership seams, optional plugin leaks, and nearby test coverage signals.
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -8,7 +9,10 @@ import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { visitModuleSpecifiers } from "./lib/guard-inventory-utils.mjs";
 import { optionalBundledClusterSet } from "./lib/optional-bundled-clusters.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
+import { toLine } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const srcRoot = path.join(repoRoot, "src");
@@ -125,7 +129,7 @@ async function walkAllCodeFiles(rootDir, options = {}) {
   const includeTests = options.includeTests === true;
 
   async function walk(dir) {
-    let entries = [];
+    let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -153,10 +157,6 @@ async function walkAllCodeFiles(rootDir, options = {}) {
 
   await walk(rootDir);
   return out.toSorted((left, right) => normalizePath(left).localeCompare(normalizePath(right)));
-}
-
-function toLine(sourceFile, node) {
-  return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
 }
 
 function resolveRelativeSpecifier(specifier, importerFile) {
@@ -211,27 +211,9 @@ function collectPluginSdkImports(filePath, sourceFile) {
     });
   }
 
-  function visit(node) {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      push("import", node.moduleSpecifier, node.moduleSpecifier.text);
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      push("export", node.moduleSpecifier, node.moduleSpecifier.text);
-    } else if (
-      ts.isCallExpression(node) &&
-      node.expression.kind === ts.SyntaxKind.ImportKeyword &&
-      node.arguments.length === 1 &&
-      ts.isStringLiteral(node.arguments[0])
-    ) {
-      push("dynamic-import", node.arguments[0], node.arguments[0].text);
-    }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
+  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifierNode, specifier }) => {
+    push(kind, specifierNode, specifier);
+  });
   return entries;
 }
 
@@ -243,15 +225,7 @@ async function collectCorePluginSdkImports() {
       continue;
     }
     const source = await fs.readFile(filePath, "utf8");
-    const scriptKind =
-      filePath.endsWith(".tsx") || filePath.endsWith(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      scriptKind,
-    );
+    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
     inventory.push(...collectPluginSdkImports(filePath, sourceFile));
   }
   return inventory.toSorted(compareImports);
@@ -282,20 +256,11 @@ function collectOptionalClusterStaticImports(filePath, sourceFile) {
     });
   }
 
-  function visit(node) {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      push("import", node.moduleSpecifier, node.moduleSpecifier.text);
-    } else if (
-      ts.isExportDeclaration(node) &&
-      node.moduleSpecifier &&
-      ts.isStringLiteral(node.moduleSpecifier)
-    ) {
-      push("export", node.moduleSpecifier, node.moduleSpecifier.text);
+  visitModuleSpecifiers(ts, sourceFile, ({ kind, specifierNode, specifier }) => {
+    if (kind !== "dynamic-import") {
+      push(kind, specifierNode, specifier);
     }
-    ts.forEachChild(node, visit);
-  }
-
-  visit(sourceFile);
+  });
   return entries;
 }
 
@@ -308,15 +273,7 @@ async function collectOptionalClusterStaticLeaks() {
       continue;
     }
     const source = await fs.readFile(filePath, "utf8");
-    const scriptKind =
-      filePath.endsWith(".tsx") || filePath.endsWith(".jsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-    const sourceFile = ts.createSourceFile(
-      filePath,
-      source,
-      ts.ScriptTarget.Latest,
-      true,
-      scriptKind,
-    );
+    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
     inventory.push(...collectOptionalClusterStaticImports(filePath, sourceFile));
   }
   return inventory.toSorted((left, right) => {
@@ -547,12 +504,8 @@ function splitNameTokens(name) {
     .filter(Boolean);
 }
 
-function escapeForRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 function hasImportSource(source, specifier) {
-  const escaped = escapeForRegExp(specifier);
+  const escaped = escapeRegExp(specifier);
   return new RegExp(`from\\s+["']${escaped}["']|import\\s*\\(\\s*["']${escaped}["']\\s*\\)`).test(
     source,
   );
@@ -584,7 +537,7 @@ function describeCronSeamKinds(relativePath, source) {
   const seamKinds = [];
   const importsAgentRunner = hasAnyImportSource(source, [
     "../../agents/cli-runner.js",
-    "../../agents/pi-embedded.js",
+    "../../agents/embedded-agent.js",
     "../../agents/model-fallback.js",
     "../../agents/subagent-registry.js",
     "../../infra/agent-events.js",
@@ -620,12 +573,11 @@ function describeCronSeamKinds(relativePath, source) {
       "./state.js",
       "../schedule.js",
       "../store.js",
-      "../run-log.js",
     ]);
 
   if (
     importsAgentRunner &&
-    /\brunCliAgent\b|\brunEmbeddedPiAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
+    /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
       source,
     )
   ) {
@@ -746,7 +698,7 @@ function describeSubagentSeamKinds(relativePath, source) {
 
   if (
     (importsAnnounceDelivery || isAnnounceDispatchPath) &&
-    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedPiMessage\b|\bwaitForEmbeddedPiRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
+    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
       source,
     )
   ) {
@@ -839,7 +791,7 @@ async function buildTestIndex(testFiles) {
 }
 
 function hasExecutableImportReference(source, importPath) {
-  const escapedImportPath = escapeForRegExp(importPath);
+  const escapedImportPath = escapeRegExp(importPath);
   const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
   const patterns = [
     new RegExp(String.raw`\bfrom\s*["'\`]${escapedImportPath}${suffix}["'\`]`),
@@ -851,7 +803,7 @@ function hasExecutableImportReference(source, importPath) {
 }
 
 function hasModuleMockReference(source, importPath) {
-  const escapedImportPath = escapeForRegExp(importPath);
+  const escapedImportPath = escapeRegExp(importPath);
   const suffix = String.raw`(?:\.[^"'\\\`]+)?`;
   const patterns = [
     new RegExp(String.raw`\bvi\.mock\s*\(\s*["'\`]${escapedImportPath}${suffix}["'\`]`),

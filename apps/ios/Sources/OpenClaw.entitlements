@@ -3,7 +3,12 @@
 <plist version="1.0">
 <dict>
 	<key>aps-environment</key>
-	<string>development</string>
+	<string>$(OPENCLAW_APNS_ENTITLEMENT_ENVIRONMENT)</string>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>$(OPENCLAW_ACTIVE_APP_GROUP_ID)</string>
+	</array>
+	<key>com.apple.developer.healthkit</key>
+	<true/>
 </dict>
 </plist>
-

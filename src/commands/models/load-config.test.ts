@@ -1,8 +1,9 @@
+// Model load-config tests cover loading config used by model commands.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
-  readSourceConfigSnapshotForWrite: vi.fn(),
+  getRuntimeConfigSourceSnapshot: vi.fn(),
   setRuntimeConfigSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
   getModelsCommandSecretTargetIds: vi.fn(),
@@ -10,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
-  readSourceConfigSnapshotForWrite: mocks.readSourceConfigSnapshotForWrite,
+  getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
 }));
 
@@ -35,10 +36,7 @@ describe("models load-config", () => {
 
   function mockResolvedConfigFlow(params: { sourceConfig: unknown; diagnostics: string[] }) {
     mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
-    mocks.readSourceConfigSnapshotForWrite.mockResolvedValue({
-      snapshot: { valid: true, sourceConfig: params.sourceConfig, resolved: params.sourceConfig },
-      writeOptions: {},
-    });
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(params.sourceConfig);
     mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
       resolvedConfig,
@@ -72,8 +70,9 @@ describe("models load-config", () => {
       targetIds,
     });
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
-    expect(runtime.log).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
-    expect(runtime.log).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    expect(runtime.error).toHaveBeenNthCalledWith(1, "[secrets] diag-one");
+    expect(runtime.error).toHaveBeenNthCalledWith(2, "[secrets] diag-two");
+    expect(runtime.log).not.toHaveBeenCalled();
     expect(result).toEqual({
       sourceConfig,
       resolvedConfig,
@@ -87,5 +86,20 @@ describe("models load-config", () => {
 
     await expect(loadModelsConfig({ commandName: "models list" })).resolves.toBe(resolvedConfig);
     expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, sourceConfig);
+  });
+
+  it("does not reread config when no source snapshot is pinned", async () => {
+    mocks.getRuntimeConfig.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
+    mocks.getModelsCommandSecretTargetIds.mockReturnValue(targetIds);
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig,
+      diagnostics: [],
+    });
+
+    const result = await loadModelsConfigWithSource({ commandName: "models list" });
+
+    expect(result.sourceConfig).toBe(runtimeConfig);
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, runtimeConfig);
   });
 });

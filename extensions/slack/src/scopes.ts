@@ -1,7 +1,13 @@
+// Slack plugin module implements scopes behavior.
 import type { WebClient } from "@slack/web-api";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { createSlackWebClient } from "./client.js";
+import {
+  isRecord,
+  normalizeStringEntries,
+  normalizeOptionalString,
+  sortUniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createSlackReadClient } from "./client.js";
+import { formatSlackError } from "./errors.js";
 
 export type SlackScopesResult = {
   ok: boolean;
@@ -11,6 +17,7 @@ export type SlackScopesResult = {
 };
 
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
+type SlackScopesMethod = "auth.test" | SlackScopesSource;
 
 function collectScopes(value: unknown, into: string[]) {
   if (!value) {
@@ -48,7 +55,7 @@ function collectScopes(value: unknown, into: string[]) {
 }
 
 function normalizeScopes(scopes: string[]) {
-  return Array.from(new Set(scopes.map((scope) => scope.trim()).filter(Boolean))).toSorted();
+  return sortUniqueStrings(normalizeStringEntries(scopes));
 }
 
 function extractScopes(payload: unknown): string[] {
@@ -58,6 +65,9 @@ function extractScopes(payload: unknown): string[] {
   const scopes: string[] = [];
   collectScopes(payload.scopes, scopes);
   collectScopes(payload.scope, scopes);
+  if (isRecord(payload.response_metadata)) {
+    collectScopes(payload.response_metadata.scopes, scopes);
+  }
   if (isRecord(payload.info)) {
     collectScopes(payload.info.scopes, scopes);
     collectScopes(payload.info.scope, scopes);
@@ -69,7 +79,7 @@ function extractScopes(payload: unknown): string[] {
 
 async function callSlack(
   client: WebClient,
-  method: SlackScopesSource,
+  method: SlackScopesMethod,
 ): Promise<Record<string, unknown> | null> {
   try {
     const result = await client.apiCall(method);
@@ -77,7 +87,7 @@ async function callSlack(
   } catch (err) {
     return {
       ok: false,
-      error: formatErrorMessage(err),
+      error: formatSlackError(err),
     };
   }
 }
@@ -86,8 +96,8 @@ export async function fetchSlackScopes(
   token: string,
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
-  const client = createSlackWebClient(token, { timeout: timeoutMs });
-  const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info"];
+  const client = createSlackReadClient(token, { timeout: timeoutMs });
+  const attempts: SlackScopesMethod[] = ["auth.test", "auth.scopes", "apps.permissions.info"];
   const errors: string[] = [];
 
   for (const method of attempts) {

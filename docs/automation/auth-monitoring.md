@@ -1,8 +1,11 @@
 ---
 summary: "Redirect to /gateway/authentication"
-title: "Auth Monitoring"
+title: "Auth monitoring"
 ---
 
-# Auth Monitoring
+This page moved. Model provider authentication lives under [Authentication](/gateway/authentication); ops scripts for monitoring auth state live at [Auth monitoring scripts](/help/scripts#auth-monitoring-scripts).
 
-This page moved to [Authentication](/gateway/authentication). See [Authentication](/gateway/authentication) for auth monitoring documentation.
+## Related
+
+- [Automation troubleshooting](/automation/cron-jobs#troubleshooting)
+- [Hooks](/automation/hooks)

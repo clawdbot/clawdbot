@@ -1,3 +1,4 @@
+// Vitest full agentic config wires the full agentic test shard.
 import { createProjectShardVitestConfig } from "./vitest.project-shard-config.ts";
 import { fullSuiteVitestShards } from "./vitest.test-shards.mjs";
 

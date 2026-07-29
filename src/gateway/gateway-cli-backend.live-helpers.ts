@@ -1,7 +1,15 @@
+// CLI backend live helpers prepare workspace/bootstrap fixtures and gateway
+// clients for live CLI backend model/runtime tests.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveCliBackendLiveTest } from "../agents/cli-backends.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  listCliRuntimeModelBackendBindings,
+  resolveCliBackendLiveTest,
+} from "../agents/cli-backends.js";
+import { parseModelRef } from "../agents/model-selection.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -13,21 +21,11 @@ import {
   requestDevicePairing,
 } from "../infra/device-pairing.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { GatewayClient } from "./client.js";
-import {
-  assertCronJobMatches,
-  assertCronJobVisibleViaCli,
-  assertLiveImageProbeReply,
-  buildLiveCronProbeMessage,
-  createLiveCronProbeSpec,
-  runOpenClawCliJson,
-  type CronListJob,
-} from "./live-agent-probes.js";
-import { renderCatFacePngBase64 } from "./live-image-probe.js";
-import { extractPayloadText } from "./test-helpers.agent-results.js";
+import { sleep } from "../utils/sleep.js";
+import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
+import { GatewayClient, type GatewayClientOptions } from "./client.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
 // websocket handshake needs a wider budget than the single-provider reruns.
@@ -41,6 +39,14 @@ export type BootstrapWorkspaceContext = {
 
 export type SystemPromptReport = {
   injectedWorkspaceFiles?: Array<{ name?: string }>;
+};
+
+export type CliBackendLiveModelSelection = {
+  providerId: string;
+  cliModelKey: string;
+  configModelKey: string;
+  configModelSwitchTarget: string | undefined;
+  agentRuntime: { id: string };
 };
 
 export type CliBackendLiveEnvSnapshot = {
@@ -58,6 +64,77 @@ export type CliBackendLiveEnvSnapshot = {
   anthropicApiKey?: string;
   anthropicApiKeyOld?: string;
 };
+
+export const CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP";
+export const CLI_BACKEND_LIVE_ADVISORY_ENV = "OPENCLAW_LIVE_CLI_BACKEND_ADVISORY";
+
+export type CliBackendLiveProviderSkipDecision = {
+  action: "fail" | "skip";
+  message: string;
+};
+
+export type ClaudeCliResumeContinuityProbe = {
+  firstTurnMarker: string;
+  firstTurnPrompt: string;
+  injectedContext: string;
+  resumePrompt: string;
+  expectedFirstReply: string;
+  expectedResumeMarker: string;
+};
+
+function normalizeCliRuntimeModelTarget(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = parseModelRef(raw, "");
+  if (!parsed) {
+    return raw;
+  }
+  const binding = listCliRuntimeModelBackendBindings({ includeSetupRegistry: true }).find(
+    (entry) => entry.runtime === parsed.provider,
+  );
+  return binding ? `${binding.provider}/${parsed.model}` : raw;
+}
+
+export function resolveCliBackendLiveModelSelection(params: {
+  rawModel: string;
+  defaultProvider: string;
+  modelSwitchTarget?: string;
+}): CliBackendLiveModelSelection {
+  const parsed = parseModelRef(params.rawModel, params.defaultProvider);
+  if (!parsed) {
+    throw new Error(
+      `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${params.rawModel}`,
+    );
+  }
+
+  if (parsed.provider === "codex-cli") {
+    throw new Error(
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/... is no longer supported. Use a supported CLI backend such as claude-cli or google-gemini-cli.",
+    );
+  }
+  const cliBinding = listCliRuntimeModelBackendBindings({ includeSetupRegistry: true }).find(
+    (binding) => binding.runtime === parsed.provider,
+  );
+  if (cliBinding) {
+    return {
+      providerId: cliBinding.runtime,
+      cliModelKey: `${cliBinding.runtime}/${parsed.model}`,
+      configModelKey: `${cliBinding.provider}/${parsed.model}`,
+      configModelSwitchTarget: normalizeCliRuntimeModelTarget(params.modelSwitchTarget),
+      agentRuntime: { id: cliBinding.runtime },
+    };
+  }
+
+  const modelKey = `${parsed.provider}/${parsed.model}`;
+  return {
+    providerId: parsed.provider,
+    cliModelKey: modelKey,
+    configModelKey: modelKey,
+    configModelSwitchTarget: params.modelSwitchTarget,
+    agentRuntime: { id: "openclaw" },
+  };
+}
 
 export function parseJsonStringArray(name: string, raw?: string): string[] | undefined {
   const trimmed = raw?.trim();
@@ -98,6 +175,29 @@ export function shouldRunCliMcpProbe(providerId: string): boolean {
   return resolveCliBackendLiveTest(providerId)?.defaultMcpProbe === true;
 }
 
+export function resolveCliBackendLiveArgs(params: {
+  providerId: string;
+  defaultArgs?: string[];
+  defaultResumeArgs?: string[];
+}): { args: string[]; resumeArgs?: string[] } {
+  const args =
+    parseJsonStringArray(
+      "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
+    ) ?? params.defaultArgs;
+  if (!args || args.length === 0) {
+    throw new Error(
+      `OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${params.providerId}".`,
+    );
+  }
+  const resumeArgs =
+    parseJsonStringArray(
+      "OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS",
+      process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS,
+    ) ?? params.defaultResumeArgs;
+  return { args, resumeArgs };
+}
+
 export function resolveCliModelSwitchProbeTarget(
   providerId: string,
   modelRef: string,
@@ -121,10 +221,102 @@ export function shouldRunCliModelSwitchProbe(providerId: string, modelRef: strin
   return typeof resolveCliModelSwitchProbeTarget(providerId, modelRef) === "string";
 }
 
+export function shouldAllowCliBackendLiveProviderSkip(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return (
+    isTruthyEnvValue(env[CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV]) &&
+    isTruthyEnvValue(env[CLI_BACKEND_LIVE_ADVISORY_ENV])
+  );
+}
+
+export function resolveCliBackendLiveProviderSkipDecision(params: {
+  allowProviderSkip: boolean;
+  label: string;
+  providerId: string;
+  reasonLabel: string;
+}): CliBackendLiveProviderSkipDecision {
+  const message = `${params.label} for provider "${params.providerId}" was blocked by ${params.reasonLabel}.`;
+  if (params.allowProviderSkip) {
+    return { action: "skip", message };
+  }
+  return {
+    action: "fail",
+    message:
+      `${message} Set ${CLI_BACKEND_LIVE_ADVISORY_ENV}=1 and ` +
+      `${CLI_BACKEND_LIVE_PROVIDER_SKIP_ENV}=1 only for advisory live probes.`,
+  };
+}
+
+export function isCliBackendLiveTimeoutPayload(payload: unknown): boolean {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    (payload as { status?: unknown }).status === "timeout"
+  );
+}
+
+export function shouldRetryCliBackendLiveTimeout(params: {
+  attempt: number;
+  maxAttempts: number;
+  payload: unknown;
+  providerId: string;
+}): boolean {
+  return (
+    params.providerId === "codex-cli" &&
+    params.attempt < params.maxAttempts &&
+    isCliBackendLiveTimeoutPayload(params.payload)
+  );
+}
+
 export function matchesCliBackendReply(text: string, expected: string): boolean {
   const normalized = text.trim();
   const target = expected.trim();
-  return normalized === target || normalized === target.slice(0, -1);
+  const targetWithoutPeriod = target.slice(0, -1);
+  return (
+    normalized === target ||
+    normalized === targetWithoutPeriod ||
+    normalized.includes(target) ||
+    normalized.includes(targetWithoutPeriod)
+  );
+}
+
+export function buildClaudeCliResumeContinuityProbe(params: {
+  firstTurnNonce: string;
+  resumeNonce: string;
+  memoryToken: string;
+}): ClaudeCliResumeContinuityProbe {
+  const firstTurnMarker = `CLI-BACKEND-${params.firstTurnNonce}`;
+  return {
+    firstTurnMarker,
+    firstTurnPrompt: `Do not inspect files or run tools. Reply with exactly: ${firstTurnMarker}.`,
+    injectedContext:
+      `Remember this exact opaque session token for a later turn: ${params.memoryToken}. ` +
+      "Do not include the token in this turn's reply.",
+    resumePrompt:
+      "Do not inspect files or run tools. " +
+      `Return exactly two whitespace-separated tokens: CLI-RESUME-${params.resumeNonce} followed by ` +
+      "the exact opaque session token from the earlier turn. Do not add prose.",
+    expectedFirstReply: `${firstTurnMarker}.`,
+    expectedResumeMarker: `CLI-RESUME-${params.resumeNonce}`,
+  };
+}
+
+export function resolveImportedClaudeCliSessionId(messages: unknown[]): string | undefined {
+  for (const message of messages) {
+    const metadata =
+      typeof message === "object" && message !== null
+        ? (message as Record<string, unknown>)["__openclaw"]
+        : undefined;
+    if (typeof metadata !== "object" || metadata === null) {
+      continue;
+    }
+    const imported = metadata as { cliSessionId?: unknown; importedFrom?: unknown };
+    if (imported.importedFrom === "claude-cli" && typeof imported.cliSessionId === "string") {
+      return imported.cliSessionId;
+    }
+  }
+  return undefined;
 }
 
 export function withClaudeMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
@@ -167,35 +359,91 @@ export async function createBootstrapWorkspace(
   return { expectedInjectedFiles, workspaceDir, workspaceRootDir };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function shouldRetryCliCronMcpProbeReply(text: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(text);
+  if (!normalized) {
+    return true;
+  }
+  const mentionsCancellation =
+    normalized.includes("tool call was cancelled") ||
+    normalized.includes("tool call was canceled") ||
+    normalized.includes("tool call was cancelled before completion") ||
+    normalized.includes("tool call was canceled before completion") ||
+    normalized.includes("attempts were cancelled") ||
+    normalized.includes("attempts were canceled") ||
+    normalized.includes("cancelled by the environment") ||
+    normalized.includes("canceled by the environment") ||
+    normalized.includes("mcp call was cancelled") ||
+    normalized.includes("mcp call was canceled");
+  const mentionsUserCancellation =
+    normalized.includes("user cancelled mcp tool call") ||
+    normalized.includes("user canceled mcp tool call");
+  const mentionsCreateFailure =
+    normalized.includes("could not create ") ||
+    normalized.includes("couldn't create ") ||
+    normalized.includes("couldn’t create ") ||
+    normalized.includes("could not create the job") ||
+    normalized.includes("couldn't create the job") ||
+    normalized.includes("couldn’t create the job") ||
+    normalized.includes("could not create job") ||
+    normalized.includes("couldn't create job") ||
+    normalized.includes("couldn’t create job");
+  const mentionsRetryRequest =
+    normalized.includes("please retry") ||
+    normalized.includes("i can try again") ||
+    normalized.includes("i'll retry") ||
+    normalized.includes("i’ll retry") ||
+    normalized.includes("send the same request again");
+  const mentionsMissingJob =
+    normalized.includes("job was not created") ||
+    normalized.includes("job still was not created") ||
+    normalized.includes("nothing was created") ||
+    normalized.includes("verify the cron job was created") ||
+    normalized.includes("was not created");
+  if (mentionsUserCancellation) {
+    return true;
+  }
+  return (
+    mentionsCancellation && (mentionsMissingJob || mentionsCreateFailure || mentionsRetryRequest)
+  );
 }
 
 export async function connectTestGatewayClient(params: {
   url: string;
   token: string;
   deviceIdentity?: DeviceIdentity;
+  timeoutMs?: number;
+  maxAttemptTimeoutMs?: number;
+  clientDisplayName?: string | null;
+  requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
+  onEvent?: (evt: EventFrame) => void;
+  onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
+  const timeoutMs = params.timeoutMs ?? CLI_GATEWAY_CONNECT_TIMEOUT_MS;
+  const maxAttemptTimeoutMs = params.maxAttemptTimeoutMs ?? 45_000;
   const startedAt = Date.now();
   let attempt = 0;
   let lastError: Error | null = null;
 
-  while (Date.now() - startedAt < CLI_GATEWAY_CONNECT_TIMEOUT_MS) {
+  while (Date.now() - startedAt < timeoutMs) {
     attempt += 1;
-    const remainingMs = CLI_GATEWAY_CONNECT_TIMEOUT_MS - (Date.now() - startedAt);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
       break;
     }
     try {
       return await connectClientOnce({
         ...params,
-        timeoutMs: Math.min(remainingMs, 45_000),
+        timeoutMs: Math.min(remainingMs, maxAttemptTimeoutMs),
       });
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       if (!isRetryableGatewayConnectError(lastError) || remainingMs <= 5_000) {
         throw lastError;
       }
+      params.onRetry?.(attempt, lastError);
       await sleep(Math.min(1_000 * attempt, 5_000));
     }
   }
@@ -208,15 +456,21 @@ async function connectClientOnce(params: {
   token: string;
   timeoutMs: number;
   deviceIdentity?: DeviceIdentity;
+  clientDisplayName?: string | null;
+  requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
+  onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     let done = false;
-    let client: GatewayClient | undefined;
+    const abortStart = new AbortController();
     const finish = (result: { client?: GatewayClient; error?: Error }) => {
       if (done) {
         return;
       }
       done = true;
+      abortStart.abort();
       clearTimeout(connectTimeout);
       if (result.error) {
         if (client) {
@@ -231,11 +485,10 @@ async function connectClientOnce(params: {
     const failWithClose = (code: number, reason: string) =>
       finish({ error: new Error(`gateway closed during connect (${code}): ${reason}`) });
 
-    client = new GatewayClient({
+    const clientOptions: GatewayClientOptions = {
       url: params.url,
       token: params.token,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
-      clientDisplayName: "vitest-live",
       clientVersion: "dev",
       mode: GATEWAY_CLIENT_MODES.TEST,
       connectChallengeTimeoutMs: params.timeoutMs,
@@ -243,14 +496,45 @@ async function connectClientOnce(params: {
       onHelloOk: () => finish({ client }),
       onConnectError: (error) => finish({ error }),
       onClose: failWithClose,
-    });
+      onEvent: params.onEvent,
+    };
+    if (params.clientDisplayName !== null) {
+      clientOptions.clientDisplayName = params.clientDisplayName ?? "vitest-live";
+    }
+    if (params.requestTimeoutMs !== undefined) {
+      clientOptions.requestTimeoutMs = params.requestTimeoutMs;
+    }
+    if (params.tickWatchTimeoutMs !== undefined) {
+      clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
+    }
+
+    const client: GatewayClient | undefined = new GatewayClient(clientOptions);
 
     const connectTimeout = setTimeout(
       () => finish({ error: new Error("gateway connect timeout") }),
       params.timeoutMs,
     );
     connectTimeout.unref();
-    client.start();
+    const startPromise =
+      params.waitForEventLoopReady === false
+        ? Promise.resolve().then(() => {
+            client.start();
+            return { ready: true, aborted: false };
+          })
+        : startGatewayClientWhenEventLoopReady(client, {
+            timeoutMs: params.timeoutMs,
+            signal: abortStart.signal,
+          });
+    void startPromise.then(
+      (readiness) => {
+        if (!readiness.ready && !readiness.aborted) {
+          finish({ error: new Error("gateway event loop readiness timeout") });
+        }
+      },
+      (error: unknown) => {
+        finish({ error: error instanceof Error ? error : new Error(String(error)) });
+      },
+    );
   });
 }
 
@@ -323,7 +607,9 @@ function restoreEnvVar(name: string, value: string | undefined): void {
   process.env[name] = value;
 }
 
-export async function ensurePairedTestGatewayClientIdentity(): Promise<DeviceIdentity> {
+export async function ensurePairedTestGatewayClientIdentity(params?: {
+  displayName?: string;
+}): Promise<DeviceIdentity> {
   const identity = loadOrCreateDeviceIdentity();
   const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const requiredScopes = ["operator.admin"];
@@ -342,7 +628,7 @@ export async function ensurePairedTestGatewayClientIdentity(): Promise<DeviceIde
   const pairing = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey,
-    displayName: "vitest",
+    displayName: params?.displayName ?? "vitest",
     platform: process.platform,
     clientId: GATEWAY_CLIENT_NAMES.TEST,
     clientMode: GATEWAY_CLIENT_MODES.TEST,
@@ -359,115 +645,4 @@ export async function ensurePairedTestGatewayClientIdentity(): Promise<DeviceIde
     );
   }
   return identity;
-}
-
-export async function verifyCliBackendImageProbe(params: {
-  client: GatewayClient;
-  providerId: string;
-  sessionKey: string;
-  tempDir: string;
-  bootstrapWorkspace: BootstrapWorkspaceContext | null;
-}): Promise<void> {
-  const imageBase64 = renderCatFacePngBase64();
-  const runIdImage = randomUUID();
-  const imageProbe = await params.client.request(
-    "agent",
-    {
-      sessionKey: params.sessionKey,
-      idempotencyKey: `idem-${runIdImage}-image`,
-      // Route all providers through the same attachment pipeline. Claude CLI
-      // still receives a local file path, but now via the runner code we
-      // actually want to validate instead of an ad hoc prompt-only shortcut.
-      message:
-        "Best match for the image: lobster, mouse, cat, horse. " +
-        "Reply with one lowercase word only.",
-      attachments: [
-        {
-          mimeType: "image/png",
-          fileName: `probe-${runIdImage}.png`,
-          content: imageBase64,
-        },
-      ],
-      deliver: false,
-    },
-    { expectFinal: true },
-  );
-  if (imageProbe?.status !== "ok") {
-    throw new Error(`image probe failed: status=${String(imageProbe?.status)}`);
-  }
-  assertLiveImageProbeReply(extractPayloadText(imageProbe?.result));
-}
-
-export async function verifyCliCronMcpProbe(params: {
-  client: GatewayClient;
-  providerId: string;
-  sessionKey: string;
-  port: number;
-  token: string;
-  env: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const cronProbe = createLiveCronProbeSpec();
-
-  let createdJob: CronListJob | undefined;
-  let lastCronText = "";
-
-  for (let attempt = 0; attempt < 2 && !createdJob; attempt += 1) {
-    const runIdMcp = randomUUID();
-    const cronResult = await params.client.request(
-      "agent",
-      {
-        sessionKey: params.sessionKey,
-        idempotencyKey: `idem-${runIdMcp}-mcp-${attempt}`,
-        message: buildLiveCronProbeMessage({
-          agent: params.providerId,
-          argsJson: cronProbe.argsJson,
-          attempt,
-          exactReply: cronProbe.name,
-        }),
-        deliver: false,
-      },
-      { expectFinal: true },
-    );
-    if (cronResult?.status !== "ok") {
-      throw new Error(`cron mcp probe failed: status=${String(cronResult?.status)}`);
-    }
-    lastCronText = extractPayloadText(cronResult?.result).trim();
-    createdJob = await assertCronJobVisibleViaCli({
-      port: params.port,
-      token: params.token,
-      env: params.env,
-      expectedName: cronProbe.name,
-      expectedMessage: cronProbe.message,
-    });
-    if (!createdJob && attempt === 1) {
-      throw new Error(
-        `cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(lastCronText)}`,
-      );
-    }
-  }
-
-  if (!createdJob) {
-    throw new Error(`cron cli verify did not create job ${cronProbe.name}`);
-  }
-  assertCronJobMatches({
-    job: createdJob,
-    expectedName: cronProbe.name,
-    expectedMessage: cronProbe.message,
-    expectedSessionKey: params.sessionKey,
-  });
-  if (createdJob?.id) {
-    await runOpenClawCliJson(
-      [
-        "cron",
-        "rm",
-        createdJob.id,
-        "--json",
-        "--url",
-        `ws://127.0.0.1:${params.port}`,
-        "--token",
-        params.token,
-      ],
-      params.env,
-    );
-  }
 }

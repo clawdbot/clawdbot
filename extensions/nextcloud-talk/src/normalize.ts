@@ -1,5 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-
+// Nextcloud Talk helper module supports normalize behavior.
 export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -8,15 +7,15 @@ export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined 
 
   let normalized = trimmed;
 
-  if (normalized.startsWith("nextcloud-talk:")) {
+  if (/^nextcloud-talk:/i.test(normalized)) {
     normalized = normalized.slice("nextcloud-talk:".length).trim();
-  } else if (normalized.startsWith("nc-talk:")) {
+  } else if (/^nc-talk:/i.test(normalized)) {
     normalized = normalized.slice("nc-talk:".length).trim();
-  } else if (normalized.startsWith("nc:")) {
+  } else if (/^nc:/i.test(normalized)) {
     normalized = normalized.slice("nc:".length).trim();
   }
 
-  if (normalized.startsWith("room:")) {
+  if (/^room:/i.test(normalized)) {
     normalized = normalized.slice("room:".length).trim();
   }
 
@@ -29,7 +28,7 @@ export function stripNextcloudTalkTargetPrefix(raw: string): string | undefined 
 
 export function normalizeNextcloudTalkMessagingTarget(raw: string): string | undefined {
   const normalized = stripNextcloudTalkTargetPrefix(raw);
-  return normalized ? normalizeLowercaseStringOrEmpty(`nextcloud-talk:${normalized}`) : undefined;
+  return normalized ? `nextcloud-talk:${normalized}`.toLowerCase() : undefined;
 }
 
 export function looksLikeNextcloudTalkTargetId(raw: string): boolean {
@@ -38,7 +37,7 @@ export function looksLikeNextcloudTalkTargetId(raw: string): boolean {
     return false;
   }
 
-  if (/^(nextcloud-talk|nc-talk|nc):/i.test(trimmed)) {
+  if (/^(nextcloud-talk|nc-talk|nc|room):/i.test(trimmed)) {
     return true;
   }
 
