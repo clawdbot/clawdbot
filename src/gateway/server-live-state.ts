@@ -2,6 +2,7 @@
 // Combines mutable runtime handles with startup-resolved services for request contexts.
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import type { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -16,6 +17,7 @@ export type GatewayServerLiveState = GatewayServerMutableState & {
   hookClientIpConfig: HookClientIpConfig;
   cronState: GatewayCronState;
   controlUiSessionPullRequests?: ReturnType<typeof createControlUiSessionPullRequestSubscriptions>;
+  sessionViewerPresence?: ReturnType<typeof createSessionViewerPresenceDeclarations>;
   pluginServices: PluginServicesHandle | null;
   gatewayMethods: string[];
 };
@@ -33,6 +35,7 @@ export function createGatewayServerLiveState(params: {
     hookClientIpConfig: params.hookClientIpConfig,
     cronState: params.cronState,
     controlUiSessionPullRequests: undefined,
+    sessionViewerPresence: undefined,
     pluginServices: null,
     gatewayMethods: params.gatewayMethods,
   };

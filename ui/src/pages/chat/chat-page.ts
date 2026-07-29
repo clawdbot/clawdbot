@@ -12,6 +12,7 @@ import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-t
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { sessionViewerPresenceForGateway } from "../../lib/session-viewer-presence.ts";
 import { readSessionDragData, sessionDragActive } from "../../lib/sessions/drag.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -100,6 +101,10 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    const gateway = this.context?.gateway;
+    if (gateway && typeof gateway.subscribe === "function") {
+      sessionViewerPresenceForGateway(gateway).unwatch(this);
+    }
     this.subscriptions.clear();
     this.mediaQuery?.removeEventListener("change", this.handleViewportChange);
     this.mediaQuery = null;
@@ -116,6 +121,7 @@ export class ChatPage extends OpenClawLightDomElement {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown>) {
+    this.syncViewerPresence();
     const data = this.data;
     const activePane = this.layout ? findPane(this.layout, this.layout.activePaneId)?.pane : null;
     const routeDraftWasRendered =
@@ -539,6 +545,26 @@ export class ChatPage extends OpenClawLightDomElement {
     return data.draft;
   }
 
+  private renderedPanes(layout: ChatSplitLayout): ChatSplitPane[] {
+    if (!this.narrow) {
+      return panesOf(layout);
+    }
+    const activePane = findPane(layout, layout.activePaneId)?.pane;
+    return activePane ? [activePane] : [];
+  }
+
+  private syncViewerPresence() {
+    const gateway = this.context?.gateway;
+    if (!gateway || typeof gateway.subscribe !== "function") {
+      return;
+    }
+    const layout = this.layout ?? this.classicLayout();
+    const sessionKeys = this.renderedPanes(layout)
+      .map((pane) => pane.sessionKey.trim())
+      .filter(Boolean);
+    sessionViewerPresenceForGateway(gateway).watch(this, sessionKeys);
+  }
+
   private renderPaneCell(
     pane: ChatSplitPane,
     active: boolean,
@@ -695,14 +721,12 @@ export class ChatPage extends OpenClawLightDomElement {
   override render() {
     const indicator = this.dropIndicator;
     const layout = this.layout ?? this.classicLayout();
-    const activeLocation = findPane(layout, layout.activePaneId);
-    const renderedPaneOwners = this.narrow
-      ? activeLocation
-        ? [{ columnId: activeLocation.column.id, pane: activeLocation.pane }]
-        : []
-      : layout.columns.flatMap((column) =>
-          column.panes.map((pane) => ({ columnId: column.id, pane })),
-        );
+    const renderedPaneIds = new Set(this.renderedPanes(layout).map((pane) => pane.id));
+    const renderedPaneOwners = layout.columns.flatMap((column) =>
+      column.panes
+        .filter((pane) => renderedPaneIds.has(pane.id))
+        .map((pane) => ({ columnId: column.id, pane })),
+    );
     const nextPaneKeys = new Set(
       renderedPaneOwners.map(({ columnId, pane }) =>
         JSON.stringify([columnId, pane.id, pane.sessionKey]),

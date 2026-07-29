@@ -176,6 +176,7 @@ export class ChatPane extends ChatPaneHeader {
       isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.typing") === true &&
       hasSessionPresenceViewers(
         this.presencePayload,
+        this.context.gateway.snapshot.selfUser?.id,
         this.context.gateway.snapshot.client?.instanceId,
         state.sessionKey,
       );
