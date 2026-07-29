@@ -327,7 +327,7 @@ describe("ChatComposerCapabilityHost", () => {
         },
       },
     };
-    host.props(context, state, session, "main").onEnsureToolAccess?.();
+    host.props(context, state, session, "main").onEnsureToolAccess?.("github");
 
     await vi.waitFor(() => {
       expect(host.props(context, state, session, "main").toolsEffectiveResult).toBe(secondResult);

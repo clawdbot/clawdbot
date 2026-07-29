@@ -424,7 +424,7 @@ describeControlUiE2e("Control UI composer capability menu", () => {
   it('renders tool access for a server named "constructor"', async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
       methodResponses: {
         "config.get": configResponse({
