@@ -254,18 +254,32 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   );
   // Recovery can already have admitted its owner and cleared the abort flag;
   // automatic and sentinel wakes must honor that canonical lifecycle fence.
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const mainSessionRecovery =
     opts.intent !== "manual" && recentSessionEntry
       ? transitionMainSessionRecovery(recentSessionEntry, {
           kind: "inspect",
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          lifecycleGeneration,
           sessionKey: recentSessionKey,
         })
       : undefined;
+  const activeRestartRecoveryRunId = normalizeOptionalString(
+    recentSessionEntry?.restartRecoveryDeliveryRunId,
+  );
+  // Delivery ownership can outlive the recovery aggregate. Only the matching
+  // run from this gateway generation may defer an automatic heartbeat.
+  const hasCurrentRestartRecoveryDelivery =
+    opts.intent !== "manual" &&
+    activeRestartRecoveryRunId !== undefined &&
+    recentSessionEntry?.restartRecoveryRuns?.some(
+      (run) =>
+        run.runId === activeRestartRecoveryRunId && run.lifecycleGeneration === lifecycleGeneration,
+    ) === true;
   if (
-    mainSessionRecovery?.kind === "observed" &&
-    (mainSessionRecovery.view.status === "blocked" ||
-      mainSessionRecovery.view.status === "recoverable")
+    (mainSessionRecovery?.kind === "observed" &&
+      (mainSessionRecovery.view.status === "blocked" ||
+        mainSessionRecovery.view.status === "recoverable")) ||
+    hasCurrentRestartRecoveryDelivery
   ) {
     return { kind: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT } as const;
   }

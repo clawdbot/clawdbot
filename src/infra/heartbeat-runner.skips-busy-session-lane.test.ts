@@ -161,6 +161,134 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
+  it.each([
+    { label: "scheduled", intent: "scheduled" as const },
+    { label: "automatic immediate", intent: "immediate" as const },
+  ])(
+    "defers $label heartbeat until the current restart recovery delivery settles",
+    async ({ intent }) => {
+      await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+        const cfg = createHeartbeatTelegramConfig();
+        cfg.session = { store: storePath };
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "123",
+          status: "running",
+          abortedLastRun: false,
+          restartRecoveryDeliveryRunId: "restart-recovery-run",
+          restartRecoveryRuns: [
+            {
+              runId: "restart-recovery-run",
+              lifecycleGeneration: getAgentEventLifecycleGeneration(),
+            },
+          ],
+        });
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          intent,
+          deps: {
+            getQueueSize: vi.fn((_lane?: string) => 0),
+            nowMs: () => Date.now(),
+            getReplyFromConfig: replySpy,
+          } as HeartbeatDeps,
+        });
+
+        expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+        expect(replySpy).not.toHaveBeenCalled();
+      });
+    },
+  );
+
+  it("does not block an explicit manual heartbeat on restart recovery delivery", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      cfg.session = { store: storePath };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123",
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "restart-recovery-run",
+        restartRecoveryRuns: [
+          {
+            runId: "restart-recovery-run",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+      });
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        intent: "manual",
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([
+    {
+      label: "a previous gateway lifecycle",
+      recoveryRun: {
+        runId: "restart-recovery-run",
+        lifecycleGeneration: "previous-gateway-lifecycle",
+      },
+    },
+    {
+      label: "another restart recovery run",
+      recoveryRun: {
+        runId: "another-restart-recovery-run",
+        lifecycleGeneration: "current-gateway-lifecycle",
+      },
+    },
+  ])("does not defer a heartbeat for $label", async ({ recoveryRun }) => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      cfg.session = { store: storePath };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "123",
+        status: "running",
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "restart-recovery-run",
+        restartRecoveryRuns: [
+          {
+            ...recoveryRun,
+            lifecycleGeneration:
+              recoveryRun.lifecycleGeneration === "current-gateway-lifecycle"
+                ? getAgentEventLifecycleGeneration()
+                : recoveryRun.lifecycleGeneration,
+          },
+        ],
+      });
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        intent: "scheduled",
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledOnce();
+    });
+  });
+
   it("returns cron-in-progress when cron has an active job", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
