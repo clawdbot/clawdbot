@@ -78,7 +78,8 @@ LINE-specific settings:
   (`retry-limit-exceeded`) immediately: LINE opts out of the generic 24-hour
   dead-letter age floor so a poison event cannot block its conversation lane for
   a day.
-- **Non-retryable failures** dead-letter on the first attempt: stored payloads
+- **Non-retryable failures** dead-letter immediately, with no further retries
+  regardless of the attempt count: stored payloads
   that no longer parse (`invalid-event`), deliveries that already committed side
   effects (`delivery-side-effects-committed`), and LINE API authentication
   failures (`authentication-failed`, HTTP 401/403).
