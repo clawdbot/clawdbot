@@ -20,6 +20,23 @@ struct BoundedProcessTests {
         #expect(self.waitUntilGone(childPID))
     }
 
+    @Test func `captures parallel instant exits`() async throws {
+        let results = try await withThrowingTaskGroup(of: Int32.self) { group in
+            for _ in 0..<32 {
+                group.addTask {
+                    try await BoundedProcess.run(
+                        path: "/usr/bin/true",
+                        arguments: [],
+                        timeout: 1).terminationStatus
+                }
+            }
+            return try await group.reduce(into: []) { $0.append($1) }
+        }
+
+        #expect(results.count == 32)
+        #expect(results.allSatisfy { $0 == 0 })
+    }
+
     @Test func `times out and reaps a TERM-resistant process group`() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("openclaw-bounded-process-\(UUID().uuidString)", isDirectory: true)
