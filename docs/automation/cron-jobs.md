@@ -77,6 +77,14 @@ Timestamps without a timezone are treated as UTC. Add `--tz America/New_York` to
 
 Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are automatically staggered by up to 5 minutes to reduce load spikes. Use `--exact` to force precise timing, or `--stagger 30s` for an explicit window (cron schedules only).
 
+### Heartbeat task migration
+
+Older heartbeat scratch supported a structured `tasks:` block. Run `openclaw doctor --fix` after upgrading to convert each entry into an ordinary editable main-session cron job. Doctor preserves the interval and previous last-run timing, creates the jobs before removing the block, and safely converges the same declaration keys on rerun.
+
+These migrated jobs carry public `systemEvent` payloads, so `openclaw cron list`, `get`, `edit`, and `remove` plus the cron tool manage them like other jobs. Their execution uses the guarded heartbeat task wake: active hours, minimum spacing, flood control, and busy retries still apply, while cron owns each task's independent cadence. Jobs due in the same coalescing window can share one heartbeat turn. A scheduled occurrence outside heartbeat active hours is skipped and retried at the job's next occurrence.
+
+Heartbeat scratch is now monitor prose only. Runtime heartbeats do not parse `tasks:` text as schedules; create new recurring work with cron.
+
 ### Stream sources
 
 A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and require `cron.triggers.enabled: true` because the long-lived command has the same unattended trust class as trigger scripts. Disabling or removing the job stops the process; Gateway shutdown waits for process-tree teardown. Fast failures restart with cron's built-in error backoff. Five consecutive runs shorter than 60 seconds leave the job in an error state and use the normal failure-alert path; manually re-enable the job to clear the restart cap.
@@ -102,9 +110,13 @@ When a stream job also has `trigger.script`, the gate runs once per closed batch
 
 Recurring jobs can set `pacing.min` and/or `pacing.max` to duration strings such as `15m` or `4h`; at least one bound is required. Use `--pacing-min` and `--pacing-max` with `cron add|edit` (`--clear-pacing` removes both bounds).
 
-During an isolated run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
+During an agent-turn run, a paced job can call the `cron` tool with `action: "next_check"` and `in: "30m"`. The proposal applies only to that currently running job and is measured from successful run completion. OpenClaw silently clamps it to the configured bounds.
 
 Pacing without a proposal leaves the normal schedule unchanged. Failed, timed-out, and skipped runs discard the proposal, so existing retry and error-backoff behavior takes precedence. Manually forcing a recurring job is out-of-band and preserves its pending natural or paced slot. For condition-triggered jobs, the built-in minimum interval remains a lower bound even when a proposal requests an earlier check.
+
+### `/loop` chat shortcut
+
+In chat, the owner-only `/loop [interval] <prompt>` command creates a recurring agent-turn job bound to that conversation. Give an interval such as `5m` for fixed cadence, or omit it to let the loop self-pace between 1 minute and 1 hour with `next_check`. Use `/loop status` to list conversation-bound loops and `/loop stop [name]` to remove them.
 
 ### Day-of-month and day-of-week use OR logic
 
@@ -165,6 +177,8 @@ Every job carries exactly one payload kind, chosen by flag:
 | Agent message | `--message <text>`                             | A model-backed agent turn                                  |
 | Command       | `--command <shell>` or `--command-argv <json>` | A shell/process on the Gateway host, no model call         |
 | Script        | `--script <file\|->`                           | A headless code-mode script using the owning agent's tools |
+
+One additional payload kind, `heartbeat`, is system-owned: the gateway converges one heartbeat monitor job per heartbeat-enabled agent (see [Heartbeat](/gateway/heartbeat)). It appears in `cron list --all` but cannot be created or edited through the CLI or API. Heartbeat config is written through to the persisted monitor schedule at startup, on config reload, or by `openclaw doctor --fix`. When cron is disabled, the monitor does not tick and no fallback heartbeat timer runs.
 
 ### Agent-turn options
 
@@ -274,11 +288,13 @@ Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` witho
 | Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
 | Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
 
+Agent-turn jobs default to the creating conversation when the create request carries session context. Callers without a session key, including CLI and API callers that do not supply one, fall back to `isolated`. System events and heartbeats still default to `main`; command and script payloads still default to `isolated`.
+
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
     **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    Main-session cron events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt's "Read HEARTBEAT.md" instruction; say that explicitly in the cron event text if a reminder should consult `HEARTBEAT.md`.
+    Main-session cron events are self-contained system-event reminders. They do not automatically include the default heartbeat prompt or the heartbeat monitor scratch; say it explicitly in the cron event text if a reminder should consult that context.
 
   </Accordion>
   <Accordion title="What 'fresh session' means for isolated jobs">
@@ -320,7 +336,7 @@ Implicit announce delivery uses configured channel allowlists to validate and re
 
 Failure notifications follow a separate destination path:
 
-- `cron.failureDestination` sets a global default for failure notifications.
+- The destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`) set a global default for failure notifications. The retired `cron.failureDestination` block is merged into them by `openclaw doctor --fix`.
 - `job.delivery.failureDestination` overrides that per job.
 - If neither is set and the job already delivers via `announce`, failure notifications fall back to that primary announce target.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.

@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../../agents/agent-scope.js";
+import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { isExecApprovalFollowupSessionRebound } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -192,7 +192,7 @@ export async function prepareAgentRequestRouting(params: {
       ? normalizeAgentId(parsed.agentId)
       : canonicalKey === "global"
         ? agentId
-        : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+        : resolveAgentIdFromSessionKey(requestedSessionKeyRaw, resolveDefaultAgentId(params.cfg));
     if (sessionAgentId !== agentId) {
       params.respond(
         false,

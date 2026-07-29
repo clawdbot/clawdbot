@@ -3,12 +3,18 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 const SW_READY_TIMEOUT = 10_000;
 
 function swReady(): Promise<ServiceWorkerRegistration> {
-  return Promise.race([
-    navigator.serviceWorker.ready,
-    new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error("Service worker not ready (timed out)")), SW_READY_TIMEOUT);
-    }),
-  ]);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(new Error("Service worker not ready (timed out)")),
+      SW_READY_TIMEOUT,
+    );
+  });
+  return Promise.race([navigator.serviceWorker.ready, timeoutPromise]).finally(() => {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+  });
 }
 
 function urlBase64ToUint8Array(base64String: string): Uint8Array {

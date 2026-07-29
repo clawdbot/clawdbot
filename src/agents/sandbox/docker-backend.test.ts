@@ -2,6 +2,7 @@
 // handling for sandbox and browser containers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 
 const dockerMocks = vi.hoisted(() => ({
   dockerContainerState: vi.fn(),
@@ -21,7 +22,8 @@ vi.mock("./docker.js", async () => {
   };
 });
 
-const { dockerSandboxBackendManager } = await import("./docker-backend.js");
+const { createDockerSandboxBackend, dockerSandboxBackendManager } =
+  await import("./docker-backend.js");
 
 function createConfig(): OpenClawConfig {
   return {
@@ -57,6 +59,23 @@ describe("docker sandbox backend manager", () => {
       stdout: "unused-image",
       stderr: "",
     });
+  });
+
+  it("forwards the canonical scope key to container provisioning", async () => {
+    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce("sandbox-container");
+    const scopeKey = `agent:poly:workspace:${"a".repeat(32)}`;
+
+    await createDockerSandboxBackend({
+      sessionKey: "agent:poly:msteams:channel-1",
+      scopeKey,
+      workspaceDir: "/tmp/customer/workspace",
+      agentWorkspaceDir: "/tmp/customer/workspace",
+      cfg: resolveSandboxConfigForAgent(createConfig(), "poly"),
+    });
+
+    expect(dockerMocks.ensureSandboxContainer).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeKey }),
+    );
   });
 
   it("matches ordinary sandbox runtimes against sandbox.docker.image", async () => {

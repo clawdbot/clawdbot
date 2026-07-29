@@ -94,7 +94,7 @@ export function isValidClawTimezone(value: string): boolean {
   }
 }
 
-function packageManagerArtifact(command: string, args: string[]): string | undefined {
+function packageManagerArtifacts(command: string, args: string[]): string[] | undefined {
   const executable = command
     .split(/[\\/]/)
     .at(-1)
@@ -109,33 +109,45 @@ function packageManagerArtifact(command: string, args: string[]): string | undef
   } else if (executable !== "npx" && executable !== "pnpx" && executable !== "bunx") {
     return undefined;
   }
+  const selected: string[] = [];
+  let positional: string | undefined;
   for (let index = start; index < args.length; index += 1) {
     const value = args[index];
     if (!value) {
       continue;
     }
+    if (value === "--") {
+      positional = args[index + 1] ?? "";
+      break;
+    }
     if (value === "-p" || value === "--package") {
-      return args[index + 1];
+      selected.push(args[index + 1] ?? "");
+      index += 1;
+      continue;
     }
     if (value.startsWith("--package=")) {
-      return value.slice("--package=".length);
+      selected.push(value.slice("--package=".length));
+      continue;
     }
-    if (!value.startsWith("-")) {
-      return value;
+    if (positional === undefined && !value.startsWith("-")) {
+      positional = value;
+      break;
     }
   }
-  return "";
+  return selected.length > 0 ? selected : [positional ?? ""];
 }
 
 export function isClawPackageManagerArtifactPinned(
   command: string,
   args: string[],
 ): boolean | undefined {
-  const artifact = packageManagerArtifact(command, args);
-  if (artifact === undefined) {
+  const artifacts = packageManagerArtifacts(command, args);
+  if (artifacts === undefined) {
     return undefined;
   }
-  const separator = artifact.lastIndexOf("@");
-  const scopedSlash = artifact.startsWith("@") ? artifact.indexOf("/") : -1;
-  return separator > 0 && separator > scopedSlash && isExactSemVer(artifact.slice(separator + 1));
+  return artifacts.every((artifact) => {
+    const separator = artifact.lastIndexOf("@");
+    const scopedSlash = artifact.startsWith("@") ? artifact.indexOf("/") : -1;
+    return separator > 0 && separator > scopedSlash && isExactSemVer(artifact.slice(separator + 1));
+  });
 }

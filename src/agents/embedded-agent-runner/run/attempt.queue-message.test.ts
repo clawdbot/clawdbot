@@ -60,14 +60,18 @@ describe("embedded OpenClaw queued steering cancellation", () => {
       { path: "/tmp/a.png", contentType: "image/png" },
       { path: "/tmp/b.pdf", contentType: "application/pdf" },
     ];
+    const imageOrder = ["offloaded", "inline"] as const;
     const activeSession: EmbeddedAgentActiveSessionSteerTarget = {
       steer,
       subscribe: () => () => {},
     };
 
-    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "inspect both", { media });
+    await steerActiveSessionWithOptionalDeliveryWait(activeSession, "inspect both", {
+      media,
+      imageOrder: [...imageOrder],
+    });
 
-    expect(steer).toHaveBeenCalledWith("inspect both", undefined, undefined, media);
+    expect(steer).toHaveBeenCalledWith("inspect both", undefined, undefined, media, imageOrder);
   });
 
   it("waits for the queued user message_end transcript boundary", async () => {

@@ -12,6 +12,10 @@ export function resolvePluginUninstallId<
   plugins: TPlugin[];
 }): { pluginId: string; plugin?: TPlugin } {
   const rawId = params.rawId.trim();
+  const resolveInstalledPlugin = (pluginId: string) => {
+    const plugin = params.plugins.find((entry) => entry.id === pluginId);
+    return plugin ? { pluginId, plugin } : { pluginId };
+  };
   const plugin = params.plugins.find((entry) => entry.id === rawId || entry.name === rawId);
   if (plugin) {
     return { pluginId: plugin.id, plugin };
@@ -24,7 +28,7 @@ export function resolvePluginUninstallId<
       install.resolvedName === rawId ||
       install.marketplacePlugin === rawId
     ) {
-      return { pluginId };
+      return resolveInstalledPlugin(pluginId);
     }
   }
 
@@ -36,7 +40,7 @@ export function resolvePluginUninstallId<
         parseClawHubPluginSpec(install.spec ?? "")?.name ??
         parseClawHubPluginSpec(install.resolvedSpec ?? "")?.name;
       if (installedClawHubName === requestedClawHub.name) {
-        return { pluginId };
+        return resolveInstalledPlugin(pluginId);
       }
     }
   }

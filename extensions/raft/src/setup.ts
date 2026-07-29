@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Raft plugin setup owns only the Raft CLI profile, never Raft credentials.
 import {
@@ -41,6 +42,16 @@ const raftSetupAdapter = createPatchedAccountSetupAdapter({
   },
 });
 
+const raftSetupContract = defineChannelSetupContract({
+  fields: {
+    profile: {
+      kind: "string",
+      cli: { flags: "--profile <profile>", description: "Raft CLI profile" },
+    },
+  },
+  legacyAdapter: raftSetupAdapter,
+});
+
 export const raftSetupPlugin: ChannelPlugin<ResolvedRaftAccount> = {
   id: RAFT_CHANNEL_ID,
   meta: {
@@ -56,6 +67,7 @@ export const raftSetupPlugin: ChannelPlugin<ResolvedRaftAccount> = {
     chatTypes: ["direct"],
   },
   setup: raftSetupAdapter,
+  setupContract: raftSetupContract,
   config: {
     listAccountIds: listRaftAccountIds,
     resolveAccount: (cfg, accountId) => resolveRaftAccount({ cfg, accountId }),

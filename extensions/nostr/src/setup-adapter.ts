@@ -1,5 +1,9 @@
 // Nostr plugin module implements setup adapter behavior.
-import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { patchTopLevelChannelConfigSection, splitSetupEntries } from "openclaw/plugin-sdk/setup";
@@ -80,4 +84,25 @@ export function createNostrSetupAdapter(params: {
       });
     },
   };
+}
+
+export function createNostrSetupContract(adapter: ChannelSetupAdapter) {
+  return defineChannelSetupContract({
+    fields: {
+      privateKey: {
+        kind: "string",
+        sensitive: true,
+        cli: { flags: "--private-key <key>", description: "Nostr private key" },
+      },
+      relayUrls: {
+        kind: "string",
+        cli: { flags: "--relay-urls <urls>", description: "Nostr relay URLs" },
+      },
+      useEnv: {
+        kind: "boolean",
+        cli: { flags: "--use-env", description: "Use NOSTR_PRIVATE_KEY" },
+      },
+    },
+    legacyAdapter: adapter,
+  });
 }

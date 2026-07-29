@@ -2,7 +2,11 @@
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, createMockPluginRegistry } from "./hooks.test-helpers.js";
 import type { PluginRegistry } from "./registry.js";
-import type { PluginHookAgentContext, PluginHookRegistration } from "./types.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookAgentTrigger,
+  PluginHookRegistration,
+} from "./types.js";
 
 export { addTestHook, createMockPluginRegistry };
 export type { PluginHookReplyDispatchResult } from "./hook-types.js";
@@ -49,6 +53,7 @@ export function createHookRunnerWithRegistry(
     pluginId?: string;
     priority?: number;
     timeoutMs?: number;
+    eligibleTriggers?: readonly PluginHookAgentTrigger[];
   }>,
   options?: Parameters<typeof createHookRunner>[1],
 ) {

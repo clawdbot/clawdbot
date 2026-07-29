@@ -915,6 +915,49 @@ describe("loadOpenClawPlugins", () => {
     expect(getDetachedTaskLifecycleRuntimeRegistration()?.pluginId).toBe("cached-detached-runtime");
   });
 
+  it("restores cached legacy internal hook registrations on cache hits", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "cached-legacy-hook",
+      filename: "cached-legacy-hook.cjs",
+      body: `module.exports = {
+          id: "cached-legacy-hook",
+          register(api) {
+            api.registerHook(
+              "gateway:startup",
+              (event) => {
+                event.messages.push("cached-hook-fired");
+              },
+              { name: "cached-legacy-hook" },
+            );
+          },
+        };`,
+    });
+
+    const loadOptions = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["cached-legacy-hook"],
+        },
+      },
+      onlyPluginIds: ["cached-legacy-hook"],
+    } satisfies Parameters<typeof loadOpenClawPlugins>[0];
+
+    loadOpenClawPlugins(loadOptions);
+    const firstEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(firstEvent);
+    expect(firstEvent.messages).toEqual(["cached-hook-fired"]);
+
+    clearInternalHooks();
+    loadOpenClawPlugins(loadOptions);
+
+    const cachedEvent = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(cachedEvent);
+    expect(cachedEvent.messages).toEqual(["cached-hook-fired"]);
+  });
+
   it("restores cached command and interactive handler registrations on cache hits", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

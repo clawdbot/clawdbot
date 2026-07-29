@@ -20,11 +20,10 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
-  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
-  | { type: "oauth"; access: string }
+  | { type: "oauth"; access: string; expires: number }
   | { type: "token"; token: string }
   | { type: "api_key"; key: string }
   | { type: string };
@@ -74,11 +73,21 @@ function createClaudeCliAuthInput(params: {
 function resolveClaudeCliAuthInput(
   credential: ClaudeCliAuthCredential | undefined,
 ): ClaudeCliPreparedExecution | undefined {
-  if (
-    credential?.type === "oauth" &&
-    "access" in credential &&
-    typeof credential.access === "string"
-  ) {
+  // Forwarded OAuth here is OpenClaw-managed material (its refresh path is
+  // OpenClaw-owned). Imported native `claude` logins are never forwarded —
+  // core runs those as identity-verified passthrough — so an expired token
+  // reaching this point is a real fault worth failing loudly, not refreshable
+  // state this plugin could repair.
+  if (credential?.type === "oauth" && "access" in credential) {
+    const expires = "expires" in credential ? credential.expires : undefined;
+    if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= Date.now()) {
+      throw new Error(
+        "Selected Claude CLI OAuth credential is expired or invalid. Re-authenticate the selected profile and retry. OpenClaw did not start the run.",
+      );
+    }
+    if (typeof credential.access !== "string") {
+      return undefined;
+    }
     return createClaudeCliAuthInput({
       envName: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
       value: credential.access,
@@ -128,6 +137,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     bundleMcp: true,
     bundleMcpMode: "claude-config-file",
     nativeToolMode: "selectable",
+    toolAvailabilityEnforcement: "execution-args",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
     // Anthropic routes direct anthropic-messages calls on subscription OAuth
@@ -166,6 +176,9 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         "{sessionId}",
       ],
       forkArg: "--fork-session",
+      // Claude Code 2.1.209+ exposes this hidden print-mode flag, and stream-json
+      // emits the matching transcript UUID on assistant records.
+      resumeAtArg: "--resume-session-at",
       output: "jsonl",
       liveSession: "claude-stdio",
       input: "stdin",
@@ -210,6 +223,5 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
-    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
   };
 }

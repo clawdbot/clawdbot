@@ -132,6 +132,8 @@ type AgentsProps = {
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onChannelsRefresh: () => void;
   onOpenMemoryImport?: () => void;
+  onOpenMemorySettings?: () => void;
+  onOpenAgentDefaults: () => void;
   onCronRefresh: () => void;
   onCronRunNow: (jobId: string) => void;
   onSkillsFilterChange: (next: string) => void;
@@ -234,6 +236,13 @@ export function renderAgents(props: AgentsProps) {
           : nothing}
       </section>
       <section class="agents-main">
+        <div class="settings-group">
+          ${renderSettingsNavRow({
+            title: t("agents.defaults.title"),
+            description: t("agents.defaults.description"),
+            onClick: props.onOpenAgentDefaults,
+          })}
+        </div>
         ${!selectedAgent
           ? renderSettingsSection(
               { title: t("agents.selectTitle") },
@@ -374,6 +383,11 @@ export function renderAgents(props: AgentsProps) {
               ${props.activePanel === "memory"
                 ? html`
                     <div class="settings-group agent-memory-import-row">
+                      ${renderSettingsNavRow({
+                        title: t("tabs.memory"),
+                        description: t("subtitles.memory"),
+                        onClick: () => props.onOpenMemorySettings?.(),
+                      })}
                       ${renderSettingsNavRow({
                         title: t("tabs.memoryImport"),
                         description: t("subtitles.memoryImport"),

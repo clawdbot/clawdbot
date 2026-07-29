@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   MODEL_CONTEXT_TOKEN_CACHE,
   providerContextTokenCacheKey,
@@ -11,6 +12,7 @@ import {
   loadManifestModelCatalog,
   loadPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
+import { resolveModelCandidateChain } from "../../agents/model-fallback-candidates.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -116,6 +118,7 @@ vi.mock("../../agents/auth-profiles/order.js", () => ({
 
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  cliBackendsTesting.resetDepsForTest();
   vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
   authProfileStoreMock.reset();
@@ -638,6 +641,7 @@ describe("createModelSelectionState catalog loading", () => {
       providerOverride: "vllm",
       modelOverride: "new-local-model",
       modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
     };
     const sessionStore = { main: sessionEntry };
 
@@ -656,6 +660,7 @@ describe("createModelSelectionState catalog loading", () => {
 
     expect(state.provider).toBe("vllm");
     expect(state.model).toBe("new-local-model");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(sessionStore.main.modelOverride).toBe("new-local-model");
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
   });
@@ -750,6 +755,7 @@ describe("resolveContextTokens", () => {
 const makeEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   sessionId: "session-id",
   updatedAt: Date.now(),
+  delivery: { kind: "none" },
   ...overrides,
 });
 
@@ -1218,6 +1224,110 @@ describe("createModelSelectionState respects session model override", () => {
     });
   });
 
+  it("preserves a locked CLI runtime alias when its canonical model is allowed", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
+          ? ({
+              pluginId: "anthropic",
+              backend: {
+                id: "claude-cli",
+                modelProvider: "anthropic",
+                config: { command: "claude" },
+                bundleMcp: false,
+              },
+            } as never)
+          : undefined,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: {
+            "openai/gpt-5.6-sol": {},
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:plugin:anthropic:catalog-adopt:claude:test";
+    const sessionEntry = makeEntry({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-8",
+      modelSelectionLocked: true,
+      pluginOwnerId: "anthropic",
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "native-claude-session",
+          forceReuse: true,
+          forkNextResume: true,
+        },
+      },
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-sol",
+      provider: "claude-cli",
+      model: "claude-opus-4-8",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      resetModelOverride: false,
+    });
+    expect(sessionStore[sessionKey]).toMatchObject({
+      providerOverride: "claude-cli",
+      modelOverride: "claude-opus-4-8",
+      modelSelectionLocked: true,
+    });
+  });
+
+  it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
+    const resolvePluginSetupCliBackend = vi.fn(() => undefined);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend,
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "custom-provider/custom-model": {} },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:custom-provider";
+    const sessionEntry = makeEntry({
+      providerOverride: "custom-provider",
+      modelOverride: "custom-model",
+    });
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-model",
+      provider: "custom-provider",
+      model: "custom-model",
+      hasModelDirective: false,
+    });
+
+    expect(state).toMatchObject({ provider: "custom-provider", model: "custom-model" });
+    expect(resolvePluginSetupCliBackend).not.toHaveBeenCalled();
+  });
+
   it("adopts a concurrent valid model while repairing a stale override", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-repair-race-"));
     const storePath = path.join(tempRoot, "sessions.json");
@@ -1370,6 +1480,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-added-after-startup");
+    expect(state.requestedRouteResolution).toBe("raw");
     expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-added-after-startup");
@@ -1423,6 +1534,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
     providerOverride: string;
     modelOverride: string;
     modelOverrideSource: "auto" | "user" | undefined;
+    modelOverrideRouteResolution?: "resolved";
     modelOverrideFallbackOriginProvider?: string;
     modelOverrideFallbackOriginModel?: string;
     fallbackNoticeSelectedModel?: string;
@@ -1440,9 +1552,16 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: params.providerOverride,
       modelOverride: params.modelOverride,
       modelOverrideSource: params.modelOverrideSource,
+      modelOverrideRouteResolution: params.modelOverrideRouteResolution,
       modelOverrideFallbackOriginProvider: params.modelOverrideFallbackOriginProvider,
       modelOverrideFallbackOriginModel: params.modelOverrideFallbackOriginModel,
-      fallbackNoticeSelectedModel: params.fallbackNoticeSelectedModel,
+      fallbackNotice: params.fallbackNoticeSelectedModel
+        ? {
+            kind: "active",
+            selectedModel: params.fallbackNoticeSelectedModel,
+            activeModel: `${params.providerOverride}/${params.modelOverride}`,
+          }
+        : undefined,
       authProfileOverride: params.authProfileOverride,
       authProfileOverrideSource: params.authProfileOverrideSource,
     });
@@ -1650,6 +1769,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
     });
     const sessionStore = { [sessionKey]: sessionEntry };
 
@@ -1921,11 +2041,13 @@ describe("createModelSelectionState auto-failover overrides", () => {
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
     });
 
     // User-selected override must persist.
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
@@ -1942,8 +2064,93 @@ describe("createModelSelectionState auto-failover overrides", () => {
 
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(state.requestedRouteResolution).toBe("raw");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("keeps a canonical stored route ahead of a colliding bare alias", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "google/gemini-3.1-pro-preview", fallbacks: [] },
+          models: {
+            "google/gemini-2.5-flash-lite": { alias: "google-flash-lite" },
+            "openrouter/google/gemini-2.5-flash-lite": {
+              alias: "gemini-2.5-flash-lite",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "google",
+      modelOverride: "gemini-2.5-flash-lite",
+      modelOverrideSource: "user",
+    });
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultProvider: "google",
+      defaultModel: "gemini-3.1-pro-preview",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      hasModelDirective: false,
+    });
+
+    expect(state.requestedRouteResolution).toBe("resolved");
+    expect(
+      resolveModelCandidateChain({
+        cfg,
+        provider: state.provider,
+        model: state.model,
+        requestedRouteResolution: state.requestedRouteResolution,
+      })[0],
+    ).toMatchObject({ provider: "google", model: "gemini-2.5-flash-lite" });
+  });
+
+  it("canonicalizes a reset-upgraded legacy alias before fallback", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "legacy-fast-model" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "anthropic",
+      modelOverride: "legacy-fast-model",
+      // Older resets added the source without resolving the stored alias.
+      modelOverrideSource: "user",
+    });
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(state.requestedRouteResolution).toBe("resolved");
+    expect(
+      resolveModelCandidateChain({
+        cfg,
+        provider: state.provider,
+        model: state.model,
+        requestedRouteResolution: state.requestedRouteResolution,
+      })[0],
+    ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
   it("does not touch an auto-failover override inherited from a parent session", async () => {

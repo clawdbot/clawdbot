@@ -26,6 +26,7 @@ export type SessionArchivedFilter = "active" | "archived" | "all";
 
 type SessionNavigationInput = {
   result: SessionsListResult | null;
+  activeSession?: GatewaySessionRow | null;
   resultAgentId?: string | null;
   sessionKey: string;
   assistantAgentId?: string | null;
@@ -256,7 +257,8 @@ export function filterVisibleSessionRows(
       sessionMatchesArchivedFilter(row, options.archivedFilter) &&
       row.kind !== "global" &&
       row.kind !== "unknown" &&
-      (options.showCron === true || (row.kind !== "cron" && !isCronSessionKey(row.key))) &&
+      (options.showCron === true ||
+        ((row.kind as string) !== "cron" && !isCronSessionKey(row.key))) &&
       !isSubagentSessionKey(row.key) &&
       !row.spawnedBy &&
       (!options.filterByAgent ||
@@ -295,7 +297,11 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
   const matchesCurrentSession = (row: GatewaySessionRow) =>
     areUiSessionKeysEquivalent(row.key, currentSessionKey) ||
     (resultScopeMatches && uiSessionRowMatchesSelectedChat(input, row.key, currentSessionKey));
-  const selectedSession = input.result?.sessions.find(matchesCurrentSession);
+  const selectedSession =
+    input.result?.sessions.find(matchesCurrentSession) ??
+    (input.activeSession && matchesCurrentSession(input.activeSession)
+      ? input.activeSession
+      : undefined);
   // Catalog sessions select their own sidebar rows; synthesizing a session row
   // here would surface the raw catalog key as a phantom chat entry.
   const activeSession =
@@ -330,8 +336,4 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     visibleSessions,
     activeRowKey: activeRow?.key ?? null,
   };
-}
-
-export function searchForSession(sessionKey: string): string {
-  return `?session=${encodeURIComponent(sessionKey)}`;
 }

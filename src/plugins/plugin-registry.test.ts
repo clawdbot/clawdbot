@@ -856,7 +856,7 @@ describe("plugin registry facade", () => {
     expect(manifestReadsAfterSecond).toBe(manifestReadsAfterFirst);
   });
 
-  it("does not reuse the process registry memo after profile extensions change", () => {
+  it("reloads profile extensions after the metadata lifecycle is cleared", () => {
     const stateDir = makeTempDir();
     const configDir = makeTempDir();
     const extensionsDir = path.join(configDir, "extensions");
@@ -872,6 +872,7 @@ describe("plugin registry facade", () => {
     const secondRoot = path.join(extensionsDir, "second");
     fs.mkdirSync(secondRoot, { recursive: true });
     createCandidate(secondRoot, "second");
+    clearPluginMetadataLifecycleCaches();
     const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
 
     expect(first.source).toBe("derived");
@@ -921,7 +922,7 @@ describe("plugin registry facade", () => {
     expectSnapshotPluginIds(second.snapshot, ["second"]);
   });
 
-  it("does not reuse the process registry memo after the persisted registry file changes", async () => {
+  it("reloads externally changed persisted state after the metadata lifecycle is cleared", async () => {
     const stateDir = makeTempDir();
     const env = hermeticEnv();
     await writePersistedInstalledPluginIndex(createPersistableIndex("first"), { stateDir });
@@ -947,6 +948,7 @@ describe("plugin registry facade", () => {
       },
       { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
     );
+    clearPluginMetadataLifecycleCaches();
     const second = loadPluginRegistrySnapshotWithMetadata({ stateDir, env });
 
     expect(first.source).toBe("persisted");

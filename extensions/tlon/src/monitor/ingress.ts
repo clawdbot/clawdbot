@@ -1,21 +1,20 @@
 // Tlon plugin module owns raw Urbit firehose durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
 const TLON_INGRESS_PAYLOAD_VERSION = 1;
 const TLON_INGRESS_POLL_INTERVAL_MS = 1_000;
-const TLON_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const TLON_INGRESS_FAILED_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-// Preserve the retired process-local guard's full 2,000-message key window.
-const TLON_INGRESS_TOMBSTONE_MAX_ENTRIES = 2_000;
 
 export type TlonIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -40,30 +39,16 @@ type TlonIngressDispatch = (
   lifecycle: TlonIngressLifecycle,
 ) => Promise<TlonIngressDispatchResult | void> | TlonIngressDispatchResult | void;
 
-class TlonIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "tlon-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "TlonIngressPermanentError";
-  }
-}
+const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "tlon-auth">(
+  "TlonIngressPermanentError",
+  { withReason: true },
+);
 
 class TlonIngressShutdownError extends Error {
   constructor() {
     super("Tlon ingress stopped before dispatch adoption.");
     this.name = "TlonIngressShutdownError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
@@ -206,11 +191,11 @@ export function createTlonIngressMonitor(options: {
     },
     deliver: (raw, lifecycle) => options.dispatch(raw.source, raw.event, lifecycle),
     pollIntervalMs: options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
+    // Preserve the retired process-local guard's full 2,000-message key window.
     retention: {
-      pruneIntervalMs: TLON_INGRESS_PRUNE_INTERVAL_MS,
-      completedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: TLON_INGRESS_FAILED_TTL_MS,
-      failedMaxEntries: TLON_INGRESS_TOMBSTONE_MAX_ENTRIES,
+      completedTtlMs: undefined,
+      completedMaxEntries: 2_000,
+      failedMaxEntries: 2_000,
     },
     // The Tlon firehose has always surfaced a failed append to its awaited callback.
     appendRetryDelaysMs: [0],

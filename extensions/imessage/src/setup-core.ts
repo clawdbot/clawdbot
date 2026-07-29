@@ -1,4 +1,9 @@
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import { parseAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
+import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 // Imessage plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
@@ -10,9 +15,6 @@ import {
   createDelegatedSetupWizardProxy,
   createDelegatedTextInputShouldPrompt,
   createPatchedAccountSetupAdapter,
-  mergeAllowFromEntries,
-  parseSetupEntriesAllowingWildcard,
-  patchChannelConfigForAccount,
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
@@ -87,7 +89,7 @@ function normalizeAllowFromEntryForPrefixCheck(entry: string): string {
 }
 
 export function parseIMessageAllowFromEntries(raw: string): { entries: string[]; error?: string } {
-  return parseSetupEntriesAllowingWildcard(raw, (entry) => {
+  return parseAllowFromEntries(raw, (entry) => {
     const lower = normalizeAllowFromEntryForPrefixCheck(entry);
     if (CHAT_TARGET_ALLOWFROM_PREFIXES.some((prefix) => lower.startsWith(prefix))) {
       return { error: `iMessage allowFrom entries must be sender handles: ${entry}` };
@@ -143,52 +145,14 @@ async function promptIMessageAllowFrom(params: {
   });
 }
 
-export const imessageDmPolicy = {
+export const imessageDmPolicy = createChannelDmPolicy({
   label: "iMessage",
   channel,
-  policyKey: "channels.imessage.dmPolicy",
-  allowFromKey: "channels.imessage.allowFrom",
-  resolveConfigKeys: (_cfg: OpenClawConfig, accountId?: string) => {
-    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(_cfg);
-    return targetAccountId !== "default"
-      ? {
-          policyKey: `channels.imessage.accounts.${targetAccountId}.dmPolicy`,
-          allowFromKey: `channels.imessage.accounts.${targetAccountId}.allowFrom`,
-        }
-      : {
-          policyKey: "channels.imessage.dmPolicy",
-          allowFromKey: "channels.imessage.allowFrom",
-        };
-  },
-  getCurrent: (cfg: OpenClawConfig, accountId?: string) => {
-    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(cfg);
-    return resolveIMessageAccount({ cfg, accountId: targetAccountId }).config.dmPolicy ?? "pairing";
-  },
-  setPolicy: (
-    cfg: OpenClawConfig,
-    policy: "pairing" | "allowlist" | "open" | "disabled",
-    accountId?: string,
-  ) => {
-    const targetAccountId = accountId ?? resolveDefaultIMessageAccountId(cfg);
-    return patchChannelConfigForAccount({
-      cfg,
-      channel,
-      accountId: targetAccountId,
-      patch:
-        policy === "open"
-          ? {
-              dmPolicy: "open",
-              allowFrom: mergeAllowFromEntries(
-                resolveIMessageAccount({ cfg, accountId: targetAccountId }).config.allowFrom,
-                ["*"],
-              ),
-            }
-          : { dmPolicy: policy },
-      setupSurface: imessageSetupAdapter,
-    });
-  },
+  resolveAccount: (cfg, accountId) =>
+    resolveIMessageAccount({ cfg, accountId: accountId ?? resolveDefaultIMessageAccountId(cfg) }),
+  setupSurface: () => imessageSetupAdapter,
   promptAllowFrom: promptIMessageAllowFrom,
-};
+});
 
 function resolveIMessageCliPath(params: { cfg: OpenClawConfig; accountId: string }) {
   return resolveIMessageAccount(params).config.cliPath ?? "imsg";
@@ -234,6 +198,29 @@ export const imessageSetupAdapter: ChannelSetupAdapter = {
   }),
   singleAccountKeysToMove: ["cliPath", "dbPath", "service", "region"],
 };
+
+export const imessageSetupContract = defineChannelSetupContract({
+  fields: {
+    cliPath: {
+      kind: "string",
+      cli: { flags: "--cli-path <path>", description: "iMessage CLI path" },
+    },
+    dbPath: {
+      kind: "string",
+      cli: { flags: "--db-path <path>", description: "iMessage database path" },
+    },
+    service: {
+      kind: "choice",
+      choices: ["imessage", "sms", "auto"],
+      cli: { flags: "--service <service>", description: "iMessage service" },
+    },
+    region: {
+      kind: "string",
+      cli: { flags: "--region <region>", description: "SMS region" },
+    },
+  },
+  legacyAdapter: imessageSetupAdapter,
+});
 
 export const imessageSetupStatusBase = {
   configuredLabel: t("wizard.channels.statusConfigured"),

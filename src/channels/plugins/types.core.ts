@@ -25,6 +25,7 @@ import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
+export type { ChannelSetupInput } from "./setup-input.js";
 
 type ChannelExposure = {
   configured?: boolean;
@@ -95,69 +96,6 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-type ChannelSetupEnvelope = {
-  name?: string;
-  token?: string;
-  tokenFile?: string;
-  useEnv?: boolean;
-  defaultTo?: string;
-  allowFrom?: string[];
-};
-
-/**
- * Compatibility fields with known published readers in the 2026-07-22 registry sweep.
- * Each field is deleted as soon as no published plugin reads it; no version boundary is needed.
- */
-type DeprecatedChannelSetupFields = {
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  privateKey?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  secret?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  botToken?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  appToken?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  signingSecret?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  mode?: "socket" | "http" | "relay";
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  cliPath?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  authDir?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  httpUrl?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  httpPort?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  webhookPath?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  webhookUrl?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  userId?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  accessToken?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  password?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  deviceName?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  url?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  baseUrl?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  code?: string;
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  groupChannels?: string[];
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  dmAllowlist?: string[];
-  /** @deprecated Declare this field in the owning plugin's setup input type. */
-  autoDiscoverChannels?: boolean;
-};
-
-/** Generic setup envelope used by CLI, onboarding, and channel-owned setup adapters. */
-export type ChannelSetupInput = ChannelSetupEnvelope & DeprecatedChannelSetupFields;
-
 export type ChannelStatusIssue = {
   channel: ChannelId;
   accountId: string;
@@ -227,8 +165,15 @@ export type ChannelAccountSnapshot = {
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;
+  stateReason?: string;
   lastError?: string | null;
   healthState?: string;
+  /**
+   * Inbound admission, which is a different failure domain from `connected`.
+   * Optional-`true` on purpose: there is no `false` to mistake for "unknown",
+   * so the 20+ channels that never report ingress at all stay unaffected.
+   */
+  ingressUnavailable?: true;
   terminalDisconnect?: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
@@ -288,6 +233,8 @@ export type ChannelGroupContext = {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  /** Trusted host instruction to ignore toolsBySender for non-ingress work. */
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -419,6 +366,15 @@ export type ChannelOutboundSessionRoute = {
 };
 
 export type ChannelThreadingAdapter = {
+  /**
+   * Where the transport keeps thread identity.
+   * "address" (default): the thread is part of the routing address (own channel id, topic id
+   * in the target tuple), fully known before send.
+   * "message": thread identity lives on a message (e.g. Slack thread_ts) — replying to a
+   * message enters its thread, and routes can discover a session-scoping thread only after
+   * target lookup.
+   */
+  threadAddressing?: "address" | "message";
   matchesToolContextTarget?: (params: {
     target: string;
     toolContext: ChannelThreadingToolContext;
@@ -632,10 +588,6 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => ReplyPayload | null;
-  enableInteractiveReplies?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => boolean;
   hasStructuredReplyPayload?: (params: { payload: ReplyPayload }) => boolean;
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;

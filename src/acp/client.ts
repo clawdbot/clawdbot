@@ -147,6 +147,10 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
     throw new Error("Failed to create ACP stdio pipes");
   }
 
+  agent.on("error", (err) => {
+    log(`agent error: ${String(err)}`);
+  });
+
   const input = Writable.toWeb(agent.stdin);
   const output = Readable.toWeb(agent.stdout) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);

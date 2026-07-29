@@ -12,12 +12,20 @@ import {
 } from "../../gateway/restart-trace.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { GatewayBootLifecycleCompletion } from "../../infra/gateway-boot-lifecycle.js";
+import {
+  GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
+  type GatewayBootLifecycleCompletion,
+} from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
+import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import {
+  findOpenClawAgentDatabaseMediaMigrationRequiredError,
+  GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON,
+} from "../../state/openclaw-agent-db-migration-required.js";
 import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -26,6 +34,7 @@ const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
+const LOG_FLUSH_EXIT_TIMEOUT_MS = 4_000;
 
 type GatewayRunSignalAction = "stop" | "restart";
 type RestartDrainTimeoutMs = number | undefined;
@@ -162,6 +171,25 @@ export async function runGatewayLoop(params: {
     cleanupSignals();
     params.runtime.exit(code);
   };
+  const exitProcessAfterLogFlush = async (code: number) => {
+    // Graceful signal/restart paths call process.exit(), which skips beforeExit.
+    let flushTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushed = await Promise.race([
+      flushLogger().then(() => true),
+      new Promise<false>((resolve) => {
+        flushTimer = setTimeout(() => resolve(false), LOG_FLUSH_EXIT_TIMEOUT_MS);
+      }),
+    ]);
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+    }
+    if (!flushed) {
+      gatewayLog.warn(
+        `log flush did not settle within ${LOG_FLUSH_EXIT_TIMEOUT_MS}ms; continuing shutdown`,
+      );
+    }
+    exitProcess(code);
+  };
   const completeForcedStop = (reason: string) => {
     params.completeBoot?.({ outcome: "forced_stop", reason });
   };
@@ -238,7 +266,7 @@ export async function runGatewayLoop(params: {
           gatewayLog.info(
             `restart mode: update process respawn (spawned pid ${respawn.pid ?? "unknown"})`,
           );
-          exitProcess(0);
+          await exitProcessAfterLogFlush(0);
           return;
         }
         gatewayLog.warn(
@@ -309,7 +337,7 @@ export async function runGatewayLoop(params: {
           return;
         }
         activeRestartRequest = null;
-        exitProcess(0);
+        await exitProcessAfterLogFlush(0);
         return;
       }
       if (respawn.mode === "failed") {
@@ -389,7 +417,7 @@ export async function runGatewayLoop(params: {
         return;
       }
       activeRestartRequest = null;
-      exitProcess(0);
+      await exitProcessAfterLogFlush(0);
       return;
     }
     if (respawn.mode === "failed") {
@@ -420,7 +448,7 @@ export async function runGatewayLoop(params: {
   const handleStopAfterServerClose = async () => {
     params.completeBoot?.({ outcome: "clean_stop", reason: "gateway.stop" });
     await releaseLockIfHeld();
-    exitProcess(0);
+    await exitProcessAfterLogFlush(0);
   };
 
   const SUPERVISOR_STOP_TIMEOUT_MS = 30_000;
@@ -725,6 +753,25 @@ export async function runGatewayLoop(params: {
           );
         }
 
+        if (!isRestart) {
+          // Keep reset-started finalizers alive without spending the shutdown
+          // reserve that server teardown and the supervisor watchdog need.
+          try {
+            const rootDrain = await eagerLifecycleRuntime.waitForActiveGatewayRootWork(
+              Math.max(0, SHUTDOWN_TIMEOUT_MS - RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS),
+            );
+            if (!rootDrain.drained) {
+              gatewayLog.warn(
+                `gateway root transaction drain timeout reached with ${rootDrain.active} root(s) still active; proceeding with shutdown`,
+              );
+            }
+          } catch (err) {
+            gatewayLog.warn(
+              `gateway root transaction drain failed; proceeding with shutdown: ${formatErrorMessage(err)}`,
+            );
+          }
+        }
+
         armCloseForceExitTimerForIndefiniteRestart();
         const closeDrainTimeoutMs = resolveRestartCloseDrainTimeoutMs();
         await server?.close({
@@ -810,9 +857,9 @@ export async function runGatewayLoop(params: {
       return;
     }
     const isRestart = action === "restart";
-    if (isRestart) {
-      markRestartDraining();
-    }
+    // Fence new roots synchronously for stops as well as restarts so admitted
+    // detached finalizers can drain before the signal tears down the gateway.
+    markRestartDraining();
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {
@@ -1010,9 +1057,16 @@ export async function runGatewayLoop(params: {
         startupFailedWithoutServerHandle = false;
         isFirstStart = false;
       } catch (err) {
+        const mediaMigrationRequired = findOpenClawAgentDatabaseMediaMigrationRequiredError(err);
         params.completeBoot?.({
           outcome: "startup_failed",
-          reason: truncateUtf16Safe(formatErrorMessage(err), 500),
+          reason: truncateUtf16Safe(
+            formatErrorMessage(err),
+            GATEWAY_BOOT_REASON_MAX_UTF16_CODE_UNITS,
+          ),
+          ...(mediaMigrationRequired
+            ? { startupReason: GATEWAY_AGENT_MEDIA_MIGRATION_REQUIRED_REASON }
+            : {}),
         });
         // On initial startup, let the error propagate so the outer handler
         // can report "Gateway failed to start" and exit non-zero. Only

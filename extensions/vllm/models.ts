@@ -15,6 +15,7 @@ export async function buildVllmProvider(params?: {
     baseUrl,
     apiKey: params?.apiKey,
     label: VLLM_PROVIDER_LABEL,
+    discoverRuntimeContext: false,
   });
   return {
     baseUrl,

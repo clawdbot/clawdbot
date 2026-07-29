@@ -112,6 +112,13 @@ function laneStatus(lane) {
   return lane.status === "pass" ? "pass" : "fail";
 }
 
+function requireLaneAttestation(lane, expectedLane, expectedSha) {
+  const attestation = lane.summary.sutAttestation;
+  if (attestation?.lane !== expectedLane || attestation?.sha !== expectedSha) {
+    throw new Error(`SUT attestation mismatch for ${expectedLane}.`);
+  }
+}
+
 function laneArtifactEntries() {
   return LANES.flatMap(({ altPrefix, label, lane }) => [
     {
@@ -207,8 +214,10 @@ export function writeTelegramDesktopProofEvidence(rawArgs = process.argv.slice(2
   for (const key of [
     "baseline_output_dir",
     "baseline_repo_root",
+    "baseline_sha",
     "candidate_output_dir",
     "candidate_repo_root",
+    "candidate_sha",
     "output_dir",
   ]) {
     if (!args[key]) {
@@ -228,6 +237,8 @@ export function writeTelegramDesktopProofEvidence(rawArgs = process.argv.slice(2
     repoRoot: path.resolve(args.candidate_repo_root),
     status: args.candidate_status,
   });
+  requireLaneAttestation(baseline, "baseline", args.baseline_sha);
+  requireLaneAttestation(candidate, "candidate", args.candidate_sha);
   copyLaneArtifacts({ lane: baseline, laneName: "baseline", outputDir });
   copyLaneArtifacts({ lane: candidate, laneName: "candidate", outputDir });
   const manifest = buildTelegramDesktopProofManifest({

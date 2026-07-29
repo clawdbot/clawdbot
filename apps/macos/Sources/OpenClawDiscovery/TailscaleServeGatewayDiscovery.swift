@@ -152,7 +152,12 @@ enum TailscaleServeGatewayDiscovery {
 
         for candidate in candidates {
             guard let executable = self.resolveExecutablePath(candidate) else { continue }
-            if let stdout = await self.run(path: executable, args: ["status", "--json"], timeout: 1.0) {
+            if let stdout = await BoundedCommand.run(
+                path: executable,
+                arguments: ["status", "--json"],
+                environment: self.commandEnvironment(),
+                timeout: 1.0)
+            {
                 return stdout
             }
         }
@@ -187,43 +192,6 @@ enum TailscaleServeGatewayDiscovery {
         }
 
         return nil
-    }
-
-    private static func run(path: String, args: [String], timeout: TimeInterval) async -> String? {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .utility).async {
-                continuation.resume(returning: self.runBlocking(path: path, args: args, timeout: timeout))
-            }
-        }
-    }
-
-    private static func runBlocking(path: String, args: [String], timeout: TimeInterval) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.environment = self.commandEnvironment()
-        let outPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-
-        let deadline = Date().addingTimeInterval(timeout)
-        while process.isRunning, Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.02)
-        }
-        if process.isRunning {
-            process.terminate()
-        }
-        process.waitUntilExit()
-
-        let data = (try? outPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return output?.isEmpty == false ? output : nil
     }
 
     static func commandEnvironment(

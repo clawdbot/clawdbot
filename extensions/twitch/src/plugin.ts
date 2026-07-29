@@ -29,15 +29,16 @@ import { TwitchConfigSchema } from "./config-schema.js";
 import {
   DEFAULT_ACCOUNT_ID,
   getAccountConfig,
-  listAccountIds,
   resolveDefaultTwitchAccountId,
   resolveTwitchAccountContext,
   resolveTwitchSnapshotAccountId,
+  twitchConfigAdapter,
+  type ResolvedTwitchAccount,
 } from "./config.js";
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";
 import { probeTwitch } from "./probe.js";
 import { resolveTwitchTargets } from "./resolver.js";
-import { twitchSetupAdapter, twitchSetupWizard } from "./setup-surface.js";
+import { twitchSetupAdapter, twitchSetupContract, twitchSetupWizard } from "./setup-surface.js";
 import { collectTwitchStatusIssues } from "./status.js";
 import type {
   ChannelLogSink,
@@ -47,8 +48,6 @@ import type {
   TwitchAccountConfig,
 } from "./types.js";
 import { isAccountConfigured, normalizeTwitchChannel } from "./utils/twitch.js";
-
-type ResolvedTwitchAccount = TwitchAccountConfig & { accountId?: string | null };
 
 function normalizeTwitchMessagingTarget(target: string): string {
   const providerTarget = stripChannelTargetPrefix(target, "twitch", "twitch-chat");
@@ -90,6 +89,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         aliases: ["twitch-chat"],
       },
       setup: twitchSetupAdapter,
+      setupContract: twitchSetupContract,
       setupWizard: twitchSetupWizard,
       capabilities: {
         chatTypes: ["group"],
@@ -116,30 +116,7 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
       message: twitchMessageAdapter,
       configSchema: buildChannelConfigSchema(TwitchConfigSchema),
       config: {
-        listAccountIds: (cfg: OpenClawConfig): string[] => listAccountIds(cfg),
-        resolveAccount: (cfg: OpenClawConfig, accountId?: string | null): ResolvedTwitchAccount => {
-          const resolvedAccountId = accountId ?? resolveDefaultTwitchAccountId(cfg);
-          const account = getAccountConfig(cfg, resolvedAccountId);
-          if (!account) {
-            return {
-              accountId: resolvedAccountId,
-              channel: "",
-              username: "",
-              accessToken: "",
-              clientId: "",
-              enabled: false,
-            };
-          }
-          return {
-            accountId: resolvedAccountId,
-            ...account,
-          };
-        },
-        defaultAccountId: (cfg: OpenClawConfig): string => resolveDefaultTwitchAccountId(cfg),
-        isConfigured: (_account: unknown, cfg: OpenClawConfig): boolean =>
-          resolveTwitchAccountContext(cfg).configured,
-        isEnabled: (account: ResolvedTwitchAccount | undefined): boolean =>
-          account?.enabled !== false,
+        ...twitchConfigAdapter,
         describeAccount: (account: TwitchAccountConfig | undefined) =>
           account
             ? describeAccountSnapshot({

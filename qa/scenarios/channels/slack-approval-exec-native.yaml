@@ -4,9 +4,10 @@ scenario:
   surface: channels
   coverage:
     primary:
+      - slack.native-approvals
+    secondary:
       - channels.channel-native-approval-prompts
   execution:
-    profiles: { "slack:default": 7 }
     kind: flow
     channel: slack
     timeoutMs: 60000

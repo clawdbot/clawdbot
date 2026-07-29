@@ -1,11 +1,174 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { nothing, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
+import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { renderToolPreview } from "./widget-card.ts";
 
 describe("widget-card", () => {
+  it("keeps mounted frames stable but refreshes remounts and new connection generations", () => {
+    const firstPreview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_surface_lease_one",
+      url: "/__openclaw__/canvas/documents/cv_surface_lease_one/index.html",
+      sandbox: "scripts",
+    } as const;
+    const host = document.createElement("div");
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      host,
+    );
+    const originalFrame = host.querySelector<HTMLIFrameElement>("iframe");
+    const originalSrc = originalFrame?.getAttribute("src");
+    expect(originalSrc).toContain("/__openclaw__/cap/one/");
+
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      }),
+      host,
+    );
+    expect(host.querySelector("iframe")).toBe(originalFrame);
+    expect(host.querySelector("iframe")?.getAttribute("src")).toBe(originalSrc);
+
+    render(nothing, host);
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      }),
+      host,
+    );
+    const remountedFrame = host.querySelector("iframe");
+    expect(remountedFrame).not.toBe(originalFrame);
+    expect(remountedFrame?.getAttribute("src")).toContain("/__openclaw__/cap/two/");
+
+    bumpCanvasWidgetFrameConnectionGeneration();
+    render(
+      renderToolPreview(firstPreview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/three",
+      }),
+      host,
+    );
+    expect(host.querySelector("iframe")).not.toBe(remountedFrame);
+    expect(host.querySelector("iframe")?.getAttribute("src")).toContain("/__openclaw__/cap/three/");
+  });
+
+  it("keeps a reported frame height across a capability rotation", () => {
+    const preview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_surface_lease_height",
+      url: "/__openclaw__/canvas/documents/cv_surface_lease_height/index.html",
+      sandbox: "scripts",
+    } as const;
+    const host = document.createElement("div");
+    document.body.append(host);
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      host,
+    );
+    const frame = host.querySelector<HTMLIFrameElement>("iframe");
+    frame?.dispatchEvent(new Event("load"));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: "openclaw:widget-size", height: 640 },
+        source: frame?.contentWindow,
+      }),
+    );
+    expect(frame?.style.height).toBe("640px");
+
+    // Re-render at the same URL so the style binding itself carries the
+    // remembered height; only then can a later rotation clear it.
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      host,
+    );
+    expect(frame?.getAttribute("style")).toContain("640px");
+
+    // The in-frame reporter only posts when its own height changes, so a
+    // rotation that lost the remembered height would strand the frame at its
+    // default until the widget content happened to resize.
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      }),
+      host,
+    );
+    expect(host.querySelector("iframe")).toBe(frame);
+    expect(frame?.getAttribute("style")).toContain("640px");
+    host.remove();
+  });
+
+  it("mounts a new document on the rotated surface URL within one connection", () => {
+    const preview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_surface_lease_mounted",
+      url: "/__openclaw__/canvas/documents/cv_surface_lease_mounted/index.html",
+      sandbox: "scripts",
+    } as const;
+    const mountedHost = document.createElement("div");
+    render(
+      renderToolPreview(preview, "chat_message", {
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+      }),
+      mountedHost,
+    );
+    expect(mountedHost.querySelector("iframe")?.getAttribute("src")).toContain(
+      "/__openclaw__/cap/one/",
+    );
+
+    // The renewal that fixes expired widgets only helps if a widget created
+    // after the rotation picks up the fresh capability instead of the mounted
+    // document's cached one.
+    const rotatedHost = document.createElement("div");
+    render(
+      renderToolPreview(
+        {
+          ...preview,
+          viewId: "cv_surface_lease_rotated",
+          url: "/__openclaw__/canvas/documents/cv_surface_lease_rotated/index.html",
+        },
+        "chat_message",
+        { canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two" },
+      ),
+      rotatedHost,
+    );
+    expect(rotatedHost.querySelector("iframe")?.getAttribute("src")).toContain(
+      "/__openclaw__/cap/two/",
+    );
+  });
+
+  it("unloads an external frame when external embeds become disallowed", () => {
+    const preview = {
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "external-policy",
+      url: "https://example.test/widget",
+      sandbox: "scripts",
+    } as const;
+    const host = document.createElement("div");
+    render(renderToolPreview(preview, "chat_message", { allowExternalEmbedUrls: true }), host);
+    const allowedFrame = host.querySelector("iframe");
+    expect(allowedFrame?.getAttribute("src")).toBe("https://example.test/widget");
+
+    render(renderToolPreview(preview, "chat_message", { allowExternalEmbedUrls: false }), host);
+    expect(host.querySelector("iframe")).not.toBe(allowedFrame);
+    expect(host.querySelector("iframe")?.hasAttribute("src")).toBe(false);
+  });
+
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", () => {
     const canvas = document.createElement("div");
     render(
@@ -45,6 +208,9 @@ describe("widget-card", () => {
       app,
     );
     expect(app.querySelector("mcp-app-view")).not.toBeNull();
+    expect(app.querySelector(".chat-tool-card__preview")?.getAttribute("data-content-kind")).toBe(
+      "mcp-app",
+    );
     expect(app.querySelector("iframe")).toBeNull();
     expect(app.querySelector('button[aria-label="Widget actions"]')).toBeNull();
 

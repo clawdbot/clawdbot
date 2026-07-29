@@ -2,11 +2,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  buildAgentMainSessionKey,
-  DEFAULT_AGENT_ID,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
 
 type ResolvedStatusSessionEntry = {
@@ -39,21 +35,21 @@ export function resolveSessionStatusEntry(params: {
 
   const candidates: string[] = [keyRaw];
   if (!keyRaw.startsWith("agent:")) {
-    candidates.push(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
+    candidates.push(`agent:${params.agentId}:${keyRaw}`);
   }
   if (includeAliasFallback && internal !== keyRaw) {
     candidates.push(internal);
   }
   if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
-    const agentInternal = `agent:${DEFAULT_AGENT_ID}:${internal}`;
-    const agentRaw = `agent:${DEFAULT_AGENT_ID}:${keyRaw}`;
+    const agentInternal = `agent:${params.agentId}:${internal}`;
+    const agentRaw = `agent:${params.agentId}:${keyRaw}`;
     if (agentInternal !== agentRaw) {
       candidates.push(agentInternal);
     }
   }
   if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
     const defaultMainKey = buildAgentMainSessionKey({
-      agentId: DEFAULT_AGENT_ID,
+      agentId: params.agentId,
       mainKey: params.mainKey,
     });
     if (!candidates.includes(defaultMainKey)) {

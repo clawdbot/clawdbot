@@ -7,7 +7,6 @@ scenario:
       - channels.message-actions
       - whatsapp.outbound-image
   execution:
-    profiles: { "whatsapp:mock-default": 24 }
     kind: flow
     channel: whatsapp
     timeoutMs: 120000

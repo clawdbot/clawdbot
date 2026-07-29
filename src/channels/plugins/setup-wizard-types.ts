@@ -7,6 +7,7 @@ import type { DmPolicy } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
+import type { ChannelOwnedSetupContract } from "./setup-contract.js";
 import type { ChannelAccessPolicy } from "./setup-group-access.js";
 import type { ChannelConfigAdapter, ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelCapabilities, ChannelId, ChannelMeta } from "./types.core.js";
@@ -16,6 +17,7 @@ export type ChannelSetupPlugin = {
   meta: ChannelMeta;
   capabilities: ChannelCapabilities;
   config: ChannelConfigAdapter<unknown>;
+  setupContract?: ChannelOwnedSetupContract;
   setup?: ChannelSetupAdapter;
   setupWizard?: ChannelSetupWizard | ChannelSetupWizardAdapter;
 };
@@ -322,6 +324,8 @@ export type SetupChannelsOptions = {
   skipConfirm?: boolean;
   quickstartDefaults?: boolean;
   initialSelection?: ChannelId[];
+  /** Finish after the explicitly targeted channel is configured or paused. */
+  finishAfterInitialSelection?: boolean;
   secretInputMode?: "plaintext" | "ref";
 };
 
@@ -377,10 +381,18 @@ export type ChannelOnboardingPostWriteHook = {
   run: (ctx: { cfg: OpenClawConfig; runtime: RuntimeEnv }) => Promise<void> | void;
 };
 
-export type ChannelSetupResult = {
-  cfg: OpenClawConfig;
-  accountId?: string;
-};
+export type ChannelSetupResult =
+  | {
+      cfg: OpenClawConfig;
+      accountId?: string;
+      completion?: "configured";
+    }
+  | {
+      cfg: OpenClawConfig;
+      /** Paused setup is persisted without configured-account hooks or routing. */
+      completion: "paused";
+      accountId?: never;
+    };
 
 export type ChannelSetupConfiguredResult = ChannelSetupResult | "skip";
 

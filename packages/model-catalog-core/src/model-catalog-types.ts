@@ -45,6 +45,7 @@ export type ModelCatalogCompatConfig = {
   supportsTemperature?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
+  supportsJsonSchemaResponseFormat?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
@@ -60,6 +61,8 @@ export type ModelCatalogCompatConfig = {
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
   supportsTools?: boolean;
+  /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+  codeMode?: "preferred" | "capable";
   requiresStringContent?: boolean;
   strictMessageKeys?: boolean;
   toolSchemaProfile?: string;
@@ -231,6 +234,13 @@ export type ModelCatalogModel = {
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
+  /**
+   * Provider/model ref of the same upstream model in another bundled catalog,
+   * for vendors reachable through several provider ids under different model
+   * ids. Authoring metadata only: normalization drops it, and the shared-model
+   * contract test uses it to keep `compat` capability tiers from drifting apart.
+   */
+  upstreamModel?: string;
   mediaInput?: ModelCatalogMediaInputConfig;
   status?: ModelCatalogStatus;
   statusReason?: string;
@@ -244,6 +254,8 @@ export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /** Provider-recommended primary model id. */
+  defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
   models: ModelCatalogModel[];

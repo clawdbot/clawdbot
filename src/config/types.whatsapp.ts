@@ -53,8 +53,6 @@ type WhatsAppSharedConfig = CommonChannelMessagingConfig<string[], string> &
     groups?: Record<string, WhatsAppGroupConfig>;
     /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
     direct?: Record<string, WhatsAppDirectConfig>;
-    /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
-    debounceMs?: number;
   };
 
 type WhatsAppSpecificConfig = {

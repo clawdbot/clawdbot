@@ -17,7 +17,10 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
+import {
+  scheduleDetachedLaunchdMaintenancePark,
+  scheduleDetachedLaunchdRestartHandoff,
+} from "./launchd-restart-handoff.js";
 
 type SpawnCall = [string, string[], { env: Record<string, string | undefined> }];
 
@@ -41,7 +44,7 @@ function requireSpawnCall(callIndex = 0): SpawnCall {
 }
 
 async function executeHandoff(
-  mode: "reload" | "start-after-exit",
+  mode: "park" | "reload" | "start-after-exit",
   launchctlStub: string,
 ): Promise<{
   calls: string[];
@@ -63,11 +66,18 @@ async function executeHandoff(
     fs.chmodSync(path.join(stubDir, "sleep"), 0o755);
 
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock, once: vi.fn() });
-    scheduleDetachedLaunchdRestartHandoff({
-      env: { HOME: home, OPENCLAW_PROFILE: "default" },
-      mode,
-      waitForPid: noWaitPid,
-    });
+    if (mode === "park") {
+      scheduleDetachedLaunchdMaintenancePark({
+        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        waitForPid: noWaitPid,
+      });
+    } else {
+      scheduleDetachedLaunchdRestartHandoff({
+        env: { HOME: home, OPENCLAW_PROFILE: "default" },
+        mode,
+        waitForPid: noWaitPid,
+      });
+    }
     const [, args] = requireSpawnCall();
     const script = args[1];
     if (!script) {
@@ -189,6 +199,17 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(result.calls.some((call) => call.includes("kickstart -k"))).toBe(false);
     expect(result.calls.some((call) => call.startsWith("bootstrap "))).toBe(false);
     expect(result.log).toContain("restart done");
+  });
+
+  it("parks the service with bootout after the caller exits", async () => {
+    const result = await executeHandoff(
+      "park",
+      'case "$1" in bootout) exit 0 ;; *) exit 1 ;; esac',
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.calls).toEqual(["bootout gui/501/test.label"]);
+    expect(result.log).toContain("service park done");
   });
 
   it("outwaits launchd's stop window after bootout and retries bootstrap for reload mode", () => {

@@ -88,6 +88,8 @@ export type ResolvedTalkConfig = {
 };
 
 export type TalkConfig = {
+  /** Agent that owns Talk sessions created without an agent-scoped session key. */
+  agentId?: string;
   /** Active Talk TTS provider (for example "acme-speech"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
@@ -107,7 +109,7 @@ export type TalkConfig = {
     | "ultra";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
-  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  /** BCP 47 locale id used for Talk speech recognition on device nodes and the iOS system-voice fallback. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
@@ -123,6 +125,11 @@ export type TalkConfigResponse = TalkConfig & {
 export type GatewayControlUiConfig = {
   /** @deprecated Doctor-only legacy input. */
   chatMessageMaxWidth?: string;
+  /**
+   * @deprecated Upgrade-only transport input. Retained so releases that shipped
+   * this break-glass flag can migrate an unpaired browser safely.
+   */
+  dangerouslyDisableDeviceAuth?: boolean;
   /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
   /** Optional base path prefix for the Control UI (e.g. "/openclaw"). */
@@ -289,7 +296,7 @@ export type GatewayRemoteConfig = {
  * host terminal is allowed.
  */
 export type GatewayTerminalConfig = {
-  /** Master switch for the operator terminal. Default: false. */
+  /** Master switch for the operator terminal. Default: true; set false to opt out. */
   enabled?: boolean;
   /**
    * Shell executable to launch. When unset the host login shell is used

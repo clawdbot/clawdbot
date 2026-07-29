@@ -2,16 +2,34 @@ package ai.openclaw.wear
 
 import ai.openclaw.wear.shared.WearProtocol
 import ai.openclaw.wear.shared.WearRpcMethod
+import android.animation.ValueAnimator
+import android.content.Intent
+import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.graphics.Color
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSystemClock
+import org.robolectric.shadows.ShadowValueAnimator
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
@@ -97,6 +115,225 @@ class WearTalkAvatarTest {
     assertTrue(level < 0.001f)
   }
 
+  @Test
+  fun avatarFrameDeltaHonorsAnimatorDurationScale() {
+    val frameDelta = 1f / 60f
+
+    assertEquals(1f / 30f, scaledAvatarDeltaSeconds(frameDelta, durationScale = 0.5f), 0.000_001f)
+    assertEquals(frameDelta, scaledAvatarDeltaSeconds(frameDelta, durationScale = 1f), 0.000_001f)
+    assertEquals(1f / 120f, scaledAvatarDeltaSeconds(frameDelta, durationScale = 2f), 0.000_001f)
+  }
+
+  @Test
+  fun zeroAnimatorDurationScaleStopsAvatarTime() {
+    assertEquals(0f, scaledAvatarDeltaSeconds(deltaSeconds = 1f / 60f, durationScale = 0f), 0f)
+  }
+
+  @Test
+  fun effectiveScaleTransitionsStopAndRestartTheClockWhileComposed() {
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+    val scaleSource = FakeWearAnimatorScaleSource(initialScale = 1f)
+    val motionDurationScale = FakeMotionDurationScale(initialScale = 1f)
+    val frameClock = FakeWearAvatarFrameClock()
+    val observedStates = mutableListOf<WearAvatarAnimationState>()
+
+    controller.get().setContent {
+      WearTalkAvatar(
+        state = RealtimeVoiceButtonState.SPEAKING,
+        mouthLevel = 1f,
+        syntheticSpeech = false,
+        accent = Color.Cyan,
+        danger = Color.Red,
+        animatorScaleSource = scaleSource,
+        motionDurationScale = motionDurationScale,
+        frameClock = frameClock,
+        onAnimationStateChanged = observedStates::add,
+      )
+    }
+    idleMainLooper()
+
+    assertEquals(1, scaleSource.subscriptionCount)
+    assertEquals(1f, observedStates.last().durationScale, 0f)
+    frameClock.sendFrame(1_000_000_000L)
+    idleMainLooper()
+    frameClock.sendFrame(1_016_666_667L)
+    idleMainLooper()
+    assertTrue(observedStates.last().animationSeconds > 0f)
+
+    scaleSource.emit(0f)
+    idleMainLooper()
+    assertEquals(0f, observedStates.last().durationScale, 0f)
+    assertEquals(0f, observedStates.last().animationSeconds, 0f)
+    assertEquals(0f, observedStates.last().mouthLevel, 0f)
+    val frameRequestsAtZero = frameClock.awaitCount
+    idleMainLooper(Duration.ofMillis(100))
+    assertEquals(frameRequestsAtZero, frameClock.awaitCount)
+
+    scaleSource.emit(1f)
+    idleMainLooper()
+    assertEquals(1f, observedStates.last().durationScale, 0f)
+    assertTrue(frameClock.awaitCount > frameRequestsAtZero)
+
+    motionDurationScale.scaleFactor = 2f
+    idleMainLooper()
+    assertEquals(2f, observedStates.last().durationScale, 0f)
+
+    controller.pause().stop().destroy()
+    idleMainLooper()
+    assertEquals(1, scaleSource.disposeCount)
+    assertEquals(0, scaleSource.activeSubscriptionCount)
+  }
+
+  @Test
+  @Config(sdk = [32])
+  fun api31And32CanonicalScaleRestartsClockWithoutEffectiveScaleCallback() {
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
+    val lifecycleOwner = TestLifecycleOwner()
+    val scaleSource = AndroidWearAnimatorScaleSource(RuntimeEnvironment.getApplication(), lifecycleOwner)
+    val motionDurationScale = FakeMotionDurationScale(initialScale = 0f)
+    val frameClock = FakeWearAvatarFrameClock()
+    val observedStates = mutableListOf<WearAvatarAnimationState>()
+    setRobolectricAnimatorDurationScale(0f)
+
+    try {
+      assertEquals(false, ValueAnimator.areAnimatorsEnabled())
+      controller.get().setContent {
+        WearTalkAvatar(
+          state = RealtimeVoiceButtonState.IDLE,
+          mouthLevel = 0f,
+          syntheticSpeech = false,
+          accent = Color.Cyan,
+          danger = Color.Red,
+          animatorScaleSource = scaleSource,
+          motionDurationScale = motionDurationScale,
+          frameClock = frameClock,
+          onAnimationStateChanged = observedStates::add,
+        )
+      }
+      idleMainLooper()
+
+      assertEquals(0f, observedStates.last().durationScale, 0f)
+      assertEquals(0, frameClock.awaitCount)
+
+      motionDurationScale.scaleFactor = 1f
+      idleMainLooper()
+
+      assertEquals(1f, observedStates.last().durationScale, 0f)
+      assertTrue(frameClock.awaitCount > 0)
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
+      setRobolectricAnimatorDurationScale(1f)
+    }
+  }
+
+  @Test
+  @Config(sdk = [33])
+  fun zeroSystemScaleColdStartUsesTheComposeMotionScaleWithoutCrashing() {
+    val context = RuntimeEnvironment.getApplication()
+    val originalScale =
+      Settings.Global.getFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+    val controller = Robolectric.buildActivity(ComponentActivity::class.java)
+    val observedStates = mutableListOf<WearAvatarAnimationState>()
+    Settings.Global.putFloat(context.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    setRobolectricAnimatorDurationScale(0f)
+
+    try {
+      controller.setup()
+      controller.get().setContent {
+        WearTalkAvatar(
+          state = RealtimeVoiceButtonState.LISTENING,
+          mouthLevel = 0f,
+          syntheticSpeech = false,
+          accent = Color.Cyan,
+          danger = Color.Red,
+          animatorScaleSource = FakeWearAnimatorScaleSource(initialScale = 1f),
+          onAnimationStateChanged = observedStates::add,
+        )
+      }
+      idleMainLooper()
+
+      assertEquals(0f, observedStates.last().durationScale, 0f)
+      assertEquals(0f, observedStates.last().animationSeconds, 0f)
+    } finally {
+      controller.pause().stop().destroy()
+      idleMainLooper()
+      Settings.Global.putFloat(
+        context.contentResolver,
+        Settings.Global.ANIMATOR_DURATION_SCALE,
+        originalScale,
+      )
+      setRobolectricAnimatorDurationScale(originalScale)
+    }
+  }
+
+  @Test
+  @Config(sdk = [32])
+  fun api31And32RefreshEffectiveScaleOnLifecycleAndPowerChangesAndCleanUp() {
+    val context = RuntimeEnvironment.getApplication()
+    val lifecycleOwner = TestLifecycleOwner()
+    val source = AndroidWearAnimatorScaleSource(context, lifecycleOwner)
+    val observedScales = mutableListOf<Float>()
+    val subscription = source.subscribe(observedScales::add)
+    val countAfterSubscribe = observedScales.size
+
+    lifecycleOwner.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+    lifecycleOwner.registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+    assertTrue(observedScales.size > countAfterSubscribe)
+    val countAfterStart = observedScales.size
+
+    context.sendBroadcast(Intent(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
+    idleMainLooper()
+    assertTrue(observedScales.size > countAfterStart)
+
+    subscription.dispose()
+    val countAfterDispose = observedScales.size
+    lifecycleOwner.registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+    context.sendBroadcast(Intent(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED))
+    idleMainLooper()
+    assertEquals(countAfterDispose, observedScales.size)
+  }
+
+  @Test
+  fun zeroMotionKeepsEveryVoiceStateStaticAndVisuallyDistinct() {
+    val poses =
+      RealtimeVoiceButtonState.entries.map { state ->
+        avatarPoseAt(
+          state = state,
+          animationSeconds = 0f,
+          mouthLevel = 0f,
+        )
+      }
+
+    assertEquals(RealtimeVoiceButtonState.entries.size, poses.distinct().size)
+    assertEquals(0f, poses.first().floatOffset, 0f)
+    assertTrue(poses.last().antennaDroop > 0f)
+  }
+
+  @Test
+  fun disabledAnimationsSuppressClockAndAudioMotionInputs() {
+    val inputs =
+      avatarMotionInputs(
+        animationsEnabled = false,
+        animationSeconds = 12.5f,
+        mouthLevel = 1f,
+      )
+
+    assertEquals(WearAvatarMotionInputs(animationSeconds = 0f, mouthLevel = 0f), inputs)
+  }
+
+  @Test
+  fun enabledAnimationsPreserveClockAndBoundAudioMotionInput() {
+    val inputs =
+      avatarMotionInputs(
+        animationsEnabled = true,
+        animationSeconds = 12.5f,
+        mouthLevel = 1.5f,
+      )
+
+    assertEquals(WearAvatarMotionInputs(animationSeconds = 12.5f, mouthLevel = 1f), inputs)
+  }
+
   private fun samplesForFrames(frameCount: Int): Int = WEAR_REALTIME_SAMPLE_RATE_HZ * MOUTH_FRAME_MILLIS / 1_000 * frameCount
 
   private fun pcm16Le(
@@ -130,6 +367,17 @@ class WearTalkAvatarTest {
     assertEquals(false, client.isPlaying.value)
   }
 
+  private fun idleMainLooper(duration: Duration = Duration.ZERO) {
+    shadowOf(Looper.getMainLooper()).idleFor(duration)
+  }
+
+  private fun setRobolectricAnimatorDurationScale(scale: Float) {
+    ShadowValueAnimator::class.java
+      .getDeclaredMethod("setDurationScale", java.lang.Float.TYPE)
+      .apply { isAccessible = true }
+      .invoke(null, scale)
+  }
+
   private fun Any.setPrivateField(
     name: String,
     value: Any,
@@ -142,5 +390,60 @@ class WearTalkAvatarTest {
 
   private companion object {
     const val WEAR_REALTIME_SAMPLE_RATE_HZ = 24_000
+  }
+
+  private class FakeMotionDurationScale(
+    initialScale: Float,
+  ) : MotionDurationScale {
+    override var scaleFactor by mutableFloatStateOf(initialScale)
+  }
+
+  private class FakeWearAnimatorScaleSource(
+    initialScale: Float,
+  ) : WearAnimatorScaleSource {
+    private var scale = initialScale
+    private var listener: ((Float) -> Unit)? = null
+    var subscriptionCount = 0
+      private set
+    var disposeCount = 0
+      private set
+    val activeSubscriptionCount: Int
+      get() = if (listener == null) 0 else 1
+
+    override fun currentScale(): Float = scale
+
+    override fun subscribe(onScaleChanged: (Float) -> Unit): WearAnimatorScaleSubscription {
+      subscriptionCount += 1
+      listener = onScaleChanged
+      return WearAnimatorScaleSubscription {
+        if (listener === onScaleChanged) listener = null
+        disposeCount += 1
+      }
+    }
+
+    fun emit(newScale: Float) {
+      scale = newScale
+      listener?.invoke(newScale)
+    }
+  }
+
+  private class FakeWearAvatarFrameClock : WearAvatarFrameClock {
+    private val frames = Channel<Long>(Channel.UNLIMITED)
+    var awaitCount = 0
+      private set
+
+    override suspend fun awaitFrame(onFrame: (Long) -> Unit) {
+      awaitCount += 1
+      onFrame(frames.receive())
+    }
+
+    fun sendFrame(frameNanos: Long) {
+      assertTrue(frames.trySend(frameNanos).isSuccess)
+    }
+  }
+
+  private class TestLifecycleOwner : LifecycleOwner {
+    val registry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle = registry
   }
 }

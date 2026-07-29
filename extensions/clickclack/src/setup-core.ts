@@ -1,13 +1,17 @@
 // ClickClack plugin module implements non-interactive setup behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupAdapter,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   applyAccountNameToChannelSection,
-  applySetupAccountConfigPatch,
-  migrateBaseNameToDefaultAccount,
   moveSingleAccountChannelSectionToDefaultAccount,
+  patchScopedAccountConfig,
+  prepareScopedSetupConfig,
 } from "openclaw/plugin-sdk/setup";
 import { createSetupInputPresenceValidator } from "openclaw/plugin-sdk/setup-runtime";
 import { resolveClickClackAccountConfig } from "./accounts.js";
@@ -156,6 +160,7 @@ export function applyClickClackSetupConfigPatch(params: {
   accountId: string;
   name?: string;
   patch: Record<string, unknown>;
+  clearFields?: readonly string[];
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
   const scopedConfig =
@@ -166,73 +171,19 @@ export function applyClickClackSetupConfigPatch(params: {
           channelKey: channel,
           setupSurface: clickClackSetupAdapter,
         });
-  const namedConfig = applyAccountNameToChannelSection({
-    cfg: scopedConfig,
-    channelKey: channel,
-    accountId,
-    name: params.name,
-  });
-  const next =
-    accountId !== DEFAULT_ACCOUNT_ID
-      ? migrateBaseNameToDefaultAccount({
-          cfg: namedConfig,
-          channelKey: channel,
-        })
-      : namedConfig;
-  return applySetupAccountConfigPatch({
-    cfg: next,
+  return patchScopedAccountConfig({
+    cfg: prepareScopedSetupConfig({
+      cfg: scopedConfig,
+      channelKey: channel,
+      accountId,
+      name: params.name,
+      migrateBaseName: accountId !== DEFAULT_ACCOUNT_ID,
+    }),
     channelKey: channel,
     accountId,
     patch: params.patch,
+    ...(params.clearFields ? { clearFields: params.clearFields } : {}),
   });
-}
-
-function clearClickClackSetupConfigFields(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-  fields: string[];
-}): OpenClawConfig {
-  const clickclack = (params.cfg.channels as Record<string, unknown> | undefined)?.clickclack as
-    | (Record<string, unknown> & { accounts?: Record<string, Record<string, unknown>> })
-    | undefined;
-  if (!clickclack) {
-    return params.cfg;
-  }
-  const accountId = normalizeAccountId(params.accountId);
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    const nextClickClack = { ...clickclack };
-    for (const field of params.fields) {
-      delete nextClickClack[field];
-    }
-    return {
-      ...params.cfg,
-      channels: {
-        ...params.cfg.channels,
-        clickclack: nextClickClack,
-      },
-    } as OpenClawConfig;
-  }
-  const currentAccount = clickclack.accounts?.[accountId];
-  if (!currentAccount) {
-    return params.cfg;
-  }
-  const nextAccount = { ...currentAccount };
-  for (const field of params.fields) {
-    delete nextAccount[field];
-  }
-  return {
-    ...params.cfg,
-    channels: {
-      ...params.cfg.channels,
-      clickclack: {
-        ...clickclack,
-        accounts: {
-          ...clickclack.accounts,
-          [accountId]: nextAccount,
-        },
-      },
-    },
-  } as OpenClawConfig;
 }
 
 export function applyClickClackCredentialConfig(params: {
@@ -249,9 +200,10 @@ export function applyClickClackCredentialConfig(params: {
       : params.token !== undefined
         ? ["tokenFile"]
         : [];
-  const next = applyClickClackSetupConfigPatch({
+  return applyClickClackSetupConfigPatch({
     cfg: params.cfg,
     accountId: params.accountId,
+    clearFields: fieldsToClear,
     patch: params.useEnv
       ? {}
       : params.tokenFile
@@ -259,11 +211,6 @@ export function applyClickClackCredentialConfig(params: {
         : params.token !== undefined
           ? { token: params.token }
           : {},
-  });
-  return clearClickClackSetupConfigFields({
-    cfg: next,
-    accountId: params.accountId,
-    fields: fieldsToClear,
   });
 }
 
@@ -391,3 +338,51 @@ export const clickClackSetupAdapter: ChannelSetupAdapter = {
     });
   },
 };
+
+export const clickClackSetupContract = defineChannelSetupContract({
+  fields: {
+    code: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--code <code>", description: "ClickClack one-time setup code or setup URL" },
+    },
+    token: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token <token>", description: "ClickClack bot token" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "ClickClack bot token file" },
+    },
+    baseUrl: {
+      kind: "string",
+      cli: { flags: "--base-url <url>", description: "ClickClack API base URL" },
+    },
+    workspace: {
+      kind: "string",
+      cli: {
+        flags: "--workspace <workspace>",
+        description: "ClickClack workspace id, slug, or name",
+      },
+    },
+    defaultTo: {
+      kind: "string",
+      cli: { flags: "--default-to <target>", description: "Default ClickClack target" },
+    },
+    allowFrom: {
+      kind: "string-list",
+      cli: { flags: "--allow-from <ids>", description: "Allowed ClickClack senders" },
+    },
+    agentActivity: {
+      kind: "boolean",
+      cli: { flags: "--agent-activity", description: "Enable ClickClack agent activity" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use CLICKCLACK_BOT_TOKEN" },
+    },
+  },
+  legacyAdapter: clickClackSetupAdapter,
+});

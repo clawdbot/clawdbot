@@ -151,10 +151,13 @@ class ExecApproval extends OpenClawLightDomContentsElement {
       return nothing;
     }
     const decisions = resolveApprovalDecisions(active);
-    const handleCancel = () => {
-      if (!props.busy && decisions.includes("deny")) {
-        void props.onDecision(active.id, "deny");
+    const handleCancel = (event: Event) => {
+      if (props.busy || !decisions.includes("deny")) {
+        // Dismissal must never hide an approval that cannot yet be resolved.
+        event.preventDefault();
+        return;
       }
+      void props.onDecision(active.id, "deny");
     };
     return html`
       <openclaw-modal-dialog

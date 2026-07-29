@@ -67,6 +67,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
 }): Promise<PreparedEmbeddedAttemptHistory> {
   const { activeSession, attempt } = input;
+  const isSettledTurnFinalization = attempt.operation === "settled-tool-finalization";
   let systemPromptText = input.systemPromptText;
   const setSystemPrompt = (nextSystemPrompt: string) => {
     systemPromptText = nextSystemPrompt;
@@ -109,7 +110,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       policy: input.transcriptPolicy,
     });
 
-    if (attempt.sessionKey) {
+    if (attempt.sessionKey && !isSettledTurnFinalization) {
       const storePath = resolveStorePath(attempt.config?.session?.store, {
         agentId: input.sessionAgentId,
       });
@@ -148,7 +149,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       }
     }
 
-    if (attempt.sessionKey && attempt.config) {
+    if (attempt.sessionKey && attempt.config && !isSettledTurnFinalization) {
       // Capability guidance must include deferred OpenClaw tools without
       // interpreting arbitrary client tool names as native capabilities.
       const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
@@ -166,24 +167,29 @@ export async function prepareEmbeddedAttemptHistory(input: {
       }
     }
 
-    const heartbeatSummary =
-      attempt.config && input.sessionAgentId
-        ? resolveHeartbeatSummaryForAgent(attempt.config, input.sessionAgentId)
-        : undefined;
-    const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
-      validated,
-      heartbeatSummary?.ackMaxChars,
-      heartbeatSummary?.prompt,
-    );
-    const truncated = limitHistoryTurns(
-      heartbeatFiltered,
-      getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config),
-    );
-    // Truncation can orphan tool_result blocks by removing the assistant message
-    // that contained the matching tool_use, so repair the pairs once more.
-    const limited = input.transcriptPolicy.repairToolUseResultPairing
-      ? repairAttemptToolUseResultPairing(truncated, input.isOpenAIResponsesApi)
-      : truncated;
+    const limited = (() => {
+      if (isSettledTurnFinalization) {
+        return validated;
+      }
+      const heartbeatSummary =
+        attempt.config && input.sessionAgentId
+          ? resolveHeartbeatSummaryForAgent(attempt.config, input.sessionAgentId)
+          : undefined;
+      const heartbeatFiltered = filterHeartbeatTranscriptArtifacts(
+        validated,
+        heartbeatSummary?.ackMaxChars,
+        heartbeatSummary?.prompt,
+      );
+      const truncated = limitHistoryTurns(
+        heartbeatFiltered,
+        getHistoryLimitFromSessionKey(attempt.sessionKey, attempt.config),
+      );
+      // Truncation can orphan tool_result blocks by removing the assistant message
+      // that contained the matching tool_use, so repair the pairs once more.
+      return input.transcriptPolicy.repairToolUseResultPairing
+        ? repairAttemptToolUseResultPairing(truncated, input.isOpenAIResponsesApi)
+        : truncated;
+    })();
     input.cacheTrace?.recordStage("session:limited", { messages: limited });
     if (limited.length > 0 || prior.length > 0) {
       activeSession.agent.state.messages = limited;

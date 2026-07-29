@@ -8,6 +8,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { formatInvalidPortOption } from "../cli/error-format.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isValidEnvSecretRefId } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertSupportedRuntime } from "../infra/runtime-guard.js";
 import { resolveProviderMatch } from "../plugins/provider-auth-choice-helpers.js";
@@ -66,6 +67,16 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
       `Invalid --mode "${String(opts.mode)}". Use "local" or "remote", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
     );
   }
+  const remoteOnlyFlags = [
+    opts.remoteUrl !== undefined ? "--remote-url" : undefined,
+    opts.remoteToken !== undefined ? "--remote-token" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (opts.nonInteractive && (opts.mode ?? "local") === "local" && remoteOnlyFlags.length > 0) {
+    return rejectOption(
+      runtime,
+      `${remoteOnlyFlags.join(" and ")} ${remoteOnlyFlags.length === 1 ? "requires" : "require"} --mode remote in non-interactive setup.`,
+    );
+  }
   const choiceValidations: Array<readonly [string, string | undefined, readonly string[]]> = [
     ["--gateway-bind", opts.gatewayBind, ["loopback", "tailnet", "lan", "auto", "custom"]],
     ["--gateway-auth", opts.gatewayAuth, ["token", "password"]],
@@ -101,6 +112,27 @@ function validatePreflightOptions(opts: OnboardOptions, runtime: RuntimeEnv): bo
     (!Number.isFinite(opts.gatewayPort) || opts.gatewayPort <= 0 || opts.gatewayPort > 65_535)
   ) {
     return rejectOption(runtime, formatInvalidPortOption("--gateway-port"));
+  }
+  if (opts.gatewayTokenRefEnv !== undefined) {
+    const gatewayTokenRefEnv = opts.gatewayTokenRefEnv.trim();
+    if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
+      return rejectOption(
+        runtime,
+        "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
+      );
+    }
+    if (opts.gatewayToken !== undefined) {
+      return rejectOption(
+        runtime,
+        "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
+      );
+    }
+    if (!process.env[gatewayTokenRefEnv]?.trim()) {
+      return rejectOption(
+        runtime,
+        `Environment variable "${gatewayTokenRefEnv}" is missing or empty. Export it first, then rerun ${formatCliCommand("openclaw onboard")}.`,
+      );
+    }
   }
   if (opts.nonInteractive && opts.mode === "remote" && !opts.remoteUrl?.trim()) {
     return rejectOption(
@@ -451,6 +483,13 @@ export async function setupWizardCommand(
     runtime.exit(1);
     return;
   }
+  if (normalizedOpts.tui && normalizedOpts.nonInteractive) {
+    runtime.error(
+      "--tui cannot be combined with --non-interactive. Remove --tui for automation, or remove --non-interactive to open the terminal hatch.",
+    );
+    runtime.exit(1);
+    return;
+  }
   if (
     normalizedOpts.secretInputMode &&
     normalizedOpts.secretInputMode !== "plaintext" && // pragma: allowlist secret
@@ -466,6 +505,13 @@ export async function setupWizardCommand(
   if (normalizedOpts.resetScope && !VALID_RESET_SCOPES.has(normalizedOpts.resetScope)) {
     runtime.error(
       `Invalid --reset-scope. Use "config", "config+creds+sessions", or "full". Run ${formatCliCommand("openclaw onboard --reset --reset-scope config")} for a config-only reset.`,
+    );
+    runtime.exit(1);
+    return;
+  }
+  if (normalizedOpts.resetScope && !normalizedOpts.reset) {
+    runtime.error(
+      `--reset-scope requires --reset. Re-run with ${formatCliCommand(`openclaw onboard --reset --reset-scope ${normalizedOpts.resetScope}`)}.`,
     );
     runtime.exit(1);
     return;

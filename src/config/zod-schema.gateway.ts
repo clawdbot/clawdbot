@@ -23,6 +23,8 @@ export const GatewayConfigSchema = z
     customBindHost: z.string().optional(),
     controlUi: z
       .strictObject({
+        // Shipped legacy input. Doctor removes it after recording migration state.
+        dangerouslyDisableDeviceAuth: z.boolean().optional(),
         enabled: z.boolean().optional(),
         basePath: z.string().optional(),
         root: z.string().optional(),

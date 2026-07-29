@@ -1,3 +1,4 @@
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type {
@@ -45,10 +46,6 @@ function errorResult(error: unknown) {
         : "OP_ERROR";
   const message = error instanceof Error ? error.message : "1Password request failed";
   return jsonResult({ ok: false, error: { code, message } });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function redactPersistedOnePasswordResult(
