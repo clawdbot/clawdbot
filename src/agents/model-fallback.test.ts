@@ -41,7 +41,7 @@ import {
   createAgentRunRestartAbortError,
   resolveAgentRunErrorLifecycleFields,
 } from "./run-termination.js";
-import { SandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { toSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveSessionSuspensionReason } from "./session-suspension.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
@@ -1809,9 +1809,9 @@ describe("runWithModelFallback", () => {
         },
       },
     });
-    const provisioningError = new SandboxProvisioningError(
-      "Sandbox image not found: openclaw-sandbox:analyst. Build or pull it first.",
-      { backendId: "docker" },
+    const provisioningError = toSandboxProvisioningError(
+      new Error("Sandbox image not found: openclaw-sandbox:analyst. Build or pull it first."),
+      "docker",
     );
     const run = vi.fn().mockRejectedValue(provisioningError);
     const onError = vi.fn();

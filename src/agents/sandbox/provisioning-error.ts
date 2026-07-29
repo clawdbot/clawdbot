@@ -3,7 +3,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 const SANDBOX_PROVISIONING_ERROR_CODE = "sandbox_provisioning";
 
 /** Model-independent sandbox setup failure that must not consume model fallbacks. */
-export class SandboxProvisioningError extends Error {
+class SandboxProvisioningError extends Error {
   readonly code = SANDBOX_PROVISIONING_ERROR_CODE;
   readonly backendId: string;
 

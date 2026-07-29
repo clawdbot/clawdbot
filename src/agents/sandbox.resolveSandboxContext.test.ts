@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SkillUsagePath } from "../skills/types.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
-import { SandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
@@ -305,7 +305,7 @@ describe("resolveSandboxContext", () => {
         workspaceDir: await createSandboxFixtureDir("broken-sandbox"),
       }).catch((caught: unknown) => caught);
 
-      expect(error).toBeInstanceOf(SandboxProvisioningError);
+      expect(isSandboxProvisioningError(error)).toBe(true);
       expect(error).toMatchObject({
         name: "SandboxProvisioningError",
         code: "sandbox_provisioning",
@@ -358,7 +358,7 @@ describe("resolveSandboxContext", () => {
         workspaceDir: await createSandboxFixtureDir("registry-failure"),
       }).catch((caught: unknown) => caught);
 
-      expect(error).toBeInstanceOf(SandboxProvisioningError);
+      expect(isSandboxProvisioningError(error)).toBe(true);
       expect(error).toMatchObject({
         backendId: "registry-failure-backend",
         message: "sandbox registry write failed",
@@ -411,7 +411,7 @@ describe("resolveSandboxContext", () => {
         workspaceDir: await createSandboxFixtureDir("browser-failure"),
       }).catch((caught: unknown) => caught);
 
-      expect(error).toBeInstanceOf(SandboxProvisioningError);
+      expect(isSandboxProvisioningError(error)).toBe(true);
       expect(error).toMatchObject({
         backendId: "browser-failure-backend",
         message: "sandbox browser image missing",
@@ -464,7 +464,7 @@ describe("resolveSandboxContext", () => {
         workspaceDir: await createSandboxFixtureDir("bridge-failure"),
       }).catch((caught: unknown) => caught);
 
-      expect(error).toBeInstanceOf(SandboxProvisioningError);
+      expect(isSandboxProvisioningError(error)).toBe(true);
       expect(error).toMatchObject({
         backendId: "bridge-failure-backend",
         message: "sandbox filesystem bridge failed",

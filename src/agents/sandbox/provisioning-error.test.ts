@@ -1,21 +1,18 @@
 import { describe, expect, it } from "vitest";
-import {
-  isSandboxProvisioningError,
-  SandboxProvisioningError,
-  toSandboxProvisioningError,
-} from "./provisioning-error.js";
+import { isSandboxProvisioningError, toSandboxProvisioningError } from "./provisioning-error.js";
 
 describe("sandbox provisioning errors", () => {
   it("preserves an existing typed error", () => {
-    const error = new SandboxProvisioningError("missing image", { backendId: "docker" });
+    const error = toSandboxProvisioningError(new Error("missing image"), "docker");
 
     expect(toSandboxProvisioningError(error, "other")).toBe(error);
   });
 
   it("recognizes provisioning failures through wrapper causes", () => {
-    const provisioningError = new SandboxProvisioningError("backend unavailable", {
-      backendId: "docker",
-    });
+    const provisioningError = toSandboxProvisioningError(
+      new Error("backend unavailable"),
+      "docker",
+    );
     const wrapped = new Error("agent setup failed", { cause: provisioningError });
 
     expect(isSandboxProvisioningError(wrapped)).toBe(true);
