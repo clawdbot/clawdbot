@@ -41,7 +41,15 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   override disconnectedCallback(): void {
     this.readinessController?.abort();
     this.readinessController = null;
+    this.readinessKey = "";
+    this.readySource = "";
     this.sourceController.cancelPendingResume();
+    if (this.media) {
+      if (!this.media.paused) {
+        this.media.pause();
+      }
+      this.sourceController.reset(this.media);
+    }
     super.disconnectedCallback();
   }
 

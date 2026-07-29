@@ -106,7 +106,7 @@ describe("ChatVideoPlayer", () => {
     const player = document.createElement("openclaw-chat-video-player");
     player.src = "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket";
     player.sourceIdentity = "media:principal-clip";
-    player.authToken = "session-a-token";
+    player.authToken = "principal-a";
     player.label = "clip.avi";
     player.playback = "transcode";
     document.body.append(player);
@@ -114,7 +114,7 @@ describe("ChatVideoPlayer", () => {
       expect(player.querySelector("video")?.getAttribute("src")).toContain("playback=1"),
     );
 
-    player.authToken = "session-b-token";
+    player.authToken = "principal-b";
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(player.textContent).toContain("Preparing playback…"));
     expect(player.querySelector("video")?.hasAttribute("src")).toBe(false);
@@ -151,5 +151,31 @@ describe("ChatVideoPlayer", () => {
         .querySelector(".chat-assistant-attachment-card--video")
         ?.hasAttribute("data-unplayable"),
     ).toBe(false);
+  });
+
+  it("pauses and clears the source when disconnected while playing", async () => {
+    const player = document.createElement("openclaw-chat-video-player");
+    player.src = "https://example.com/playing.mp4";
+    player.sourceIdentity = "media:playing";
+    player.label = "playing.mp4";
+    document.body.append(player);
+    await player.updateComplete;
+    const video = player.querySelector("video")!;
+    let paused = false;
+    Object.defineProperty(video, "paused", { configurable: true, get: () => paused });
+    const pause = vi.spyOn(video, "pause").mockImplementation(() => {
+      paused = true;
+    });
+
+    player.remove();
+
+    expect(pause).toHaveBeenCalledOnce();
+    expect(paused).toBe(true);
+    expect(video.hasAttribute("src")).toBe(false);
+
+    document.body.append(player);
+    await vi.waitFor(() =>
+      expect(video.getAttribute("src")).toBe("https://example.com/playing.mp4"),
+    );
   });
 });
