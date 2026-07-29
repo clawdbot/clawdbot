@@ -16,6 +16,7 @@ type PairingChallengeParams = {
     meta?: PairingMeta;
   }) => Promise<{ code: string; created: boolean }>;
   sendPairingReply: (text: string) => Promise<void>;
+  pairingTemplate?: string;
   buildReplyText?: (params: { code: string; senderIdLine: string }) => string;
   onCreated?: (params: { code: string }) => void;
   onReplyError?: (err: unknown) => void;
@@ -73,12 +74,14 @@ export async function issuePairingChallenge(
     meta: params.meta,
   }).catch(() => undefined);
   const replyText =
-    params.buildReplyText?.({ code, senderIdLine: params.senderIdLine }) ??
-    buildPairingReply({
-      channel: params.channel,
-      idLine: params.senderIdLine,
-      code,
-    });
+    params.pairingTemplate === undefined && params.buildReplyText
+      ? params.buildReplyText({ code, senderIdLine: params.senderIdLine })
+      : buildPairingReply({
+          channel: params.channel,
+          idLine: params.senderIdLine,
+          code,
+          template: params.pairingTemplate,
+        });
   try {
     await params.sendPairingReply(replyText);
   } catch (err) {

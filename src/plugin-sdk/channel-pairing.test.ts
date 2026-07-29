@@ -12,6 +12,7 @@ import {
   createChannelPairingChallengeIssuer,
   createChannelPairingController,
 } from "./channel-pairing.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
 function createReplyCollector() {
   const replies: string[] = [];
@@ -25,6 +26,7 @@ function createReplyCollector() {
 
 afterEach(() => {
   resetGlobalHookRunner();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("createChannelPairingController", () => {
@@ -120,6 +122,35 @@ describe("createChannelPairingController", () => {
       }),
     );
   });
+
+  it("uses the current global pairing template", async () => {
+    const { replies, sendPairingReply } = createReplyCollector();
+    const runtime = {
+      config: {
+        current: () => ({ messages: { pairingTemplate: "Pair {channel}: {code}" } }),
+      },
+      channel: {
+        pairing: {
+          readAllowFromStore: vi.fn(async () => []),
+          removeAllowFromStoreEntry: vi.fn(async () => ({ changed: false, allowFrom: [] })),
+          upsertPairingRequest: vi.fn(async () => ({ code: "CFG123", created: true })),
+        },
+      },
+    } as unknown as PluginRuntime;
+
+    const pairing = createChannelPairingController({
+      core: runtime,
+      channel: "googlechat",
+      accountId: "primary",
+    });
+    await pairing.issueChallenge({
+      senderId: "user-4",
+      senderIdLine: "Your id: user-4",
+      sendPairingReply,
+    });
+
+    expect(replies).toEqual(["Pair googlechat: CFG123"]);
+  });
 });
 
 describe("createChannelPairingChallengeIssuer", () => {
@@ -173,5 +204,22 @@ describe("createChannelPairingChallengeIssuer", () => {
         senderId: "user-3",
       }),
     );
+  });
+
+  it("uses the global runtime pairing template", async () => {
+    setRuntimeConfigSnapshot({ messages: { pairingTemplate: "Pair {channel}: {code}" } });
+    const { replies, sendPairingReply } = createReplyCollector();
+    const issueChallenge = createChannelPairingChallengeIssuer({
+      channel: "quietchat",
+      upsertPairingRequest: vi.fn(async () => ({ code: "GLOBAL1", created: true })),
+    });
+
+    await issueChallenge({
+      senderId: "user-5",
+      senderIdLine: "Your id: user-5",
+      sendPairingReply,
+    });
+
+    expect(replies).toEqual(["Pair quietchat: GLOBAL1"]);
   });
 });

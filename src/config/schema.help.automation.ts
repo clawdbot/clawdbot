@@ -231,6 +231,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Message infrastructure and cross-agent defaults. Root siblings own infrastructure and cross-agent defaults; agents.defaults owns agent-loop behavior; agent entries may override either where supported.",
   "messages.visibleReplies":
     'Controls model-authored source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for normal assistant output and generic tool media; explicitly host-owned runtime output remains deliverable except for ambient room events. "automatic" posts normal replies as before.',
+  "messages.pairingTemplate":
+    "Template sent to new pairing requesters. Use the case-sensitive variables {channel}, {senderIdLine}, {code}, and {approveCommand}. Include {code} or {approveCommand} so the requester receives an actionable approval credential.",
   "messages.usageTemplate":
     "Custom /usage full footer template, either an inline object or a JSON file path. Invalid or unavailable templates fall back to the built-in usage line.",
   "messages.responseUsage":

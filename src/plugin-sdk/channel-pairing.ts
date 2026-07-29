@@ -12,17 +12,19 @@ export {
 import { issuePairingChallenge } from "../pairing/pairing-challenge.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createScopedPairingAccess } from "./pairing-access.js";
+import { getRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
 type ScopedPairingAccess = ReturnType<typeof createScopedPairingAccess>;
+type PublicPairingChallengeParams = Omit<
+  Parameters<typeof issuePairingChallenge>[0],
+  "channel" | "accountId" | "upsertPairingRequest" | "pairingTemplate"
+>;
 
 /** Pairing helpers scoped to one channel account. */
 export type ChannelPairingController = ScopedPairingAccess & {
   /** Issue a pairing challenge using the controller's channel and scoped store writer. */
   issueChallenge: (
-    params: Omit<
-      Parameters<typeof issuePairingChallenge>[0],
-      "channel" | "accountId" | "upsertPairingRequest"
-    >,
+    params: PublicPairingChallengeParams,
   ) => ReturnType<typeof issuePairingChallenge>;
 };
 
@@ -35,19 +37,15 @@ export function createChannelPairingChallengeIssuer(params: {
   /** Store writer that persists pending pairing requests for the bound channel. */
   upsertPairingRequest: Parameters<typeof issuePairingChallenge>[0]["upsertPairingRequest"];
 }) {
-  return (
-    /** Challenge details supplied at message handling time. */
-    challenge: Omit<
-      Parameters<typeof issuePairingChallenge>[0],
-      "channel" | "accountId" | "upsertPairingRequest"
-    >,
-  ) =>
-    issuePairingChallenge({
+  return (challenge: PublicPairingChallengeParams) => {
+    return issuePairingChallenge({
       channel: params.channel,
       accountId: params.accountId,
       upsertPairingRequest: params.upsertPairingRequest,
       ...challenge,
+      pairingTemplate: getRuntimeConfigSnapshot()?.messages?.pairingTemplate,
     });
+  };
 }
 
 /** Build the full scoped pairing controller used by channel runtime code. */
@@ -62,10 +60,15 @@ export function createChannelPairingController(params: {
   const access = createScopedPairingAccess(params);
   return {
     ...access,
-    issueChallenge: createChannelPairingChallengeIssuer({
-      channel: params.channel,
-      accountId: access.accountId,
-      upsertPairingRequest: access.upsertPairingRequest,
-    }),
+    issueChallenge: (challenge) =>
+      issuePairingChallenge({
+        channel: params.channel,
+        accountId: access.accountId,
+        upsertPairingRequest: access.upsertPairingRequest,
+        ...challenge,
+        pairingTemplate:
+          params.core.config?.current?.().messages?.pairingTemplate ??
+          getRuntimeConfigSnapshot()?.messages?.pairingTemplate,
+      }),
   };
 }

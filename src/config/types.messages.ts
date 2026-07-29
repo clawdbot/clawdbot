@@ -98,6 +98,13 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /**
+   * Template used for replies to new pairing requests.
+   *
+   * Supported variables: `{channel}`, `{senderIdLine}`, `{code}`, and
+   * `{approveCommand}`. Variables are case-sensitive.
+   */
+  pairingTemplate?: string;
   /** Custom `/usage full` footer template, inline or JSON file path. */
   usageTemplate?: string | Record<string, unknown>;
   /**

@@ -69,4 +69,36 @@ describe("buildPairingReply", () => {
   it.each(pairingReplyCases)("formats pairing reply for $channel", (testCase) => {
     expectProfileAwarePairingReply(testCase);
   });
+
+  it("renders every supported custom-template variable", () => {
+    const text = buildPairingReply({
+      channel: "whatsapp",
+      idLine: "Your WhatsApp phone number: +15550003333",
+      code: "MNO345",
+      template:
+        "{channel}\n{senderIdLine}\n{code}\n{approveCommand}\nAgain: {code}\nUnknown: {owner}",
+    });
+
+    expect(text).toBe(
+      [
+        "whatsapp",
+        "Your WhatsApp phone number: +15550003333",
+        "MNO345",
+        "openclaw --profile isolated pairing approve whatsapp MNO345",
+        "Again: MNO345",
+        "Unknown: {owner}",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves an empty custom template", () => {
+    expect(
+      buildPairingReply({
+        channel: "telegram",
+        idLine: "Your Telegram user id: 42",
+        code: "QRS678",
+        template: "",
+      }),
+    ).toBe("");
+  });
 });

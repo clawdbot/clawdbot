@@ -135,6 +135,13 @@ export const MessagesSchema = z
   .object({
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
+    pairingTemplate: z
+      .string()
+      .refine(
+        (template) => template.includes("{code}") || template.includes("{approveCommand}"),
+        "Pairing template must include {code} or {approveCommand}",
+      )
+      .optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
     responseUsage: z
       .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])

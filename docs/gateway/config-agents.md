@@ -1293,6 +1293,7 @@ Membership and visibility changes are written into the session transcript as sys
 {
   messages: {
     responsePrefix: "🦞", // or "auto"
+    pairingTemplate: "Approval needed.\n\n{senderIdLine}\nCode: {code}\n\nSend this to the owner:\n{approveCommand}",
     ackReaction: "👀",
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
     queue: {
@@ -1333,6 +1334,21 @@ Resolution (most specific wins): account → channel → global. `""` disables a
 | `{identity.name}` | Agent identity name    | (same as `"auto"`)          |
 
 Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
+
+### Pairing reply template
+
+`messages.pairingTemplate` customizes the reply sent to a new requester when a channel uses `dmPolicy: "pairing"`. It applies globally to every pairing-capable channel. When unset, OpenClaw uses its built-in reply.
+
+The template preserves whitespace and supports these case-sensitive variables:
+
+| Variable           | Description                                      |
+| ------------------ | ------------------------------------------------ |
+| `{channel}`        | Channel identifier, such as `whatsapp`           |
+| `{senderIdLine}`   | Channel-formatted sender identifier line         |
+| `{code}`           | Pairing code                                     |
+| `{approveCommand}` | Profile-aware CLI command that approves the code |
+
+Every occurrence is replaced. Unknown variables remain unchanged.
 
 ### Ack reaction
 

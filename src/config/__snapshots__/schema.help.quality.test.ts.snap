@@ -222,6 +222,7 @@ exports[`config tier coverage > keeps the curated common leaf set reviewable 1`]
   "messages.groupChat.mentionPatterns.*",
   "messages.groupChat.unmentionedInbound",
   "messages.groupChat.visibleReplies",
+  "messages.pairingTemplate",
   "messages.queue.byChannel.discord",
   "messages.queue.byChannel.googlechat",
   "messages.queue.byChannel.imessage",

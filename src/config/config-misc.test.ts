@@ -937,6 +937,32 @@ describe("config identity/materialization regressions", () => {
     }
   });
 
+  it("accepts a multiline pairing template", () => {
+    const pairingTemplate = "Approval required.\n{senderIdLine}\n{code}";
+    const res = validateConfigObject({ messages: { pairingTemplate } });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.messages?.pairingTemplate).toBe(pairingTemplate);
+    }
+  });
+
+  it.each(["", "Contact the operator", "Sender: {senderIdLine}"])(
+    "rejects a non-actionable pairing template: %j",
+    (pairingTemplate) => {
+      const result = validateConfigObject({ messages: { pairingTemplate } });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toContainEqual(
+          expect.objectContaining({
+            path: "messages.pairingTemplate",
+            message: expect.stringContaining("{code} or {approveCommand}"),
+          }),
+        );
+      }
+    },
+  );
+
   it("accepts blank model provider apiKey values", () => {
     const res = validateConfigObjectRaw({
       models: {
