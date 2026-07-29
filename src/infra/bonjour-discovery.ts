@@ -566,7 +566,16 @@ async function discoverViaAvahi(
     args.push("-d", domain.replace(/\.$/, ""));
   }
   const browse = await run(args, { timeoutMs });
-  return parseAvahiBrowse(browse.stdout).map((beacon) => Object.assign({}, beacon, { domain }));
+  return parseAvahiBrowse(browse.stdout).map((beacon) => ({
+    instanceName: beacon.instanceName,
+    displayName: beacon.displayName,
+    host: beacon.host,
+    port: beacon.port,
+    domain,
+    // Only explicitly known top-level fields are carried forward; the
+    // raw txt Record<string,string> and any other network-origin data is
+    // discarded.
+  }));
 }
 
 export async function discoverGatewayBeacons(
