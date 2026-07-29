@@ -151,13 +151,6 @@ export function createGatewayHooksRequestHandler(params: {
     const jobId = randomUUID();
     const runId = randomUUID();
     const nowMs = resolveDateTimestampMs(Date.now());
-    const delivery = value.deliver
-      ? {
-          mode: "announce" as const,
-          channel: value.channel,
-          to: value.to,
-        }
-      : { mode: "none" as const };
     const job: CronJob = {
       id: jobId,
       agentId: value.agentId,
@@ -177,7 +170,7 @@ export function createGatewayHooksRequestHandler(params: {
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
         externalContentSource: value.externalContentSource,
       },
-      delivery,
+      delivery: value.delivery,
       state: { nextRunAtMs: nowMs },
     };
     let hookEventSessionKey: string | undefined;

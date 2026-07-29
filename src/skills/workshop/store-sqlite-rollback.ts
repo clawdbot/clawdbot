@@ -135,3 +135,40 @@ export async function readSkillProposalRollback(
     ...(row.support_files_json ? { supportFiles: parseJson(row.support_files_json) } : {}),
   });
 }
+
+export async function clearSkillProposalRollback(params: {
+  proposalId: string;
+  expectedRecordJson: string;
+  store?: SkillWorkshopStoreOptions;
+}): Promise<boolean> {
+  assertProposalId(params.proposalId);
+  ensureSkillWorkshopSchema(params.store);
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(db);
+      const proposal = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("skill_workshop_proposals")
+          .select(["record_json", "status"])
+          .where("proposal_id", "=", params.proposalId),
+      );
+      if (
+        !proposal ||
+        proposal.status !== "pending" ||
+        proposal.record_json !== params.expectedRecordJson
+      ) {
+        return false;
+      }
+      executeSqliteQuerySync(
+        db,
+        kysely
+          .deleteFrom("skill_workshop_proposal_rollbacks")
+          .where("proposal_id", "=", params.proposalId),
+      );
+      return true;
+    },
+    databaseOptions(params.store),
+    { operationLabel: "skill-workshop.rollback.clear" },
+  );
+}

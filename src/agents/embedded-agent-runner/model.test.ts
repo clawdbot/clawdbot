@@ -905,6 +905,7 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
     const preparedModelRuntime = {
       agentDir: "/tmp/agent",
+      activeProjectKeys: [],
       config: cfg,
       metadataSnapshot: { plugins: [] } as never,
       modelCatalog: { entries: [], routeVariants: [] },

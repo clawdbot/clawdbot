@@ -26,6 +26,18 @@ import type {
 } from "./types.js";
 
 export type NewSkillProposalEvent = Omit<SkillProposalEvent, "sequence">;
+type StoredSkillProposalEventRow = {
+  sequence: number;
+  event_id: string;
+  proposal_id: string;
+  proposed_version: string;
+  revision_hash: string;
+  event_type: string;
+  occurred_at: string;
+  actor_json: string;
+  correlation_id: string | null;
+  payload_json: string | null;
+};
 const STORED_EVENT_DATA_VERSION = 1;
 const MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES = MAX_SKILL_PROPOSAL_EVALUATION_BYTES + 64 * 1024;
 const MAX_SKILL_PROPOSAL_EVENTS_RESPONSE_BYTES = 2 * 1024 * 1024;
@@ -68,6 +80,18 @@ export function appendSkillProposalEvent(
     throw new Error(`Failed to append Skill Workshop event: ${event.eventId}`);
   }
   return { ...event, sequence: inserted.sequence };
+}
+
+export function readStoredSkillProposalEvent(
+  eventId: string,
+  options: SkillWorkshopStoreOptions = {},
+): SkillProposalEvent | null {
+  const { database, kysely } = openSkillWorkshopStore(options);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    kysely.selectFrom("skill_workshop_proposal_events").selectAll().where("event_id", "=", eventId),
+  );
+  return row ? parseStoredSkillProposalEventRow(row) : null;
 }
 
 export function listStoredSkillProposalEvents(
@@ -128,32 +152,10 @@ export function listStoredSkillProposalEvents(
   let responseBytes = 2;
   const events: SkillProposalEvent[] = [];
   for (const row of rows.slice(0, limit)) {
-    const actor = parseSkillProposalEventActor(parseJson(row.actor_json));
-    if (!actor || !isSkillProposalEventType(row.event_type)) {
+    const event = parseStoredSkillProposalEventRow(row);
+    if (!event) {
       continue;
     }
-    if (
-      row.payload_json &&
-      Buffer.byteLength(row.payload_json, "utf8") > MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES
-    ) {
-      throw new Error(
-        `Stored Skill Workshop event ${row.event_id} exceeds ${MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES} bytes and cannot be replayed safely.`,
-      );
-    }
-    const storedData = parseSkillProposalEventData(parseJson(row.payload_json));
-    const event: SkillProposalEvent = {
-      sequence: row.sequence,
-      eventId: row.event_id,
-      proposalId: row.proposal_id,
-      proposedVersion: row.proposed_version,
-      revisionHash: row.revision_hash,
-      type: row.event_type,
-      occurredAt: row.occurred_at,
-      actor,
-      ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
-      ...(storedData.payload ? { payload: storedData.payload } : {}),
-      ...(storedData.evaluation ? { evaluation: storedData.evaluation } : {}),
-    };
     const eventBytes = Buffer.byteLength(JSON.stringify(event), "utf8") + 1;
     if (
       events.length > 0 &&
@@ -168,6 +170,37 @@ export function listStoredSkillProposalEvents(
   return {
     events,
     ...(hasMore && events.length > 0 ? { nextSequence: events[events.length - 1]!.sequence } : {}),
+  };
+}
+
+function parseStoredSkillProposalEventRow(
+  row: StoredSkillProposalEventRow,
+): SkillProposalEvent | null {
+  const actor = parseSkillProposalEventActor(parseJson(row.actor_json));
+  if (!actor || !isSkillProposalEventType(row.event_type)) {
+    return null;
+  }
+  if (
+    row.payload_json &&
+    Buffer.byteLength(row.payload_json, "utf8") > MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES
+  ) {
+    throw new Error(
+      `Stored Skill Workshop event ${row.event_id} exceeds ${MAX_SKILL_PROPOSAL_EVENT_DATA_BYTES} bytes and cannot be replayed safely.`,
+    );
+  }
+  const storedData = parseSkillProposalEventData(parseJson(row.payload_json));
+  return {
+    sequence: row.sequence,
+    eventId: row.event_id,
+    proposalId: row.proposal_id,
+    proposedVersion: row.proposed_version,
+    revisionHash: row.revision_hash,
+    type: row.event_type,
+    occurredAt: row.occurred_at,
+    actor,
+    ...(row.correlation_id ? { correlationId: row.correlation_id } : {}),
+    ...(storedData.payload ? { payload: storedData.payload } : {}),
+    ...(storedData.evaluation ? { evaluation: storedData.evaluation } : {}),
   };
 }
 

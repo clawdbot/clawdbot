@@ -322,6 +322,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           workspaceDir: effectiveWorkspace,
           spawnWorkspaceDir,
           config: params.config,
+          webSearchEnabled: params.toolOverrides?.webSearch !== false,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           modelProvider: effectiveModel.provider,
@@ -553,9 +554,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       toolNames: effectiveTools.map((tool) => tool.name),
       capabilityToolNames: allowedToolNames,
     });
-    const activeProjectKeys = params.preparedModelRuntime?.projectKey
-      ? [params.preparedModelRuntime.projectKey]
-      : [];
+    const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,

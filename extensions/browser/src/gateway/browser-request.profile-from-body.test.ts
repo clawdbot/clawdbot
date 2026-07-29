@@ -7,11 +7,33 @@ const {
   isNodeCommandAllowedMock,
   resolveNodeCommandAllowlistMock,
   startBrowserControlServiceFromConfigMock,
-} = vi.hoisted(() => ({
-  loadConfigMock: vi.fn(),
-  isNodeCommandAllowedMock: vi.fn(),
-  resolveNodeCommandAllowlistMock: vi.fn(),
-  startBrowserControlServiceFromConfigMock: vi.fn(async () => false),
+  createBrowserControlContextMock,
+  createBrowserRouteDispatcherMock,
+  dispatchBrowserRouteMock,
+} = vi.hoisted(() => {
+  const dispatchMock = vi.fn();
+  return {
+    loadConfigMock: vi.fn(),
+    isNodeCommandAllowedMock: vi.fn(),
+    resolveNodeCommandAllowlistMock: vi.fn(),
+    startBrowserControlServiceFromConfigMock: vi.fn(async () => false),
+    createBrowserControlContextMock: vi.fn(() => ({ control: true })),
+    dispatchBrowserRouteMock: dispatchMock,
+    createBrowserRouteDispatcherMock: vi.fn(() => ({
+      dispatch: dispatchMock,
+    })),
+  };
+});
+
+const uploadMocks = vi.hoisted(() => ({
+  isBrowserProxyUploadRequest: vi.fn(
+    (params: { method: string; path: string; body: unknown }) =>
+      params.method === "POST" &&
+      params.path === "/hooks/file-chooser" &&
+      Array.isArray((params.body as { paths?: unknown } | undefined)?.paths) &&
+      ((params.body as { paths: unknown[] }).paths.length ?? 0) > 0,
+  ),
+  prepareBrowserProxyUploadRequest: vi.fn(),
 }));
 
 vi.mock("../core-api.js", async () => {
@@ -19,8 +41,12 @@ vi.mock("../core-api.js", async () => {
   return {
     ...actual,
     startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
+    createBrowserControlContext: createBrowserControlContextMock,
+    createBrowserRouteDispatcher: createBrowserRouteDispatcherMock,
   };
 });
+
+vi.mock("../browser-proxy-upload.js", () => uploadMocks);
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
@@ -52,6 +78,7 @@ type TestNode = {
   displayName?: string;
   caps?: string[];
   commands?: string[];
+  declaredCommands?: string[];
   platform?: string;
 };
 
@@ -65,7 +92,7 @@ function createContext(invokeResult?: unknown, connectedNodes?: TestNode[]) {
         {
           nodeId: "node-1",
           caps: ["browser"],
-          commands: ["browser.proxy"],
+          commands: ["browser.proxy", "browser.proxy.upload.v1"],
           platform: "linux",
         },
       ],
@@ -120,7 +147,14 @@ describe("browser.request profile selection", () => {
     });
     resolveNodeCommandAllowlistMock.mockReturnValue([]);
     isNodeCommandAllowedMock.mockReturnValue({ ok: true });
-    startBrowserControlServiceFromConfigMock.mockClear();
+    startBrowserControlServiceFromConfigMock.mockReset().mockResolvedValue(false);
+    createBrowserControlContextMock.mockClear();
+    createBrowserRouteDispatcherMock.mockClear();
+    dispatchBrowserRouteMock.mockReset();
+    uploadMocks.isBrowserProxyUploadRequest.mockClear();
+    uploadMocks.prepareBrowserProxyUploadRequest
+      .mockReset()
+      .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
   });
 
   it("forces system-profile import host-local even when a browser node is connected", async () => {
@@ -297,6 +331,145 @@ describe("browser.request profile selection", () => {
     expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
     expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
     expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
+  });
+
+  it("sends Gateway-owned upload bytes without forwarding source paths", async () => {
+    const upload = {
+      envelope: "browser-upload-v1",
+      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+    };
+    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
+      body: { ref: "e12" },
+      upload,
+    });
+
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "POST",
+      path: "/hooks/file-chooser",
+      body: {
+        paths: ["/tmp/openclaw/uploads/report.txt"],
+        ref: "e12",
+      },
+    });
+
+    expect(invokeParams(nodeRegistry).params).toMatchObject({
+      body: { ref: "e12" },
+      upload,
+    });
+    expect(invokeParams(nodeRegistry).command).toBe("browser.proxy.upload.v1");
+    expect(invokeParams(nodeRegistry).params?.body).not.toHaveProperty("paths");
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
+    const originalBody = {
+      paths: ["/tmp/openclaw/uploads/report.txt"],
+      ref: "e12",
+    };
+    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
+      body: { ref: "e12" },
+      upload: {
+        envelope: "browser-upload-v1",
+        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+      },
+    });
+    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
+    dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: { ok: true } });
+
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/hooks/file-chooser",
+        body: originalBody,
+      },
+      undefined,
+      [
+        {
+          nodeId: "node-1",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+      ],
+    );
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(dispatchBrowserRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        path: "/hooks/file-chooser",
+        body: originalBody,
+      }),
+    );
+    expect(firstRespondCall(respond)).toEqual([true, { ok: true }]);
+    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects a configured old node upload before node dispatch", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
+    });
+    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
+      body: { ref: "e12" },
+      upload: {
+        envelope: "browser-upload-v1",
+        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
+      },
+    });
+
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/hooks/file-chooser",
+        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
+      },
+      undefined,
+      [
+        {
+          nodeId: "node-1",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          platform: "linux",
+        },
+      ],
+    );
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "browser node does not support remote upload transfer",
+    );
+    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+  });
+
+  it("explains when configured-node upload support is awaiting approval", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
+    });
+
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/hooks/file-chooser",
+        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
+      },
+      undefined,
+      [
+        {
+          nodeId: "node-1",
+          caps: ["browser"],
+          commands: ["browser.proxy"],
+          declaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
+          platform: "linux",
+        },
+      ],
+    );
+
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "remote upload transfer is pending approval",
+    );
+    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
   });
 
   it("preserves a configured node failure instead of falling back to the host", async () => {

@@ -152,7 +152,7 @@ vi.mock("../infra/device-pairing.js", () => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
 import type { CliDeps } from "../cli/deps.js";
-import type { HealthSummary } from "../commands/health.js";
+import type { HealthSummary } from "./health/types.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 
@@ -1953,6 +1953,7 @@ describe("agent request events", () => {
           mediaRef: "media://inbound/offloaded",
           id: "offloaded",
           path: "/media/inbound/offloaded.png",
+          kind: "image",
           mimeType: "image/png",
           label: "offloaded.png",
           sizeBytes: 2_100_000,

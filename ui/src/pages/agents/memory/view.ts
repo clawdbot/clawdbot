@@ -3,6 +3,7 @@ import "../../../styles/lobster-pet.css";
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { renderHubTabs } from "../../../components/hub-tabs.ts";
 import {
   createLobsterPetLook,
   lobsterPetSeed,
@@ -281,42 +282,36 @@ export function renderDreaming(props: DreamingProps) {
     <div class="dreams-page">
       <!-- ── Sub-tab bar ── -->
       <div class="dreams__topbar">
-        <nav class="dreams__tabs">
-          <button
-            class="dreams__tab ${state.activeSubTab === "scene" ? "dreams__tab--active" : ""}"
-            @click=${() => {
-              state.activeSubTab = "scene";
-              props.onViewStateChange();
-            }}
-          >
-            ${t("dreaming.tabs.scene")}
-          </button>
-          <button
-            class="dreams__tab ${state.activeSubTab === "diary" ? "dreams__tab--active" : ""}"
-            @click=${() => {
-              state.activeSubTab = "diary";
-              props.onViewStateChange();
-            }}
-          >
-            ${t("dreaming.tabs.diary")}
-          </button>
-          <button
-            class="dreams__tab ${state.activeSubTab === "advanced" ? "dreams__tab--active" : ""}"
-            @click=${() => {
-              state.activeSubTab = "advanced";
-              props.onViewStateChange();
-            }}
-          >
-            ${t("dreaming.tabs.advanced")}
-          </button>
-        </nav>
+        ${renderHubTabs({
+          id: "dreams",
+          active: state.activeSubTab,
+          tabs: [
+            { value: "scene", label: t("dreaming.tabs.scene") },
+            { value: "diary", label: t("dreaming.tabs.diary") },
+            { value: "advanced", label: t("dreaming.tabs.advanced") },
+          ],
+          ariaLabel: t("memoryPage.tabs.dreams"),
+          panelId: "dreams-panel",
+          variant: "sub",
+          onSelect: (tab) => {
+            state.activeSubTab = tab;
+            props.onViewStateChange();
+          },
+        })}
       </div>
 
-      ${state.activeSubTab === "scene"
-        ? renderScene(props, idle, dreamText)
-        : state.activeSubTab === "diary"
-          ? renderDiarySection(props)
-          : renderAdvancedSection(props)}
+      <div
+        id="dreams-panel"
+        class="dreams__panel"
+        role="tabpanel"
+        aria-labelledby=${`dreams-tab-${state.activeSubTab}`}
+      >
+        ${state.activeSubTab === "scene"
+          ? renderScene(props, idle, dreamText)
+          : state.activeSubTab === "diary"
+            ? renderDiarySection(props)
+            : renderAdvancedSection(props)}
+      </div>
     </div>
   `;
 }
@@ -1524,47 +1519,24 @@ function renderDiarySection(props: DreamingProps) {
       <div class="dreams-diary__chrome">
         <div class="dreams-diary__header">
           <span class="dreams-diary__title">${t("dreaming.diary.title")}</span>
-          <div class="dreams-diary__subtabs">
-            <button
-              class="dreams-diary__subtab ${activeDiarySubTab === "dreams"
-                ? "dreams-diary__subtab--active"
-                : ""}"
-              @click=${() => {
-                resetWikiPreview(state);
-                state.activeDiarySubTab = "dreams";
-                state.diaryPage = 0;
-                props.onViewStateChange();
-              }}
-            >
-              ${t("dreaming.wiki.dreamsTab")}
-            </button>
-            <button
-              class="dreams-diary__subtab ${activeDiarySubTab === "insights"
-                ? "dreams-diary__subtab--active"
-                : ""}"
-              @click=${() => {
-                resetWikiPreview(state);
-                state.activeDiarySubTab = "insights";
-                state.diaryPage = 0;
-                props.onViewStateChange();
-              }}
-            >
-              ${t("dreaming.wiki.insightsTab")}
-            </button>
-            <button
-              class="dreams-diary__subtab ${activeDiarySubTab === "palace"
-                ? "dreams-diary__subtab--active"
-                : ""}"
-              @click=${() => {
-                resetWikiPreview(state);
-                state.activeDiarySubTab = "palace";
-                state.diaryPage = 0;
-                props.onViewStateChange();
-              }}
-            >
-              ${t("dreaming.wiki.palaceTab")}
-            </button>
-          </div>
+          ${renderHubTabs({
+            id: "dream-diary",
+            active: activeDiarySubTab,
+            tabs: [
+              { value: "dreams", label: t("dreaming.wiki.dreamsTab") },
+              { value: "insights", label: t("dreaming.wiki.insightsTab") },
+              { value: "palace", label: t("dreaming.wiki.palaceTab") },
+            ],
+            ariaLabel: t("dreaming.diary.title"),
+            panelId: "dream-diary-panel",
+            variant: "sub",
+            onSelect: (tab) => {
+              resetWikiPreview(state);
+              state.activeDiarySubTab = tab;
+              state.diaryPage = 0;
+              props.onViewStateChange();
+            },
+          })}
           <button
             class="btn btn--subtle btn--sm"
             ?disabled=${memoryWikiUnavailable
@@ -1606,32 +1578,38 @@ function renderDiarySection(props: DreamingProps) {
         ${renderDiarySubtabExplainer(activeDiarySubTab)}
       </div>
 
-      ${memoryWikiUnavailable
-        ? html`
-            <div class="dreams-diary__empty">
-              <div class="dreams-diary__empty-text">${t("dreaming.wiki.unavailable")}</div>
-              <div class="dreams-diary__empty-hint">
-                ${t("dreaming.wiki.unavailablePluginPrefix")}
-                <code>memory-wiki</code> ${t("dreaming.wiki.unavailablePluginSuffix")}
+      <div
+        id="dream-diary-panel"
+        role="tabpanel"
+        aria-labelledby=${`dream-diary-tab-${activeDiarySubTab}`}
+      >
+        ${memoryWikiUnavailable
+          ? html`
+              <div class="dreams-diary__empty">
+                <div class="dreams-diary__empty-text">${t("dreaming.wiki.unavailable")}</div>
+                <div class="dreams-diary__empty-hint">
+                  ${t("dreaming.wiki.unavailablePluginPrefix")}
+                  <code>memory-wiki</code> ${t("dreaming.wiki.unavailablePluginSuffix")}
+                </div>
+                <div class="dreams-diary__empty-hint">
+                  ${t("dreaming.wiki.enablePrefix")}
+                  <code>plugins.entries.memory-wiki.enabled = true</code>${t(
+                    "dreaming.wiki.enableSuffix",
+                  )}
+                </div>
+                <div class="dreams-diary__empty-actions">
+                  <button class="btn btn--subtle btn--sm" @click=${() => props.onOpenConfig()}>
+                    ${t("dreaming.wiki.openConfig")}
+                  </button>
+                </div>
               </div>
-              <div class="dreams-diary__empty-hint">
-                ${t("dreaming.wiki.enablePrefix")}
-                <code>plugins.entries.memory-wiki.enabled = true</code>${t(
-                  "dreaming.wiki.enableSuffix",
-                )}
-              </div>
-              <div class="dreams-diary__empty-actions">
-                <button class="btn btn--subtle btn--sm" @click=${() => props.onOpenConfig()}>
-                  ${t("dreaming.wiki.openConfig")}
-                </button>
-              </div>
-            </div>
-          `
-        : activeDiarySubTab === "dreams"
-          ? renderDreamDiaryEntries(props)
-          : activeDiarySubTab === "insights"
-            ? renderDiaryImportsSection(props)
-            : renderMemoryPalaceSection(props)}
+            `
+          : activeDiarySubTab === "dreams"
+            ? renderDreamDiaryEntries(props)
+            : activeDiarySubTab === "insights"
+              ? renderDiaryImportsSection(props)
+              : renderMemoryPalaceSection(props)}
+      </div>
       ${renderWikiPreviewOverlay(props)}
     </section>
   `;

@@ -21,6 +21,7 @@ import type {
   PluginHookAfterCompactionEvent,
   PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
+  PluginHookAgentTrigger,
   PluginHookAgentEndEvent,
   PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
@@ -238,9 +239,25 @@ type SyncHookResult<K extends SyncHookName> = ReturnType<SyncHookHandler<K>>;
 function getHooksForName<K extends PluginHookName>(
   registry: HookRunnerRegistry,
   hookName: K,
+  ctx?: unknown,
 ): PluginHookRegistration<K>[] {
   return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((h) => h.hookName === hookName)
+    .filter((hook) => {
+      if (hook.hookName !== hookName) {
+        return false;
+      }
+      if (hookName !== "before_agent_reply" || hook.eligibleTriggers === undefined) {
+        return true;
+      }
+      const trigger =
+        typeof ctx === "object" && ctx !== null && "trigger" in ctx
+          ? (ctx as { trigger?: unknown }).trigger
+          : undefined;
+      return (
+        typeof trigger === "string" &&
+        hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
+      );
+    })
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 
@@ -524,8 +541,12 @@ export function createHookRunner(
     normalizePositiveTimeoutMs(hook.timeoutMs) ??
     normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
-  const getClaimingHookTimeoutMs = (hook: PluginHookRegistration): number | undefined =>
-    normalizePositiveTimeoutMs(hook.timeoutMs);
+  const getClaimingHookTimeoutMs = (
+    hookName: PluginHookName,
+    hook: PluginHookRegistration,
+  ): number | undefined =>
+    normalizePositiveTimeoutMs(hook.timeoutMs) ??
+    normalizePositiveTimeoutMs(modifyingHookTimeoutMsByHook[hookName]);
 
   const withHookTimeout = async <T>(
     promise: Promise<T>,
@@ -662,7 +683,7 @@ export function createHookRunner(
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
   ): Promise<TResult | undefined> {
-    const hooks = getHooksForName(registry, hookName);
+    const hooks = getHooksForName(registry, hookName, ctx);
     if (hooks.length === 0) {
       return undefined;
     }
@@ -707,7 +728,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return handlerResult;
@@ -758,7 +779,7 @@ export function createHookRunner(
         const promise = Promise.resolve(
           (hook.handler as (event: unknown, ctx: unknown) => Promise<TResult | void>)(event, ctx),
         );
-        const timeoutMs = getClaimingHookTimeoutMs(hook);
+        const timeoutMs = getClaimingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
         if (handlerResult?.handled) {
           return { status: "handled", result: handlerResult };
@@ -1659,8 +1680,14 @@ export function createHookRunner(
   // Utility
   // =========================================================================
 
-  function hasHooks(hookName: PluginHookName): boolean {
-    return registry.typedHooks.some((h) => h.hookName === hookName);
+  function hasHooks<K extends PluginHookName>(
+    hookName: K,
+    ctx?: Parameters<PluginHookHandlerMap[K]>[1],
+  ): boolean {
+    if (ctx === undefined) {
+      return registry.typedHooks.some((hook) => hook.hookName === hookName);
+    }
+    return getHooksForName(registry, hookName, ctx).length > 0;
   }
 
   /**

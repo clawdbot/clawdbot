@@ -85,6 +85,25 @@ function assignmentOwnerKey(assignment: SecretAssignment): string {
   return `${getSecretAssignmentSource(assignment)}\0${assignment.ownerKind}\0${assignment.ownerId}`;
 }
 
+const AUTH_STORE_PROVIDER_UNCONFIGURED_REASON = "secret provider is not configured" as const;
+
+function resolveOwnerFailureReason(params: {
+  assignments: SecretAssignment[];
+  error: unknown;
+  fallback: SecretDegradationReason | undefined;
+}): SecretDegradationReason | undefined {
+  if (params.fallback) {
+    return params.fallback;
+  }
+  const owner = params.assignments[0];
+  return owner &&
+    getSecretAssignmentSource(owner) === "auth-store" &&
+    isProviderScopedSecretResolutionError(params.error) &&
+    params.error.code === "SECRET_PROVIDER_NOT_CONFIGURED"
+    ? AUTH_STORE_PROVIDER_UNCONFIGURED_REASON
+    : undefined;
+}
+
 function groupAssignmentsByOwner(assignments: SecretAssignment[]): SecretAssignment[][] {
   const groups = new Map<string, SecretAssignment[]>();
   for (const assignment of assignments) {
@@ -182,11 +201,14 @@ function associateAssignmentFailureOwners(params: {
         .map(assignmentOwnerKey),
     ),
   );
-  const reason =
+  const sharedReason =
     validationFailures.length > 0
       ? "resolved secret value was invalid"
       : describeSecretResolutionError(params.error);
-  if (!reason) {
+  const authStoreProviderUnconfigured =
+    isProviderScopedSecretResolutionError(params.error) &&
+    params.error.code === "SECRET_PROVIDER_NOT_CONFIGURED";
+  if (!sharedReason && !authStoreProviderUnconfigured) {
     return;
   }
   const owners = groupAssignmentsByOwner(params.assignments).flatMap((assignments) => {
@@ -199,6 +221,14 @@ function associateAssignmentFailureOwners(params: {
         : assignmentMatchesResolutionFailure(assignment, params.error),
     );
     if (!failureMatched) {
+      return [];
+    }
+    const reason = resolveOwnerFailureReason({
+      assignments,
+      error: params.error,
+      fallback: sharedReason,
+    });
+    if (!reason) {
       return [];
     }
     const degradedOwner = createDegradedOwner(assignments, reason);
@@ -279,6 +309,14 @@ function associateAssignmentFailureOwners(params: {
     if (refs.length === 0) {
       return [];
     }
+    const reason =
+      sharedReason ??
+      (source === "auth-store" && authStoreProviderUnconfigured
+        ? AUTH_STORE_PROVIDER_UNCONFIGURED_REASON
+        : undefined);
+    if (!reason) {
+      return [];
+    }
     return [
       {
         ownerKind: owner.ownerKind,
@@ -355,10 +393,17 @@ function assertOwnerCanBeIsolated(
   error: unknown,
 ): SecretDegradationReason {
   const owner = assignments[0]!;
-  const reason = describeSecretResolutionError(error);
+  const reason = resolveOwnerFailureReason({
+    assignments,
+    error,
+    fallback: describeSecretResolutionError(error),
+  });
+  const isolatableFailure =
+    reason === AUTH_STORE_PROVIDER_UNCONFIGURED_REASON ||
+    (reason !== undefined && isRetryableSecretDegradationReason(reason));
   if (
     !reason ||
-    !isRetryableSecretDegradationReason(reason) ||
+    !isolatableFailure ||
     owner.ownerKind === "unknown" ||
     owner.requiredForGateway ||
     owner.disposition === "fail-closed"

@@ -243,6 +243,29 @@ function primeSuccessfulPluginPersistence(pluginId = "demo") {
   return { cfg, enabledCfg };
 }
 
+function primeSuccessfulClawHubPluginInstall(
+  params: {
+    explicitVersion?: boolean;
+    trust?: Parameters<typeof createClawHubInstallResult>[0]["trust"];
+  } = {},
+) {
+  const result = primeSuccessfulPluginPersistence("demo");
+  parseClawHubPluginSpec.mockReturnValue({
+    name: "demo",
+    ...(params.explicitVersion ? { version: "1.2.3" } : {}),
+  });
+  installPluginFromClawHub.mockResolvedValue(
+    createClawHubInstallResult({
+      pluginId: "demo",
+      packageName: "demo",
+      version: "1.2.3",
+      channel: "official",
+      ...(params.trust ? { trust: params.trust } : {}),
+    }),
+  );
+  return result;
+}
+
 function createPathHookPackInstalledConfig(tmpRoot: string): OpenClawConfig {
   return {
     hooks: {
@@ -1543,16 +1566,7 @@ describe("plugins cli install", () => {
   );
 
   it("does not show the non-ClawHub warning for explicit ClawHub installs", async () => {
-    primeSuccessfulPluginPersistence("demo");
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
+    primeSuccessfulClawHubPluginInstall();
     await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
 
     expect(runtimeLogsContain("outside ClawHub review")).toBe(false);
@@ -1560,27 +1574,7 @@ describe("plugins cli install", () => {
   });
 
   it("installs ClawHub plugins and persists source metadata", async () => {
-    const cfg = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledCfg = createEnabledPluginConfig("demo");
-    loadConfig.mockReturnValue(cfg);
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: enabledCfg,
-      warnings: [],
-    });
+    const { enabledCfg } = primeSuccessfulClawHubPluginInstall();
 
     await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
 
@@ -1613,21 +1607,7 @@ describe("plugins cli install", () => {
   });
 
   it("does not report a ClawHub install when durable persistence fails", async () => {
-    loadConfig.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: createEnabledPluginConfig("demo") });
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: createEnabledPluginConfig("demo"),
-      warnings: [],
-    });
+    primeSuccessfulClawHubPluginInstall();
     writeConfigFile.mockRejectedValueOnce(new Error("persistence failed"));
 
     await expect(runPluginsCommand(["plugins", "install", "clawhub:demo"])).rejects.toThrow(
@@ -1638,27 +1618,14 @@ describe("plugins cli install", () => {
   });
 
   it("passes ClawHub risk acknowledgement to explicit ClawHub installs", async () => {
-    loadConfig.mockReturnValue(createEmptyPluginConfig());
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-        trust: {
-          disposition: "review-required",
-          scanStatus: "suspicious",
-          reasons: ["payload_strings"],
-          checkedAt: "2026-05-14T18:00:00.000Z",
-          acknowledgedAt: "2026-05-14T18:00:03.000Z",
-        },
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: createEnabledPluginConfig("demo") });
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: createEnabledPluginConfig("demo"),
-      warnings: [],
+    primeSuccessfulClawHubPluginInstall({
+      trust: {
+        disposition: "review-required",
+        scanStatus: "suspicious",
+        reasons: ["payload_strings"],
+        checkedAt: "2026-05-14T18:00:00.000Z",
+        acknowledgedAt: "2026-05-14T18:00:03.000Z",
+      },
     });
 
     await runPluginsCommand(["plugins", "install", "clawhub:demo", "--acknowledge-clawhub-risk"]);
@@ -1714,24 +1681,7 @@ describe("plugins cli install", () => {
 
   it("passes the active profile extensions dir to ClawHub installs", async () => {
     const extensionsDir = useProfileExtensionsDir();
-    const cfg = createEmptyPluginConfig();
-    const enabledCfg = createEnabledPluginConfig("demo");
-
-    loadConfig.mockReturnValue(cfg);
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: enabledCfg,
-      warnings: [],
-    });
+    primeSuccessfulClawHubPluginInstall();
 
     await runPluginsCommand(["plugins", "install", "clawhub:demo"]);
 
@@ -1859,29 +1809,7 @@ describe("plugins cli install", () => {
   });
 
   it("passes force through as overwrite mode for ClawHub installs", async () => {
-    const cfg = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledCfg = createEnabledPluginConfig("demo");
-
-    loadConfig.mockReturnValue(cfg);
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    recordPluginInstall.mockReturnValue(enabledCfg);
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: enabledCfg,
-      warnings: [],
-    });
+    primeSuccessfulClawHubPluginInstall();
 
     await runPluginsCommand(["plugins", "install", "clawhub:demo", "--force"]);
 
@@ -1890,28 +1818,7 @@ describe("plugins cli install", () => {
   });
 
   it("keeps explicit ClawHub versions pinned in install records", async () => {
-    const cfg = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledCfg = createEnabledPluginConfig("demo");
-
-    loadConfig.mockReturnValue(cfg);
-    parseClawHubPluginSpec.mockReturnValue({ name: "demo", version: "1.2.3" });
-    installPluginFromClawHub.mockResolvedValue(
-      createClawHubInstallResult({
-        pluginId: "demo",
-        packageName: "demo",
-        version: "1.2.3",
-        channel: "official",
-      }),
-    );
-    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
-    applyExclusiveSlotSelection.mockReturnValue({
-      config: enabledCfg,
-      warnings: [],
-    });
+    primeSuccessfulClawHubPluginInstall({ explicitVersion: true });
 
     await runPluginsCommand(["plugins", "install", "clawhub:demo@1.2.3"]);
 

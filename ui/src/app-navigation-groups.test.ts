@@ -9,6 +9,7 @@ import {
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
+  settingsNavigationOwnerRoute,
   sidebarMoreRoutes,
 } from "./app-navigation.ts";
 
@@ -45,7 +46,6 @@ describe("sidebar entries", () => {
     for (const routeId of [
       "custodian",
       "channels",
-      "config",
       "security",
       "notifications",
       "advanced",
@@ -59,6 +59,13 @@ describe("sidebar entries", () => {
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
     expect(settingsRoutes).not.toContain("model-setup");
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
+    expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
+  });
+
+  it("keeps Agent Defaults routed as an Agents subpage without a sidebar entry", () => {
+    expect(settingsRoutes).not.toContain("ai-agents");
+    expect(isSettingsNavigationRoute("ai-agents")).toBe(true);
+    expect(settingsNavigationOwnerRoute("ai-agents")).toBe("agents");
   });
 
   it("keeps devices in connection settings and drops stale pinned entries", () => {

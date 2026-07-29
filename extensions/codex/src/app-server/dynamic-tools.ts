@@ -349,6 +349,7 @@ function hasExplicitNonSourceMessageRoute(
 export type CodexDynamicToolBridge = {
   availableSpecs: CodexDynamicToolSpec[];
   specs: CodexDynamicToolSpec[];
+  resultContentSourceForTool: (toolName: string) => AnyAgentTool["resultContentSource"];
   handleToolCall: (
     params: CodexDynamicToolCallParams,
     options?: {
@@ -544,6 +545,7 @@ export function createCodexDynamicToolBridge(params: {
       loading: params.loading ?? "searchable",
       directToolNames,
     }),
+    resultContentSourceForTool: (toolName) => toolMap.get(toolName)?.tool.resultContentSource,
     telemetry,
     setRemoteWorkspaceFileReader: (reader) => {
       readRemoteWorkspaceFile = reader;

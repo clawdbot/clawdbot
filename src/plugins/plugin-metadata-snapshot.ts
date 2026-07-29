@@ -107,19 +107,6 @@ function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
   return Object.freeze(value);
 }
 
-function freezePluginMetadataSnapshot(snapshot: PluginMetadataSnapshot): PluginMetadataSnapshot {
-  return freezeSnapshotValue(snapshot);
-}
-
-function resolvePluginMetadataControlPlaneFingerprint(
-  params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
-    index?: InstalledPluginIndex;
-    policyHash?: string;
-  },
-): string {
-  return resolvePluginControlPlaneFingerprint(params);
-}
-
 function indexesMatch(
   left: InstalledPluginIndex | undefined,
   right: InstalledPluginIndex | undefined,
@@ -189,7 +176,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
-        resolvePluginMetadataControlPlaneFingerprint({
+        resolvePluginControlPlaneFingerprint({
           config: params.config,
           env,
           index: params.index ?? params.snapshot.index,
@@ -317,7 +304,7 @@ export function loadPluginMetadataSnapshot(
   );
   return measureDiagnosticsTimelineSpanSync(
     "plugins.metadata.freeze",
-    () => freezePluginMetadataSnapshot(snapshot),
+    () => freezeSnapshotValue(snapshot),
     {
       phase: activeTimelineSpan?.phase ?? "startup",
       config: params.config,
@@ -411,7 +398,7 @@ function loadPluginMetadataSnapshotImpl(
   return {
     policyHash: index.policyHash,
     registrySource: registryResult.source,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
+    configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
       index,

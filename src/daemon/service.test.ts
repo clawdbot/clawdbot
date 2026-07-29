@@ -16,6 +16,11 @@ import {
 } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
+
 function setPlatform(value: NodeJS.Platform) {
   mockProcessPlatform(value);
 }

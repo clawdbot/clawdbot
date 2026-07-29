@@ -247,15 +247,19 @@ function isEmptyPluginConfigJsonSchema(schema: Record<string, unknown>): boolean
   ) {
     return false;
   }
+  const hasConditional = "if" in schema && ("then" in schema || "else" in schema);
   return !(
     "required" in schema ||
     "dependentRequired" in schema ||
+    "dependentSchemas" in schema ||
     "dependencies" in schema ||
     "minProperties" in schema ||
     "allOf" in schema ||
     "anyOf" in schema ||
     "oneOf" in schema ||
-    "not" in schema
+    "not" in schema ||
+    "patternProperties" in schema ||
+    hasConditional
   );
 }
 

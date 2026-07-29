@@ -22,7 +22,10 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "controlUiSessionPullRequests"
+  >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   sessionCompanion: SessionCompanionService;
   sessionObserver: SessionObserverService;
@@ -160,6 +163,7 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    controlUiSessionPullRequests: params.runtimeState.controlUiSessionPullRequests,
     sessionCompanion: params.sessionCompanion,
     sessionObserver: params.sessionObserver,
     notifyPluginMetadataChanged: () =>
@@ -315,7 +319,11 @@ export function createGatewayRequestContext(
     unsubscribeSessionEvents: params.unsubscribeSessionEvents,
     subscribeSessionMessageEvents: params.subscribeSessionMessageEvents,
     unsubscribeSessionMessageEvents: params.unsubscribeSessionMessageEvents,
-    unsubscribeAllSessionEvents: params.unsubscribeAllSessionEvents,
+    unsubscribeAllSessionEvents: (connId) => {
+      params.unsubscribeAllSessionEvents(connId);
+      // PR replace-sets share this websocket cleanup boundary with session events.
+      params.runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);
+    },
     getSessionEventSubscriberConnIds: params.getSessionEventSubscriberConnIds,
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,

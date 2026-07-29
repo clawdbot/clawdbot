@@ -155,7 +155,10 @@ suite.define(() => {
           kind === "image"
             ? page.getByAltText("Local bootstrap image")
             : page.locator(".chat-assistant-attachment-card audio");
-        await media.waitFor({ state: "visible", timeout: 10_000 });
+        await media.waitFor({
+          state: kind === "image" ? "visible" : "attached",
+          timeout: 10_000,
+        });
         await expect.poll(() => requestedMediaUrls.length, { timeout: 10_000 }).toBe(2);
         expect(requestedMediaUrls[0]?.searchParams.get("meta")).toBe("1");
         expect(requestedMediaUrls[1]?.searchParams.get("mediaTicket")).toBe(ticket);
@@ -598,6 +601,13 @@ suite.define(() => {
             ),
         )
         .toBe(64);
+      const initialBlobUrls = await page
+        .locator("img.chat-message-image")
+        .evaluateAll((images) => images.map((image) => image.getAttribute("src")));
+      const retainedRecentBlobUrl = expectDefined(
+        initialBlobUrls[0],
+        "recent managed image Blob URL",
+      );
 
       await replaceHistory(
         historyFor([0], "Recently viewed managed image"),
@@ -608,26 +618,30 @@ suite.define(() => {
       await replaceHistory(historyFor([64], "Overflow managed image"), "Overflow managed image 65");
       await expect.poll(async () => (await readBlobProof()).created.length).toBe(65);
       const overflowProof = await readBlobProof();
-      const retainedRecentBlobUrl = expectDefined(
-        overflowProof.created[0],
-        "recent managed image Blob URL",
-      );
+      // Concurrent image fetches can resolve in any order. Find the real LRU
+      // rather than assuming that creation order matches transcript order.
       const evictedBlobUrl = expectDefined(
-        overflowProof.created[1],
+        overflowProof.created.find((blobUrl) => blobUrl !== retainedRecentBlobUrl),
         "evicted managed image Blob URL",
       );
+      const evictedImageIndex = initialBlobUrls.indexOf(evictedBlobUrl);
+      expect(evictedImageIndex).toBeGreaterThanOrEqual(0);
       expect(overflowProof.revoked).toContain(evictedBlobUrl);
       expect(overflowProof.revoked).not.toContain(retainedRecentBlobUrl);
 
       const evictedPath = new URL(
-        expectDefined(imageUrls[1], "evicted managed image URL"),
+        expectDefined(imageUrls[evictedImageIndex], "evicted managed image URL"),
         suite.server.baseUrl,
       ).pathname;
       const fetchesBeforeRevisit = fetchedMedia.filter(
         (request) => request.pathname === evictedPath,
       ).length;
-      await replaceHistory(historyFor([1], "Refetched managed image"), "Refetched managed image 2");
-      const revisitedImage = page.getByAltText("Refetched managed image 2");
+      const revisitedImageAlt = `Refetched managed image ${evictedImageIndex + 1}`;
+      await replaceHistory(
+        historyFor([evictedImageIndex], "Refetched managed image"),
+        revisitedImageAlt,
+      );
+      const revisitedImage = page.getByAltText(revisitedImageAlt);
       await expect
         .poll(() =>
           revisitedImage.evaluate((image) =>
@@ -652,7 +666,7 @@ suite.define(() => {
       const proofSummary = {
         cacheCapacity: 64,
         createdBlobUrls: finalProof.created.length,
-        evictedBlobIndex: 1,
+        evictedBlobIndex: evictedImageIndex,
         evictedImageFetches,
         refetchedImageNaturalWidth: await revisitedImage.evaluate(
           (image) => (image as HTMLImageElement).naturalWidth,

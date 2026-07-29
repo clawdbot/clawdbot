@@ -366,6 +366,14 @@ export function createHooksRequestHandler(
             sendJson(res, 400, { ok: false, error: getHookChannelError() });
             return true;
           }
+          const deliver = resolveHookDeliver(mapped.action.deliver);
+          const delivery = deliver
+            ? {
+                mode: "announce" as const,
+                channel,
+                to: mapped.action.to,
+              }
+            : { mode: "none" as const };
           if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
             sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
             return true;
@@ -403,7 +411,7 @@ export function createHooksRequestHandler(
               message: mapped.action.message,
               name: mapped.action.name ?? "Hook",
               wakeMode: mapped.action.wakeMode,
-              deliver: resolveHookDeliver(mapped.action.deliver),
+              deliver,
               channel,
               to: mapped.action.to ?? null,
               model: mapped.action.model ?? null,
@@ -424,9 +432,10 @@ export function createHooksRequestHandler(
             wakeMode: mapped.action.wakeMode,
             sessionKey: dispatchSessionKey,
             sourcePath: `${basePath}/${subPath}`,
-            deliver: resolveHookDeliver(mapped.action.deliver),
+            deliver,
             channel,
             to: mapped.action.to,
+            delivery,
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,

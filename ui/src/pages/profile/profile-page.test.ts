@@ -180,6 +180,9 @@ it("renders identity before a Usage statistics link without requesting usage dat
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
 
   expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
+  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+  expect(docsLink?.textContent?.trim()).toBe("Learn more");
+  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
   expect(page.querySelector(".profile-stats")).toBeNull();
   expect(page.querySelector(".profile-heatmap")).toBeNull();
   const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");

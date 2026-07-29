@@ -231,6 +231,22 @@ describe("gateway session utils", () => {
     );
   });
 
+  test("projects stored session tool overrides to list and live payloads", () => {
+    const toolOverrides = { mcpServers: { docs: false }, webSearch: false };
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "session-tools", updatedAt: 1, toolOverrides },
+    });
+
+    expect(row.toolOverrides).toEqual(toolOverrides);
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).toolOverrides).toEqual(
+      toolOverrides,
+    );
+  });
+
   test("emits a tombstone when a session has no current control owner", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),

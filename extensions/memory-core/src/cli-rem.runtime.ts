@@ -86,9 +86,16 @@ export async function runMemorySessionBackfill(
         `${heading("Session Backfill")} ${muted(`(${agentId})`)}`,
         muted(`workspace=${shortenHomePath(workspaceDir)}`),
         muted(
-          `days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
+          `batches=${result.batchCount ?? 1} days=${result.days.length} candidates=${result.candidateCount} staged=${result.stagedEntries}`,
         ),
       ];
+      for (const batch of result.batches ?? []) {
+        lines.push(
+          muted(
+            `batch=${batch.batch} days=${batch.days} candidates=${batch.candidates} staged=${batch.stagedEntries}`,
+          ),
+        );
+      }
       for (const day of result.days) {
         lines.push("", heading(day.day), muted(`candidates=${day.candidateCount}`));
         lines.push(...day.topCandidates.map((candidate) => `- ${candidate}`));
