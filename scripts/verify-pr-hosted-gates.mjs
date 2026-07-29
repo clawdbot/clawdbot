@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { execGhApiRead } from "./lib/plain-gh.mjs";
+import { execGhApiRead, plainGhEnv } from "./lib/plain-gh.mjs";
 
 export const SCHEDULED_HOSTED_WORKFLOWS = [
   "Blacksmith Testbox",
@@ -17,12 +18,18 @@ const ARTIFACT_FALLBACK_REQUIRED_WORKFLOWS = [
   "Blacksmith ARM Testbox",
   "Workflow Sanity",
 ];
-const WORKFLOW_RUNS_PAGE_SIZE = 100;
+// Full workflow-run objects are large enough for a 100-row response to exceed
+// the Octopool relay cap on busy SHAs. Keep each REST page bounded and retain
+// the existing 1,000-result search window through pagination.
+const WORKFLOW_RUNS_PAGE_SIZE = 30;
 const MAX_WORKFLOW_RUN_SEARCH_RESULTS = 1_000;
 const COMPARE_COMMITS_PAGE_SIZE = 100;
 export const HOSTED_GATE_MAX_AGE_HOURS = 24;
 const HOSTED_GATE_MAX_AGE_MS = HOSTED_GATE_MAX_AGE_HOURS * 60 * 60 * 1_000;
 const HOSTED_GATE_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+const MAX_CI_REUSE_CANDIDATES = 5;
+const CI_REUSE_RUN_LIST_LIMIT = 50;
+const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
@@ -146,6 +153,128 @@ function isRecentRun(run, nowMs) {
 
 function isSuccessfulRecentRun(run, nowMs) {
   return run?.status === "completed" && run.conclusion === "success" && isRecentRun(run, nowMs);
+}
+
+function runGit(args, { input } = {}) {
+  const result = spawnSync("git", args, {
+    encoding: "utf8",
+    input,
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(`git ${args[0]} failed with exit code ${result.status ?? "unknown"}`);
+  }
+  return result.stdout;
+}
+
+function parseSingleObjectId(raw, label) {
+  const values = String(raw).trim().split(/\s+/u).filter(Boolean);
+  if (values.length !== 1 || !/^[0-9a-f]{40,64}$/u.test(values[0])) {
+    throw new Error(`Expected one ${label} object id.`);
+  }
+  return values[0];
+}
+
+function computePatchId(sha, mainRef, execGit) {
+  const mergeBase = parseSingleObjectId(
+    execGit(["merge-base", mainRef, sha]),
+    `merge base for ${sha}`,
+  );
+  const diff = execGit(["diff", mergeBase, sha]);
+  const patchIdLines = String(execGit(["patch-id", "--stable"], { input: diff }))
+    .trim()
+    .split(/\r?\n/u)
+    .filter(Boolean);
+  if (patchIdLines.length !== 1) {
+    throw new Error(`Expected one patch id for ${sha}.`);
+  }
+  const [patchId, commitId, ...rest] = patchIdLines[0].trim().split(/\s+/u);
+  if (
+    rest.length > 0 ||
+    !/^[0-9a-f]{40,64}$/u.test(patchId ?? "") ||
+    !/^[0-9a-f]{40,64}$/u.test(commitId ?? "")
+  ) {
+    throw new Error(`Invalid patch-id output for ${sha}.`);
+  }
+  return patchId;
+}
+
+function ensureCommitAvailable(sha, execGit) {
+  try {
+    execGit(["cat-file", "-e", `${sha}^{commit}`]);
+    return true;
+  } catch {
+    try {
+      execGit(["fetch", "origin", sha]);
+      execGit(["cat-file", "-e", `${sha}^{commit}`]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function isQualifyingCiReuseRun(run) {
+  if (run?.event === "pull_request") {
+    return run?.name === "CI";
+  }
+  return isReleaseGateCiRun(run, run?.head_sha);
+}
+
+function findPatchIdenticalCiReuse({
+  sha,
+  candidateRuns,
+  nowMs,
+  mainRef = "origin/main",
+  execGit = runGit,
+}) {
+  if (!Array.isArray(candidateRuns)) {
+    return undefined;
+  }
+  const candidates = candidateRuns
+    .filter(
+      (run) =>
+        run?.head_sha !== sha &&
+        /^[0-9a-f]{40,64}$/u.test(String(run?.head_sha ?? "")) &&
+        isQualifyingCiReuseRun(run) &&
+        isSuccessfulRecentRun(run, nowMs),
+    )
+    .toSorted((left, right) =>
+      String(right.updated_at ?? "").localeCompare(String(left.updated_at ?? "")),
+    )
+    .slice(0, MAX_CI_REUSE_CANDIDATES);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+
+  let currentPatchId;
+  try {
+    currentPatchId = computePatchId(sha, mainRef, execGit);
+  } catch {
+    return undefined;
+  }
+  for (const run of candidates) {
+    if (!ensureCommitAvailable(run.head_sha, execGit)) {
+      continue;
+    }
+    try {
+      if (computePatchId(run.head_sha, mainRef, execGit) === currentPatchId) {
+        return {
+          run,
+          reusedFromSha: run.head_sha,
+          reusedRunId: run.id,
+          patchIdMatched: true,
+        };
+      }
+    } catch {
+      // A candidate is reusable only when every local git proof step succeeds.
+    }
+  }
+  return undefined;
 }
 
 const CI_GATE_CHECK_NAME = "openclaw/ci-gate";
@@ -333,7 +462,7 @@ export function parseWorkflowRunPage(raw) {
 export function workflowRunPageCount(totalCount) {
   return Math.min(
     Math.ceil(totalCount / WORKFLOW_RUNS_PAGE_SIZE),
-    MAX_WORKFLOW_RUN_SEARCH_RESULTS / WORKFLOW_RUNS_PAGE_SIZE,
+    Math.ceil(MAX_WORKFLOW_RUN_SEARCH_RESULTS / WORKFLOW_RUNS_PAGE_SIZE),
   );
 }
 
@@ -346,6 +475,8 @@ export function collectHostedGateEvidence({
   pullRequestHeadRepository = "",
   workflowRuns,
   ciGateJobs = [],
+  loadCiReuseCandidates = () => [],
+  execGit = runGit,
   changelogOnly = false,
   nowMs = Date.now(),
 }) {
@@ -354,17 +485,21 @@ export function collectHostedGateEvidence({
   }
   const pullRequestCommitShaSet = new Set(pullRequestCommitShas);
 
-  const collectForSha = (evidenceSha, { allowManual, requiredScheduledWorkflows = new Set() }) => {
+  const collectForSha = (
+    evidenceSha,
+    { allowManual, requiredScheduledWorkflows = new Set(), ciRun },
+  ) => {
     const workflows = [];
     const fallbackCoveredWorkflows = [];
     if (!changelogOnly) {
       workflows.push(
-        successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
-          allowManual,
-          nowMs,
-          // Gate proof only vouches for the exact head under verification.
-          ciGateJobs: evidenceSha === sha ? ciGateJobs : [],
-        }),
+        ciRun ??
+          successfulRunOrThrow(workflowRuns, "CI", evidenceSha, {
+            allowManual,
+            nowMs,
+            // Gate proof only vouches for the exact head under verification.
+            ciGateJobs: evidenceSha === sha ? ciGateJobs : [],
+          }),
       );
     }
     for (const workflowName of SCHEDULED_HOSTED_WORKFLOWS) {
@@ -399,14 +534,43 @@ export function collectHostedGateEvidence({
     return { workflows, fallbackCoveredWorkflows };
   };
 
+  let ciRun;
+  let ciReuse;
+  if (!changelogOnly) {
+    try {
+      ciRun = successfulRunOrThrow(workflowRuns, "CI", sha, {
+        allowManual: true,
+        nowMs,
+        ciGateJobs,
+      });
+    } catch (exactCiError) {
+      let candidateRuns;
+      try {
+        candidateRuns = loadCiReuseCandidates();
+      } catch {
+        candidateRuns = [];
+      }
+      ciReuse = findPatchIdenticalCiReuse({
+        sha,
+        candidateRuns,
+        nowMs,
+        execGit,
+      });
+      if (!ciReuse) {
+        throw exactCiError;
+      }
+      ciRun = ciReuse.run;
+    }
+  }
+
   let evidenceSha = sha;
   let selected;
   try {
-    selected = collectForSha(sha, { allowManual: true });
+    selected = collectForSha(sha, { allowManual: true, ciRun });
   } catch (exactError) {
-    // Hosted CI proves the PR cohort, not ancestry freshness. A newer head's
-    // failure must not discard a complete same-PR green cohort from the last
-    // 24 hours; review and focused gates own the newer delta.
+    // Scheduled hosted workflows retain their existing recent-cohort fallback.
+    // CI itself is either exact-head proof or the patch-identical run selected
+    // above; never silently replace it with an unverified prior-head run.
     const targetScheduledWorkflows = new Set(
       SCHEDULED_HOSTED_WORKFLOWS.filter(
         (workflowName) =>
@@ -414,6 +578,7 @@ export function collectHostedGateEvidence({
       ),
     );
     const fallbackShas = [
+      ciReuse?.reusedFromSha,
       recentSha,
       ...workflowRuns
         .filter(
@@ -440,6 +605,7 @@ export function collectHostedGateEvidence({
         selected = collectForSha(fallbackSha, {
           allowManual: false,
           requiredScheduledWorkflows: targetScheduledWorkflows,
+          ciRun,
         });
         evidenceSha = fallbackSha;
         break;
@@ -469,6 +635,11 @@ export function collectHostedGateEvidence({
   };
   if (evidenceSha !== sha) {
     evidence.evidenceHeadSha = evidenceSha;
+  }
+  if (ciReuse) {
+    evidence.reusedFromSha = ciReuse.reusedFromSha;
+    evidence.reusedRunId = ciReuse.reusedRunId;
+    evidence.patchIdMatched = true;
   }
   if (selected.fallbackCoveredWorkflows.length > 0) {
     evidence.fallbackCoveredWorkflows = selected.fallbackCoveredWorkflows;
@@ -515,6 +686,51 @@ function loadWorkflowRuns(repo, sha, recentSha, headBranch) {
     loadWorkflowRunsForQuery((page) => withPage(query, page)),
   );
   return [...new Map(workflowRuns.map((run) => [run.id, run])).values()];
+}
+
+function loadCiReuseCandidateRuns(repo, headBranch) {
+  const raw = execFileSync(
+    "gh",
+    [
+      "run",
+      "list",
+      "--repo",
+      repo,
+      "--workflow",
+      "ci.yml",
+      "--branch",
+      headBranch,
+      "--limit",
+      String(CI_REUSE_RUN_LIST_LIMIT),
+      "--json",
+      "databaseId,workflowName,headSha,headBranch,event,status,conclusion,createdAt,updatedAt,url,displayTitle",
+    ],
+    {
+      encoding: "utf8",
+      env: plainGhEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  const runs = JSON.parse(stripAnsi(raw));
+  if (!Array.isArray(runs)) {
+    throw new Error("Expected gh run list to return an array.");
+  }
+  // The workflow selector above supplies the path identity that the REST
+  // release-gate matcher normally reads from each full workflow-run object.
+  return runs.map((run) => ({
+    id: run.databaseId,
+    name: run.workflowName,
+    event: run.event,
+    status: run.status,
+    conclusion: run.conclusion,
+    head_sha: run.headSha,
+    head_branch: run.headBranch,
+    path: CI_WORKFLOW_PATH,
+    created_at: run.createdAt,
+    updated_at: run.updatedAt,
+    html_url: run.url,
+    display_title: run.displayTitle,
+  }));
 }
 
 export function compareCommitPageCount(totalCommits) {
@@ -640,6 +856,7 @@ function main(argv = process.argv.slice(2)) {
     pullRequestHeadRepository: headRepository,
     workflowRuns,
     ciGateJobs: loadCiGateJobs(args.repo, workflowRuns, args.sha),
+    loadCiReuseCandidates: () => loadCiReuseCandidateRuns(args.repo, headBranch),
     changelogOnly: args.changelogOnly,
   });
   const evidenceHeadSha = evidence.evidenceHeadSha ?? args.sha;
@@ -649,13 +866,28 @@ function main(argv = process.argv.slice(2)) {
     repo: args.repo,
     pullRequestNumber: args.pr,
     selection: {
-      mode: evidenceHeadSha === args.sha ? "exact-head" : "recent-pr-head",
+      mode: evidence.patchIdMatched
+        ? "patch-identical-pre-rebase"
+        : evidenceHeadSha === args.sha
+          ? "exact-head"
+          : "recent-pr-head",
       maxAgeHours: HOSTED_GATE_MAX_AGE_HOURS,
     },
     ...evidence,
   };
   mkdirSync(path.dirname(args.output), { recursive: true });
   writeFileSync(args.output, `${JSON.stringify(manifest, null, 2)}\n`);
+  if (evidence.patchIdMatched) {
+    const reusedRun = manifest.workflows.find((workflow) => workflow.id === evidence.reusedRunId);
+    const updatedAtMs = runUpdatedAtMs({ updated_at: reusedRun?.updatedAt });
+    const ageHours =
+      updatedAtMs === null
+        ? "unknown"
+        : `${(Math.max(0, Date.now() - updatedAtMs) / (60 * 60 * 1_000)).toFixed(1)}h`;
+    console.log(
+      `hosted CI reused from patch-identical pre-rebase head ${evidence.reusedFromSha} (run ${evidence.reusedRunId}, age ${ageHours})`,
+    );
+  }
   console.log(
     `Hosted gates passed for PR #${args.pr} at ${args.sha} using ${evidenceHeadSha}: ${manifest.workflows
       .map((workflow) => `${workflow.name}#${workflow.id}`)

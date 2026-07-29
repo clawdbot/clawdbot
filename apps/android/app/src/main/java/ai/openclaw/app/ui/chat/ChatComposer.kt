@@ -3,10 +3,10 @@ package ai.openclaw.app.ui.chat
 import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
+import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.VoiceNoteRecorderState
-import android.net.Uri
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.saveable.listSaver
 import kotlinx.coroutines.CancellationException
@@ -24,26 +24,6 @@ internal data class PendingChatComposerSend(
   val owner: ChatComposerOwner,
   val inputSnapshot: String?,
 )
-
-internal data class ChatComposerSendPayload(
-  val inputSnapshot: String,
-  val message: String,
-  val attachments: List<PendingAttachment>,
-)
-
-/** Captures the owner stores at admission time; Compose values may lag a synchronous edit. */
-internal fun captureChatComposerSendPayload(
-  owner: ChatComposerOwner,
-  textDrafts: ChatComposerTextDraftStore,
-  attachmentStore: ChatComposerAttachmentStore,
-): ChatComposerSendPayload {
-  val inputSnapshot = textDrafts[owner]
-  return ChatComposerSendPayload(
-    inputSnapshot = inputSnapshot,
-    message = inputSnapshot.trim(),
-    attachments = attachmentStore.get(owner),
-  )
-}
 
 internal data class ChatComposerDraftSnapshot(
   val drafts: Map<ChatComposerOwner, String> = emptyMap(),
@@ -266,74 +246,24 @@ internal fun ChatComposerOwner.matchesSession(
   return ownerKey == deletedKey && (this.agentId == agentId || !routingVerified)
 }
 
-internal class ChatComposerOwnerCheckpoint(
+/** One-shot owner lease for picker and voice results; requestId distinguishes recordings. */
+internal class ChatComposerMediaCheckpoint(
   var owner: ChatComposerOwner? = null,
+  private var requestId: String? = null,
   private var mediaAuthorizationId: String? = null,
 ) {
   fun begin(
     owner: ChatComposerOwner,
     mediaAuthorizationId: String,
+    requestId: String? = null,
   ) {
     this.owner = owner
+    this.requestId = requestId
     this.mediaAuthorizationId = mediaAuthorizationId
   }
 
-  fun consume(): ChatComposerMediaLease? {
-    val capturedOwner = owner ?: return null
-    val capturedAuthorizationId = mediaAuthorizationId ?: return null
-    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
-  }
-
-  fun clear() {
-    owner = null
-    mediaAuthorizationId = null
-  }
-
-  companion object {
-    val Saver =
-      listSaver<ChatComposerOwnerCheckpoint, String>(
-        save = { checkpoint ->
-          val capturedOwner = checkpoint.owner
-          val capturedAuthorizationId = checkpoint.mediaAuthorizationId
-          if (capturedOwner == null || capturedAuthorizationId == null) {
-            emptyList()
-          } else {
-            capturedOwner.toCheckpointValues() + capturedAuthorizationId
-          }
-        },
-        restore = { values ->
-          ChatComposerOwnerCheckpoint(
-            owner = chatComposerOwnerFromCheckpointValues(values.take(5)),
-            mediaAuthorizationId = values.getOrNull(5),
-          )
-        },
-      )
-  }
-}
-
-internal data class ChatComposerMediaLease(
-  val owner: ChatComposerOwner,
-  val authorizationId: String,
-)
-
-/** Binds an asynchronous voice-note preparation to the recording that started it. */
-internal class ChatVoiceNoteCommitCheckpoint {
-  var owner: ChatComposerOwner? = null
-  private var recordingId: String? = null
-  private var mediaAuthorizationId: String? = null
-
-  fun begin(
-    owner: ChatComposerOwner,
-    recordingId: String,
-    mediaAuthorizationId: String,
-  ) {
-    this.owner = owner
-    this.recordingId = recordingId
-    this.mediaAuthorizationId = mediaAuthorizationId
-  }
-
-  fun consume(recordingId: String): ChatComposerMediaLease? {
-    if (this.recordingId != recordingId) return null
+  fun consume(requestId: String? = null): ChatComposerMediaLease? {
+    if (this.requestId != requestId) return null
     val capturedOwner = owner ?: return null
     val capturedAuthorizationId = mediaAuthorizationId ?: return null
     return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
@@ -347,11 +277,38 @@ internal class ChatVoiceNoteCommitCheckpoint {
         }
       }
     owner = null
-    recordingId = null
+    requestId = null
     mediaAuthorizationId = null
     return lease
   }
+
+  companion object {
+    val Saver =
+      listSaver<ChatComposerMediaCheckpoint, String>(
+        save = { checkpoint ->
+          val capturedOwner = checkpoint.owner
+          val capturedAuthorizationId = checkpoint.mediaAuthorizationId
+          if (capturedOwner == null || capturedAuthorizationId == null) {
+            emptyList()
+          } else {
+            capturedOwner.toCheckpointValues() + capturedAuthorizationId + checkpoint.requestId.orEmpty()
+          }
+        },
+        restore = { values ->
+          ChatComposerMediaCheckpoint(
+            owner = chatComposerOwnerFromCheckpointValues(values.take(5)),
+            mediaAuthorizationId = values.getOrNull(5),
+            requestId = values.getOrNull(6)?.takeIf(String::isNotEmpty),
+          )
+        },
+      )
+  }
 }
+
+internal data class ChatComposerMediaLease(
+  val owner: ChatComposerOwner,
+  val authorizationId: String,
+)
 
 internal fun ChatComposerOwner.toCheckpointValues(): List<String> =
   listOf(
@@ -399,18 +356,14 @@ internal fun shouldMigrateComposerDraft(
   return previous.agentId == current.agentId && mainAliasResolved
 }
 
-internal fun canCommitComposerResult(
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean = ownerSnapshot == currentOwner
-
 internal fun mergeChatDraft(
   draft: ChatDraft?,
   currentInput: String,
   currentOwner: ChatComposerOwner? = null,
 ): String? {
   if (draft?.owner != null && draft.owner != currentOwner) return null
-  val text = draft?.text?.takeIf { it.isNotBlank() } ?: return null
+  if (draft?.expectedExistingText != null && draft.expectedExistingText != currentInput) return null
+  val text = draft?.text?.takeIf { draft.acceptsEmptyText || it.isNotBlank() } ?: return null
   return when (draft.placement) {
     ChatDraftPlacement.Replace -> text
     ChatDraftPlacement.BeforeExisting -> text + currentInput
@@ -429,11 +382,16 @@ internal fun mergeSharedChatText(
 internal data class StagedChatShare(
   val text: String?,
   val attachments: List<PendingAttachment>,
-  val failedImageCount: Int,
-  val droppedImageCount: Int,
+  val failedAttachmentCount: Int,
+  val droppedAttachmentCount: Int,
 )
 
 internal const val CHAT_COMPOSER_MAX_ATTACHMENTS = 8
+
+// Gateway chat attachments default to 20 MiB (images: 6 MiB); Android's outbox further caps audio/documents at 8 MiB.
+internal const val CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES = 6L * 1024L * 1024L
+internal const val CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
+internal const val CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 internal const val CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 internal const val CHAT_COMPOSER_MAX_BASE64_CHARS = ((CHAT_COMPOSER_MAX_DECODED_ATTACHMENT_BYTES + 2) / 3) * 4
 internal const val CHAT_COMPOSER_MAX_TOTAL_ATTACHMENTS = 24
@@ -460,10 +418,11 @@ internal fun admitChatAttachments(
   for (candidate in candidates) {
     val candidateBase64Chars = candidate.base64.length.toLong()
     val candidateDecodedBytes = decodedBase64ByteCount(candidate.base64)
+    val withinKind = candidateDecodedBytes <= chatComposerAttachmentDecodedByteLimit(candidate.mimeType)
     val withinCount = currentAttachments.size + accepted.size < maxAttachmentCount
     val withinBase64 = candidateBase64Chars <= maxBase64Chars - base64Chars
     val withinDecoded = candidateDecodedBytes <= maxDecodedBytes - decodedBytes
-    if (withinCount && withinBase64 && withinDecoded) {
+    if (withinKind && withinCount && withinBase64 && withinDecoded) {
       accepted += candidate
       base64Chars += candidateBase64Chars
       decodedBytes += candidateDecodedBytes
@@ -473,6 +432,13 @@ internal fun admitChatAttachments(
   }
   return ChatAttachmentAdmission(accepted = accepted, omittedCount = omittedCount)
 }
+
+internal fun chatComposerAttachmentDecodedByteLimit(mimeType: String): Long =
+  when {
+    mimeType.startsWith("image/", ignoreCase = true) -> CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
+    mimeType.startsWith("audio/", ignoreCase = true) -> CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES
+    else -> CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES
+  }
 
 internal fun decodedBase64ByteCount(base64: String): Long {
   val padding =
@@ -487,29 +453,29 @@ internal fun decodedBase64ByteCount(base64: String): Long {
 /** Loads a complete queue head before any part of it becomes visible in the composer. */
 internal suspend fun stageChatShareDraft(
   draft: ChatShareDraft,
-  loadImage: suspend (Uri) -> PendingAttachment,
+  loadAttachment: suspend (SharedAttachment) -> PendingAttachment,
 ): StagedChatShare {
   val attachments = mutableListOf<PendingAttachment>()
-  var failedImageCount = 0
-  var droppedImageCount = draft.droppedImageCount
-  for (uri in draft.imageUris) {
+  var failedAttachmentCount = 0
+  var droppedAttachmentCount = draft.droppedAttachmentCount
+  for (sharedAttachment in draft.attachments) {
     try {
-      val candidate = loadImage(uri)
+      val candidate = loadAttachment(sharedAttachment)
       val admission = admitChatAttachments(attachments, listOf(candidate))
       attachments += admission.accepted
-      droppedImageCount += admission.omittedCount
+      droppedAttachmentCount += admission.omittedCount
     } catch (error: CancellationException) {
       // Screen disposal must leave the queue head unacknowledged for the next ChatScreen.
       throw error
     } catch (_: Exception) {
-      failedImageCount += 1
+      failedAttachmentCount += 1
     }
   }
   return StagedChatShare(
     text = draft.text,
     attachments = attachments,
-    failedImageCount = failedImageCount,
-    droppedImageCount = droppedImageCount,
+    failedAttachmentCount = failedAttachmentCount,
+    droppedAttachmentCount = droppedAttachmentCount,
   )
 }
 
@@ -520,7 +486,16 @@ internal fun canCommitStagedChatShare(
   currentOwner: ChatComposerOwner,
 ): Boolean =
   currentHead?.id == stagedId &&
-    canCommitComposerResult(ownerSnapshot = ownerSnapshot, currentOwner = currentOwner)
+    ownerSnapshot == currentOwner
+
+internal fun appendChatDictationTranscript(
+  currentInput: String,
+  transcript: String,
+): String {
+  val normalized = transcript.trim()
+  if (normalized.isEmpty()) return currentInput
+  return if (currentInput.isEmpty() || currentInput.last().isWhitespace()) currentInput + normalized else "$currentInput $normalized"
+}
 
 internal fun chatComposerSendEnabled(
   voiceNoteState: VoiceNoteRecorderState,
@@ -528,9 +503,11 @@ internal fun chatComposerSendEnabled(
   hasContent: Boolean,
   shareStaging: Boolean,
   sendInFlight: Boolean = false,
+  dictationActive: Boolean = false,
 ): Boolean =
   !shareStaging &&
     !sendInFlight &&
+    !dictationActive &&
     voiceNoteState !is VoiceNoteRecorderState.Recording &&
     voiceNoteState !is VoiceNoteRecorderState.Preparing &&
     pendingRunCount == 0 &&

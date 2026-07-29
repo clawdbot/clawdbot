@@ -74,7 +74,7 @@ export const UpdateRunParamsSchema = closedObject({
 });
 
 /** UI metadata attached to config schema paths. */
-export const ConfigUiHintSchema = closedObject({
+const ConfigUiHintSchema = closedObject({
   label: Type.Optional(Type.String()),
   help: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
@@ -83,6 +83,7 @@ export const ConfigUiHintSchema = closedObject({
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
+  presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });
 
@@ -95,7 +96,7 @@ export const ConfigSchemaResponseSchema = closedObject({
 });
 
 /** Child entry returned when looking up a config schema path. */
-export const ConfigSchemaLookupChildSchema = closedObject({
+const ConfigSchemaLookupChildSchema = closedObject({
   key: NonEmptyString,
   path: NonEmptyString,
   type: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),

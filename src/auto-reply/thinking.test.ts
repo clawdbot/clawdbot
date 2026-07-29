@@ -2,17 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolveProviderBinaryThinking: vi.fn(),
-  resolveProviderDefaultThinkingLevel: vi.fn(),
   resolveProviderThinkingProfile: vi.fn(),
-  resolveProviderXHighThinking: vi.fn(),
 }));
 
 vi.mock("../plugins/provider-thinking.js", () => ({
-  resolveProviderBinaryThinking: providerRuntimeMocks.resolveProviderBinaryThinking,
-  resolveProviderDefaultThinkingLevel: providerRuntimeMocks.resolveProviderDefaultThinkingLevel,
   resolveProviderThinkingProfile: providerRuntimeMocks.resolveProviderThinkingProfile,
-  resolveProviderXHighThinking: providerRuntimeMocks.resolveProviderXHighThinking,
 }));
 
 const {
@@ -29,14 +23,8 @@ const {
 } = await import("./thinking.js");
 
 beforeEach(() => {
-  providerRuntimeMocks.resolveProviderBinaryThinking.mockReset();
-  providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(undefined);
-  providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReset();
-  providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue(undefined);
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReset();
   providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue(undefined);
-  providerRuntimeMocks.resolveProviderXHighThinking.mockReset();
-  providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(undefined);
 });
 
 describe("normalizeThinkLevel", () => {
@@ -86,25 +74,30 @@ describe("normalizeThinkLevel", () => {
 });
 
 describe("listThinkingLevels", () => {
-  it("uses provider runtime hooks for xhigh support", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+  it("uses provider thinking profiles for xhigh support", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "xhigh" }],
+    });
 
     expect(listThinkingLevels("demo", "demo-model")).toContain("xhigh");
   });
 
-  it("uses provider runtime hooks for xhigh labels", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
+  it("uses provider thinking profiles for xhigh labels", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "xhigh" }],
+    });
 
     expect(listThinkingLevelLabels("demo", "demo-model")).toContain("xhigh");
   });
 
   it("includes xhigh for provider-advertised models", () => {
-    providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
-      (provider === "openai" &&
-        ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
-      (provider === "github-copilot" && context.modelId === "gpt-5.4")
-        ? true
-        : undefined,
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
+      ({ provider, context }) =>
+        (provider === "openai" &&
+          ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
+        (provider === "github-copilot" && context.modelId === "gpt-5.4")
+          ? { levels: [{ id: "off" }, { id: "low" }, { id: "xhigh" }] }
+          : undefined,
     );
 
     for (const [provider, model] of [
@@ -186,13 +179,11 @@ describe("listThinkingLevels", () => {
     ]);
   });
 
-  it("uses provider thinking profiles ahead of legacy hooks", () => {
+  it("uses provider thinking profiles as the canonical policy", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
       levels: [{ id: "off" }, { id: "low", label: "on" }],
       defaultLevel: "off",
     });
-    providerRuntimeMocks.resolveProviderXHighThinking.mockReturnValue(true);
-
     expect(listThinkingLevels("demo", "demo-model")).toEqual(["off", "low"]);
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
@@ -610,8 +601,58 @@ describe("listThinkingLevels", () => {
     ).toBe(true);
   });
 
+  it("uses advanced catalog efforts and derives OpenClaw Ultra from Max", () => {
+    const catalog = [
+      {
+        provider: "myazure",
+        id: "gpt-5.6-sol",
+        name: "GPT 5.6 Sol via Azure",
+        api: "openai-responses",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+        },
+      },
+    ];
+
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "openclaw")).toEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultra",
+    ]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "max",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(true);
+    expect(
+      isThinkingLevelSupported({
+        provider: "myazure",
+        model: "gpt-5.6-sol",
+        level: "ultra",
+        catalog,
+        agentRuntime: "openclaw",
+      }),
+    ).toBe(true);
+    expect(listThinkingLevels("myazure", "gpt-5.6-sol", catalog, "codex")).not.toContain("ultra");
+  });
+
   it("does not let catalog xhigh compat override binary thinking providers", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+    });
     const catalog = [
       {
         provider: "zai",
@@ -702,15 +743,27 @@ describe("listThinkingLevels", () => {
 });
 
 describe("listThinkingLevelLabels", () => {
-  it("uses provider runtime hooks for binary thinking providers", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockReturnValue(true);
+  it("uses provider thinking profiles for binary thinking providers", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+    });
 
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
 
   it("returns on/off for provider-advertised binary thinking", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(({ provider }) =>
-      provider === "zai" ? true : undefined,
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "zai"
+        ? {
+            levels: [
+              { id: "off", label: "off" },
+              { id: "low", label: "on" },
+            ],
+          }
+        : undefined,
     );
 
     expect(listThinkingLevelLabels("zai", "glm-4.7")).toEqual(["off", "on"]);
@@ -728,8 +781,11 @@ describe("listThinkingLevelLabels", () => {
 });
 
 describe("resolveThinkingDefaultForModel", () => {
-  it("uses provider runtime hooks for default thinking levels", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockReturnValue("adaptive");
+  it("uses provider thinking profiles for default thinking levels", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "adaptive" }],
+      defaultLevel: "adaptive",
+    });
 
     expect(resolveThinkingDefaultForModel({ provider: "demo", model: "demo-model" })).toBe(
       "adaptive",
@@ -737,9 +793,11 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 
   it("uses provider-advertised adaptive defaults", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
       ({ provider, context }) =>
-        provider === "anthropic" && context.modelId === "claude-opus-4-6" ? "adaptive" : undefined,
+        provider === "anthropic" && context.modelId === "claude-opus-4-6"
+          ? { levels: [{ id: "off" }, { id: "adaptive" }], defaultLevel: "adaptive" }
+          : undefined,
     );
 
     expect(
@@ -748,10 +806,10 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 
   it("does not apply provider-advertised adaptive defaults across Bedrock id variants", () => {
-    providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(
       ({ provider, context }) =>
         provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
-          ? "adaptive"
+          ? { levels: [{ id: "off" }, { id: "adaptive" }], defaultLevel: "adaptive" }
           : undefined,
     );
 
@@ -780,8 +838,8 @@ describe("resolveThinkingDefaultForModel", () => {
   });
 
   it("remaps implicit reasoning defaults to the strongest supported level at or below medium", () => {
-    providerRuntimeMocks.resolveProviderBinaryThinking.mockImplementation(
-      ({ provider }) => provider === "demo-binary",
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ provider }) =>
+      provider === "demo-binary" ? { levels: [{ id: "off" }, { id: "low" }] } : undefined,
     );
 
     expect(

@@ -15,6 +15,7 @@ import { publishProviderAuthWarmSnapshot } from "./model-provider-auth-state.js"
 
 const modelCatalogMocks = vi.hoisted(() => ({
   loadModelCatalog: vi.fn<(params?: unknown) => Promise<ModelCatalogEntry[]>>(),
+  ownerWorkspaceDir: undefined as string | undefined,
 }));
 
 const modelAuthMocks = vi.hoisted(() => ({
@@ -64,8 +65,16 @@ const authProfilesMocks = vi.hoisted(() => ({
   listProfilesForProvider: vi.fn(() => []),
 }));
 
-vi.mock("./model-catalog.js", () => ({
-  loadModelCatalog: modelCatalogMocks.loadModelCatalog,
+vi.mock("./prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogOwnerSnapshot: async (params?: unknown) => ({
+    ...(modelCatalogMocks.ownerWorkspaceDir
+      ? { workspaceDir: modelCatalogMocks.ownerWorkspaceDir }
+      : {}),
+    modelCatalog: {
+      entries: await modelCatalogMocks.loadModelCatalog(params),
+      routeVariants: [],
+    },
+  }),
 }));
 
 vi.mock("./model-auth.js", () => ({
@@ -120,6 +129,7 @@ describe("prepared provider auth state", () => {
   afterEach(() => {
     clearCurrentProviderAuthState();
     vi.clearAllMocks();
+    modelCatalogMocks.ownerWorkspaceDir = undefined;
     modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue({
       availability: false,
       routeResolution: null,
@@ -155,9 +165,31 @@ describe("prepared provider auth state", () => {
 
     await publishCurrentProviderAuthStateSnapshot(cfg);
 
-    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      readOnly: true,
+    expect(modelCatalogMocks.loadModelCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: cfg,
+        agentDir: expect.any(String),
+        readOnly: true,
+      }),
+    );
+    expect(modelCatalogMocks.loadModelCatalog.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
+    );
+  });
+
+  it("uses the prepared owner's authoritative workspace for auth discovery", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelCatalogMocks.ownerWorkspaceDir = "/warm/gateway-launch-workspace";
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { id: "gpt", name: "gpt", provider: "openai" },
+    ]);
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+
+    await buildCurrentProviderAuthStateSnapshot(cfg);
+
+    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledWith({
+      cfg,
+      workspaceDir: "/warm/gateway-launch-workspace",
     });
   });
 

@@ -946,11 +946,11 @@ function renderFailureMarkdown(payload: {
 }
 
 function sanitizeFailureReportText(value: string): string {
-  return value
+  const sanitized = value
     .replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, "[redacted-email]")
     .replace(/(api[_-]?key|token|secret|password)[=-][A-Za-z0-9._-]+/gi, "$1-[redacted]")
-    .replace(/(api[_-]?key|token|secret|password)=\S+/gi, "$1=[redacted]")
-    .slice(0, 500);
+    .replace(/(api[_-]?key|token|secret|password)=\S+/gi, "$1=[redacted]");
+  return truncateUtf16Safe(sanitized, 500);
 }
 
 function shortenFailureReportPath(filePath: string): string {

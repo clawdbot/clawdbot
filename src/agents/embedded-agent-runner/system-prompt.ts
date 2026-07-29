@@ -6,6 +6,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PreparedMemoryPromptSection } from "../../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
@@ -16,6 +17,7 @@ import type { AgentSession } from "../sessions/index.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import type { ProviderSystemPromptContribution } from "../system-prompt-contribution.js";
 import type { PromptMode, SilentReplyPromptMode } from "../system-prompt.types.js";
+import type { PreparedWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
 import type { EmbeddedSandboxInfo } from "./types.js";
 import type { ReasoningLevel, ThinkLevel } from "./utils.js";
 
@@ -32,6 +34,7 @@ export function buildEmbeddedSystemPrompt(params: {
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
   skillsPrompt?: string;
+  codeModeActive?: boolean;
   docsPath?: string;
   sourcePath?: string;
   ttsHint?: string;
@@ -90,6 +93,10 @@ export function buildEmbeddedSystemPrompt(params: {
   bootstrapTruncationNotice?: string;
   includeMemorySection?: boolean;
   memoryCitationsMode?: MemoryCitationsMode;
+  preparedMemoryPrompt?: PreparedMemoryPromptSection;
+  preparedWatchedSessions?: PreparedWatchedSessionsPrompt;
+  projectMemoryBootstrap?: string[];
+  activeProjectKeys?: readonly string[];
   promptContribution?: ProviderSystemPromptContribution;
 }): string {
   return buildConfiguredAgentSystemPrompt({
@@ -105,6 +112,7 @@ export function buildEmbeddedSystemPrompt(params: {
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
     skillsPrompt: params.skillsPrompt,
+    codeModeActive: params.codeModeActive,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     ttsHint: params.ttsHint,
@@ -134,6 +142,10 @@ export function buildEmbeddedSystemPrompt(params: {
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,
     includeMemorySection: params.includeMemorySection,
     memoryCitationsMode: params.memoryCitationsMode,
+    preparedMemoryPrompt: params.preparedMemoryPrompt,
+    preparedWatchedSessions: params.preparedWatchedSessions,
+    projectMemoryBootstrap: params.projectMemoryBootstrap,
+    activeProjectKeys: params.activeProjectKeys,
     promptContribution: params.promptContribution,
   });
 }

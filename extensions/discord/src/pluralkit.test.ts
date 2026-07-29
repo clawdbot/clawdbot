@@ -59,13 +59,15 @@ describe("fetchPluralKitMessageInfo", () => {
   });
 
   it("returns null on 404", async () => {
-    const fetcher = vi.fn(async () => buildResponse({ status: 404 }));
+    const tracked = cancelTrackedResponse("missing", { status: 404 });
+    const fetcher = vi.fn(async () => tracked.response);
     const result = await fetchPluralKitMessageInfo({
       messageId: "missing",
       config: { enabled: true },
       fetcher: fetcher as unknown as typeof fetch,
     });
     expect(result).toBeNull();
+    expect(tracked.wasCanceled()).toBe(true);
   });
 
   it("returns payload and sends token when configured", async () => {
@@ -91,6 +93,23 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
   });
+
+  it.each([
+    ["null", "null"],
+    ["array", "[]"],
+  ])(
+    "rejects a %s PluralKit message envelope with a stable provider error",
+    async (_kind, body) => {
+      const fetcher = vi.fn(async () => buildResponse({ status: 200, body }));
+      await expect(
+        fetchPluralKitMessageInfo({
+          messageId: "123",
+          config: { enabled: true },
+          fetcher: fetcher as unknown as typeof fetch,
+        }),
+      ).rejects.toThrow("PluralKit message: malformed JSON response");
+    },
+  );
 
   it("aborts PluralKit response body reads that exceed the lookup timeout", async () => {
     vi.useFakeTimers();

@@ -7,10 +7,6 @@ import {
   type MemoryPluginPublicArtifact,
   registerMemoryCapability,
 } from "openclaw/plugin-sdk/memory-host-core";
-import {
-  appendMemoryHostEvent,
-  resolveMemoryHostEventLogPath,
-} from "openclaw/plugin-sdk/memory-host-events";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
@@ -147,7 +143,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     const logLines = (await fs.readFile(path.join(vaultDir, ".openclaw-wiki", "log.jsonl"), "utf8"))
       .trim()
       .split("\n");
-    expect(logLines).toHaveLength(2);
+    expect(logLines).toHaveLength(3);
   });
 
   it("skips generated artifacts from its own vault", async () => {
@@ -436,7 +432,7 @@ describe("syncMemoryWikiBridgeSources", () => {
       },
     });
 
-    await appendMemoryHostEvent(workspaceDir, {
+    const eventContent = `${JSON.stringify({
       type: "memory.recall.recorded",
       timestamp: "2026-04-05T12:00:00.000Z",
       query: "bridge events",
@@ -449,13 +445,16 @@ describe("syncMemoryWikiBridgeSources", () => {
           score: 0.8,
         },
       ],
-    });
+    })}\n`;
+    const eventPath = path.join(workspaceDir, "memory", "events", "memory-host-events.jsonl");
+    await fs.mkdir(path.dirname(eventPath), { recursive: true });
+    await fs.writeFile(eventPath, eventContent, "utf8");
     registerBridgeArtifacts([
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/.dreams/events.jsonl",
-        absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
+        relativePath: "memory/events/memory-host-events.jsonl",
+        absolutePath: eventPath,
         agentIds: ["main"],
         contentType: "json",
       },

@@ -15,6 +15,7 @@ import {
   markDiagnosticEmbeddedRunEnded,
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
+  startDiagnosticRunActivityTracking,
 } from "./diagnostic-run-activity.js";
 import {
   markDiagnosticModelStartedForTest,
@@ -49,8 +50,18 @@ import {
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
-  startDiagnosticHeartbeat,
+  startDiagnosticHeartbeat as startDiagnosticHeartbeatImpl,
 } from "./diagnostic.js";
+
+function startDiagnosticHeartbeat(
+  config?: Parameters<typeof startDiagnosticHeartbeatImpl>[0],
+  opts?: Parameters<typeof startDiagnosticHeartbeatImpl>[1],
+) {
+  return startDiagnosticHeartbeatImpl(config, {
+    testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 60_000 },
+    ...opts,
+  });
+}
 
 function createEmitMemorySampleMock() {
   return vi.fn(() => ({
@@ -323,7 +334,7 @@ describe("stuck session diagnostics threshold", () => {
     vi.useRealTimers();
   });
 
-  it("uses the configured diagnostics.stuckSessionWarnMs threshold", () => {
+  it("uses the heartbeat test timing without runtime config tuning", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
@@ -334,7 +345,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -359,7 +369,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("keeps queued stale sessions eligible for lane recovery", () => {
+  it("does not count a single in-flight turn as queued work without an active run", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
@@ -370,7 +380,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -387,12 +396,12 @@ describe("stuck session diagnostics threshold", () => {
     expect(stuckEvents).toHaveLength(1);
     expectRecordFields(requireRecord(stuckEvents[0], "stuck event"), {
       classification: "stale_session_state",
-      reason: "queued_work_without_active_run",
-      queueDepth: 1,
+      reason: "stale_session_state",
+      queueDepth: 0,
     });
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 1 },
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
       ["ageMs", "stateGeneration"],
     );
   });
@@ -405,7 +414,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
         },
       },
       { recoverStuckSession },
@@ -434,7 +442,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
         },
       },
       { recoverStuckSession },
@@ -456,83 +463,6 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it.each([
-    { stuckSessionAbortMs: 1_000, heartbeatOverdueMs: 1_000 },
-    { stuckSessionAbortMs: 30_000, heartbeatOverdueMs: 1_000 },
-    { stuckSessionAbortMs: 31_000, heartbeatOverdueMs: 1_000 },
-    { stuckSessionAbortMs: 45_000, heartbeatOverdueMs: 15_000 },
-    { stuckSessionAbortMs: 89_000, heartbeatOverdueMs: 59_000 },
-  ])(
-    "defers a liveness-delayed heartbeat with a $stuckSessionAbortMs ms abort threshold",
-    ({ stuckSessionAbortMs, heartbeatOverdueMs }) => {
-      const recoverStuckSession = vi.fn();
-      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-
-      vi.setSystemTime(0);
-      startDiagnosticHeartbeat(
-        {
-          diagnostics: {
-            enabled: true,
-            stuckSessionWarnMs: 1_000,
-            stuckSessionAbortMs,
-          },
-        },
-        { recoverStuckSession },
-      );
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-
-      vi.setSystemTime(heartbeatOverdueMs);
-      vi.advanceTimersByTime(30_000);
-
-      expectLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
-      expect(recoverStuckSession).not.toHaveBeenCalled();
-
-      vi.advanceTimersByTime(30_000);
-
-      expectRecoveryCall(
-        recoverStuckSession,
-        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
-        ["ageMs", "stateGeneration"],
-      );
-    },
-  );
-
-  it.each([
-    { stuckSessionAbortMs: 1_000, schedulingJitterMs: 1 },
-    { stuckSessionAbortMs: 30_000, schedulingJitterMs: 999 },
-  ])(
-    "recovers at a $stuckSessionAbortMs ms abort threshold with ordinary scheduling jitter",
-    ({ stuckSessionAbortMs, schedulingJitterMs }) => {
-      const recoverStuckSession = vi.fn();
-      const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
-
-      vi.setSystemTime(0);
-      startDiagnosticHeartbeat(
-        {
-          diagnostics: {
-            enabled: true,
-            stuckSessionWarnMs: 1_000,
-            stuckSessionAbortMs,
-          },
-        },
-        { recoverStuckSession },
-      );
-      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
-
-      vi.setSystemTime(schedulingJitterMs);
-      vi.advanceTimersByTime(30_000);
-
-      expectNoLoggerMessageContaining(warnSpy, "liveness heartbeat delayed");
-      expectRecoveryCall(
-        recoverStuckSession,
-        { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
-        ["ageMs", "stateGeneration"],
-      );
-    },
-  );
-
   it("defers a material heartbeat stall even when elapsed time is below the abort threshold", () => {
     const recoverStuckSession = vi.fn();
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
@@ -542,8 +472,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 1_000,
-          stuckSessionAbortMs: 45_000,
         },
       },
       { recoverStuckSession },
@@ -584,8 +512,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 1_000,
-          stuckSessionAbortMs: 45_000,
         },
       },
       { recoverStuckSession },
@@ -626,7 +552,6 @@ describe("stuck session diagnostics threshold", () => {
       startDiagnosticHeartbeat({
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
         },
       });
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
@@ -655,7 +580,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -693,7 +617,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -734,10 +657,12 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
-        { recoverStuckSession },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 5 * 60_000 },
+        },
       );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
@@ -776,7 +701,6 @@ describe("stuck session diagnostics threshold", () => {
       startDiagnosticHeartbeat({
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
         },
       });
 
@@ -802,7 +726,7 @@ describe("stuck session diagnostics threshold", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 30_000;
-    const stuckSessionAbortMs = resolveStuckSessionAbortMs(undefined, stuckSessionWarnMs);
+    const stuckSessionAbortMs = resolveStuckSessionAbortMs(stuckSessionWarnMs);
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
     });
@@ -811,11 +735,12 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
-        { recoverStuckSession },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
+        },
       );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
@@ -844,8 +769,6 @@ describe("stuck session diagnostics threshold", () => {
 
   it("aborts stale embedded runs when queued work refreshes session activity", () => {
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 120_000;
-    const stuckSessionAbortMs = 360_000;
 
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
@@ -857,8 +780,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs,
-          stuckSessionAbortMs,
         },
       },
       { recoverStuckSession },
@@ -875,8 +796,6 @@ describe("stuck session diagnostics threshold", () => {
 
   it("does not abort embedded runs with recent progress just because session activity is old", () => {
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
-    const stuckSessionAbortMs = 60_000;
 
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
@@ -891,8 +810,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs,
-          stuckSessionAbortMs,
         },
       },
       { recoverStuckSession },
@@ -915,7 +832,6 @@ describe("stuck session diagnostics threshold", () => {
   it("recovers stale native tool calls through the active-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
     const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
@@ -925,8 +841,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -980,8 +894,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
-            stuckSessionAbortMs: 60_000,
           },
         },
         { recoverStuckSession },
@@ -1017,7 +929,6 @@ describe("stuck session diagnostics threshold", () => {
   it("recovers stale model calls through the active embedded-run abort path", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
     const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
@@ -1027,8 +938,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -1083,11 +992,12 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
-        { recoverStuckSession },
+        {
+          recoverStuckSession,
+          testTimings: { stuckSessionWarnMs, stuckSessionAbortMs },
+        },
       );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
@@ -1123,7 +1033,6 @@ describe("stuck session diagnostics threshold", () => {
   it("does not actively abort model calls with recent stream progress", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
     const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
@@ -1133,8 +1042,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -1177,7 +1084,6 @@ describe("stuck session diagnostics threshold", () => {
   it("actively aborts silent local model calls after the stuck timeout", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
     const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
@@ -1187,8 +1093,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -1230,7 +1134,6 @@ describe("stuck session diagnostics threshold", () => {
   it("recovers stale model calls without active embedded-run ownership", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
     const stuckSessionAbortMs = 60_000;
     const unsubscribe = onDiagnosticEvent((event) => {
       events.push(event);
@@ -1240,8 +1143,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -1281,15 +1182,12 @@ describe("stuck session diagnostics threshold", () => {
 
   it("does not recover a recent native tool call just because the session is old", async () => {
     const recoverStuckSession = vi.fn();
-    const stuckSessionWarnMs = 30_000;
     const stuckSessionAbortMs = 90_000;
 
     startDiagnosticHeartbeat(
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs,
-          stuckSessionAbortMs,
         },
       },
       { recoverStuckSession },
@@ -1319,15 +1217,13 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("uses diagnostics.stuckSessionAbortMs for stalled active-work recovery", () => {
+  it("uses the built-in abort threshold for stalled active-work recovery", () => {
     const recoverStuckSession = vi.fn();
 
     startDiagnosticHeartbeat(
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
-          stuckSessionAbortMs: 60_000,
         },
       },
       { recoverStuckSession },
@@ -1377,8 +1273,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
-            stuckSessionAbortMs: 60_000,
           },
         },
         { recoverStuckSession },
@@ -1436,8 +1330,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
-          stuckSessionAbortMs: 60_000,
         },
       },
       { recoverStuckSession },
@@ -1488,8 +1380,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
-            stuckSessionAbortMs: 60_000,
           },
         },
         { recoverStuckSession },
@@ -1557,8 +1447,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
-            stuckSessionAbortMs: 60_000,
           },
         },
         { recoverStuckSession },
@@ -1613,8 +1501,6 @@ describe("stuck session diagnostics threshold", () => {
       {
         diagnostics: {
           enabled: true,
-          stuckSessionWarnMs: 30_000,
-          stuckSessionAbortMs: 60_000,
         },
       },
       { recoverStuckSession },
@@ -1688,8 +1574,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
-            stuckSessionAbortMs: 60_000,
           },
         },
         { recoverStuckSession },
@@ -1736,7 +1620,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -1777,7 +1660,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -1821,7 +1703,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -1876,7 +1757,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -1945,8 +1825,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
-            stuckSessionAbortMs: 60_000,
           },
         },
         { recoverStuckSession },
@@ -2006,7 +1884,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -2043,7 +1920,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -2085,7 +1961,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs: 30_000,
           },
         },
         { recoverStuckSession },
@@ -2105,9 +1980,9 @@ describe("stuck session diagnostics threshold", () => {
     expect(longRunningEvents).toHaveLength(1);
     expectRecordFields(requireRecord(longRunningEvents[0], "long-running event"), {
       classification: "long_running",
-      reason: "queued_behind_active_work",
+      reason: "active_work",
       activeWorkKind: "embedded_run",
-      queueDepth: 1,
+      queueDepth: 0,
     });
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
@@ -2126,8 +2001,6 @@ describe("stuck session diagnostics threshold", () => {
         {
           diagnostics: {
             enabled: true,
-            stuckSessionWarnMs,
-            stuckSessionAbortMs,
           },
         },
         { recoverStuckSession },
@@ -2158,13 +2031,13 @@ describe("stuck session diagnostics threshold", () => {
       classification: "stalled_agent_run",
       reason: "queued_behind_terminal_active_work",
       activeWorkKind: "embedded_run",
-      queueDepth: 2,
+      queueDepth: 1,
       terminalProgressStale: true,
       lastProgressReason: terminalReason,
     });
     expectRecoveryCall(
       recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 2, allowActiveAbort: true },
+      { sessionId: "s1", sessionKey: "main", queueDepth: 1, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
   });
@@ -2635,20 +2508,9 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.some((event) => event.type === "session.stuck")).toBe(false);
   });
 
-  it("uses default threshold for invalid values", () => {
-    expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: -1 } })).toBe(120_000);
-    expect(resolveStuckSessionWarnMs({ diagnostics: { stuckSessionWarnMs: 0 } })).toBe(120_000);
+  it("uses fixed session attention thresholds", () => {
     expect(resolveStuckSessionWarnMs()).toBe(120_000);
-    expect(
-      resolveStuckSessionAbortMs({ diagnostics: { stuckSessionAbortMs: 5_000 } }, 30_000),
-    ).toBe(30_000);
-    expect(
-      resolveStuckSessionAbortMs(
-        { diagnostics: { stuckSessionAbortMs: 48 * 60 * 60_000 } },
-        30_000,
-      ),
-    ).toBe(48 * 60 * 60_000);
-    expect(resolveStuckSessionAbortMs(undefined, 30_000)).toBe(5 * 60_000);
+    expect(resolveStuckSessionAbortMs(30_000)).toBe(5 * 60_000);
   });
 });
 
@@ -2732,6 +2594,7 @@ describe("stuck session recovery activity reconciliation", () => {
     setDiagnosticsEnabledForProcess(true);
     resetDiagnosticSessionStateForTest();
     resetDiagnosticRunActivityForTest();
+    startDiagnosticRunActivityTracking();
     resetDiagnosticSessionRecoveryCoordinatorForTest();
   });
 

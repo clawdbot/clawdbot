@@ -186,7 +186,6 @@ describe("security fix", () => {
         signal: { groupPolicy: "open" },
         imessage: { groupPolicy: "open" },
       },
-      logging: { redactSensitive: "off" },
     } satisfies OpenClawConfig;
     const fixed = await runConfigFixScenario({
       prefix: "group-policy",
@@ -194,7 +193,6 @@ describe("security fix", () => {
       channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15551234567"])],
     });
     expect(fixed.res.changes).toEqual([
-      'logging.redactSensitive=off -> "tools"',
       "channels.telegram.groupPolicy=open -> allowlist",
       "channels.whatsapp.groupPolicy=open -> allowlist",
       "channels.discord.groupPolicy=open -> allowlist",
@@ -344,6 +342,32 @@ describe("security fix", () => {
       sessionsStorePath,
       transcriptPath,
     ]);
+  });
+
+  it("tightens the live legacy main auth store for a named default roster", async () => {
+    const stateDir = await createStateDir("named-default-legacy-auth");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
+      "utf-8",
+    );
+    const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
+    await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");
+    await fs.chmod(legacyAuthPath, 0o644);
+
+    const result = await fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+      channelPlugins: [],
+    });
+
+    expect(result.actions).toContainEqual(
+      expect.objectContaining({ kind: "chmod", ok: true, path: legacyAuthPath, mode: 0o600 }),
+    );
+    expectPerms((await fs.stat(legacyAuthPath)).mode & 0o777, 0o600);
   });
 
   it.runIf(process.platform !== "win32")(

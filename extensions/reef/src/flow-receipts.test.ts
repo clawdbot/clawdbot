@@ -771,3 +771,71 @@ describe("ReefMessageFlow delivery receipts", () => {
     });
   });
 });
+
+describe("ReefMessageFlow overdue delivery follow-up", () => {
+  it("notifies the owner when an accepted receipt closes an overdue notice", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const trusted = trust({ alice: peerTrust(alice) });
+    const relay = transport();
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(23)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice,
+    });
+    const id = await flow.send("alice", "are you there?");
+    const record = trusted.deliveries.get(`alice:${id}`)!;
+    record.overdueNotifiedAt = Date.now();
+    const receipt = signReceipt(
+      { id, bodyHash: record.bodyHash, auditHead: "a".repeat(64), status: "accepted" },
+      alice.signing.secretKey,
+    );
+
+    await expect(
+      flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
+    ).resolves.toEqual([]);
+
+    expect(trusted.deliveries.has(`alice:${id}`)).toBe(false);
+    expect(onOwnerNotice).toHaveBeenCalledOnce();
+    expect(onOwnerNotice.mock.calls[0]?.[0]).toContain("delivered after");
+  });
+
+  it("stays silent for accepted receipts that were never reported overdue", async () => {
+    const alice = generateIdentity();
+    const bob = reefKeys();
+    const trusted = trust({ alice: peerTrust(alice) });
+    const relay = transport();
+    const onOwnerNotice = vi.fn(async (_text: string) => {});
+    const flow = new ReefMessageFlow({
+      config: config(),
+      trust: trusted.store,
+      keys: bob,
+      transport: relay as unknown as ReefTransportClient,
+      guard: guard(allow),
+      audit: new MemoryAuditStore(new Uint8Array(32).fill(24)),
+      replay: new MemoryReplayStore(),
+      ...flowStores(),
+      onIngress: async () => {},
+      onOwnerNotice,
+    });
+    const id = await flow.send("alice", "quick ping");
+    const record = trusted.deliveries.get(`alice:${id}`)!;
+    const receipt = signReceipt(
+      { id, bodyHash: record.bodyHash, auditHead: "a".repeat(64), status: "accepted" },
+      alice.signing.secretKey,
+    );
+
+    await expect(
+      flow.processEntries([{ seq: 1, peer: "alice", id, kind: "receipt", receipt, ts: 1 }]),
+    ).resolves.toEqual([]);
+    expect(onOwnerNotice).not.toHaveBeenCalled();
+  });
+});

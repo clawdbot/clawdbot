@@ -1,13 +1,18 @@
 // Queued cron reservation cleanup regressions across every trigger.
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDeferred,
   createDueIsolatedJob,
   noopLogger,
   setupCronRegressionFixtures,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import * as cronStoreModule from "../store.js";
 import { loadCronStore, saveCronStore } from "../store.js";
-import { run, stop } from "./ops.js";
+import { stop } from "./ops-lifecycle.js";
+import { update } from "./ops-mutations.js";
+import { run } from "./ops-run.js";
+import { runWithCronAdmission } from "./run-admission.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 import { onTimer } from "./timer.test-support.js";
@@ -17,6 +22,110 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 describe("cron service run admission cleanup", () => {
+  it.each([
+    { mode: "force" as const, evaluation: "completed" as const },
+    { mode: "due" as const, evaluation: "completed" as const },
+    { mode: "force" as const, evaluation: "quiet" as const },
+    { mode: "due" as const, evaluation: "quiet" as const },
+  ])(
+    "preserves an operator-edited schedule after an active $mode $evaluation manual run",
+    async ({ mode, evaluation }) => {
+      const store = opsRegressionFixtures.makeStorePath();
+      const startedAt = Date.parse("2026-02-06T10:05:02.000Z");
+      const job = createDueIsolatedJob({
+        id: `manual-${mode}-${evaluation}-preserves-edited-schedule`,
+        nowMs: startedAt,
+        nextRunAtMs: startedAt,
+      });
+      job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
+      await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+      const runnerStarted = createDeferred<void>();
+      const releaseRun = createDeferred<{
+        status: "ok";
+        summary: string;
+        triggerEval?: { fired: false; stateChanged: false };
+      }>();
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => startedAt,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(async () => {
+          runnerStarted.resolve();
+          return await releaseRun.promise;
+        }),
+      });
+
+      const activeRun = run(state, job.id, mode);
+      await runnerStarted.promise;
+      const editedJob = await update(state, job.id, {
+        schedule: { kind: "every", everyMs: 3_600_000, anchorMs: startedAt },
+      });
+      const editedNextRunAtMs = editedJob.state.nextRunAtMs;
+      expect(editedNextRunAtMs).toBe(startedAt + 3_600_000);
+
+      releaseRun.resolve({
+        status: "ok",
+        summary: "manual run completed",
+        ...(evaluation === "quiet" ? { triggerEval: { fired: false, stateChanged: false } } : {}),
+      });
+      await expect(activeRun).resolves.toMatchObject({ ok: true, ran: true });
+
+      const persistedJob = (await loadCronStore(store.storePath)).jobs.find(
+        (entry) => entry.id === job.id,
+      );
+      expect(persistedJob?.schedule).toEqual(editedJob.schedule);
+      expect(persistedJob?.state.nextRunAtMs).toBe(editedNextRunAtMs);
+      expect(persistedJob?.state.forcePreservedNextRunAtMs).toBeUndefined();
+    },
+  );
+
+  it("releases immediate and queued admission slots in FIFO order after failures", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const releaseFirst = createDeferred<void>();
+    const executionOrder: string[] = [];
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => 0,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    state.runAdmission.active = DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1;
+
+    const immediate = runWithCronAdmission(state, async () => {
+      executionOrder.push("immediate");
+      await releaseFirst.promise;
+      return "immediate";
+    });
+    const failed = runWithCronAdmission(state, async () => {
+      executionOrder.push("failed");
+      throw new Error("queued admission failed");
+    });
+    const failure = expect(failed).rejects.toThrow("queued admission failed");
+    const queued = runWithCronAdmission(state, async () => {
+      executionOrder.push("queued");
+      return "queued";
+    });
+
+    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    expect(state.runAdmission.waiters).toHaveLength(2);
+
+    releaseFirst.resolve();
+
+    await expect(immediate).resolves.toEqual({ kind: "admitted", value: "immediate" });
+    await failure;
+    await expect(queued).resolves.toEqual({ kind: "admitted", value: "queued" });
+    expect(executionOrder).toEqual(["immediate", "failed", "queued"]);
+    expect(state.runAdmission.active).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS - 1);
+    expect(state.runAdmission.waiters).toHaveLength(0);
+  });
+
   it.each(["manual", "scheduled", "startup"] as const)(
     "does not start a %s run when stop wins the activation write",
     async (trigger) => {
@@ -46,10 +155,11 @@ describe("cron service run admission cleanup", () => {
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
         .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
+          const nextState = nextStore.jobs.find((entry) => entry.id === job.id)?.state;
+          const queuedAtMs = nextState?.queuedAtMs;
+          const runningAtMs = nextState?.runningAtMs;
           await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
+          if (!reservationPersisted && queuedAtMs === dueAt) {
             reservationPersisted = true;
             now = dueAt + 1;
           } else if (reservationPersisted && runningAtMs === dueAt + 1) {
@@ -110,14 +220,14 @@ describe("cron service run admission cleanup", () => {
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
         .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (reservationPersisted && !cleanupFailed && runningAtMs === undefined) {
+          const nextState = nextStore.jobs.find((entry) => entry.id === job.id)?.state;
+          const queuedAtMs = nextState?.queuedAtMs;
+          if (reservationPersisted && !cleanupFailed && queuedAtMs === undefined) {
             cleanupFailed = true;
             throw new Error("reservation cleanup persist failed");
           }
           await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
+          if (!reservationPersisted && queuedAtMs === dueAt) {
             reservationPersisted = true;
             stop(state);
           }
@@ -177,14 +287,15 @@ describe("cron service run admission cleanup", () => {
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
         .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
+          const nextState = nextStore.jobs.find((entry) => entry.id === job.id)?.state;
+          const queuedAtMs = nextState?.queuedAtMs;
+          const runningAtMs = nextState?.runningAtMs;
           if (reservationPersisted && !activationFailed && runningAtMs === dueAt + 1) {
             activationFailed = true;
             throw new Error("activation persist failed");
           }
           await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
+          if (!reservationPersisted && queuedAtMs === dueAt) {
             reservationPersisted = true;
             now = dueAt + 1;
           }
@@ -243,14 +354,20 @@ describe("cron service run admission cleanup", () => {
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
         .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (activationPersisted && !cleanupFailed && runningAtMs === undefined) {
+          const nextState = nextStore.jobs.find((entry) => entry.id === job.id)?.state;
+          const queuedAtMs = nextState?.queuedAtMs;
+          const runningAtMs = nextState?.runningAtMs;
+          if (
+            activationPersisted &&
+            !cleanupFailed &&
+            queuedAtMs === undefined &&
+            runningAtMs === undefined
+          ) {
             cleanupFailed = true;
             throw new Error("cleanup persist failed");
           }
           await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
+          if (!reservationPersisted && queuedAtMs === dueAt) {
             reservationPersisted = true;
             now = dueAt + 1;
           } else if (reservationPersisted && runningAtMs === dueAt + 1) {
@@ -309,13 +426,14 @@ describe("cron service run admission cleanup", () => {
       const saveSpy = vi
         .spyOn(cronStoreModule, "saveCronJobsStore")
         .mockImplementation(async (storePath, nextStore, opts) => {
-          const runningAtMs = nextStore.jobs.find((entry) => entry.id === job.id)?.state
-            .runningAtMs;
-          if (activationPersisted && runningAtMs === undefined) {
+          const nextState = nextStore.jobs.find((entry) => entry.id === job.id)?.state;
+          const queuedAtMs = nextState?.queuedAtMs;
+          const runningAtMs = nextState?.runningAtMs;
+          if (activationPersisted && queuedAtMs === undefined && runningAtMs === undefined) {
             throw new Error("terminal cleanup persist failed");
           }
           await realSave(storePath, nextStore, opts);
-          if (!reservationPersisted && runningAtMs === dueAt) {
+          if (!reservationPersisted && queuedAtMs === dueAt) {
             reservationPersisted = true;
             now = dueAt + 1;
           } else if (reservationPersisted && runningAtMs === dueAt + 1) {

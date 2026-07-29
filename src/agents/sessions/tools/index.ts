@@ -25,6 +25,8 @@ export type {
   LsToolInput,
   ReadToolDetails,
   ReadToolInput,
+  ReadToolTruncationDetails,
+  WriteToolDetails,
   WriteToolInput,
 } from "./tool-contracts.js";
 export {

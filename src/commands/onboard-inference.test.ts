@@ -36,37 +36,160 @@ describe("detectInferenceBackends", () => {
     expect(candidates).toEqual([]);
   });
 
-  it("orders the ladder: existing model, env keys, then CLI logins", async () => {
+  it("does not offer external CLIs whose version probes time out", async () => {
     const candidates = await detectInferenceBackends({
-      config: { agents: { defaults: { model: "zai/glm-5.2" } } },
+      env: {},
+      platform: "linux",
+      deps: {
+        probeLocalCommand: async (command) => ({
+          command,
+          found: true,
+          timedOut: true,
+          error: "timed out after 1500ms",
+        }),
+        readClaudeCliCredentials: () => ({ type: "oauth" }),
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+        readGeminiCliCredentials: () => ({ type: "oauth" }),
+      },
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
+  it("orders the ladder: existing model, logged-in subscriptions, env keys, then fallback CLIs", async () => {
+    const candidates = await detectInferenceBackends({
+      config: {
+        agents: {
+          defaults: { model: "zai/glm-5.2" },
+          entries: { main: { default: true } },
+        },
+      },
       env: { OPENAI_API_KEY: "sk-x", ANTHROPIC_API_KEY: "sk-y" },
       platform: "linux",
       deps: {
-        probeLocalCommand: probeDeps({ claude: true, codex: true }),
+        probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
         readClaudeCliCredentials: () => ({ type: "oauth" }),
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+        readGeminiCliCredentials: () => ({ type: "oauth" }),
+        randomInt: () => 0,
+      },
+    });
+    expect(candidates.map((candidate) => candidate.kind)).toEqual([
+      "existing-model",
+      "claude-cli",
+      "codex-cli",
+      "openai-api-key",
+      "anthropic-api-key",
+      "gemini-cli",
+    ]);
+    expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
+    expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
+    expect(candidates[1]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
+    expect(candidates[2]?.modelRef).toBe(CODEX_APP_SERVER_DEFAULT_MODEL_REF);
+    expect(candidates[3]?.modelRef).toBe(OPENAI_API_DEFAULT_MODEL_REF);
+    expect(candidates[4]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
+  });
+
+  it("ranks a logged-in Codex subscription before an OpenAI environment key", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { OPENAI_API_KEY: "sk-x" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ codex: true }),
         readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
-    expect(candidates.slice(0, 3).map((candidate) => candidate.kind)).toEqual([
-      "existing-model",
-      "openai-api-key",
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "openai-api-key"]);
+  });
+
+  it("keeps status-only Codex login after env keys without verifiable OAuth tokens", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { OPENAI_API_KEY: "sk-x" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ codex: true }),
+        readCodexCliCredentials: () => null,
+        detectCodexLoginState: async () => true,
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
+    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+  });
+
+  it("keeps API-key-helper-backed Claude after environment keys", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { ANTHROPIC_API_KEY: "sk-y" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        readClaudeCliCredentials: () => ({ type: "api_key_helper" }),
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual([
       "anthropic-api-key",
+      "claude-cli",
     ]);
-    expect(
-      candidates
-        .slice(3)
-        .map((candidate) => candidate.kind)
-        .toSorted(),
-    ).toEqual(["claude-cli", "codex-cli"]);
-    expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
-    expect(candidates[1]?.modelRef).toBe(OPENAI_API_DEFAULT_MODEL_REF);
-    expect(candidates[2]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
-    expect(
-      candidates
-        .slice(3)
-        .map((candidate) => candidate.modelRef)
-        .toSorted(),
-    ).toEqual([CLAUDE_CLI_DEFAULT_MODEL_REF, CODEX_APP_SERVER_DEFAULT_MODEL_REF].toSorted());
+    expect(candidates[1]).toMatchObject({ credentials: true, detail: "logged in" });
+  });
+
+  it("keeps an Anthropic environment key ahead of unknown Claude credentials", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { ANTHROPIC_API_KEY: "sk-y" },
+      platform: "darwin",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true }),
+        readClaudeCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual([
+      "anthropic-api-key",
+      "claude-cli",
+    ]);
+    expect(candidates[1]?.credentials).toBeUndefined();
+  });
+
+  it("keeps a logged-in Gemini CLI after environment keys", async () => {
+    const candidates = await detectInferenceBackends({
+      env: { OPENAI_API_KEY: "sk-x" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ gemini: true }),
+        readGeminiCliCredentials: () => ({ type: "oauth" }),
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "gemini-cli"]);
+  });
+
+  it("keeps the existing model first and definitively logged-out CLIs last", async () => {
+    const candidates = await detectInferenceBackends({
+      config: {
+        agents: {
+          defaults: { model: "zai/glm-5.2" },
+          entries: { main: { default: true } },
+        },
+      },
+      env: { OPENAI_API_KEY: "sk-x" },
+      platform: "linux",
+      deps: {
+        probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
+        readClaudeCliCredentials: () => null,
+        readCodexCliCredentials: () => ({ type: "oauth" }),
+        readGeminiCliCredentials: () => null,
+      },
+    });
+
+    expect(candidates.map((candidate) => candidate.kind)).toEqual([
+      "existing-model",
+      "codex-cli",
+      "openai-api-key",
+      "claude-cli",
+      "gemini-cli",
+    ]);
   });
 
   it("prefers the configured default agent model over the global default", async () => {
@@ -102,6 +225,7 @@ describe("detectInferenceBackends", () => {
             model: { primary: "opus" },
             models: { "anthropic/claude-opus-4-8": { alias: "opus" } },
           },
+          entries: { main: { default: true } },
         },
       },
       env: {},

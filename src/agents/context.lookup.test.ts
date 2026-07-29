@@ -20,8 +20,13 @@ const contextTestState = vi.hoisted(() => {
     staticCatalogModels: [] as DiscoveredModel[],
     runtimeConfigSnapshot: null as OpenClawConfig | null,
     runtimeConfigSourceSnapshot: null as OpenClawConfig | null,
-    loadModelCatalog: vi.fn(async () => state.discoveredModels),
-    loadStaticCatalog: vi.fn(async () => state.staticCatalogModels),
+    loadModelCatalogOwnerSnapshot: vi.fn(async (_params: unknown) => ({
+      modelCatalog: {
+        entries: state.discoveredModels,
+        routeVariants: [],
+        staticEntries: state.staticCatalogModels,
+      },
+    })),
   };
   return state;
 });
@@ -37,12 +42,8 @@ vi.mock("../config/runtime-source-projection.js", () => ({
       : config,
 }));
 
-vi.mock("./model-catalog.runtime.js", () => ({
-  loadModelCatalog: contextTestState.loadModelCatalog,
-}));
-
-vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
-  loadBundledProviderStaticCatalogContextModels: contextTestState.loadStaticCatalog,
+vi.mock("./prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalogOwnerSnapshot: contextTestState.loadModelCatalogOwnerSnapshot,
 }));
 
 function mockContextDeps(params: {
@@ -131,11 +132,14 @@ describe("lookupContextTokens", () => {
     contextTestState.staticCatalogModels = [];
     contextTestState.runtimeConfigSnapshot = null;
     contextTestState.runtimeConfigSourceSnapshot = null;
-    contextTestState.loadModelCatalog.mockClear();
-    contextTestState.loadStaticCatalog.mockClear();
-    contextTestState.loadStaticCatalog.mockImplementation(
-      async () => contextTestState.staticCatalogModels,
-    );
+    contextTestState.loadModelCatalogOwnerSnapshot.mockClear();
+    contextTestState.loadModelCatalogOwnerSnapshot.mockImplementation(async () => ({
+      modelCatalog: {
+        entries: contextTestState.discoveredModels,
+        routeVariants: [],
+        staticEntries: contextTestState.staticCatalogModels,
+      },
+    }));
     contextModule.resetContextWindowCacheForTest();
   });
 
@@ -338,11 +342,17 @@ describe("lookupContextTokens", () => {
     lookupContextTokens("anthropic/claude-opus-4.7-20260219");
     await flushAsyncWarmup();
 
-    expect(contextTestState.loadModelCatalog).toHaveBeenCalledOnce();
-    expect(contextTestState.loadModelCatalog).toHaveBeenCalledWith({
-      config,
-      readOnly: true,
-    });
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledOnce();
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        agentDir: expect.any(String),
+        readOnly: true,
+      }),
+    );
+    expect(contextTestState.loadModelCatalogOwnerSnapshot.mock.calls[0]?.[0]).not.toHaveProperty(
+      "workspaceDir",
+    );
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(
       ANTHROPIC_CONTEXT_1M_TOKENS,
     );
@@ -361,10 +371,9 @@ describe("lookupContextTokens", () => {
     const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
     await ensureContextWindowCacheLoaded(config);
 
-    expect(contextTestState.loadModelCatalog).toHaveBeenCalledWith({
-      config,
-      readOnly: true,
-    });
+    expect(contextTestState.loadModelCatalogOwnerSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ config, readOnly: true }),
+    );
     expect(
       lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
     ).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
@@ -397,8 +406,8 @@ describe("lookupContextTokens", () => {
   it("status waits for pending context warmup but releases on timeout", async () => {
     vi.useFakeTimers();
     try {
-      contextTestState.loadModelCatalog.mockImplementationOnce(
-        () => new Promise<DiscoveredModel[]>(() => {}),
+      contextTestState.loadModelCatalogOwnerSnapshot.mockImplementationOnce(
+        () => new Promise<never>(() => {}),
       );
 
       const { ensureContextWindowCacheLoaded, waitForContextWindowCacheLoad } =
@@ -432,7 +441,7 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("gemini-3.1-pro-preview")).toBe(1_048_576);
   });
 
-  it("keeps persisted context metadata when provider static warmup fails", async () => {
+  it("keeps discovered context metadata when no static rows exist", async () => {
     mockDiscoveryDeps([
       {
         id: "claude-sonnet",
@@ -440,8 +449,6 @@ describe("lookupContextTokens", () => {
         contextWindow: 654_321,
       },
     ]);
-    contextTestState.loadStaticCatalog.mockRejectedValueOnce(new Error("catalog unavailable"));
-
     const { lookupContextTokens } = await importContextModule();
     lookupContextTokens("claude-sonnet");
     await flushAsyncWarmup();

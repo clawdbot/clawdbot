@@ -370,7 +370,9 @@ function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBucket[] 
     ];
   }
 
-  const firstLetter = (value: string): string => value.charAt(0).toLowerCase();
+  // Bucket ids enter URI-encoded Discord custom ids, so the prefix must never
+  // be a lone UTF-16 surrogate when an identifier starts with an astral character.
+  const firstLetter = (value: string): string => (Array.from(value)[0] ?? "").toLowerCase();
   const firstItem = expectDefined(sortedItems.at(0), "non-empty sorted model picker items");
   const allSamePrefix = sortedItems.every((item) => firstLetter(item) === firstLetter(firstItem));
   if (allSamePrefix) {

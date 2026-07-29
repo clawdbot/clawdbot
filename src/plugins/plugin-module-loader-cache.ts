@@ -258,7 +258,6 @@ function createPluginModuleLoader(params: {
         allowWindows: true,
         aliasMap: params.aliasMap,
         fallbackOnMissingDependency: true,
-        fallbackOnNativeError: true,
       });
       if (native.ok) {
         pluginModuleLoaderStats.nativeHits += 1;
@@ -277,12 +276,14 @@ export function getCachedPluginModuleLoader(
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
-  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
   const cached = params.cache.get(cacheEntry.scopedCacheKey);
   if (cached) {
     return cached;
   }
+  // Exact-key hits already own the native aliases installed with their loader;
+  // reinstallation would rescan the host package on every cached request.
+  installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
   const loader = createPluginModuleLoader({
     loaderFilename: cacheEntry.loaderFilename,
     aliasMap: cacheEntry.aliasMap,

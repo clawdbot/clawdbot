@@ -3,15 +3,14 @@ import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
-import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
 import type { MatrixClient } from "./sdk.js";
+import { chunkMatrixText, prepareMatrixSingleText } from "./send/chunking.js";
 import {
   resolveMediaMaxBytes,
   withResolvedMatrixControlClient,
@@ -47,22 +46,9 @@ import {
   type MatrixTextMsgType,
 } from "./send/types.js";
 
-const MATRIX_TEXT_LIMIT = 4000;
-const getCore = () => getMatrixRuntime();
-
+export { chunkMatrixText, prepareMatrixSingleText } from "./send/chunking.js";
 export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
-
-type MatrixPreparedSingleText = {
-  trimmedText: string;
-  convertedText: string;
-  singleEventLimit: number;
-  fitsInSingleEvent: boolean;
-};
-
-type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
-  chunks: string[];
-};
 
 type MatrixClientResolveOpts = {
   client?: MatrixClient;
@@ -179,57 +165,6 @@ async function resolvePreviousEditMentions(params: {
   });
 }
 
-export function prepareMatrixSingleText(
-  text: string,
-  opts: {
-    cfg: CoreConfig;
-    accountId?: string;
-    tableMode?: MarkdownTableMode;
-  },
-): MatrixPreparedSingleText {
-  const trimmedText = text.trim();
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
-  const tableMode =
-    opts.tableMode ??
-    getCore().channel.text.resolveMarkdownTableMode({
-      cfg,
-      channel: "matrix",
-      accountId: opts.accountId,
-    });
-  const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
-  const singleEventLimit = Math.min(
-    getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
-    MATRIX_TEXT_LIMIT,
-  );
-  return {
-    trimmedText,
-    convertedText,
-    singleEventLimit,
-    fitsInSingleEvent: convertedText.length <= singleEventLimit,
-  };
-}
-
-export function chunkMatrixText(
-  text: string,
-  opts: {
-    cfg: CoreConfig;
-    accountId?: string;
-    tableMode?: MarkdownTableMode;
-  },
-): MatrixPreparedChunkedText {
-  const preparedText = prepareMatrixSingleText(text, opts);
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
-  const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
-  return {
-    ...preparedText,
-    chunks: getCore().channel.text.chunkMarkdownTextWithMode(
-      preparedText.convertedText,
-      preparedText.singleEventLimit,
-      chunkMode,
-    ),
-  };
-}
-
 export async function sendMessageMatrix(
   to: string,
   message: string | undefined,
@@ -249,7 +184,7 @@ export async function sendMessageMatrix(
     async (client) => {
       const roomId = await resolveMatrixRoomId(client, to);
       const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
-      const { chunks } = chunkMatrixText(trimmedMessage, {
+      const { chunks, tableMode } = chunkMatrixText(trimmedMessage, {
         cfg,
         accountId: opts.accountId,
       });
@@ -298,7 +233,7 @@ export async function sendMessageMatrix(
           buffer: media.buffer,
           contentType: media.contentType,
           fileName: media.fileName,
-          kind: media.kind ?? "unknown",
+          kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
         });
         const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
         const { useVoice } = resolveMatrixVoiceDecision({
@@ -336,6 +271,7 @@ export async function sendMessageMatrix(
           client,
           content,
           markdown: captionMarkdown,
+          tableMode,
         });
         const eventId = await sendContent(content, receiptKind);
         lastMessageId = eventId ?? lastMessageId;
@@ -347,8 +283,8 @@ export async function sendMessageMatrix(
         // transcript follow-up attached to the same reply/thread context.
         const followupRelation = useVoice || threadId ? relation : undefined;
         for (const chunk of textChunks) {
-          const text = chunk.trim();
-          if (!text) {
+          const text = chunk;
+          if (!text.trim()) {
             continue;
           }
           const followup = buildTextContent(text, followupRelation);
@@ -356,6 +292,7 @@ export async function sendMessageMatrix(
             client,
             content: followup,
             markdown: text,
+            tableMode,
           });
           const followupEventId = await sendContent(followup, "text");
           lastMessageId = followupEventId ?? lastMessageId;
@@ -365,8 +302,8 @@ export async function sendMessageMatrix(
         }
       } else {
         for (const chunk of chunks.length ? chunks : [""]) {
-          const text = chunk.trim();
-          if (!text) {
+          const text = chunk;
+          if (!text.trim()) {
             continue;
           }
           const content = buildTextContent(text, relation);
@@ -374,6 +311,7 @@ export async function sendMessageMatrix(
             client,
             content,
             markdown: text,
+            tableMode,
           });
           const eventId = await sendContent(content, "text");
           lastMessageId = eventId ?? lastMessageId;
@@ -499,17 +437,23 @@ export async function sendSingleTextMessageMatrix(
     live?: boolean;
   },
 ): Promise<MatrixSendResult> {
-  const { trimmedText, convertedText, singleEventLimit, fitsInSingleEvent } =
-    prepareMatrixSingleText(text, {
-      cfg: opts.cfg,
-      accountId: opts.accountId,
-    });
+  const {
+    trimmedText,
+    convertedText,
+    singleEventLimit,
+    eventTextLength,
+    fitsInSingleEvent,
+    tableMode,
+  } = prepareMatrixSingleText(text, {
+    cfg: opts.cfg,
+    accountId: opts.accountId,
+  });
   if (!trimmedText) {
     throw new Error("Matrix single-message send requires text");
   }
   if (!fitsInSingleEvent) {
     throw new Error(
-      `Matrix single-message text exceeds limit (${convertedText.length} > ${singleEventLimit})`,
+      `Matrix single-message text exceeds limit (${eventTextLength} > ${singleEventLimit})`,
     );
   }
   return await withResolvedMatrixSendClient(
@@ -535,6 +479,7 @@ export async function sendSingleTextMessageMatrix(
         content,
         markdown: convertedText,
         includeMentions: opts.includeMentions,
+        tableMode,
       });
       // MSC4357: mark the initial message as live so supporting clients start
       // rendering a streaming animation immediately.
@@ -602,12 +547,11 @@ export async function editMessageMatrix(
     async (client) => {
       const resolvedRoom = await resolveMatrixRoomId(client, roomId);
       const cfg = requireRuntimeConfig(opts.cfg, "Matrix message edit") as CoreConfig;
-      const tableMode = getCore().channel.text.resolveMarkdownTableMode({
+      const { convertedText, tableMode } = prepareMatrixSingleText(newText, {
         cfg,
-        channel: "matrix",
         accountId: opts.accountId,
+        preserveWhitespace: true,
       });
-      const convertedText = getCore().channel.text.convertMarkdownTables(newText, tableMode);
       const newContent = withMatrixExtraContentFields(
         buildTextContent(convertedText, undefined, {
           msgtype: opts.msgtype,
@@ -619,6 +563,7 @@ export async function editMessageMatrix(
         content: newContent,
         markdown: convertedText,
         includeMentions: opts.includeMentions,
+        tableMode,
       });
       const previousEvent = await getPreviousMatrixEvent(client, resolvedRoom, originalEventId);
       const replaceMentions =
@@ -649,7 +594,7 @@ export async function editMessageMatrix(
       // m.new_content still see properly formatted text (with HTML).
       const content: Record<string, unknown> = {
         ...newContent,
-        body: `* ${convertedText}`,
+        body: `* ${newContent.body}`,
         ...(typeof newContent.formatted_body === "string"
           ? { formatted_body: `* ${newContent.formatted_body}` }
           : {}),

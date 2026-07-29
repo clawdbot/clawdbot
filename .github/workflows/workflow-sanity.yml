@@ -87,7 +87,7 @@ jobs:
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
@@ -180,7 +180,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ACTIONLINT_VERSION="1.7.11"
+          ACTIONLINT_VERSION="1.7.12"
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
           # GitHub release downloads occasionally return transient 5xx responses.
@@ -231,7 +231,7 @@ jobs:
       - name: Check config docs drift statefile
         run: pnpm config:docs:check
 
-      - name: Check plugin SDK API baseline drift
+      - name: Check plugin SDK API contract manifest
         run: pnpm plugin-sdk:api:check
 
       - name: Check SQLite sessions/transcripts schema baseline drift

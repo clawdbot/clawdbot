@@ -28,7 +28,7 @@ export type TaskEventPayload =
   | { action: "deleted"; taskId: string }
   | { action: "restored" };
 
-export function taskUpdatedAt(task: TaskRecord): number {
+function taskUpdatedAt(task: TaskRecord): number {
   return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
 }
 

@@ -311,12 +311,6 @@ function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       return identity;
     }
     const identity = loadOrCreateDeviceIdentity();
-    // Approval registration and wait can use separate gateway connections.
-    // Reject loadOrCreate's unpersisted fallback so both sides bind the same id.
-    const persistedIdentity = loadDeviceIdentityIfPresent();
-    if (persistedIdentity?.deviceId !== identity.deviceId) {
-      throw new Error("device identity is not persisted");
-    }
     return identity;
   } catch (error) {
     if (isNodeApprovalReplay) {

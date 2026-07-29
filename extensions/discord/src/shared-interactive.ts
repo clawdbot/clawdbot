@@ -142,6 +142,7 @@ function appendDiscordButtonBlocks(
   blocks: NonNullable<DiscordComponentMessageSpec["blocks"]>,
   buttons: readonly MessagePresentationButton[],
 ): void {
+  // Index is position in the question's options; core emits one buttons block in option order.
   const components = buttons
     .map((button, optionIndex) => buildDiscordButtonComponent(button, optionIndex))
     .filter((button): button is DiscordComponentButtonSpec => Boolean(button));

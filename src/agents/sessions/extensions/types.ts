@@ -34,8 +34,10 @@ import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import type {
   AgentMessage,
+  AgentTool,
   AgentToolResult,
   AgentToolUpdateCallback,
+  StreamFn,
   ThinkingLevel,
   ToolExecutionMode,
 } from "../../runtime/index.js";
@@ -495,6 +497,8 @@ export interface ToolDefinition<
   label: string;
   /** Preserve lifecycle telemetry without rendering transient channel progress. */
   hideFromChannelProgress?: boolean;
+  /** Tool results contain externally controlled network content. */
+  resultContentSource?: AgentTool["resultContentSource"];
   /** Description for LLM */
   description: string;
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
@@ -503,6 +507,8 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Parameter schema (TypeBox) */
   parameters: TParams;
+  /** Exact schema for the structured value returned in AgentToolResult.details. */
+  outputSchema?: TSchema;
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
 
@@ -612,6 +618,10 @@ interface SessionBeforeCompactEvent {
   branchEntries: SessionEntry[];
   customInstructions?: string;
   signal: AbortSignal;
+  /** Prepared reasoning level for extension-owned summarization. */
+  thinkingLevel?: ThinkingLevel;
+  /** Prepared provider stream for extension-owned summarization. */
+  streamFn?: StreamFn;
 }
 
 /** Fired after context compaction */
@@ -715,6 +725,11 @@ interface AgentStartEvent {
 interface AgentEndEvent {
   type: "agent_end";
   messages: AgentMessage[];
+}
+
+/** Fired once the session has no automatic retry, compaction, or queued continuation left. */
+interface AgentSettledEvent {
+  type: "agent_settled";
 }
 
 /** Fired at the start of each turn */
@@ -1047,6 +1062,7 @@ export type ExtensionEvent =
   | BeforeAgentStartEvent
   | AgentStartEvent
   | AgentEndEvent
+  | AgentSettledEvent
   | TurnStartEvent
   | TurnEndEvent
   | MessageStartEvent
@@ -1218,6 +1234,7 @@ export interface ExtensionAPI {
   ): void;
   on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
   on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
+  on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): void;
   on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
   on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
   on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;

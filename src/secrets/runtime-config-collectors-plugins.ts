@@ -51,6 +51,7 @@ export function collectPluginConfigAssignments(params: {
   const workspaceDir = resolveAgentWorkspaceDir(
     params.config,
     resolveDefaultAgentId(params.config),
+    params.context.env,
   );
   const bundledLoadablePluginIds = [...(params.loadablePluginOrigins?.entries() ?? [])]
     .filter(([, origin]) => origin === "bundled")
@@ -169,6 +170,7 @@ function collectConfiguredPluginSecretAssignments(params: {
                 ownerId: fullPath,
                 requiredForGateway: false,
                 disposition: "isolate" as const,
+                contract: params.pluginConfig,
               },
             }
           : {}),

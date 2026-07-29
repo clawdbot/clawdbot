@@ -135,6 +135,14 @@ enum OpenClawChatTheme {
         #endif
     }
 
+    static var success: Color {
+        #if os(macOS)
+        Color(nsColor: .systemGreen)
+        #else
+        Color(uiColor: .systemGreen)
+        #endif
+    }
+
     static var assistantBubble: Color {
         #if os(macOS)
         Color(nsColor: self.assistantBubbleDynamicNSColor)

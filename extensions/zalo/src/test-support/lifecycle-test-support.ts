@@ -144,7 +144,12 @@ export function createImageLifecycleCore() {
       };
       reply: { to: string; originatingTo: string };
       message: { body?: string; rawBody: string; bodyForAgent?: string; commandBody?: string };
-      media?: Array<{ path?: string; url?: string; contentType?: string }>;
+      media?: Array<{
+        path?: string;
+        url?: string;
+        contentType?: string;
+        kind?: "audio" | "document" | "image" | "unknown" | "video";
+      }>;
       extra?: Record<string, unknown>;
     }) =>
       finalizeInboundContextMock({
@@ -164,9 +169,7 @@ export function createImageLifecycleCore() {
         Surface: params.channel,
         MessageSid: params.messageId,
         Timestamp: params.timestamp,
-        MediaPath: params.media?.[0]?.path,
-        MediaType: params.media?.[0]?.contentType,
-        MediaUrl: params.media?.[0]?.url ?? params.media?.[0]?.path,
+        media: params.media,
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
@@ -291,16 +294,14 @@ export function expectImageLifecycleDelivery(params: {
   expect(params.finalizeInboundContextMock).toHaveBeenCalledWith(
     expect.objectContaining({
       SenderName: senderName,
-      MediaPath: mediaPath,
-      MediaType: mediaType,
+      media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
     }),
   );
   expect(params.recordInboundSessionMock).toHaveBeenCalledWith(
     expect.objectContaining({
       ctx: expect.objectContaining({
         SenderName: senderName,
-        MediaPath: mediaPath,
-        MediaType: mediaType,
+        media: [expect.objectContaining({ path: mediaPath, contentType: mediaType })],
       }),
     }),
   );

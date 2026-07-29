@@ -12,11 +12,14 @@ import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
-  resolveExtraParams,
   resolvePreparedExtraParams,
 } from "../extra-params.js";
 import { log } from "../logger.js";
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
+import {
+  type ProviderPromptState,
+  wrapStreamFnWithProviderPromptState,
+} from "../provider-prompt-state.js";
 import {
   describeEmbeddedAgentStreamStrategy,
   resolveEmbeddedAgentApiKey,
@@ -43,6 +46,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
   sandboxSessionKey: string;
   sandbox?: SandboxContext | null;
   codeModeControlsEnabled: boolean;
+  providerPromptState: {
+    state: ProviderPromptState;
+    effectiveContextTokenBudget: number;
+  };
 }) {
   const attempt = input.attempt;
   const session = input.session;
@@ -67,12 +74,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedTransport,
   });
-  const resolvedExtraParams = resolveExtraParams({
-    cfg: attempt.config,
-    provider: attempt.provider,
-    modelId: attempt.modelId,
-    agentId: input.sessionAgentId,
-  });
   const effectiveExtraParams =
     preparedRuntimeExtraParams ??
     resolvePreparedExtraParams({
@@ -84,7 +85,6 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentId: input.sessionAgentId,
       agentDir: input.agentDir,
       workspaceDir: input.workspaceDir,
-      resolvedExtraParams,
       model: attempt.model,
       resolvedTransport,
     });
@@ -117,6 +117,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
     authProfileId: resolveAttemptStreamAuthProfileId(attempt),
     authStorage: attempt.authStorage,
   });
+  // Install inside provider/config wrappers so their full onPayload chain runs
+  // before admission hashes the request body that the built-in transport sends.
+  session.agent.streamFn = wrapStreamFnWithProviderPromptState({
+    streamFn: session.agent.streamFn,
+    ...input.providerPromptState,
+  });
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: attempt.provider,
     config: attempt.config,
@@ -131,6 +137,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     });
   }
   const nativeWebSearchPolicyContext = {
+    webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
     sessionKey: input.sandboxSessionKey,
     sandboxToolPolicy: input.sandbox?.tools,
     messageProvider: resolveAttemptToolPolicyMessageProvider(attempt),

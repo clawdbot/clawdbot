@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));
 
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
@@ -89,6 +90,7 @@ function hostedFeedEntry(params: {
   packageName: string;
   title: string;
   featured?: boolean;
+  featuredAt?: number;
   pluginId?: string;
   catalogFeatured?: boolean;
   order?: number;
@@ -102,6 +104,7 @@ function hostedFeedEntry(params: {
     ...(params.icon ? { icon: params.icon } : {}),
     state: "available",
     ...(params.featured === undefined ? {} : { featured: params.featured }),
+    ...(params.featuredAt === undefined ? {} : { featuredAt: params.featuredAt }),
     publisher: { id: "openclaw", trust: "official" },
     install: {
       candidates: [
@@ -244,6 +247,43 @@ describe("plugin management Featured authority", () => {
         install: { source: "official", pluginId: "@openclaw/new-tool" },
       }),
     ]);
+  });
+
+  it("orders live featured packages by when they were featured", async () => {
+    mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
+    mocks.officialCatalog.mockResolvedValue(
+      hostedCatalog([
+        hostedFeedEntry({
+          packageName: "@openclaw/older-popular",
+          title: "Older Popular",
+          featured: true,
+          featuredAt: 100,
+          order: 1,
+        }),
+        hostedFeedEntry({
+          packageName: "@openclaw/newest-featured",
+          title: "Newest Featured",
+          featured: true,
+          featuredAt: 200,
+          order: 99,
+        }),
+        hostedFeedEntry({
+          packageName: "@openclaw/legacy-featured",
+          title: "Legacy Featured",
+          featured: true,
+          order: 0,
+        }),
+      ]),
+    );
+
+    const catalog = await listManagedPlugins({ config: {}, env: {} });
+
+    expect(catalog.plugins.map((plugin) => plugin.id)).toEqual([
+      "@openclaw/newest-featured",
+      "@openclaw/older-popular",
+      "@openclaw/legacy-featured",
+    ]);
+    expect(catalog.plugins.map((plugin) => plugin.featuredAt)).toEqual([200, 100, undefined]);
   });
 
   it("clears stale embedded curation on an unmatched live official package", async () => {
@@ -395,6 +435,7 @@ describe("plugin management Featured authority", () => {
           packageName: "@openclaw/firecrawl-plugin",
           title: "FireCrawl",
           featured: true,
+          featuredAt: 1_784_280_000_000,
           pluginId: "firecrawl",
           description: "Crawl, scrape, search, and extract web content with FireCrawl.",
           icon: hostedIcon,
@@ -416,6 +457,7 @@ describe("plugin management Featured authority", () => {
         description: "Crawl, scrape, search, and extract web content with FireCrawl.",
         packageName: "@openclaw/firecrawl-plugin",
         featured: true,
+        featuredAt: 1_784_280_000_000,
         order: 10,
         hasIcon: true,
       }),

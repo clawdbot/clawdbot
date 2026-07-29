@@ -1,8 +1,12 @@
 // Session store pruning tests cover pruning decisions and retention ordering.
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
 import {
   collectSessionMaintenancePreserveKeys,
@@ -122,6 +126,20 @@ describe("pruneStaleEntries", () => {
     expect(store).toHaveProperty(lockedKey);
     expect(store.old).toBeUndefined();
   });
+
+  it("preserves archived entries until they are unarchived", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["archived", { ...makeEntry(now - 31 * DAY_MS), archivedAt: now - DAY_MS }],
+    ]);
+
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(0);
+    expect(store).toHaveProperty("archived");
+
+    delete store.archived?.archivedAt;
+    expect(pruneStaleEntries(store, 30 * DAY_MS)).toBe(1);
+    expect(store.archived).toBeUndefined();
+  });
 });
 
 describe("resolveQuotaSuspensionEntryMaintenance", () => {
@@ -194,15 +212,11 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
   it("preserves the active session and cleans artifacts using the final referenced session set", async () => {
     const now = Date.now();
     const store = makeStore([
-      [
-        "stale",
-        { sessionId: "stale-session", sessionFile: "stale.jsonl", updatedAt: now - 30 * DAY_MS },
-      ],
+      ["stale", { sessionId: "stale-session", updatedAt: now - 30 * DAY_MS }],
       [
         "stale-shared",
         {
           sessionId: "shared-session",
-          sessionFile: "shared-old.jsonl",
           updatedAt: now - 30 * DAY_MS,
         },
       ],
@@ -252,8 +266,8 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     expect(archiveCalls).toEqual([
       {
         removedSessionFiles: [
-          ["stale-session", "stale.jsonl"],
-          ["shared-session", "shared-old.jsonl"],
+          ["stale-session", undefined],
+          ["shared-session", undefined],
         ],
         referencedSessionIds: new Set(["shared-session", "active-session"]),
       },
@@ -657,6 +671,26 @@ describe("capEntryCount", () => {
     expect(store.old).toBeUndefined();
   });
 
+  it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
+    const now = Date.now();
+    const mainKey = "agent:main:main";
+    // `main` is the oldest entry, so pre-fix it was the first unprotected eviction target once
+    // protected thread entries (>= maxEntries) left zero removable budget.
+    const store = makeStore([
+      [mainKey, makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:channel:C1:thread:1", makeEntry(now - 3 * DAY_MS)],
+      ["agent:main:slack:channel:C2:thread:2", makeEntry(now - 2 * DAY_MS)],
+      ["agent:main:slack:channel:C3:thread:3", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    // Every entry is now protected (main + threads), so nothing is evicted and `main` survives.
+    expect(store).toHaveProperty(mainKey);
+    expect(evicted).toBe(0);
+    expect(Object.keys(store)).toHaveLength(4);
+  });
+
   it("preserves model-locked harness sessions when capping", () => {
     const now = Date.now();
     const lockedKey = "agent:main:harness-owned:locked";
@@ -670,6 +704,20 @@ describe("capEntryCount", () => {
 
     expect(evicted).toBe(1);
     expect(store).toHaveProperty(lockedKey);
+    expect(store).toHaveProperty("recent");
+    expect(store.old).toBeUndefined();
+  });
+
+  it("preserves archived sessions when capping", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["archived", { ...makeEntry(now - 10 * DAY_MS), archivedAt: now - 5 * DAY_MS }],
+      ["recent", makeEntry(now)],
+      ["old", makeEntry(now - DAY_MS)],
+    ]);
+
+    expect(capEntryCount(store, 2)).toBe(1);
+    expect(store).toHaveProperty("archived");
     expect(store).toHaveProperty("recent");
     expect(store.old).toBeUndefined();
   });
@@ -751,7 +799,54 @@ describe("capEntryCount", () => {
   });
 });
 
+describe("enforceSessionDiskBudget", () => {
+  it("preserves archived sessions under disk pressure", async () => {
+    const dir = await fixtureSuite.createCaseDir("archived-disk-budget");
+    const storePath = path.join(dir, "sessions.json");
+    const archivedKey = "agent:main:archived";
+    const removableKey = "agent:main:subagent:old-worker";
+    const activeKey = "agent:main:main";
+    const store: Record<string, SessionEntry> = {
+      [archivedKey]: {
+        sessionId: "archived",
+        updatedAt: 1,
+        archivedAt: 2,
+        displayName: "a".repeat(2_000),
+      },
+      [removableKey]: {
+        sessionId: "removable",
+        updatedAt: 2,
+        displayName: "r".repeat(2_000),
+      },
+      [activeKey]: { sessionId: "active", updatedAt: 3 },
+    };
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+    const result = await enforceSessionDiskBudget({
+      store,
+      storePath,
+      activeSessionKey: activeKey,
+      maintenance: { maxDiskBytes: 1_000, highWaterBytes: 500 },
+      warnOnly: false,
+    });
+
+    expect(store).toHaveProperty(archivedKey);
+    expect(store[removableKey]).toBeUndefined();
+    expect(store).toHaveProperty(activeKey);
+    expect(result?.removedEntries).toBe(1);
+  });
+});
+
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it.each([
+    ["agent:main:main", true],
+    ["agent:worker:main", true],
+    ["global", true],
+    ["agent:main:opaque", false],
+  ])("classifies primary session key %s as protected=%s", (key, expected) => {
+    expect(isProtectedSessionMaintenanceEntry(key, makeEntry(Date.now()))).toBe(expected);
+  });
+
   it("treats generated ACP bridge sessions as disposable", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
@@ -771,7 +866,10 @@ describe("isProtectedSessionMaintenanceEntry", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
         ...makeEntry(Date.now()),
-        origin: { chatType: "group" },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "group:test" },
+          origin: { chatType: "group" },
+        }),
       }),
     ).toBe(false);
   });
@@ -825,8 +923,8 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.resetArchiveRetentionMs).toBeNull();
-    expect(maintenance.maxDiskBytes).toBe(2 * 1024 * 1024 * 1024);
-    expect(maintenance.highWaterBytes).toBe(Math.floor(2 * 1024 * 1024 * 1024 * 0.8));
+    expect(maintenance.maxDiskBytes).toBe(10 * 1024 * 1024 * 1024);
+    expect(maintenance.highWaterBytes).toBe(Math.floor(10 * 1024 * 1024 * 1024 * 0.8));
   });
 
   it("honors explicit archive retention and disk budget opt-outs", () => {

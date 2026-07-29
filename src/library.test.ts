@@ -1,7 +1,10 @@
 // Tests library entrypoint exports and package boundary behavior.
-import { readFileSync } from "node:fs";
+import fs, { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { loadSessionStore, saveSessionStore } from "./library.js";
 
 const libraryPath = new URL("./library.ts", import.meta.url);
 const lazyRuntimeSpecifiers = [
@@ -37,6 +40,29 @@ describe("library module imports", () => {
       expect(dynamicImports.has(specifier), `${specifier} should remain dynamically imported`).toBe(
         true,
       );
+    }
+  });
+
+  it("keeps the deprecated root session-store wrappers uncached", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-library-session-store-"));
+    const storePath = path.join(dir, "sessions.json");
+    try {
+      await saveSessionStore(
+        storePath,
+        {
+          "agent:main:main": { sessionId: "first", updatedAt: Date.now() },
+        },
+        { skipMaintenance: true },
+      );
+      expect(loadSessionStore(storePath)["agent:main:main"]?.sessionId).toBe("first");
+
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({ "agent:main:main": { sessionId: "second", updatedAt: 2 } }),
+      );
+      expect(loadSessionStore(storePath)["agent:main:main"]?.sessionId).toBe("second");
+    } finally {
+      fs.rmSync(dir, { force: true, recursive: true });
     }
   });
 });

@@ -3,8 +3,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { LegacyCodexModelIdentity } from "./codex-route-model-ref.js";
 import {
   normalizeLegacyBrowserConfig,
-  normalizeLegacyCrossContextMessageConfig,
-  normalizeLegacyMediaProviderOptions,
   normalizeLegacyMistralModelDefaults,
   normalizeLegacyOpenAIModelProviderApi,
   normalizeLegacyOllamaNativeNumCtxParams,
@@ -45,8 +43,6 @@ export function normalizeBaseCompatibilityConfigValues(
   next = normalizeLegacyTalkConfig(next, changes);
   next = normalizeLegacyOpenAIModelProviderApi(next, changes);
   next = normalizeLegacyRuntimeModelRefs(next, changes, blockedModelIdentities);
-  next = normalizeLegacyCrossContextMessageConfig(next, changes);
-  next = normalizeLegacyMediaProviderOptions(next, changes);
   next = normalizeLegacyOllamaNativeNumCtxParams(next, changes);
   return normalizeLegacyMistralModelDefaults(next, changes);
 }

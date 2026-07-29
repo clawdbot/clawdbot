@@ -7,7 +7,6 @@ import {
   hasConfiguredAccountValue,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-resolution-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
@@ -23,12 +22,16 @@ import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } f
 const DEFAULT_RECONNECT_MS = 1_500;
 const MIN_RECONNECT_MS = 100;
 const MAX_RECONNECT_MS = 60_000;
+const DEFAULT_DISCUSSIONS_SECTION = "Sessions";
 
 const {
   listAccountIds: listClickClackAccountIds,
   resolveDefaultAccountId: resolveDefaultClickClackAccountId,
-} = createAccountListHelpers("clickclack", {
+  resolveAccountConfig: resolveMergedClickClackAccountConfig,
+} = createAccountListHelpers<ClickClackAccountConfig>("clickclack", {
   normalizeAccountId,
+  omitKeys: ["defaultAccount"],
+  nestedObjectKeys: ["discussions"],
   hasImplicitDefaultAccount: (cfg) => {
     const channel = cfg.channels?.clickclack;
     return Boolean(
@@ -48,13 +51,7 @@ export function resolveClickClackAccountConfig(
   accountId: string,
 ): ClickClackAccountConfig {
   const channel = cfg.channels?.clickclack;
-  const merged = resolveMergedAccountConfig<ClickClackAccountConfig>({
-    channelConfig: cfg.channels?.clickclack as ClickClackAccountConfig | undefined,
-    accounts: channel?.accounts,
-    accountId,
-    omitKeys: ["defaultAccount"],
-    normalizeAccountId,
-  });
+  const merged = resolveMergedClickClackAccountConfig(cfg, accountId);
   const account = resolveNormalizedAccountEntry(channel?.accounts, accountId, normalizeAccountId);
   const accountTokenFile = account?.tokenFile?.trim();
   if (accountTokenFile) {
@@ -161,6 +158,9 @@ export function resolveClickClackAccount(params: {
     env: params.env,
   });
   const workspace = merged.workspace?.trim() ?? "";
+  const discussionsWorkspace = merged.discussions?.workspace?.trim() || workspace;
+  const controlUrlBase = merged.discussions?.controlUrlBase?.trim();
+  const apiEndpoint = merged.apiBaseUrl?.trim().replace(/\/$/, "") || baseUrl;
   return {
     accountId,
     enabled,
@@ -174,7 +174,6 @@ export function resolveClickClackAccount(params: {
     replyMode: merged.replyMode === "model" ? "model" : "agent",
     model: normalizeOptionalString(merged.model),
     systemPrompt: normalizeOptionalString(merged.systemPrompt),
-    timeoutSeconds: merged.timeoutSeconds,
     toolsAllow: merged.toolsAllow,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],
@@ -189,10 +188,17 @@ export function resolveClickClackAccount(params: {
     // Command-menu sync is best effort and current bot:write tokens include
     // commands:write, so resolved accounts default on unless explicitly disabled.
     commandMenu: merged.commandMenu !== false,
+    discussions: {
+      enabled: merged.discussions?.enabled === true,
+      workspace: discussionsWorkspace,
+      ...(controlUrlBase ? { controlUrlBase } : {}),
+      section: merged.discussions?.section?.trim() || DEFAULT_DISCUSSIONS_SECTION,
+    },
     config: {
       ...merged,
       allowFrom: merged.allowFrom ?? ["*"],
     },
+    apiEndpoint,
   };
 }
 

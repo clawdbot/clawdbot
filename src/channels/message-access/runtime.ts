@@ -137,7 +137,7 @@ function useAccessGroupsFromConfig(params: {
   useAccessGroups?: boolean | null;
   cfg?: ChannelIngressCommandPresetInput["cfg"];
 }): boolean {
-  return params.useAccessGroups ?? params.cfg?.commands?.useAccessGroups !== false;
+  return params.useAccessGroups ?? true;
 }
 
 function channelIngressCommand(

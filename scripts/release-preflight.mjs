@@ -3,7 +3,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { runManagedCommand } from "./lib/managed-child-process.mjs";
-import { parseReleaseVersion } from "./lib/npm-publish-plan.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 const parsedArgs = parseArgs(process.argv.slice(2));
 const fix = parsedArgs.fix;
@@ -25,12 +25,10 @@ const releaseTasks = [
     check: nodeCommand("--import", "tsx", "scripts/sync-plugin-versions.ts", "--check"),
   },
   {
-    id: "npm-shrinkwraps",
-    name: "npm shrinkwraps",
+    id: "npm-package-locks",
+    name: "npm package locks",
     scopes: ["dependencies", "plugins", "version"],
-    fix: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--changed"),
-    fixAfter: ["plugin-versions", "plugin-sdk-exports"],
-    check: nodeCommand("scripts/generate-npm-shrinkwrap.mjs", "--all", "--check"),
+    check: nodeCommand("scripts/generate-npm-package-lock.mjs", "--all"),
   },
   {
     id: "plugin-inventory",
@@ -72,7 +70,7 @@ const releaseTasks = [
   },
   {
     id: "plugin-sdk-api",
-    name: "plugin SDK API baseline",
+    name: "plugin SDK API contract manifest",
     scopes: ["plugin-sdk"],
     fix: pnpmCommand("plugin-sdk:api:gen"),
     fixAfter: ["plugin-sdk-exports"],
@@ -90,6 +88,12 @@ const releaseTasks = [
     scopes: ["version"],
     fix: pnpmCommand("ui:i18n:sync"),
     check: pnpmCommand("ui:i18n:check"),
+  },
+  {
+    id: "native-app-i18n",
+    name: "native app generated locale artifacts",
+    scopes: ["version"],
+    check: pnpmCommand("native:i18n:check"),
   },
 ];
 const selectedTasks = releaseTasks.filter((task) => taskMatchesScopes(task, parsedArgs.scopes));
@@ -148,7 +152,7 @@ if (macosVersionErrors.length !== 0 || checkFailures.length !== 0) {
   }
   printCommandFailures(checkFailures);
   console.error(
-    "\nCorrect manual version metadata first. Run `pnpm release:prep` for intentional generated version/config/API changes, then commit the resulting files.",
+    "\nCorrect manual version metadata first. Run `pnpm release:prep` for intentional generated version/config/API changes, then commit the resulting files. If native locale artifacts lag, wait for or dispatch Native App Locale Refresh before freezing the release SHA.",
   );
   process.exit(1);
 }

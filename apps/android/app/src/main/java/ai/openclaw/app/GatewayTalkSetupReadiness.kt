@@ -101,6 +101,13 @@ val GatewayTalkSetupState.isReady: Boolean
 val GatewayTalkSetupState.requiresSetup: Boolean
   get() = this is GatewayTalkSetupState.NeedsSetup
 
+internal fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
+  val normalized = model?.trim()?.lowercase() ?: return true
+  // extensions/openai/realtime-quicksilver.ts makes gpt-live WebRTC-only;
+  // the Gateway relay rejects it instead of providing a usable Android session.
+  return normalized != "gpt-live" && !normalized.startsWith("gpt-live-")
+}
+
 fun gatewayTalkSetupStatusText(state: GatewayTalkSetupState): String =
   when (state) {
     is GatewayTalkSetupState.Ready -> nativeString("Ready")

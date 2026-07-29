@@ -264,6 +264,53 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(25);
   });
 
+  it("keeps waiting while a launchd KeepAlive supervisor can retry", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+    const snapshot = await waitForStoppedFreeGatewayRestart({ supervisorKeepsAlive: true });
+
+    expect(snapshot.healthy).toBe(false);
+    expect(snapshot.runtime.status).toBe("stopped");
+    expect(snapshot.portUsage.status).toBe("free");
+    expect(snapshot.waitOutcome).toBe("timeout");
+    expect(snapshot.elapsedMs).toBe(60_000);
+    expect(sleep).toHaveBeenCalledTimes(120);
+  });
+
+  it("accepts a launchd KeepAlive restart after the stopped-free grace window", async () => {
+    let runtimeReads = 0;
+    let portInspections = 0;
+    const service = {
+      readRuntime: vi.fn(async () =>
+        ++runtimeReads >= 27 ? { status: "running", pid: 8000 } : { status: "stopped" },
+      ),
+    } as unknown as GatewayService;
+    inspectPortUsage.mockImplementation(async () =>
+      ++portInspections >= 27
+        ? {
+            port: 18789,
+            status: "busy",
+            listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+            hints: [],
+          }
+        : { port: 18789, status: "free", listeners: [], hints: [] },
+    );
+    probeGateway.mockResolvedValue({ ok: true, close: null });
+
+    const { waitForGatewayHealthyRestart } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyRestart({
+      service,
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+      supervisorKeepsAlive: true,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(snapshot.waitOutcome).toBe("healthy");
+    expect(snapshot.elapsedMs).toBe(13_000);
+  });
+
   it("waits longer before stopped-free early exit on Windows", async () => {
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
 

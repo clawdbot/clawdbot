@@ -7,6 +7,7 @@ import {
   readAcpSessionEntry,
   type AcpSessionStoreEntry,
 } from "../acp/runtime/session-meta.js";
+import { isBackgroundExecSessionActive } from "../agents/bash-process-control.js";
 import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
@@ -14,7 +15,7 @@ import {
 import { resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   type SessionEntrySummary,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -33,7 +34,7 @@ import {
   deriveSessionChatTypeFromKey,
   type SessionKeyChatType,
 } from "../sessions/session-chat-type-shared.js";
-import { CODEX_NATIVE_SUBAGENT_STALE_ERROR } from "./codex-native-subagent-task.js";
+import { isBackgroundExecTask } from "./background-exec-task-contract.js";
 import {
   collectCronHistoryOverflowTaskIds,
   shouldPruneTerminalTask,
@@ -43,10 +44,7 @@ import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
-import {
-  isChildlessNativeSubagentTask,
-  resolveChildlessNativeSubagentTaskDefinition,
-} from "./native-subagent-task.js";
+import { isHarnessOwnedSubagentTask } from "./harness-owned-subagent-task.js";
 import {
   deleteTaskRecordById,
   ensureTaskRegistryReady,
@@ -73,7 +71,7 @@ import { resolveEffectiveTaskCleanupAfter, resolveTaskCleanupAfter } from "./tas
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
-const CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS = 30 * 60_000;
+const HARNESS_OWNED_SUBAGENT_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_STALE_RUNNING_MS = 30 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -98,11 +96,12 @@ type TaskRegistryMaintenanceRuntime = {
   }) => Promise<void>;
   listSessionBindingsBySession?: ReturnType<typeof getSessionBindingService>["listBySession"];
   unbindSessionBindings?: ReturnType<typeof getSessionBindingService>["unbind"];
-  listSessionEntries: typeof listSessionEntries;
+  listSessionEntries: typeof listSessionEntriesReadOnly;
   resolveStorePath: typeof resolveStorePath;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
   getAgentRunContext: typeof getAgentRunContext;
+  isBackgroundExecSessionActive?: typeof isBackgroundExecSessionActive;
   hasActiveAcpTurn: (sessionKey: string) => boolean;
   parseAgentSessionKey: typeof parseAgentSessionKey;
   hasActiveTaskForChildSessionKey: typeof hasActiveTaskForChildSessionKey;
@@ -136,11 +135,12 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   listSessionBindingsBySession: (sessionKey) =>
     getSessionBindingService().listBySession(sessionKey),
   unbindSessionBindings: (input) => getSessionBindingService().unbind(input),
-  listSessionEntries,
+  listSessionEntries: listSessionEntriesReadOnly,
   resolveStorePath,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
   getAgentRunContext,
+  isBackgroundExecSessionActive,
   hasActiveAcpTurn: isAcpTurnActive,
   parseAgentSessionKey,
   hasActiveTaskForChildSessionKey,
@@ -175,6 +175,7 @@ export type TaskRegistryMaintenanceTaskDiagnostic = {
   reason:
     | "acp_runtime_not_authoritative"
     | "active_cli_run"
+    | "active_background_exec"
     | "backing_session_missing"
     | "backing_session_present"
     | "cron_runtime_not_authoritative"
@@ -299,8 +300,8 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  const graceMs = isChildlessNativeSubagentTask(task)
-    ? CHILDLESS_NATIVE_SUBAGENT_RECONCILE_GRACE_MS
+  const graceMs = isHarnessOwnedSubagentTask(task)
+    ? HARNESS_OWNED_SUBAGENT_RECONCILE_GRACE_MS
     : TASK_RECONCILE_GRACE_MS;
   return now - referenceAt >= graceMs;
 }
@@ -400,6 +401,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
 
+  if (isBackgroundExecTask(task)) {
+    const processSessionId = task.sourceId?.trim();
+    return Boolean(
+      processSessionId &&
+      taskRegistryMaintenanceRuntime.isBackgroundExecSessionActive?.(processSessionId),
+    );
+  }
   if (task.runtime === "cli" && hasActiveCliRun(task)) {
     return true;
   }
@@ -409,7 +417,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return !isChildlessNativeSubagentTask(task);
+    return !isHarnessOwnedSubagentTask(task);
   }
   if (task.runtime === "acp") {
     // The live-turn map is process-local; only the gateway owns it. A standalone CLI
@@ -438,11 +446,8 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
-  const nativeDefinition = resolveChildlessNativeSubagentTaskDefinition(task);
-  if (nativeDefinition) {
-    return nativeDefinition.taskKind === "codex-native"
-      ? CODEX_NATIVE_SUBAGENT_STALE_ERROR
-      : "Native subagent stopped reporting progress";
+  if (isHarnessOwnedSubagentTask(task)) {
+    return "Native subagent stopped reporting progress";
   }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
@@ -934,6 +939,9 @@ function explainActiveTaskRetention(params: {
   }
   if (params.task.runtime === "cli" && hasActiveCliRun(params.task)) {
     return { decision: "retained", reason: "active_cli_run" };
+  }
+  if (isBackgroundExecTask(params.task)) {
+    return { decision: "retained", reason: "active_background_exec" };
   }
   return { decision: "retained", reason: "backing_session_present" };
 }

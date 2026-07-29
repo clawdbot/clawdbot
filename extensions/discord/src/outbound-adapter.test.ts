@@ -109,15 +109,6 @@ describe("discordOutbound", () => {
     });
   });
 
-  it("sanitizes internal runtime scaffolding before Discord delivery", () => {
-    expect(
-      discordOutbound.sanitizeText?.({
-        text: "<previous_response>null</previous_response>visible",
-        payload: { text: "<previous_response>null</previous_response>visible" },
-      }),
-    ).toBe("visible");
-  });
-
   it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
     expect(
       discordOutbound.resolveTarget?.({
@@ -128,17 +119,6 @@ describe("discordOutbound", () => {
       ok: true,
       to: "user:1470130713209602050",
     });
-  });
-
-  it("preserves Discord-native angle markup while stripping internal scaffolding", () => {
-    expect(
-      discordOutbound.sanitizeText?.({
-        text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
-        payload: {
-          text: "soon <t:1710000000:R> run </deploy:123> <previous_response>null</previous_response>",
-        },
-      }),
-    ).toBe("soon <t:1710000000:R> run </deploy:123> ");
   });
 
   it("forwards explicit formatting options to Discord text sends", async () => {
@@ -181,7 +161,6 @@ describe("discordOutbound", () => {
             channels: {
               discord: {
                 token: "test-token",
-                retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
               },
             },
           },

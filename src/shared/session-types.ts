@@ -34,9 +34,15 @@ export type GatewayThinkingLevelOption = {
   label: string;
 };
 
+export type GatewayAgentKind = "agent" | "system";
+
+/** Per-session Control UI face preference carried by session list rows. */
+export type SessionBoardFace = "chat" | "dashboard";
+
 /** Common agent row shape used by session list responses. */
 export type GatewayAgentRow = {
   id: string;
+  kind?: GatewayAgentKind;
   name?: string;
   identity?: GatewayAgentIdentity;
   workspace?: string;
@@ -58,6 +64,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   offset?: number;
   nextOffset?: number | null;
   hasMore?: boolean;
+  /** Complete creator facet for the filtered result, independent of pagination. */
+  creators?: Array<{ id: string; label?: string }>;
   defaults: TDefaults;
   sessions: TRow[];
 };

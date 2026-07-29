@@ -12,10 +12,6 @@ const streamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
-vi.mock("../../llm/stream.js", () => ({
-  streamSimple: streamMocks.streamSimple,
-}));
-
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
@@ -24,7 +20,7 @@ import { createExtensionRuntime } from "./extensions/loader.js";
 import type { LoadExtensionsResult, ToolDefinition } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { createAgentSession } from "./sdk.js";
+import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { createSyntheticSourceInfo } from "./source-info.js";
@@ -160,6 +156,7 @@ async function createTestSession(
     sessionManager?: SessionManager;
     resourceLoader?: ResourceLoader;
     customTools?: ToolDefinition[];
+    contextOverflowRecoveryOwner?: "session" | "caller";
   } = {},
 ) {
   const model = options.model ?? testModel;
@@ -172,15 +169,25 @@ async function createTestSession(
       retry: { enabled: false },
     });
   const sessionManager = options.sessionManager ?? SessionManager.inMemory();
-  const result = await createAgentSession({
+  const modelRegistry = ModelRegistry.inMemory(authStorage);
+  modelRegistry.registerProvider(model.provider, {
+    api: model.api,
+    streamSimple: streamMocks.streamSimple,
+  });
+  const sessionOptions = {
     model,
-    noTools: "builtin",
+    noTools: "builtin" as const,
     customTools: options.customTools,
     resourceLoader: options.resourceLoader ?? createResourceLoader(),
     sessionManager,
     settingsManager,
-    modelRegistry: ModelRegistry.inMemory(authStorage),
-  });
+    modelRegistry,
+  };
+  const result = options.contextOverflowRecoveryOwner
+    ? await createAgentSessionForEmbeddedRunner(sessionOptions, {
+        contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
+      })
+    : await createAgentSession(sessionOptions);
   sessions.push(result.session);
   return { ...result, settingsManager, sessionManager };
 }
@@ -201,6 +208,24 @@ afterEach(() => {
 });
 
 describe("AgentSession loop correctness", () => {
+  it("emits agent_settled once after a normal run", async () => {
+    const lifecycleEvents: string[] = [];
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["agent_end", [async () => lifecycleEvents.push("agent_end")]],
+      ["agent_settled", [async () => lifecycleEvents.push("agent_settled")]],
+    ]);
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }]),
+      ),
+    );
+    const { session } = await createTestSession({ resourceLoader: createResourceLoader(handlers) });
+
+    await session.prompt("new prompt");
+
+    expect(lifecycleEvents).toEqual(["agent_end", "agent_settled"]);
+  });
+
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
     appendHistory(
@@ -259,6 +284,33 @@ describe("AgentSession loop correctness", () => {
     expect(compactionEvents).toContainEqual(
       expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
     );
+  });
+
+  it("skips threshold maintenance when embedded auto-compaction is disabled", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: false, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("new prompt");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
   });
 
   it("does not retry a high-usage turn terminated by a tool result", async () => {
@@ -349,6 +401,70 @@ describe("AgentSession loop correctness", () => {
     expect(session.getLastAssistantText()).toBe("complete retry");
   });
 
+  it("leaves reactive overflow recovery to the caller when configured", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream({
+        ...createAssistant(activeModel, [], "error", 100),
+        errorMessage: "400 Your input exceeds the context window of this model",
+      }),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      contextOverflowRecoveryOwner: "caller",
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toEqual([]);
+    expect(session.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+      errorMessage: "400 Your input exceeds the context window of this model",
+    });
+  });
+
+  it("keeps threshold maintenance session-owned when the caller owns overflow recovery", async () => {
+    const settingsManager = SettingsManager.inMemory({
+      compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      retry: { enabled: false },
+    });
+    const compactionEvents: AgentSessionEvent[] = [];
+    streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
+      createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+      ),
+    );
+    const { session } = await createTestSession({
+      settingsManager,
+      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      contextOverflowRecoveryOwner: "caller",
+    });
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        compactionEvents.push(event);
+      }
+    });
+
+    await session.prompt("long request");
+
+    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+    expect(compactionEvents).toContainEqual(
+      expect.objectContaining({ type: "compaction_end", reason: "threshold", willRetry: false }),
+    );
+  });
+
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {
     const sessionManager = SessionManager.inMemory();
     appendHistory(
@@ -383,11 +499,13 @@ describe("AgentSession loop correctness", () => {
   it("drains a follow-up queued by an agent-end handler", async () => {
     const sessionRef: { current?: AgentSession } = {};
     let queued = false;
+    const lifecycleEvents: string[] = [];
     const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
       [
         "agent_end",
         [
           async () => {
+            lifecycleEvents.push("agent_end");
             if (!queued) {
               queued = true;
               await sessionRef.current?.followUp("queued after end");
@@ -396,6 +514,7 @@ describe("AgentSession loop correctness", () => {
           },
         ],
       ],
+      ["agent_settled", [async () => lifecycleEvents.push("agent_settled")]],
     ]);
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
@@ -412,10 +531,15 @@ describe("AgentSession loop correctness", () => {
     expect(requests).toHaveLength(2);
     expect(JSON.stringify(requests[1]?.messages)).toContain("queued after end");
     expect(session.agent.hasQueuedMessages()).toBe(false);
+    expect(lifecycleEvents).toEqual(["agent_end", "agent_end", "agent_settled"]);
   });
 
   it("leaves queued messages dormant after a turn handoff", async () => {
     const sessionRef: { current?: AgentSession } = {};
+    const settled = vi.fn();
+    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
+      ["agent_settled", [async () => settled()]],
+    ]);
     const yieldTool: ToolDefinition = {
       name: "yield_turn",
       label: "Yield turn",
@@ -446,13 +570,17 @@ describe("AgentSession loop correctness", () => {
         ),
       ),
     );
-    const { session } = await createTestSession({ customTools: [yieldTool] });
+    const { session } = await createTestSession({
+      customTools: [yieldTool],
+      resourceLoader: createResourceLoader(handlers),
+    });
     sessionRef.current = session;
 
     await session.prompt("yield now");
 
     expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
     expect(session.agent.hasQueuedMessages()).toBe(true);
+    expect(settled).not.toHaveBeenCalled();
     session.agent.clearAllQueues();
   });
 

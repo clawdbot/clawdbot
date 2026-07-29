@@ -6,7 +6,7 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../lib/chat/commands.ts";
-import { refreshSlashCommands } from "./chat-commands.ts";
+import { dispatchChatSlashCommand, refreshSlashCommands } from "./chat-commands.ts";
 
 function requireCommandByName(name: string): Record<string, unknown> {
   const command = SLASH_COMMANDS.find((entry) => entry.name === name);
@@ -241,5 +241,132 @@ describe("refreshSlashCommands", () => {
       name: "pair",
       description: "Generate setup codes.",
     });
+  });
+});
+
+describe("conversation reset confirmation", () => {
+  it("propagates cancelled /new session creation", async () => {
+    const result = await dispatchChatSlashCommand(
+      { createChatSession: vi.fn(async () => false) } as never,
+      "new",
+      "",
+      { sendResetMessage: vi.fn() },
+    );
+
+    expect(result).toBe("cancelled");
+  });
+
+  it("cancels /reset before sending when confirmation is rejected", async () => {
+    const sendResetMessage = vi.fn(async () => {});
+    const result = await dispatchChatSlashCommand(
+      {
+        confirmConversationReset: vi.fn(async () => false),
+      } as never,
+      "reset",
+      "",
+      { sendResetMessage },
+    );
+
+    expect(result).toBe("cancelled");
+    expect(sendResetMessage).not.toHaveBeenCalled();
+  });
+
+  it("cancels /reset when the selected session changes during confirmation", async () => {
+    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+    const confirmation = new Promise<boolean>((resolve) => {
+      settleConfirmation = resolve;
+    });
+    const sendResetMessage = vi.fn(async () => {});
+    const host = {
+      sessionKey: "agent:main:first",
+      confirmConversationReset: vi.fn(async () => await confirmation),
+    };
+
+    const pending = dispatchChatSlashCommand(host as never, "reset", "", {
+      sendResetMessage,
+    });
+    host.sessionKey = "agent:main:second";
+    settleConfirmation?.(true);
+
+    await expect(pending).resolves.toBe("cancelled");
+    expect(sendResetMessage).not.toHaveBeenCalled();
+  });
+
+  it("continues /reset when the session key changes to an equivalent alias", async () => {
+    let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+    const confirmation = new Promise<boolean>((resolve) => {
+      settleConfirmation = resolve;
+    });
+    const sendResetMessage = vi.fn(async () => {});
+    const host = {
+      sessionKey: "main",
+      confirmConversationReset: vi.fn(async () => await confirmation),
+    };
+
+    const pending = dispatchChatSlashCommand(host as never, "reset", "", {
+      sendResetMessage,
+    });
+    host.sessionKey = "agent:main:main";
+    settleConfirmation?.(true);
+
+    await expect(pending).resolves.toBe("completed");
+    expect(sendResetMessage).toHaveBeenCalledOnce();
+  });
+
+  it.each(["reset", "clear"])(
+    "defers /%s when a run starts during confirmation",
+    async (command) => {
+      let settleConfirmation: ((confirmed: boolean) => void) | undefined;
+      const confirmation = new Promise<boolean>((resolve) => {
+        settleConfirmation = resolve;
+      });
+      const sendResetMessage = vi.fn(async () => {});
+      const reset = vi.fn();
+      const host = {
+        chatRunId: null as string | null,
+        sessionKey: "agent:main:current",
+        confirmConversationReset: vi.fn(async () => await confirmation),
+        sessions: { reset },
+      };
+
+      const pending = dispatchChatSlashCommand(host as never, command, "", {
+        sendResetMessage,
+      });
+      host.chatRunId = "run-started-during-confirmation";
+      settleConfirmation?.(true);
+
+      await expect(pending).resolves.toBe("deferred");
+      expect(sendResetMessage).not.toHaveBeenCalled();
+      expect(reset).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps chat-only /reset unchanged", async () => {
+    const sendResetMessage = vi.fn(async () => {});
+    const result = await dispatchChatSlashCommand({} as never, "reset", "now", {
+      sendResetMessage,
+    });
+
+    expect(result).toBe("completed");
+    expect(sendResetMessage).toHaveBeenCalledWith("/reset now", {
+      sendResetMessage,
+    });
+  });
+
+  it("cancels /clear before resetting a board-bearing session", async () => {
+    const reset = vi.fn();
+    const result = await dispatchChatSlashCommand(
+      {
+        sessionKey: "agent:main:current",
+        confirmConversationReset: vi.fn(async () => false),
+        sessions: { reset },
+      } as never,
+      "clear",
+      "",
+      { sendResetMessage: vi.fn() },
+    );
+
+    expect(result).toBe("cancelled");
+    expect(reset).not.toHaveBeenCalled();
   });
 });

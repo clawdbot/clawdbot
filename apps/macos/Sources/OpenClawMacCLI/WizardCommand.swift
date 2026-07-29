@@ -272,7 +272,12 @@ actor GatewayWizardClient {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
         let connectNonce = try await self.waitForConnectChallenge()
-        let identity = DeviceIdentityStore.loadOrCreate()
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
+            throw NSError(
+                domain: "OpenClawMacCLI",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Could not access the persisted device identity"])
+        }
         let signedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
         let payload = GatewayDeviceAuthPayload.buildConnectCompatibilityPayload(
             fields: .init(
@@ -376,7 +381,10 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                 fputs("wizard: \(error)\n", stderr)
             }
 
-            if let step = nextResult.step {
+            // Gateway-executed steps (download/install progress) take no answer;
+            // echo the frame and poll, or the run stalls on input that can never
+            // advance the session.
+            if let step = nextResult.step, wizardStepExecutor(step) != "gateway" {
                 let answer = try promptAnswer(for: step)
                 var answerPayload: [String: ProtoAnyCodable] = [
                     "stepId": ProtoAnyCodable(step.id),
@@ -395,6 +403,9 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
                     dumpResult(response)
                 }
             } else {
+                if let step = nextResult.step, !opts.json {
+                    printWizardStepHeader(step)
+                }
                 let response = try await client.request(
                     method: "wizard.next",
                     params: ["sessionId": ProtoAnyCodable(sessionId)])
@@ -424,14 +435,18 @@ private func dumpResult(_ response: ResponseFrame) {
     }
 }
 
-private func promptAnswer(for step: WizardStep) throws -> Any {
-    let type = wizardStepType(step)
+private func printWizardStepHeader(_ step: WizardStep) {
     if let title = step.title, !title.isEmpty {
         print("\n\(title)")
     }
     if let message = step.message, !message.isEmpty {
         print(message)
     }
+}
+
+private func promptAnswer(for step: WizardStep) throws -> Any {
+    let type = wizardStepType(step)
+    printWizardStepHeader(step)
 
     switch type {
     case "note":

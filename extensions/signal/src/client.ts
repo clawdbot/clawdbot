@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 
 export type SignalRpcOptions = {
@@ -68,7 +68,12 @@ function parseSignalBaseUrl(url: string): URL {
 }
 
 function resolveSignalEndpointUrl(baseUrl: string, pathname: string): URL {
-  return new URL(pathname, parseSignalBaseUrl(baseUrl));
+  const parsed = parseSignalBaseUrl(baseUrl);
+  const basePath = parsed.pathname.endsWith("/") ? parsed.pathname : `${parsed.pathname}/`;
+  parsed.pathname = `${basePath}${pathname.replace(/^\/+/, "")}`;
+  parsed.search = "";
+  parsed.hash = "";
+  return parsed;
 }
 
 function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcResponse<T> {
@@ -140,7 +145,7 @@ function requestSignalHttpText(
       }
       settled = true;
       cleanup();
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
     const resolveOnce = (response: SignalHttpResponse) => {
       if (settled) {
@@ -292,7 +297,7 @@ function openSignalEventStream(
       }
       settled = true;
       cleanup();
-      reject(toLintErrorObject(error, "Non-Error rejection"));
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
     const request: ClientRequest = client.request(
       url,
@@ -435,18 +440,4 @@ export async function streamSignalEvents(params: {
   }
 
   await flushEvent();
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

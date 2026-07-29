@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, request as createHttpRequest, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -37,6 +37,7 @@ async function startServer(
     vendorAssetPath?: string;
     readVendorAsset?: (assetPath: string) => Promise<Buffer>;
     logError?: (message: string) => void;
+    bodyTimeoutMs?: number;
   } = {},
 ): Promise<string> {
   const route = createDiscordActivityHttpHandler({
@@ -59,6 +60,39 @@ async function startServer(
   });
   const address = server.address() as AddressInfo;
   return `http://127.0.0.1:${address.port}`;
+}
+
+async function observeStalledTokenRequest(
+  base: string,
+  clientTimeoutMs: number,
+): Promise<"server-terminated" | "client-timeout"> {
+  return await new Promise((resolve) => {
+    const request = createHttpRequest(`${base}/discord/activity/api/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+    let settled = false;
+    const finish = (outcome: "server-terminated" | "client-timeout") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => {
+      finish("client-timeout");
+      request.end();
+    }, clientTimeoutMs);
+    request.on("response", (response) => {
+      response.resume();
+      response.on("end", () => finish("server-terminated"));
+      response.on("close", () => finish("server-terminated"));
+    });
+    request.on("error", () => finish("server-terminated"));
+    request.on("close", () => finish("server-terminated"));
+    request.write('{"code":"');
+  });
 }
 
 function guardedJsonFetch(params?: {
@@ -124,6 +158,12 @@ function fetchInputUrl(input: string | URL | Request): string {
 }
 
 describe("Discord Activity HTTP OAuth", () => {
+  it("terminates stalled token request bodies within the read timeout", async () => {
+    const base = await startServer(createActivityTestRuntime(), { bodyTimeoutMs: 25 });
+
+    await expect(observeStalledTokenRequest(base, 1_000)).resolves.toBe("server-terminated");
+  });
+
   it("exchanges a code, creates a session, and uses it on the widget endpoint", async () => {
     const runtime = createActivityTestRuntime();
     const widgetId = await createWidget(runtime);
@@ -223,16 +263,26 @@ describe("Discord Activity HTTP OAuth", () => {
     expect(response.status).toBe(401);
   });
 
-  it("returns 403 for a user outside the account allowlist", async () => {
-    const base = await startServer(createActivityTestRuntime(), {
-      fetchGuard: guardedJsonFetch({ userId: "99" }),
+  it("lets a channel member outside the agent allowlist open the widget", async () => {
+    const runtime = createActivityTestRuntime();
+    const widgetId = await createWidget(runtime);
+    const base = await startServer(runtime, {
+      fetchGuard: guardedJsonFetch({ userId: "99", instanceUsers: ["99"] }),
     });
     const response = await fetch(`${base}/discord/activity/api/token`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ code: "oauth-code" }),
     });
-    expect(response.status).toBe(403);
+    expect(response.status).toBe(200);
+    const token = (await response.json()) as { session_token: string };
+
+    const widgetResponse = await fetch(
+      `${base}/discord/activity/api/widget?custom_id=${widgetId}&instance_id=instance-1`,
+      { headers: { Authorization: `Bearer ${token.session_token}` } },
+    );
+    expect(widgetResponse.status).toBe(200);
+    await expect(widgetResponse.json()).resolves.toMatchObject({ id: widgetId });
   });
 
   it("returns 503 when the configured account no longer resolves a secret", async () => {

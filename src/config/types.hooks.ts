@@ -87,8 +87,6 @@ export type InternalHooksConfig = {
     /** Additional hook directories to scan */
     extraDirs?: string[];
   };
-  /** Install records for hook packs or hooks */
-  installs?: Record<string, HookInstallRecord>;
 };
 
 export type HooksConfig = {
@@ -116,7 +114,6 @@ export type HooksConfig = {
    * allow any agent. Set `[]` to deny all agent routing.
    */
   allowedAgentIds?: string[];
-  maxBodyBytes?: number;
   presets?: string[];
   transformsDir?: string;
   mappings?: HookMappingConfig[];
