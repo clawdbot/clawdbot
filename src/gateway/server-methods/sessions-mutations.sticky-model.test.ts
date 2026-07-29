@@ -87,7 +87,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(
       async (params: {
-        mutate: (draft: OpenClawConfig, context: unknown) => unknown | Promise<unknown>;
+        mutate: (draft: OpenClawConfig, context: unknown) => unknown;
       }) => {
         const draft = structuredClone(cfg);
         const result = await params.mutate(draft, {});

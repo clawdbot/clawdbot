@@ -48,7 +48,7 @@ export function persistStickyModelSelectionBestEffort(params: {
     }
     return;
   }
-  void persistStickyModelSelection(params).catch((error) => {
+  void persistStickyModelSelection(params).catch((error: unknown) => {
     log.warn(
       `failed sticky model persistence agentId=${params.agentId} model=${params.model} reason=${formatErrorMessage(error)}`,
     );
