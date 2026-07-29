@@ -4,6 +4,7 @@ import {
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
+import { GatewayEventListeners } from "./event-listeners.js";
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -165,7 +166,7 @@ type PendingRequest = {
 export class GatewayProtocolClient<TPlan> {
   private socket: GatewayProtocolSocket | null = null;
   private readonly pending = new Map<string, PendingRequest>();
-  private listeners = new Map<(event: EventFrame) => void, object>();
+  private readonly listeners = new GatewayEventListeners<EventFrame>();
   private stopped = true;
   private generation = 0;
   private lastSeq: number | null = null;
@@ -312,18 +313,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
-    let subscription = this.listeners.get(listener);
-    if (!subscription) {
-      subscription = {};
-      this.listeners.set(listener, subscription);
-    }
-    return () => {
-      // An old disposer must not remove the same callback after a new owner
-      // subscribes it during reconnect or synchronous event dispatch.
-      if (this.listeners.get(listener) === subscription) {
-        this.listeners.delete(listener);
-      }
-    };
+    return this.listeners.add(listener);
   }
 
   closeSocket(code?: number, reason?: string): void {
@@ -584,13 +574,13 @@ export class GatewayProtocolClient<TPlan> {
       }
       // An owner may replace the socket while handling this frame. Snapshot
       // first so replacement listeners cannot inherit a retired event.
-      const listeners = [...this.listeners];
+      const listeners = this.listeners.snapshot();
       this.invoke("event", () => this.opts.onEvent?.(parsed));
       for (const [listener, subscription] of listeners) {
         if (!this.isActive(socket, generation)) {
           return;
         }
-        if (this.listeners.get(listener) === subscription) {
+        if (this.listeners.isCurrent(listener, subscription)) {
           this.invoke("event listener", () => listener(parsed));
         }
       }

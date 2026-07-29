@@ -1409,7 +1409,7 @@ function installControlUiMockGateway(
     readonly protocol = "";
     readyState = MockWebSocket.CONNECTING;
     readonly url: string;
-    private tickTimer: ReturnType<typeof window.setInterval> | null = null;
+    private tickTimer: number | null = null;
 
     constructor(url: string | URL) {
       super();

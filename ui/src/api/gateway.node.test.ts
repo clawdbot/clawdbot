@@ -3,10 +3,10 @@ import { createHash } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
+  MAX_SAFE_TIMEOUT_DELAY_MS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "@openclaw/gateway-client/timeouts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
