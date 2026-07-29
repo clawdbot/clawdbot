@@ -29,6 +29,10 @@ function loadManifestCatalogRowsForPluginIds(params: {
         plugins: params.registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id)),
       }
     : params.registry;
+  // selection: "static" accepts both explicitly-static and refreshable
+  // provider catalog rows — refreshable providers ship manifest rows as
+  // their static-authoritative fallback (#103532, #112412). Runtime-only
+  // entries are excluded because they have no bundled manifest rows.
   return planEffectiveModelCatalogRows({
     registry,
     config: params.cfg,
