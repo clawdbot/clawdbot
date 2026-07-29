@@ -655,6 +655,8 @@ Use the latest-generation, best-tier model available from your provider for untr
 ```
 
 `webhookToken` is sent as `Authorization: Bearer <token>` on cron webhook POSTs.
+Webhook URLs must not include embedded username/password credentials; use
+`webhookToken` when the receiver supports bearer authentication.
 
 `cron.store` is a logical store key and doctor migration path, not a live JSON file to hand-edit. Job data lives in SQLite; use the CLI or Gateway API for changes.
 
