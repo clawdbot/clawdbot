@@ -1,7 +1,7 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SkillStatusEntry } from "../../api/types.ts";
+import type { GatewaySessionRow, SkillStatusEntry, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import "../../components/modal-dialog.ts";
@@ -9,12 +9,17 @@ import { renderMcpServerForm, type McpServerForm } from "../../components/mcp-se
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import {
+  buildToolsEffectiveRequestKey,
+  loadToolsEffective,
+} from "../../lib/agents/tools-effective.ts";
+import {
   buildAddMcpServerPatch,
   MCP_SERVER_NAME_PATTERN,
   parseMcpTarget,
   patchMcpServers,
   summarizeMcpServers,
 } from "../../lib/config/mcp-servers.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
@@ -76,6 +81,9 @@ export class ChatComposerCapabilityHost {
   private readonly loading = new Set<string>();
   private readonly loadErrors = new Set<string>();
   private readonly patchTokens = new Map<string, symbol>();
+  private readonly effectiveTools = new Map<string, ToolsEffectiveResult>();
+  private readonly effectiveToolsErrors = new Set<string>();
+  private effectiveToolsLoadingKey: string | null = null;
   private client: GatewayBrowserClient | null = null;
   private addDialogOpen = false;
   private addScope: ComposerMcpServerScope = "session";
@@ -169,6 +177,78 @@ export class ChatComposerCapabilityHost {
       .finally(() => {
         if (this.client === client) {
           this.loading.delete(agentId);
+          this.notify();
+        }
+      });
+  }
+
+  private effectiveToolsKey(
+    context: ApplicationContext,
+    state: ChatPageHost,
+    agentId: string,
+  ): string {
+    return buildToolsEffectiveRequestKey(
+      {
+        chatModelCatalog: state.chatModelCatalog,
+        sessions: context.sessions,
+        sessionsResult: state.sessionsResult,
+      },
+      { agentId, sessionKey: state.sessionKey },
+    );
+  }
+
+  private loadEffectiveTools(
+    context: ApplicationContext,
+    state: ChatPageHost,
+    agentId: string,
+  ): void {
+    const client = state.client;
+    const sessionKey = state.sessionKey;
+    const requestKey = this.effectiveToolsKey(context, state, agentId);
+    if (
+      !state.connected ||
+      !client ||
+      this.effectiveTools.has(requestKey) ||
+      this.effectiveToolsLoadingKey === requestKey
+    ) {
+      return;
+    }
+    const loader = {
+      chatModelCatalog: state.chatModelCatalog,
+      client,
+      connected: true,
+      sessions: context.sessions,
+      sessionsResult: state.sessionsResult,
+      toolsEffectiveError: null as string | null,
+      toolsEffectiveLoading: false,
+      toolsEffectiveLoadingKey: null as string | null,
+      toolsEffectiveResult: null as ToolsEffectiveResult | null,
+      toolsEffectiveResultKey: null as string | null,
+    };
+    const isCurrent = () =>
+      this.client === client &&
+      state.client === client &&
+      state.connected &&
+      state.sessionKey === sessionKey;
+    this.effectiveToolsErrors.delete(requestKey);
+    this.effectiveToolsLoadingKey = requestKey;
+    this.notify();
+    void loadToolsEffective(loader, { agentId, sessionKey }, { isCurrent })
+      .then(() => {
+        if (!isCurrent()) {
+          return;
+        }
+        if (loader.toolsEffectiveResult && loader.toolsEffectiveResultKey === requestKey) {
+          this.effectiveTools.set(requestKey, loader.toolsEffectiveResult);
+        } else if (loader.toolsEffectiveError) {
+          this.effectiveToolsErrors.add(requestKey);
+        }
+      })
+      .finally(() => {
+        if (this.effectiveToolsLoadingKey === requestKey) {
+          this.effectiveToolsLoadingKey = null;
+        }
+        if (this.client === client) {
           this.notify();
         }
       });
@@ -454,12 +534,26 @@ export class ChatComposerCapabilityHost {
       this.loading.clear();
       this.loadErrors.clear();
       this.patchTokens.clear();
+      this.effectiveTools.clear();
+      this.effectiveToolsErrors.clear();
+      this.effectiveToolsLoadingKey = null;
     }
     // Sparse session overrides resolve against active runtime defaults, so display and key
     // removal decisions must use the same runtime snapshot that executes the session.
     const runtimeConfig = context.runtimeConfig.state.configSnapshot?.runtimeConfig ?? null;
     const access = readGatewayOperatorAccess(context.gateway.snapshot);
     const gatewayAvailable = state.connected && Boolean(state.client);
+    const effectiveToolsAvailable =
+      isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
+    const effectiveToolsKey = effectiveToolsAvailable
+      ? this.effectiveToolsKey(context, state, agentId)
+      : null;
+    const toolsEffectiveResult =
+      effectiveToolsKey === null ? null : (this.effectiveTools.get(effectiveToolsKey) ?? null);
+    const toolsEffectiveLoading =
+      effectiveToolsKey !== null && this.effectiveToolsLoadingKey === effectiveToolsKey;
+    const toolsEffectiveError =
+      effectiveToolsKey !== null && this.effectiveToolsErrors.has(effectiveToolsKey);
     const capabilitiesReady = gatewayAvailable && session !== undefined && runtimeConfig !== null;
     const mutationBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
@@ -470,6 +564,13 @@ export class ChatComposerCapabilityHost {
           : this.patchTokens.has(state.sessionKey)
             ? t("chat.composer.menu.savingBlocked")
             : null;
+    const toolAccessMutationBlockedReason =
+      mutationBlockedReason ??
+      (toolsEffectiveResult
+        ? null
+        : toolsEffectiveError
+          ? t("chat.composer.menu.toolAccess.loadFailed")
+          : t("common.loading"));
     const adminBlockedReason = !gatewayAvailable
       ? t("chat.composer.menu.offlineBlocked")
       : !access.canAdmin
@@ -489,6 +590,10 @@ export class ChatComposerCapabilityHost {
       skillsLoading: this.loading.has(agentId),
       skillsError: this.loadErrors.has(agentId),
       mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
+      toolsEffectiveResult,
+      toolsEffectiveLoading,
+      toolsEffectiveError,
+      toolAccessMutationBlockedReason,
       webSearchBaseEnabled: webSearchBaseEnabled(runtimeConfig),
       mutationBlockedReason,
       canAdmin: access.canAdmin && gatewayAvailable,
@@ -506,6 +611,9 @@ export class ChatComposerCapabilityHost {
         this.addError = null;
         this.notify();
       },
+      ...(effectiveToolsAvailable
+        ? { onOpenToolAccess: () => this.loadEffectiveTools(context, state, agentId) }
+        : {}),
     };
   }
 }

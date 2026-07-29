@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   countSessionToolOverrides,
   nextBooleanToolOverrides,
+  nextMcpToolsDenyOverrides,
   nextWebSearchToolOverrides,
   resolveToolOverrideState,
   sessionToolOverrideNames,
@@ -42,6 +43,40 @@ describe("session tool overrides", () => {
     expect(nextWebSearchToolOverrides(off, true)).toEqual({ skills: { docs: true } });
     expect(nextWebSearchToolOverrides({}, true, false)).toEqual({ webSearch: true });
     expect(nextWebSearchToolOverrides({ webSearch: true }, false, false)).toEqual({});
+  });
+
+  it("adds sorted MCP tool denials without mutating sibling overrides", () => {
+    const current = {
+      mcpToolsDeny: { github: ["zebra"], notion: ["delete_page"] },
+      webSearch: false,
+    };
+    expect(nextMcpToolsDenyOverrides(current, "github", "alpha", true)).toEqual({
+      mcpToolsDeny: { github: ["alpha", "zebra"], notion: ["delete_page"] },
+      webSearch: false,
+    });
+    expect(current.mcpToolsDeny.github).toEqual(["zebra"]);
+  });
+
+  it("removes MCP tool denials and keeps the map sparse", () => {
+    expect(
+      nextMcpToolsDenyOverrides(
+        { mcpToolsDeny: { github: ["read", "write"], notion: ["delete_page"] } },
+        "github",
+        "read",
+        false,
+      ),
+    ).toEqual({ mcpToolsDeny: { github: ["write"], notion: ["delete_page"] } });
+    expect(
+      nextMcpToolsDenyOverrides(
+        { mcpToolsDeny: { github: ["write"], notion: ["delete_page"] } },
+        "github",
+        "write",
+        false,
+      ),
+    ).toEqual({ mcpToolsDeny: { notion: ["delete_page"] } });
+    expect(
+      nextMcpToolsDenyOverrides({ mcpToolsDeny: { github: ["write"] } }, "github", "write", false),
+    ).toEqual({});
   });
 
   it("counts override categories and returns deterministic tooltip names", () => {

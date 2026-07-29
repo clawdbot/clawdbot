@@ -57,6 +57,33 @@ export function nextWebSearchToolOverrides(
   return next;
 }
 
+export function nextMcpToolsDenyOverrides(
+  current: SessionToolOverrides | null | undefined,
+  server: string,
+  rawToolName: string,
+  denied: boolean,
+): SessionToolOverrides {
+  const next = copyOverrides(current);
+  const deniedTools = new Set(next.mcpToolsDeny?.[server] ?? []);
+  if (denied) {
+    deniedTools.add(rawToolName);
+  } else {
+    deniedTools.delete(rawToolName);
+  }
+  const mcpToolsDeny = { ...next.mcpToolsDeny };
+  if (deniedTools.size > 0) {
+    mcpToolsDeny[server] = [...deniedTools].toSorted();
+  } else {
+    delete mcpToolsDeny[server];
+  }
+  if (Object.keys(mcpToolsDeny).length === 0) {
+    delete next.mcpToolsDeny;
+  } else {
+    next.mcpToolsDeny = mcpToolsDeny;
+  }
+  return next;
+}
+
 export function countSessionToolOverrides(
   overrides: SessionToolOverrides | null | undefined,
 ): number {

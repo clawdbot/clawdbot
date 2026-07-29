@@ -84,6 +84,59 @@ function configResponse(
   };
 }
 
+function effectiveToolsResponse() {
+  return {
+    agentId: "main",
+    profile: "full",
+    groups: [
+      {
+        id: "mcp",
+        label: "MCP",
+        source: "mcp",
+        tools: [
+          {
+            id: "mcp_github_list_issues",
+            label: "list_issues",
+            description: "List issues",
+            rawDescription: "List issues",
+            source: "mcp",
+            mcpServer: "github",
+            mcpToolName: "list-issues",
+          },
+          {
+            id: "mcp_github_search_items_dash",
+            label: "search_items",
+            description: "Search items",
+            rawDescription: "Search items",
+            source: "mcp",
+            mcpServer: "github",
+            mcpToolName: "search-items",
+          },
+          {
+            id: "mcp_github_search_items_underscore",
+            label: "search_items",
+            description: "Search items",
+            rawDescription: "Search items",
+            source: "mcp",
+            mcpServer: "github",
+            mcpToolName: "search_items",
+            deniedBySession: true,
+          },
+          {
+            id: "mcp_notion_delete_page",
+            label: "delete_page",
+            description: "Delete a page",
+            rawDescription: "Delete a page",
+            source: "mcp",
+            mcpServer: "notion",
+            mcpToolName: "delete_page",
+          },
+        ],
+      },
+    ],
+  };
+}
+
 async function latestToolOverrides(gateway: MockGatewayControls) {
   const requests = await gateway.getRequests("sessions.patch");
   return (requests.at(-1)?.params as { toolOverrides?: unknown } | undefined)?.toolOverrides;
@@ -99,9 +152,19 @@ function configPatchRaw(request: { params?: unknown }) {
 
 async function openMenu(page: Page) {
   const composer = page.locator(".agent-chat__input");
-  await composer.getByRole("button", { name: "Add attachment" }).click();
+  const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
+  const skills = composer.getByRole("menuitem", { name: "Skills" });
+  const isOpen = await dropdown.evaluate((node) => (node as HTMLElement & { open: boolean }).open);
+  if (!isOpen) {
+    await composer.getByRole("button", { name: "Add attachment" }).click();
+  }
   await expect
-    .poll(() => composer.getByRole("menuitem", { name: "Skills" }).isVisible())
+    .poll(async () => {
+      const open = await dropdown.evaluate(
+        (node) => (node as HTMLElement & { open: boolean }).open,
+      );
+      return open && (await skills.isVisible());
+    })
     .toBe(true);
   return composer;
 }
@@ -272,6 +335,115 @@ describeControlUiE2e("Control UI composer capability menu", () => {
       expect(themeBackgrounds[0]).not.toBe("");
       expect(themeBackgrounds[1]).not.toBe("");
       expect(themeBackgrounds[0]).not.toBe(themeBackgrounds[1]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("shows per-connector tool access and preserves raw MCP tool identity", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      methodResponses: {
+        "config.get": configResponse({
+          github: { url: "https://mcp.example.test", enabled: true },
+          notion: { command: "notion-mcp", enabled: true },
+        }),
+        "sessions.list": sessionsList({
+          mcpToolsDeny: { github: ["search_items"] },
+        }),
+        "tools.effective": effectiveToolsResponse(),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      await expect.poll(() => menu.getByText("2 of 3 tools on").isVisible()).toBe(true);
+      await expect.poll(() => menu.getByRole("menuitem", { name: "delete_page" }).count()).toBe(0);
+
+      const toolRows = menu.locator('wa-dropdown-item[value^="mcp-tool:"]');
+      await expect
+        .poll(() => toolRows.allTextContents())
+        .toEqual([
+          expect.stringContaining("list_issues"),
+          expect.stringContaining("search_items"),
+          expect.stringContaining("search_items"),
+        ]);
+      const collisions = toolRows.filter({ hasText: "search_items" });
+      await expect.poll(() => collisions.count()).toBe(2);
+      await expect
+        .poll(() =>
+          collisions
+            .nth(1)
+            .locator("wa-switch")
+            .evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
+        .toBe(false);
+      await collisions.first().click();
+      await expect
+        .poll(() => latestToolOverrides(gateway))
+        .toEqual({ mcpToolsDeny: { github: ["search-items", "search_items"] } });
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("blocks tool mutations until the session, runtime config, and catalog are ready", async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      featureMethods: ["chat.metadata", "chat.startup", "tools.effective"],
+      deferredMethods: ["sessions.list", "tools.effective"],
+      methodResponses: {
+        "config.get": configResponse({
+          github: { url: "https://mcp.example.test", enabled: true },
+        }),
+        "tools.effective": effectiveToolsResponse(),
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await gateway.waitForRequest("sessions.list");
+      const composer = await openMenu(page);
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      await gateway.waitForRequest("tools.effective");
+      await expect.poll(() => menu.getByText("Loading tools…").isVisible()).toBe(true);
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+
+      await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
+      const listIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
+      await expect.poll(() => listIssues.isDisabled()).toBe(true);
+      await expect.poll(() => listIssues.getAttribute("title")).toBe("Loading…");
+      await listIssues.evaluate((item) => {
+        item
+          .closest("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+
+      await gateway.resolveDeferred("sessions.list", sessionsList());
+      await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
+      await menu.getByRole("menuitem", { name: "Back" }).click();
+      await menu.getByRole("menuitem", { name: "Tool access" }).click();
+      const readyListIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
+      await expect.poll(() => readyListIssues.isDisabled()).toBe(false);
+      await readyListIssues.click();
+      await expect
+        .poll(() => latestToolOverrides(gateway))
+        .toEqual({ mcpToolsDeny: { github: ["list-issues"] } });
     } finally {
       await context.close();
     }
