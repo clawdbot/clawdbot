@@ -518,6 +518,8 @@ The Control UI ships a `manifest.webmanifest` and a service worker, so modern br
 
 Inside the macOS app, the Notifications settings page shows the app's native notification permission instead of browser push because the app delivers notifications natively.
 
+See [Notifications](/web/notifications) for the browser and macOS setup steps.
+
 If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
 
 | Surface                                            | What it does                                                                 |
@@ -540,7 +542,7 @@ The Control UI uses these scope-gated Gateway methods to register and test brows
 - `push.web.vapidPublicKey` fetches the active VAPID public key.
 - `push.web.subscribe` registers an `endpoint` plus `keys.p256dh`/`keys.auth`.
 - `push.web.unsubscribe` removes a registered endpoint.
-- `push.web.test` sends a test notification to the caller's subscription.
+- `push.web.test` sends a test notification to registered browser subscriptions.
 
 <Note>
 Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway/configuration) for relay-backed push) and the `push.test` method, which targets native mobile pairing.
