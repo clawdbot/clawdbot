@@ -160,6 +160,7 @@ describe("createSmsWebhookHandler", () => {
     await handler(createRequest(body, signature), res);
 
     expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
     expect(enqueueSmsIngress).toHaveBeenCalledWith(parseTestTwilioForm(body));
   });
 
@@ -178,6 +179,53 @@ describe("createSmsWebhookHandler", () => {
     );
 
     expect(res.endMock).not.toHaveBeenCalled();
+    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+  });
+
+  it("acknowledges only after the durable enqueue resolves", async () => {
+    const { body, signature } = createSignedSmsPayload(createMessageSid(3));
+    let releaseAdmission: (() => void) | undefined;
+    enqueueSmsIngress.mockImplementationOnce(
+      async () =>
+        await new Promise<{ kind: "accepted"; duplicate: boolean }>((resolve) => {
+          releaseAdmission = () => resolve({ kind: "accepted", duplicate: false });
+        }),
+    );
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    const handling = handler(createRequest(body, signature), res);
+    await vi.waitFor(() => expect(enqueueSmsIngress).toHaveBeenCalledTimes(1));
+    expect(res.endMock).not.toHaveBeenCalled();
+    if (!releaseAdmission) {
+      throw new Error("expected pending SMS durable admission");
+    }
+    releaseAdmission();
+    await handling;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+    expect(res.endMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still acks durable when the enqueue reports a replayed duplicate", async () => {
+    const { body, signature } = createSignedSmsPayload(createMessageSid(4));
+    enqueueSmsIngress.mockResolvedValueOnce({ kind: "accepted", duplicate: true });
+    const handler = createSmsWebhookHandler({
+      cfg: {},
+      account: createAccount(),
+      ingress: createIngress(),
+    });
+    const res = createResponse();
+
+    await handler(createRequest(body, signature), res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.setHeaderMock).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
   });
 
   it("rejects a signed webhook without a stable MessageSid", async () => {
