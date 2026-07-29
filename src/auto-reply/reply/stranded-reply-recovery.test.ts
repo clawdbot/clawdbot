@@ -106,6 +106,25 @@ describe("resolveStrandedReplyRecovery", () => {
     expect(recovery.kind).toBe("retry");
   });
 
+  it("creates the same retry for a substantive CJK private final", () => {
+    // Behavior proof for #115555: the CJK path reaches the recovery, not just the log.
+    const base = createMockFollowupRun({ prompt: "question" });
+
+    const recovery = resolveStrandedReplyRecovery({
+      base,
+      finalText:
+        "近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。" +
+        "建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sendPolicyDenied: false,
+      successfulSourceReplyDelivery: false,
+      isHeartbeat: false,
+      isRoomEvent: false,
+    });
+
+    expect(recovery.kind).toBe("retry");
+  });
+
   it("returns a diagnostic rather than a second retry", () => {
     const base = createMockFollowupRun({ prompt: "question", strandedReplyRetry: true });
 

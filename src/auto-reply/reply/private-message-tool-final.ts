@@ -1,5 +1,6 @@
-/** Detects and logs long private finals when message-tool-only delivery was expected. */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+/** Detects and logs long private finals when message-tool-only delivery was expected. */
+import { estimateStringChars } from "../../utils/cjk-chars.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { isSilentReplyText } from "../tokens.js";
 
@@ -8,9 +9,7 @@ const privateFinalReplyLogger = createSubsystemLogger("source-reply/private-fina
 const LONG_PRIVATE_FINAL_MIN_CHARS = 280;
 const MULTI_SENTENCE_PRIVATE_FINAL_MIN_CHARS = 120;
 const MULTI_SENTENCE_TERMINATOR_MIN_COUNT = 2;
-// CJK sentence terminators are full-width and are not followed by whitespace,
-// so they need their own alternative rather than the ASCII trailing-space rule.
-const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)|[。！？]+/g;
+const SENTENCE_TERMINATOR_REGEX = /[.!?]+(?:\s|$)/g;
 
 /**
  * `message_tool_only` allows the model to stay silent by simply not calling the
@@ -36,12 +35,16 @@ export function shouldWarnAboutPrivateMessageToolFinal(params: {
   if (!trimmed || isSilentReplyText(trimmed)) {
     return false;
   }
-  if (trimmed.length >= LONG_PRIVATE_FINAL_MIN_CHARS) {
+  // Both thresholds are substance proxies, so they must be compared against the
+  // shared CJK-aware estimate: raw UTF-16 length under-counts CJK about 4x, which
+  // kept substantive CJK finals below both branches and skipped stranded recovery.
+  const estimatedChars = estimateStringChars(trimmed);
+  if (estimatedChars >= LONG_PRIVATE_FINAL_MIN_CHARS) {
     return true;
   }
   const sentenceTerminatorCount = countSentenceLikeTerminators(trimmed);
   return (
-    trimmed.length >= MULTI_SENTENCE_PRIVATE_FINAL_MIN_CHARS &&
+    estimatedChars >= MULTI_SENTENCE_PRIVATE_FINAL_MIN_CHARS &&
     sentenceTerminatorCount >= MULTI_SENTENCE_TERMINATOR_MIN_COUNT
   );
 }
