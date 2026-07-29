@@ -59,6 +59,20 @@ function readEntryJson(env: NodeJS.ProcessEnv, sessionKey: string): string {
 }
 
 describe("doctor canonical session delivery state", () => {
+  it("warns and skips an unmigrated agent database", () => {
+    const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-legacy-schema-"));
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    database.db.exec("PRAGMA user_version = 8;");
+    closeOpenClawAgentDatabasesForTest();
+
+    expect(repairCanonicalSessionDeliveryStates({ apply: true, cfg: {}, env })).toEqual({
+      found: 0,
+      repaired: 0,
+      scannedStores: 1,
+    });
+  });
+
   it("keeps bare channel and origin metadata below explicit delivery context", () => {
     const stateDir = fs.realpathSync(tempDirs.make("openclaw-delivery-fallback-order-"));
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

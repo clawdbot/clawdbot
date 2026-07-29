@@ -6,6 +6,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveStateDir } from "../config/paths.js";
 import { deleteSessionCostUsageRollupsExcept } from "../infra/session-cost-usage-cache.sqlite.js";
 import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db.js";
+import { runDoctorAgentDatabaseOperation } from "./doctor-agent-database-operation.js";
 import { maybeScrubConfigAuditLog } from "./doctor-config-audit-scrub.js";
 
 const LEGACY_USAGE_COST_TEMP_GRACE_MS = 10_000;
@@ -135,12 +136,17 @@ export async function maybeRepairLegacyRuntimeFiles(
   if (shouldRepair) {
     for (const entry of listOpenClawRegisteredAgentDatabases({ env })) {
       if ((await fs.stat(entry.path).catch(() => null))?.isFile()) {
-        deleteSessionCostUsageRollupsExcept({
+        runDoctorAgentDatabaseOperation({
           agentId: entry.agentId,
-          databasePath: entry.path,
-          liveKeys: new Set(),
-          // Doctor retires old scopes only; current v2 rows are not prune candidates.
-          rows: [],
+          path: entry.path,
+          run: () =>
+            deleteSessionCostUsageRollupsExcept({
+              agentId: entry.agentId,
+              databasePath: entry.path,
+              liveKeys: new Set(),
+              // Doctor retires old scopes only; current v2 rows are not prune candidates.
+              rows: [],
+            }),
         });
       }
     }
