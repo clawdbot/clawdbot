@@ -494,6 +494,10 @@ async function executeMusicGenerationJob(params: {
     path: track.path,
     mimeType: track.contentType,
     name: result.tracks[index]?.fileName,
+    sizeBytes: track.size,
+    ...(typeof appliedDurationSeconds === "number"
+      ? { durationMs: appliedDurationSeconds * 1000 }
+      : {}),
     ...savedTrackMetadata[index],
   }));
   const lines = [

@@ -40227,7 +40227,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 735,
+      "line": 737,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift",
       "source": "Image",
       "surface": "apple",

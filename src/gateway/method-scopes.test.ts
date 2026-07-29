@@ -157,13 +157,18 @@ describe("method scope resolution", () => {
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", { command: "browser.proxy" }),
     ).toEqual(["operator.admin"]);
     expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
+        command: "browser.proxy.upload.v1",
+      }),
+    ).toEqual(["operator.admin"]);
+    expect(
       authorizeOperatorScopesForMethod("node.invoke", ["operator.write"], {
         command: "fs.listDir",
       }),
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("node.invoke", {
-        command: "browser.proxy",
+        command: "browser.proxy.upload.v1",
         params: { method: "POST", path: "/profiles/create" },
       }),
     ).toEqual(["operator.write"]);

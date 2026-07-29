@@ -545,7 +545,12 @@ function marketplaceRef(
   };
 }
 
-/** True for either supported OpenAI curated marketplace wire name. */
+/**
+ * True for either supported OpenAI curated marketplace wire name. Codex also
+ * counts `openai-api-curated` (API-key/Bedrock accounts) as curated, but
+ * OpenClaw's native plugin flows are ChatGPT-account scoped, so that catalog
+ * stays out of discovery and activation until it gets end-to-end support.
+ */
 export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
   return (
     marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME ||

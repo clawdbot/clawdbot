@@ -91,8 +91,8 @@ Notes:
   - commandless request: `operator.pairing`
   - ordinary command request: `operator.pairing` + `operator.write`
   - admin-sensitive request containing `system.run`, `system.run.prepare`,
-    `system.which`, `browser.proxy`, `fs.listDir`, or
-    `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
+    `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
+    or `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
 
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.

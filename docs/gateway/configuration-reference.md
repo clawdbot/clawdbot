@@ -366,7 +366,8 @@ are host-specific. See
 [Native Codex plugins](/plugins/codex-native-plugins) for app-server version and
 readiness requirements.
 
-`app/list` readiness checks are cached for one hour and refreshed
+`app/installed` readiness checks (with authorized metadata from batched
+`app/read`) are cached for one hour and refreshed
 asynchronously when stale. Codex thread app config is computed at Codex harness
 session establishment, not on every turn; use `/new`, `/reset`, or a gateway
 restart after changing native plugin config.
@@ -375,8 +376,8 @@ restart after changing native plugin config.
 app into each new native Codex thread. It does not install plugins or apps, and
 inaccessible apps stay excluded. Account apps use the global
 `codexPlugins.allow_destructive_actions` policy. Explicit plugin entries take
-precedence when the same app is present in both paths. If `app/list` cannot be
-read, account-wide exposure fails closed.
+precedence when the same app is present in both paths. If `app/installed`
+cannot be read, account-wide exposure fails closed.
 
 - `plugins.entries.firecrawl.config.webFetch`: Firecrawl web-fetch provider settings.
   - `apiKey`: Optional Firecrawl API key for higher limits (accepts SecretRef). Falls back to `plugins.entries.firecrawl.config.webSearch.apiKey` or `FIRECRAWL_API_KEY` env var.

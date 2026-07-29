@@ -117,6 +117,43 @@ class OpenShellFsBridge implements SandboxFsBridge {
     await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
   }
 
+  async createFileExclusive(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists"> {
+    const target = this.resolveTarget(params);
+    const hostPath = this.requireHostPath(target);
+    this.ensureWritable(target, "create files");
+    await assertLocalPathSafety({
+      target,
+      root: target.mountHostRoot,
+      allowMissingLeaf: true,
+      allowFinalSymlinkForUnlink: false,
+    });
+    const buffer = Buffer.isBuffer(params.data)
+      ? params.data
+      : Buffer.from(params.data, params.encoding ?? "utf8");
+    const root = await fsRoot(target.mountHostRoot);
+    try {
+      await root.create(path.relative(target.mountHostRoot, hostPath), buffer, {
+        mkdir: params.mkdir !== false,
+      });
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "already-exists") {
+        return "exists";
+      }
+      throw error;
+    }
+    // Mirror mode treats local state as canonical. Syncing may fail, but must
+    // never downgrade the exclusive local create to an overwriting write.
+    await this.backend.syncLocalPathToRemote(hostPath, target.containerPath);
+    return "created";
+  }
+
   async mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void> {
     const target = this.resolveTarget(params);
     const hostPath = this.requireHostPath(target);

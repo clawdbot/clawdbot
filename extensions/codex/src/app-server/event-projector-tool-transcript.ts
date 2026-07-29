@@ -157,19 +157,23 @@ export class CodexToolTranscriptProjection {
     });
   }
 
-  recordDynamicToolResult(params: {
-    callId: string;
-    tool: string;
-    success: boolean;
-    contentItems: CodexDynamicToolCallOutputContentItem[];
-    details?: unknown;
-  }): void {
+  recordDynamicToolResult(
+    params: {
+      callId: string;
+      tool: string;
+      success: boolean;
+      contentItems: CodexDynamicToolCallOutputContentItem[];
+      details?: unknown;
+    },
+    resultContentSource?: "network",
+  ): void {
     this.recordToolResult({
       id: params.callId,
       name: params.tool,
       text: collectDynamicToolContentText(params.contentItems),
       isError: !params.success,
       details: params.details,
+      ...(resultContentSource ? { resultContentSource } : {}),
     });
   }
 
@@ -197,6 +201,7 @@ export class CodexToolTranscriptProjection {
           itemTranscriptResultText(item, this.progress.outputTextByItem),
         isError: isNonSuccessItemStatus(itemStatus(item)),
         details,
+        ...(item.type === "webSearch" ? { resultContentSource: "network" } : {}),
       });
     }
   }
@@ -615,6 +620,9 @@ export class CodexToolTranscriptProjection {
         },
       ],
       ...(params.details !== undefined ? { details: params.details } : {}),
+      ...(params.resultContentSource
+        ? { __openclaw: { resultContentSource: params.resultContentSource } }
+        : {}),
       timestamp: this.nextTranscriptTimestamp(),
     } as unknown as AgentMessage;
   }

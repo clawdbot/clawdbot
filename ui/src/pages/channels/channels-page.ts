@@ -7,11 +7,12 @@ import type {
   ChannelsPairingRequest,
   NostrProfile,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
@@ -27,6 +28,7 @@ import { ChannelWizardHost } from "./wizard-host.ts";
 type NostrProfileFormState = ReturnType<typeof createNostrProfileFormState> | null;
 
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
+const CHANNELS_DOCS_URL = "https://docs.openclaw.ai/channels";
 
 type NostrOperation = {
   generation: number;
@@ -658,6 +660,10 @@ class ChannelsPage extends OpenClawLightDomElement {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("channels")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("channels")}
+            ${renderDocsLink(CHANNELS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(

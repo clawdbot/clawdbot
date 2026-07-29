@@ -49,6 +49,38 @@ describe("CodexAppServerClient", () => {
     expect(outbound.method).toBe("model/list");
   });
 
+  it("isolates synchronous notification handler failures", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const error = new Error("notification observer failed");
+    const receiveNotification = vi.fn();
+
+    harness.client.addNotificationHandler(() => {
+      throw error;
+    });
+    harness.client.addNotificationHandler(receiveNotification);
+
+    const notification = {
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "message-1",
+        delta: "hello",
+      },
+    };
+
+    expect(() => harness.send(notification)).not.toThrow();
+    expect(receiveNotification).toHaveBeenCalledWith(notification);
+    expect(warn).toHaveBeenCalledWith("codex app-server notification handler failed", { error });
+
+    const request = harness.client.request("model/list", {});
+    const outbound = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({ id: outbound.id, result: { models: [] } });
+    await expect(request).resolves.toEqual({ models: [] });
+  });
+
   it("rejects unbounded guarded thread requests before acquiring the fence", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

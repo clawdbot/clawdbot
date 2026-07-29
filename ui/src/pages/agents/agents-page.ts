@@ -11,14 +11,16 @@ import type {
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
 import {
   loadToolsCatalog,
@@ -60,6 +62,8 @@ import {
 import type { AgentsRouteData } from "./route.ts";
 import { loadAgentSkills } from "./skills.ts";
 import { renderAgents } from "./view.ts";
+
+const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
 type AgentsRequestSources = Partial<
   Pick<ApplicationContext, "agents" | "agentIdentity" | "sessions">
@@ -802,6 +806,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("agents")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("agents")} ${renderDocsLink(AGENTS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(

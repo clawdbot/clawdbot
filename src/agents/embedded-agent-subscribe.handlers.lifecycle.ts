@@ -91,9 +91,11 @@ export function handleAgentEnd(
     toolAudioAsVoice:
       ctx.state.pendingToolAudioAsVoice ||
       ctx.state.deferredBlockReplies.some((payload) => payload.audioAsVoice),
-    toolTrustedLocalMedia:
-      ctx.state.pendingToolTrustedLocalMedia ||
-      ctx.state.deferredBlockReplies.some((payload) => payload.trustedLocalMedia),
+    toolTrustedLocalMedia: resolveTerminalToolMediaTrust({
+      pendingMediaUrls: ctx.state.pendingToolMediaUrls,
+      pendingTrustByUrl: ctx.state.pendingToolMediaTrustByUrl,
+      deferredReplies: ctx.state.deferredBlockReplies,
+    }),
     hasToolMediaBlockReply: ctx.state.hasToolMediaBlockReply,
     didDeliverSourceReplyViaMessageTool:
       ctx.state.messageToolOnlySourceReplyDelivered ||
@@ -401,3 +403,19 @@ export function handleAgentEnd(
   }
   return deliverTerminalWithLifecycleErrorFallback();
 }
+function resolveTerminalToolMediaTrust(params: {
+  pendingMediaUrls: readonly string[];
+  pendingTrustByUrl: ReadonlyMap<string, boolean>;
+  deferredReplies: readonly { mediaUrls?: string[]; trustedLocalMedia?: boolean }[];
+}): boolean {
+  const trust = [
+    ...params.pendingMediaUrls.map((url) => params.pendingTrustByUrl.get(url.trim()) === true),
+    ...params.deferredReplies.flatMap((payload) =>
+      (payload.mediaUrls ?? []).map(() => payload.trustedLocalMedia === true),
+    ),
+  ];
+  return trust.length > 0 && trust.every(Boolean);
+}
+
+const testing = { resolveTerminalToolMediaTrust };
+export { testing as __testing };

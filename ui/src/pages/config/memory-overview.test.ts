@@ -88,12 +88,10 @@ function renderOverview(
   render(
     renderMemoryOverview({
       agentId: "main",
-      agents: [],
       engineSelection,
       engineDisabled: false,
       status,
       probingEmbeddings: false,
-      onAgentChange: vi.fn(),
       onRefresh: vi.fn(),
       onProbeEmbeddings: vi.fn(),
       onNavigate: vi.fn(),
@@ -142,12 +140,10 @@ describe("renderMemoryOverview", () => {
     render(
       renderMemoryOverview({
         agentId: "main",
-        agents: [],
         engineSelection: { kind: "pinned", engineId: "memory-core" },
         engineDisabled: true,
         status: { kind: "ready", payload: fixturePayload() },
         probingEmbeddings: false,
-        onAgentChange: vi.fn(),
         onRefresh: vi.fn(),
         onProbeEmbeddings: vi.fn(),
         onNavigate: vi.fn(),
@@ -284,12 +280,10 @@ describe("renderMemoryOverview", () => {
     render(
       renderMemoryOverview({
         agentId: "main",
-        agents: [],
         engineSelection: { kind: "auto", engineId: "memory-core" },
         engineDisabled: false,
         status: { kind: "ready", payload: fixturePayload() },
         probingEmbeddings: false,
-        onAgentChange: vi.fn(),
         onRefresh: vi.fn(),
         onProbeEmbeddings: vi.fn(),
         onNavigate,

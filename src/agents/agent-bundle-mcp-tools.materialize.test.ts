@@ -602,6 +602,68 @@ describe("createBundleMcpToolRuntime", () => {
     ).rejects.toThrow("bundle-mcp catalog projection cannot execute tools");
   });
 
+  it("projects session-denied tools only for read-only inventory", () => {
+    const catalog = {
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        knowledge: {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          launchSummary: "knowledge",
+          toolCount: 0,
+          resources: { listChanged: false },
+          deniedToolNames: ["resources_read"],
+        },
+      },
+      tools: [
+        {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          toolName: "alpha?",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Enabled knowledge tool",
+        },
+      ],
+      sessionDeniedTools: [
+        {
+          serverName: "knowledge",
+          safeServerName: "knowledge",
+          toolName: "alpha!",
+          inputSchema: { type: "object", properties: {} },
+          fallbackDescription: "Denied knowledge tool",
+          deniedBySession: true,
+        },
+      ],
+    } satisfies Parameters<typeof buildBundleMcpToolsFromCatalog>[0]["catalog"];
+
+    expect(buildBundleMcpToolsFromCatalog({ catalog }).map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__resources_list",
+    ]);
+    const inventoryTools = buildBundleMcpToolsFromCatalog({
+      catalog,
+      includeSessionDenied: true,
+    });
+    expect(inventoryTools.map((tool) => tool.name)).toEqual([
+      "knowledge__alpha-",
+      "knowledge__alpha--2",
+      "knowledge__resources_list",
+      "knowledge__resources_read",
+    ]);
+    expect(
+      inventoryTools.map((tool) => ({
+        name: tool.name,
+        deniedBySession: getPluginToolMeta(tool)?.mcp?.deniedBySession,
+      })),
+    ).toEqual([
+      { name: "knowledge__alpha-", deniedBySession: undefined },
+      { name: "knowledge__alpha--2", deniedBySession: true },
+      { name: "knowledge__resources_list", deniedBySession: undefined },
+      { name: "knowledge__resources_read", deniedBySession: true },
+    ]);
+  });
+
   it("materializes configured MCP tools through the session runtime boundary", async () => {
     const created: Parameters<
       NonNullable<Parameters<typeof createBundleMcpToolRuntime>[0]["createRuntime"]>

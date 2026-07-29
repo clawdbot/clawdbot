@@ -74,6 +74,8 @@ export type CodexAppInventoryCacheRead = {
 
 type CacheEntry = CodexAppInventorySnapshot & {
   invalidated: boolean;
+  /** Present while invalidated: the app ids the invalidation concerns. Absent = whole inventory. */
+  invalidatedAppIds?: readonly string[];
 };
 
 type RefreshParams = {
@@ -143,12 +145,37 @@ export class CodexAppInventoryCache {
     return this.refresh(params);
   }
 
-  /** Marks a key stale and records the reason as a diagnostic. */
-  invalidate(key: string, reason: string, nowMs = Date.now()): number {
+  /**
+   * Marks a key stale and records the reason as a diagnostic. A scope names
+   * the app ids the invalidation concerns so a covering targeted refresh can
+   * clear it; without one, only a complete refresh revalidates the entry.
+   */
+  invalidate(
+    key: string,
+    reason: string,
+    nowMs = Date.now(),
+    invalidatedAppIds?: readonly string[],
+  ): number {
     this.revision += 1;
+    // Invalidation outranks in-flight refreshes: retire their publish token so
+    // pre-invalidation reads cannot republish as fresh, and drop the shared
+    // in-flight slot so the next read starts a post-invalidation refresh.
+    this.refreshTokens.set(key, (this.refreshTokens.get(key) ?? 0) + 1);
+    this.inFlight.delete(key);
     const diagnostic = { message: reason, atMs: nowMs };
     const entry = this.entries.get(key);
     if (entry) {
+      const scope = invalidatedAppIds?.filter(Boolean) ?? [];
+      if (!entry.invalidated) {
+        entry.invalidatedAppIds = scope.length ? [...scope].toSorted() : undefined;
+      } else if (entry.invalidatedAppIds && scope.length) {
+        // Stacked scoped invalidations widen; an unscoped one stays whole-inventory.
+        entry.invalidatedAppIds = Array.from(
+          new Set([...entry.invalidatedAppIds, ...scope]),
+        ).toSorted();
+      } else {
+        entry.invalidatedAppIds = undefined;
+      }
       entry.invalidated = true;
       entry.lastError = diagnostic;
       entry.revision = this.revision;
@@ -247,7 +274,18 @@ export class CodexAppInventoryCache {
       // Only publish this snapshot if no newer refresh started for the same key
       // while this request was in flight.
       if (this.refreshTokens.get(params.key) === refreshToken) {
-        this.entries.set(params.key, { ...snapshot, invalidated: false });
+        const existingEntry = this.entries.get(params.key);
+        const published = resolvePublishedInventorySnapshot(existingEntry, snapshot, nowMs);
+        // An uncovered invalidation keeps its remaining scope and diagnostic
+        // until covering or complete refreshes prove the entry current again.
+        const remaining = resolveRemainingInvalidationScope(existingEntry, snapshot);
+        this.entries.set(params.key, {
+          ...published,
+          ...remaining,
+          ...(remaining.invalidated && existingEntry?.lastError
+            ? { lastError: existingEntry.lastError }
+            : {}),
+        });
         this.diagnostics.delete(params.key);
       }
       return snapshot;
@@ -269,6 +307,97 @@ export class CodexAppInventoryCache {
       throw error;
     }
   }
+}
+
+/**
+ * Publish policy for refreshed snapshots. A complete refresh replaces the
+ * entry, but a targeted refresh only rewrites its own target rows in place —
+ * replacing the whole entry with a narrow snapshot makes agents that share
+ * the runtime identity see each other's plugin apps vanish and force a hosted
+ * connector refresh per turn. The refreshed snapshot stays authoritative for
+ * its target set, so target rows it no longer returns are deleted.
+ */
+function resolvePublishedInventorySnapshot(
+  existing: CodexAppInventorySnapshot | undefined,
+  snapshot: CodexAppInventorySnapshot,
+  nowMs: number,
+): CodexAppInventorySnapshot {
+  if (!snapshot.targetAppIds?.length || !existing) {
+    return snapshot;
+  }
+  // Merging preserves rows the refresh never re-read, which is only safe while
+  // the existing entry is within TTL. An expired entry is replaced outright so
+  // freshness restarts from this refresh; keeping expired rows would pin the
+  // entry stale no matter how many targeted refreshes cover it.
+  if (!isFutureDateTimestampMs(existing.expiresAtMs, { nowMs })) {
+    return snapshot;
+  }
+  const refreshedTargetIds = new Set(snapshot.targetAppIds);
+  const { targetAppIds: snapshotTargetAppIds, ...snapshotBase } = snapshot;
+  return {
+    ...snapshotBase,
+    // Freshness belongs to the still-valid prior fetch: the merge must not
+    // renew rows it never re-read.
+    fetchedAtMs: existing.fetchedAtMs,
+    expiresAtMs: existing.expiresAtMs,
+    apps: mergeRefreshedRows(existing.apps, snapshot.apps, refreshedTargetIds),
+    installedApps: mergeRefreshedRows(
+      existing.installedApps,
+      snapshot.installedApps,
+      refreshedTargetIds,
+    ),
+    // A merge into a complete entry keeps the entry complete (no targetAppIds).
+    ...(existing.targetAppIds?.length
+      ? {
+          targetAppIds: Array.from(
+            new Set([...existing.targetAppIds, ...snapshotTargetAppIds]),
+          ).toSorted(),
+        }
+      : {}),
+  };
+}
+
+/** Replaces refreshed target rows in place, deletes vanished ones, appends new ones. */
+function mergeRefreshedRows<Row extends { id: string }>(
+  existingRows: readonly Row[],
+  refreshedRows: readonly Row[],
+  refreshedTargetIds: ReadonlySet<string>,
+): Row[] {
+  const refreshedById = new Map(refreshedRows.map((row) => [row.id, row]));
+  const existingIds = new Set(existingRows.map((row) => row.id));
+  return [
+    ...existingRows.flatMap((row) => {
+      if (!refreshedTargetIds.has(row.id)) {
+        return [row];
+      }
+      const refreshed = refreshedById.get(row.id);
+      return refreshed ? [refreshed] : [];
+    }),
+    ...refreshedRows.filter((row) => !existingIds.has(row.id)),
+  ];
+}
+
+/**
+ * A refresh retires exactly the invalidation scope it re-read: a complete
+ * refresh clears everything; a targeted one subtracts its target ids so
+ * separate covering refreshes accumulate until no scope remains. Unscoped
+ * invalidations require a complete refresh.
+ */
+function resolveRemainingInvalidationScope(
+  existing: CacheEntry | undefined,
+  snapshot: CodexAppInventorySnapshot,
+): { invalidated: false } | { invalidated: true; invalidatedAppIds?: readonly string[] } {
+  if (!existing?.invalidated || !snapshot.targetAppIds?.length) {
+    return { invalidated: false };
+  }
+  if (!existing.invalidatedAppIds) {
+    return { invalidated: true };
+  }
+  const refreshedTargetIds = new Set(snapshot.targetAppIds);
+  const remaining = existing.invalidatedAppIds.filter((appId) => !refreshedTargetIds.has(appId));
+  return remaining.length > 0
+    ? { invalidated: true, invalidatedAppIds: remaining }
+    : { invalidated: false };
 }
 
 function doesInFlightRefreshCover(existing: InFlightRefresh, params: RefreshParams): boolean {
@@ -398,7 +527,7 @@ async function readInstalledApps(
 }
 
 function stripEntryState(entry: CacheEntry): CodexAppInventorySnapshot {
-  const { invalidated: _invalidated, ...snapshot } = entry;
+  const { invalidated: _invalidated, invalidatedAppIds: _invalidatedAppIds, ...snapshot } = entry;
   return snapshot;
 }
 

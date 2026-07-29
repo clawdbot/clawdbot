@@ -523,7 +523,10 @@ export function createApplicationOverlays(
           return;
         }
         const status = response.result?.status ?? (response.ok === true ? "ok" : "error");
-        const expectedVersion = response.result?.after?.version?.trim() || null;
+        const expectedVersion =
+          response.result?.after?.version?.trim() ||
+          snapshot.updateAvailable?.latestVersion?.trim() ||
+          null;
         if (
           response.ok === true &&
           status === "skipped" &&

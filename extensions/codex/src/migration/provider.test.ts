@@ -523,7 +523,7 @@ describe("buildCodexMigrationProvider", () => {
       ]).marketplaces,
       marketplaceLoadErrors: [
         {
-          marketplacePath: "/marketplaces/broken-custom",
+          marketplacePath: "/marketplaces/broken-custom/.claude-plugin/marketplace.json",
           message: "unrelated custom marketplace is unavailable",
         },
       ],
@@ -564,7 +564,7 @@ describe("buildCodexMigrationProvider", () => {
           marketplaces: [],
           marketplaceLoadErrors: [
             {
-              marketplacePath: "/marketplaces/broken-custom",
+              marketplacePath: "/marketplaces/broken-custom/.agents/plugins/marketplace.json",
               message: "unrelated custom marketplace is unavailable",
             },
           ],
@@ -581,29 +581,34 @@ describe("buildCodexMigrationProvider", () => {
     expect(appServerRequest).toHaveBeenCalledTimes(1);
   });
 
-  it("fails closed when marketplace errors prevent curated source discovery", async () => {
-    const fixture = await createCodexFixture();
-    appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
-      if (method === "plugin/installed") {
-        return {
-          marketplaces: [],
-          marketplaceLoadErrors: [
-            {
-              marketplacePath: "/marketplaces/openai-curated",
-              message: "curated marketplace is unavailable",
-            },
-          ],
-        } satisfies v2.PluginInstalledResponse;
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+  // Codex reports load failures by manifest file path under the curated sync
+  // root `<codexHome>/.tmp/plugins`; cover both curated manifest variants.
+  it.each([[".agents/plugins/marketplace.json"], [".agents/plugins/api_marketplace.json"]])(
+    "fails closed when the curated %s manifest cannot load",
+    async (manifestRelativePath) => {
+      const fixture = await createCodexFixture();
+      appServerRequest.mockImplementation(async ({ method }: { method: string }) => {
+        if (method === "plugin/installed") {
+          return {
+            marketplaces: [],
+            marketplaceLoadErrors: [
+              {
+                marketplacePath: path.join(fixture.codexHome, ".tmp/plugins", manifestRelativePath),
+                message: "curated marketplace is unavailable",
+              },
+            ],
+          } satisfies v2.PluginInstalledResponse;
+        }
+        throw new Error(`unexpected request ${method}`);
+      });
 
-    const source = await discoverCodexSource({ input: fixture.codexHome });
+      const source = await discoverCodexSource({ input: fixture.codexHome });
 
-    expect(source.pluginDiscoveryError).toBe("curated marketplace is unavailable");
-    expect(source.plugins.some((plugin) => plugin.marketplaceName !== undefined)).toBe(false);
-    expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
-  });
+      expect(source.pluginDiscoveryError).toBe("curated marketplace is unavailable");
+      expect(source.plugins.some((plugin) => plugin.marketplaceName !== undefined)).toBe(false);
+      expect(sourceAppServerClientScope).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("does not trust a curated marketplace that reports its own load error", async () => {
     const fixture = await createCodexFixture();
@@ -615,7 +620,10 @@ describe("buildCodexMigrationProvider", () => {
           ]).marketplaces,
           marketplaceLoadErrors: [
             {
-              marketplacePath: "/marketplaces/openai-curated",
+              marketplacePath: path.join(
+                fixture.codexHome,
+                ".tmp/plugins/.agents/plugins/marketplace.json",
+              ),
               message: "curated marketplace was only partially loaded",
             },
           ],
