@@ -35,6 +35,7 @@ import {
 } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedAcquireAgentRunPreparedModelRuntime,
   mockedBuildAgentRuntimePlan,
   mockedBuildEmbeddedRunPayloads,
   mockedCoerceToFailoverError,
@@ -303,6 +304,14 @@ async function waitForRunEvent(events: string[], expected: string): Promise<void
     await Promise.resolve();
   }
   throw new Error(`Expected run event ${expected}; saw ${events.join(", ")}`);
+}
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((innerResolve) => {
+    resolve = innerResolve;
+  });
+  return { promise, resolve };
 }
 
 describe("runEmbeddedAgent overflow compaction trigger routing", () => {
@@ -1268,6 +1277,43 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
     await expect(runResult).resolves.toMatchObject({ name: "AbortError" });
     expect(onExecutionStarted).not.toHaveBeenCalled();
     expect(getAgentRunContext("aborted-queued-across-restart")).toBeUndefined();
+  });
+
+  it("does not enter the native runner when admission aborts during runtime preparation", async () => {
+    const runtimePreparation =
+      createDeferred<Awaited<ReturnType<typeof mockedAcquireAgentRunPreparedModelRuntime>>>();
+    mockedAcquireAgentRunPreparedModelRuntime.mockImplementationOnce(
+      async () => await runtimePreparation.promise,
+    );
+    const abortController = new AbortController();
+    const timeoutError = new Error("hook admission timed out");
+    const onExecutionStarted = vi.fn();
+
+    const runPromise = runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      runId: "aborted-during-runtime-preparation",
+      abortSignal: abortController.signal,
+      onExecutionStarted,
+    });
+    await vi.waitFor(() =>
+      expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(1),
+    );
+    abortController.abort(timeoutError);
+    runtimePreparation.resolve({
+      snapshot: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        config: {},
+        workspaceDir: "/tmp/workspace",
+        metadataSnapshot: {} as never,
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }) as never,
+      },
+      release: vi.fn(),
+    });
+
+    await expect(runPromise).rejects.toBe(timeoutError);
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(mockedRunEmbeddedAttempt).not.toHaveBeenCalled();
   });
 
   it("rejects stale descendants admitted after lifecycle rotation", async () => {

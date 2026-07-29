@@ -379,6 +379,23 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
+  it("does not enter the CLI backend after admission aborts", async () => {
+    const abortController = new AbortController();
+    const timeoutError = new Error("hook admission timed out");
+    const onExecutionStarted = vi.fn();
+    abortController.abort(timeoutError);
+
+    await expect(
+      runEmbeddedAgentViaCliBackendIfEligible(
+        baseRunParams({ abortSignal: abortController.signal, onExecutionStarted }),
+      ),
+    ).rejects.toBe(timeoutError);
+
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(runCliAgent).not.toHaveBeenCalled();
+    expect(createCliDispatchTranscriptRecorder).not.toHaveBeenCalled();
+  });
+
   it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
     const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
 

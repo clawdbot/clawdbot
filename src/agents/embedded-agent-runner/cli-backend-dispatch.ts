@@ -91,6 +91,9 @@ async function runEmbeddedAgentViaCliBackend(
   dispatch: EmbeddedCliBackendDispatch,
 ): Promise<EmbeddedAgentRunResult> {
   const { runCliAgent } = await import("../cli-runner.runtime.js");
+  // Dynamic import is the last asynchronous preparation before runner entry.
+  // Recheck admission so a timed-out caller cannot emit a late start signal.
+  params.abortSignal?.throwIfAborted();
   // The dispatch gate guarantees a non-empty named allowlist; translate it to
   // the selectable-backend surface: no native tools, only the listed loopback
   // MCP tools. The MCP list also bounds the loopback grant server-side (tools

@@ -497,6 +497,9 @@ async function runCliAgentInternal(
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
+  // Admission callbacks authorize runner entry; an expired caller must not
+  // observe entry or allocate backend resources after its timeout response.
+  params.abortSignal?.throwIfAborted();
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();

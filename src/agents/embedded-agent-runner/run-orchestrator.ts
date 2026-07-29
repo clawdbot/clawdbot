@@ -261,6 +261,9 @@ async function runEmbeddedAgentInternal(
           sessionId: params.sessionId,
           tracker: startupStages,
         });
+        // Prepared runtime acquisition can outlive an upstream admission timeout.
+        // Fence the actual runner-entry signal and all execution side effects.
+        throwIfAborted();
         params.onExecutionStarted?.({ lifecycleGeneration });
         notifyExecutionPhase("runner_entered");
         const canonicalWorkspace = resolveUserPath(

@@ -62,7 +62,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-function buildMinimalParams() {
+function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
   return {
     deps: {} as never,
     getHooksConfig: () => null,
@@ -75,6 +75,7 @@ function buildMinimalParams() {
       info: logHooksInfoMock,
       error: vi.fn(),
     } as never,
+    ...overrides,
   };
 }
 
@@ -341,14 +342,14 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it("reports runtime-config failures after returning a run id", async () => {
+  it("reports runtime-config failures as failed admission", async () => {
     loadConfigMock.mockImplementationOnce(() => {
       throw new Error("config exploded");
     });
 
-    const runId = dispatchAgentHook(buildAgentPayload("Config"));
+    const result = await dispatchAgentHook(buildAgentPayload("Config"));
 
-    expect(runId).toEqual(expect.any(String));
+    expect(result).toMatchObject({ ok: false, statusCode: 502, runId: expect.any(String) });
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Config (error): Error: config exploded",
@@ -356,6 +357,38 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("aborts admission timeout without allowing a late start", async () => {
+    capturedDispatchAgentHook = undefined;
+    createGatewayHooksRequestHandler(buildMinimalParams({ agentStartAdmissionTimeoutMs: 10 }));
+    const releasePreparation = createDeferred();
+    const onExecutionStarted = vi.fn();
+    let abortSignal: AbortSignal | undefined;
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal; onExecutionStarted?: () => void }) => {
+        abortSignal = params.abortSignal;
+        await releasePreparation.promise;
+        if (!params.abortSignal?.aborted) {
+          onExecutionStarted.mockImplementation(params.onExecutionStarted ?? (() => {}));
+          onExecutionStarted();
+        }
+        return { status: "ok", summary: "done", delivered: false };
+      },
+    );
+
+    const result = await dispatchAgentHook(buildAgentPayload("Timeout"));
+    expect(result).toMatchObject({
+      ok: false,
+      statusCode: 503,
+      error: "hook agent run did not start before admission timeout",
+      runId: expect.any(String),
+    });
+    expect(abortSignal?.aborted).toBe(true);
+
+    releasePreparation.resolve();
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+    expect(onExecutionStarted).not.toHaveBeenCalled();
   });
 
   it("does not announce successful deliver:false hook results", async () => {

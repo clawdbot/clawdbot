@@ -157,6 +157,26 @@ afterEach(() => {
 });
 
 describe("runCliAgent before_agent_reply seam", () => {
+  it("rejects an expired admission before runner entry", async () => {
+    const abortController = new AbortController();
+    const timeoutError = new Error("hook admission timed out");
+    const onExecutionStarted = vi.fn();
+    abortController.abort(timeoutError);
+
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        trigger: "cron",
+        abortSignal: abortController.signal,
+        onExecutionStarted,
+      }),
+    ).rejects.toBe(timeoutError);
+
+    expect(onExecutionStarted).not.toHaveBeenCalled();
+    expect(runBeforeAgentReplyMock).not.toHaveBeenCalled();
+    expect(prepareCliRunContextMock).not.toHaveBeenCalled();
+  });
+
   it("adds Claude CLI harness and run ownership at the runner entrypoint", async () => {
     const events: DiagnosticEventPayload[] = [];
     const unsubscribe = onTrustedInternalDiagnosticEvent((event) => {
