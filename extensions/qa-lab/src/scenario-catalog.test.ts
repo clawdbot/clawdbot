@@ -643,20 +643,28 @@ describe("qa scenario catalog", () => {
       requiredProvider: "openai",
       requiredModel: "gpt-5.4",
     });
-    const longContextFlow = JSON.stringify(
-      readQaScenarioById("long-context-progress-watchdog").execution.flow,
-    );
-    expect(longContextFlow).toContain("originalCodexPluginEnabled");
-    expect(longContextFlow).not.toContain(
-      "originalPluginAllow === undefined ? null : originalPluginAllow",
-    );
-    expect(longContextFlow).not.toContain("{ ...originalCodexPluginEntry, enabled:");
+    const longContextScenario = readQaScenarioById("long-context-progress-watchdog");
+    const longContextFlow = JSON.stringify(longContextScenario.execution.flow);
+    expect(longContextScenario.execution).toMatchObject({ kind: "flow", runtime: "codex" });
+    expect(longContextFlow).toContain("OPENCLAW_QA_FORCE_RUNTIME");
+    expect(longContextFlow).toContain("markGatewayLogCursor");
+    expect(longContextFlow).toContain("fs.writeFile");
+    expect(longContextFlow).toContain("runAgentPrompt");
+    expect(longContextFlow).toContain("waitForOutboundMessage");
+    expect(longContextFlow).toContain("assertNoGatewayLogSentinels");
+    expect(longContextFlow).toContain("codex-app-server-timeout");
+    expect(longContextFlow).toContain("stalled-agent-run");
+    expect(longContextFlow).not.toContain("patchConfig");
+    expect(longContextFlow).not.toContain("originalCodexPluginEnabled");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
+      fixtureFile: "LONG_CONTEXT_SENTINEL_FIXTURE.txt",
+      expectedMarker: "LONG-CONTEXT-WATCHDOG-OK",
+      repeatCount: 2000,
     });
-    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
-    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
+    expect(longContextScenario.plugins).toBeUndefined();
+    expect(longContextScenario.gatewayConfigPatch).toBeUndefined();
   });
 
   it("loads the QA bus tool trace visibility harness scenario", () => {
@@ -938,6 +946,68 @@ describe("qa scenario catalog", () => {
       expect(config?.prompt).toContain("check");
       expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
     }
+  });
+
+  it("proves one visible failure after the empty-response retry budget is exhausted", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("empty-response-retry-budget-exhausted"),
+    );
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.execution.config).toMatchObject({
+      requiredProvider: "mock-openai",
+      retryNeedle: "The previous attempt did not produce a user-visible answer.",
+      settledToolRetryNeedle:
+        "The previous assistant turn completed its tool calls but did not produce a user-visible answer.",
+      expectedDiagnostic: "⚠️ Agent couldn't generate a response. Please try again.",
+      unexpectedSuccessMarker: "EMPTY-EXHAUSTED-OK",
+    });
+    const firstOutboundIndex = flow.indexOf('"set":"firstScenarioOutbound"');
+    const settleIndex = flow.indexOf('"call":"sleep","args":[300]');
+    const finalOutboundIndex = flow.indexOf('"set":"scenarioOutbound"');
+
+    expect(firstOutboundIndex).toBeGreaterThanOrEqual(0);
+    expect(settleIndex).toBeGreaterThan(firstOutboundIndex);
+    expect(finalOutboundIndex).toBeGreaterThan(settleIndex);
+    expect(flow).toContain("Date.now() + liveTurnTimeoutMs(env, 30000)");
+    expect(flow).toContain("await sleep(100)");
+    expect(flow).toContain("slice(outboundStartIndex)");
+    expect(flow).toContain("message.conversation.id === 'qa-operator'");
+    expect(flow).not.toContain("qaImport(");
+    expect(flow).not.toContain("waitForQaTransportCondition");
+    expect(flow).toContain("/debug/requests?after=${requestCursorBefore}");
+    expect(flow).toContain("String(request.allInputText ?? '').includes(config.promptSnippet)");
+    expect(flow).toContain("splitModelRef(env.primaryModel)?.model");
+    expect(flow).toContain("splitModelRef(env.alternateModel)?.model");
+    expect(flow).toContain("Array.from(new Set(");
+    expect(flow).toContain("scenarioRequests.slice(index * 3, index * 3 + 3)");
+    expect(flow).toContain("scenarioRequests.length === expectedModels.length * 3");
+    expect(flow).toContain("request.model === group.model");
+    expect(flow).toContain("cursor: request.cursor");
+    expect(flow).toContain("model: request.model");
+    expect(flow).toContain("tool: request.plannedToolName ?? null");
+    expect(flow).toContain(
+      "retry: String(request.allInputText ?? '').includes(config.retryNeedle)",
+    );
+    expect(flow).toContain(
+      "settledRetry: String(request.allInputText ?? '').includes(config.settledToolRetryNeedle)",
+    );
+    expect(flow).toContain("callId: request.toolOutputCallId ?? null");
+    expect(flow).toContain("group.requests[0]?.plannedToolName === 'read'");
+    expect(flow).toContain("!group.requests[1]?.plannedToolName");
+    expect(flow).toContain("!group.requests[2]?.plannedToolName");
+    expect(flow).toContain("typeof group.requests[1]?.toolOutputCallId === 'string'");
+    expect(flow).toContain("typeof group.requests[2]?.toolOutputCallId === 'string'");
+    expect(flow).toContain("String(request.allInputText ?? '').includes(config.retryNeedle)");
+    expect(flow).toContain(
+      "String(request.allInputText ?? '').includes(config.settledToolRetryNeedle)",
+    );
+    expect(flow).toContain("modelRequestGroups.map((group) => group.requests[2])");
+    expect(flow).toContain("retryRequests.length === expectedModels.length");
+    expect(flow).toContain("group.requests[2] === retryRequests[index]");
+    expect(flow).toContain("scenarioOutbound.length === 1");
+    expect(flow).toContain("String(scenarioOutbound[0]?.text ?? '') === config.expectedDiagnostic");
+    expect(flow).toContain("config.unexpectedSuccessMarker");
   });
 
   it("keeps mock-only image debug assertions guarded in live-frontier runs", () => {

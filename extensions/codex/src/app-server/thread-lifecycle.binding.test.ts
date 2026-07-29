@@ -1322,17 +1322,16 @@ describe("Codex app-server thread lifecycle bindings", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("resumes a bound Codex thread when only dynamic tool descriptions change", async () => {
+  it("starts a fresh Codex thread when dynamic tool descriptions change", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
     const appServer = createThreadLifecycleAppServerOptions();
     const request = vi.fn(async (method: string, _requestParams?: unknown) => {
       if (method === "thread/start") {
-        return threadStartResult("thread-existing");
-      }
-      if (method === "thread/resume") {
-        return threadStartResult("thread-existing");
+        return threadStartResult(
+          request.mock.calls.length === 1 ? "thread-existing" : "thread-refreshed",
+        );
       }
       throw new Error(`unexpected method: ${method}`);
     });
@@ -1356,8 +1355,16 @@ describe("Codex app-server thread lifecycle bindings", () => {
       appServer,
     });
 
-    expect(binding.threadId).toBe("thread-existing");
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(binding.threadId).toBe("thread-refreshed");
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/start"]);
+    expect(request.mock.calls[1]?.[1]).toMatchObject({
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send and manage messages for the current Discord channel.",
+        },
+      ],
+    });
   });
 
   it.each([

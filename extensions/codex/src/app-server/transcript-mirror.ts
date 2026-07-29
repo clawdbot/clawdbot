@@ -133,6 +133,10 @@ function projectCodexUserItemText(item: Record<string, unknown>): string | undef
       parts.push("[Image attachment]");
       continue;
     }
+    if (input.type === "audio" || input.type === "localAudio" || input.type === "local_audio") {
+      parts.push("[Audio attachment]");
+      continue;
+    }
     if (input.type === "skill" || input.type === "mention") {
       const name = normalizeOptionalString(input.name);
       if (name) {

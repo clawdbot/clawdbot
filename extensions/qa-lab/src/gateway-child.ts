@@ -843,10 +843,13 @@ async function waitForQaGatewayChildExit(child: ChildProcess, timeoutMs: number)
   return !isQaGatewayChildProcessTreeAlive(child);
 }
 
-function resolveQaGatewayChildStopTimeouts(opts?: {
+type QaGatewayChildStopOptions = {
   gracefulTimeoutMs?: number;
   forceTimeoutMs?: number;
-}) {
+  interruption?: "crash";
+};
+
+function resolveQaGatewayChildStopTimeouts(opts?: QaGatewayChildStopOptions) {
   return {
     gracefulTimeoutMs: opts?.gracefulTimeoutMs ?? QA_GATEWAY_CHILD_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
     forceTimeoutMs: opts?.forceTimeoutMs ?? QA_GATEWAY_CHILD_FORCE_SHUTDOWN_TIMEOUT_MS,
@@ -855,15 +858,19 @@ function resolveQaGatewayChildStopTimeouts(opts?: {
 
 async function stopQaGatewayChildProcessTree(
   child: ChildProcess,
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number },
+  opts?: QaGatewayChildStopOptions,
 ) {
   if (!isQaGatewayChildProcessTreeAlive(child)) {
     return;
   }
   const timeouts = resolveQaGatewayChildStopTimeouts(opts);
-  signalQaGatewayChildProcessTree(child, "SIGTERM");
-  if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
-    return;
+  // A recovery scenario must leave its in-flight claim intact; SIGTERM runs
+  // normal shutdown and can settle the turn before the replacement starts.
+  if (opts?.interruption !== "crash") {
+    signalQaGatewayChildProcessTree(child, "SIGTERM");
+    if (await waitForQaGatewayChildExit(child, timeouts.gracefulTimeoutMs)) {
+      return;
+    }
   }
   signalQaGatewayChildProcessTree(child, "SIGKILL");
   const stopped = await waitForQaGatewayChildExit(child, timeouts.forceTimeoutMs);
@@ -880,7 +887,7 @@ async function stopQaGatewayChildWithBoundary(params: {
   child: ChildProcess;
   controller: QaGatewayProcessBoundaryController | null;
   identity: QaGatewayVerifiedProcessIdentity | null;
-  opts?: { gracefulTimeoutMs?: number; forceTimeoutMs?: number };
+  opts?: QaGatewayChildStopOptions;
 }) {
   const errors: unknown[] = [];
   if (params.controller && params.identity) {
@@ -1670,6 +1677,7 @@ export async function startQaGatewayChild(params: {
       },
       async restartAfterStateMutation(
         mutateState: (context: QaGatewayChildStateMutationContext) => Promise<void>,
+        options?: { interruption: "crash" },
       ) {
         throwActiveChildFailure();
         await activeRpcClient.stop().catch(() => {});
@@ -1677,6 +1685,7 @@ export async function startQaGatewayChild(params: {
           child: activeChild,
           controller: processBoundaryController,
           identity: activeIdentity,
+          opts: options,
         });
         await mutateState({
           configPath,

@@ -20,6 +20,7 @@ type QaRuntimeGatewayClient = {
       stateDir: string;
       tempRoot: string;
     }) => Promise<void>,
+    options?: { interruption: "crash" },
   ) => Promise<void>;
   call: (
     method: string,
