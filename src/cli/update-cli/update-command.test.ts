@@ -768,6 +768,35 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
         "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
     });
   });
+
+  it("preserves system LaunchDaemon recovery guidance", async () => {
+    const readState = vi.fn(async () => ({
+      installed: true,
+      loaded: false,
+      running: false,
+      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
+      command: null,
+      runtime: { status: "unknown", missingSupervision: true },
+    }));
+    const recover = vi.fn(async () => {
+      throw new Error("System LaunchDaemon system/ai.openclaw.stomme owns this label");
+    });
+
+    await expect(
+      updateCommandServiceTesting.recoverInstalledLaunchAgentAfterUpdate({
+        service: {} as never,
+        deps: {
+          platform: "darwin",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({
+      attempted: true,
+      recovered: false,
+      detail: "System LaunchDaemon system/ai.openclaw.stomme owns this label",
+    });
+  });
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
