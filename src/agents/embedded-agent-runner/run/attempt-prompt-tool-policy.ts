@@ -20,7 +20,7 @@ import {
 type NamedTool = { name: string };
 type PromptToolSession = Pick<AgentSession, "getActiveToolNames" | "setActiveToolsByName">;
 
-export type PromptBuildToolPolicyBaseline = {
+type PromptBuildToolPolicyBaseline = {
   activeToolNames: readonly string[];
   catalogEntries: readonly ToolSearchCatalogEntry[];
 };
