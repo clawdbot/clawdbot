@@ -507,7 +507,7 @@ describe("memory-core dreaming phases", () => {
     };
     const nowMs = Date.parse("2026-04-05T10:05:00.000Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `agent:main:dreaming-narrative-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-light-${workspaceHash}`;
 
     await runDreamingSweepPhases({
       agentId: "main",
@@ -586,7 +586,7 @@ describe("memory-core dreaming phases", () => {
         subagent,
         nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ degradedPhases: 0, pendingNarratives: 0 });
 
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("A memory trace surfaced, but details were unavailable in this run.");

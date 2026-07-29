@@ -379,23 +379,6 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
     expect(onExecutionStarted).toHaveBeenCalledWith({ lifecycleGeneration: "gen-1" });
   });
 
-  it("does not enter the CLI backend after admission aborts", async () => {
-    const abortController = new AbortController();
-    const timeoutError = new Error("hook admission timed out");
-    const onExecutionStarted = vi.fn();
-    abortController.abort(timeoutError);
-
-    await expect(
-      runEmbeddedAgentViaCliBackendIfEligible(
-        baseRunParams({ abortSignal: abortController.signal, onExecutionStarted }),
-      ),
-    ).rejects.toBe(timeoutError);
-
-    expect(onExecutionStarted).not.toHaveBeenCalled();
-    expect(runCliAgent).not.toHaveBeenCalled();
-    expect(createCliDispatchTranscriptRecorder).not.toHaveBeenCalled();
-  });
-
   it("retains prompt media facts through the embedded-to-CLI bridge", async () => {
     const media = [{ path: "/tmp/recall.png", contentType: "image/png" }];
 
@@ -450,6 +433,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
           name: "mcp__openclaw__memory_search",
           result: { content: [] },
           isError: false,
+          resultContentSource: "network",
         },
       });
       // Soft tool failures must surface as isError like the native path.
@@ -532,6 +516,7 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
           toolCallId: "call-1",
           result: { content: [] },
           isError: false,
+          resultContentSource: "network",
         },
       });
       return cliRunResult();
@@ -557,7 +542,11 @@ describe("runEmbeddedAgentViaCliBackendIfEligible execution", () => {
       }),
     );
     expect(transcriptRecorder.noteToolEvent).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "result", toolName: "memory_search" }),
+      expect.objectContaining({
+        phase: "result",
+        toolName: "memory_search",
+        resultContentSource: "network",
+      }),
     );
     expect(transcriptRecorder.finalize).toHaveBeenCalledWith("recall summary");
   });

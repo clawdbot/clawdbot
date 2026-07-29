@@ -20,7 +20,7 @@ type ZoomMeetingsSpeechBlockedReason =
   | "audio-bridge-unavailable"
   | "zoom-microphone-muted";
 
-export type ZoomMeetingsPluginTypes = ReturnType<
+type ZoomMeetingsPluginTypes = ReturnType<
   typeof MeetingPlatformAdapter.pluginTypes<
     ZoomMeetingsConfig,
     ZoomMeetingsTransport,
@@ -33,6 +33,4 @@ export type ZoomMeetingsPluginTypes = ReturnType<
 export type ZoomMeetingsTranscriptSnapshot = ZoomMeetingsPluginTypes["TranscriptSnapshot"];
 export type ZoomMeetingsJoinRequest = ZoomMeetingsPluginTypes["JoinRequest"];
 export type ZoomMeetingsChromeHealth = ZoomMeetingsPluginTypes["ChromeHealth"];
-export type ZoomMeetingsBrowserTab = ZoomMeetingsPluginTypes["BrowserTab"];
 export type ZoomMeetingsSession = ZoomMeetingsPluginTypes["Session"];
-export type ZoomMeetingsJoinResult = ZoomMeetingsPluginTypes["JoinResult"];

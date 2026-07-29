@@ -164,6 +164,9 @@
       "@openclaw/normalization-core/result": [
         "./packages/normalization-core/src/result.ts"
       ],
+      "@openclaw/normalization-core/stable-node-path": [
+        "./packages/normalization-core/src/stable-node-path.ts"
+      ],
       "@openclaw/normalization-core/string-coerce": [
         "./packages/normalization-core/src/string-coerce.ts"
       ],

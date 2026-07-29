@@ -17,12 +17,6 @@ import { getZaloRuntime } from "./runtime.js";
 const ZALO_WEBHOOK_SPOOL_VERSION = 1;
 const ZALO_WEBHOOK_DRAIN_INTERVAL_MS = 500;
 const ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES = 8;
-const ZALO_WEBHOOK_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-// Durable tombstones dominate the retired 5-minute / 5,000-key replay cache.
-const ZALO_WEBHOOK_COMPLETED_TTL_MS = 30 * 24 * 60 * 60_000;
-const ZALO_WEBHOOK_COMPLETED_MAX_ENTRIES = 20_000;
-const ZALO_WEBHOOK_FAILED_TTL_MS = 30 * 24 * 60 * 60_000;
-const ZALO_WEBHOOK_FAILED_MAX_ENTRIES = 5_000;
 
 type ZaloWebhookSpoolPayload = {
   version: 1;
@@ -181,12 +175,9 @@ function createZaloWebhookIngress(options: {
       );
     },
     pollIntervalMs: ZALO_WEBHOOK_DRAIN_INTERVAL_MS,
+    // Standard 30-day tombstones dominate the retired 5-minute / 5,000-key replay cache.
     retention: {
-      pruneIntervalMs: ZALO_WEBHOOK_PRUNE_INTERVAL_MS,
-      completedTtlMs: ZALO_WEBHOOK_COMPLETED_TTL_MS,
-      completedMaxEntries: ZALO_WEBHOOK_COMPLETED_MAX_ENTRIES,
-      failedTtlMs: ZALO_WEBHOOK_FAILED_TTL_MS,
-      failedMaxEntries: ZALO_WEBHOOK_FAILED_MAX_ENTRIES,
+      failedMaxEntries: 5_000,
     },
     waitForDeliveryIdleBeforeRepump: false,
     runPumpTask: runDetachedWebhookWork,

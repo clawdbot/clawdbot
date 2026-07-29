@@ -60,6 +60,7 @@ import type { BoardFace } from "../lib/board/settings.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
@@ -1271,11 +1272,11 @@ class OpenClawShell extends OpenClawLightDomElement {
     const settingsModifier = event.metaKey !== event.ctrlKey && !event.altKey;
     if (settingsModifier && event.shiftKey && event.code === "Comma") {
       event.preventDefault();
-      this.navigate("config");
+      this.navigate("appearance");
       return;
     }
     const commandKey = event.metaKey && !event.ctrlKey && !event.altKey;
-    if (!commandKey || event.shiftKey || event.key.toLowerCase() !== "b") {
+    if (!commandKey || event.shiftKey || resolveAsciiShortcutKey(event) !== "b") {
       return;
     }
     event.preventDefault();

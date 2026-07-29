@@ -741,44 +741,47 @@ describe("node.invoke APNs wake path", () => {
     vi.useRealTimers();
   });
 
-  it("rejects browser.proxy for plugin runtime owners without admin scope", async () => {
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "browser-node",
-        commands: ["browser.proxy"],
-      })),
-      invoke: vi.fn().mockResolvedValue({
-        ok: true,
-        payloadJSON: '{"ok":true}',
-      }),
-    };
+  it.each(["browser.proxy", "browser.proxy.upload.v1"])(
+    "rejects %s for plugin runtime owners without admin scope",
+    async (command) => {
+      const nodeRegistry = {
+        get: vi.fn(() => ({
+          nodeId: "browser-node",
+          commands: [command],
+        })),
+        invoke: vi.fn().mockResolvedValue({
+          ok: true,
+          payloadJSON: '{"ok":true}',
+        }),
+      };
 
-    const respond = await invokeNode({
-      nodeRegistry,
-      client: createOperatorClient({
-        scopes: ["operator.write"],
-        pluginRuntimeOwnerId: "third-party",
-      }),
-      requestParams: {
-        nodeId: "browser-node",
-        command: "browser.proxy",
-        params: { method: "GET", path: "/profiles" },
-      },
-    });
+      const respond = await invokeNode({
+        nodeRegistry,
+        client: createOperatorClient({
+          scopes: ["operator.write"],
+          pluginRuntimeOwnerId: "third-party",
+        }),
+        requestParams: {
+          nodeId: "browser-node",
+          command,
+          params: { method: "GET", path: "/profiles" },
+        },
+      });
 
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(false);
-    expect(call[2]).toMatchObject({
-      code: "FORBIDDEN",
-      message: "missing scope: operator.admin",
-      details: {
-        code: "MISSING_SCOPE",
-        missingScope: "operator.admin",
-        requiredScopes: ["operator.admin"],
-      },
-    });
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-  });
+      const call = firstRespondCall(respond);
+      expect(call[0]).toBe(false);
+      expect(call[2]).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    },
+  );
 
   it("allows an enabled computer.act command for write-scoped operators", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
@@ -940,40 +943,43 @@ describe("node.invoke APNs wake path", () => {
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
   });
 
-  it("allows browser.proxy for admin-scoped plugin runtime callers", async () => {
-    const nodeRegistry = {
-      get: vi.fn(() => ({
-        nodeId: "browser-node",
-        commands: ["browser.proxy"],
-      })),
-      invoke: vi.fn().mockResolvedValue({
-        ok: true,
-        payloadJSON: '{"ok":true}',
-      }),
-    };
+  it.each(["browser.proxy", "browser.proxy.upload.v1"])(
+    "allows %s for admin-scoped plugin runtime callers",
+    async (command) => {
+      const nodeRegistry = {
+        get: vi.fn(() => ({
+          nodeId: "browser-node",
+          commands: [command],
+        })),
+        invoke: vi.fn().mockResolvedValue({
+          ok: true,
+          payloadJSON: '{"ok":true}',
+        }),
+      };
 
-    const respond = await invokeNode({
-      nodeRegistry,
-      client: createOperatorClient({
-        scopes: ["operator.admin"],
-        pluginRuntimeOwnerId: "google-meet",
-      }),
-      requestParams: {
+      const respond = await invokeNode({
+        nodeRegistry,
+        client: createOperatorClient({
+          scopes: ["operator.admin"],
+          pluginRuntimeOwnerId: "google-meet",
+        }),
+        requestParams: {
+          nodeId: "browser-node",
+          command,
+          params: { method: "GET", path: "/profiles" },
+        },
+      });
+
+      const call = firstRespondCall(respond);
+      expect(call[0]).toBe(true);
+      expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
+      expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
         nodeId: "browser-node",
-        command: "browser.proxy",
+        command,
         params: { method: "GET", path: "/profiles" },
-      },
-    });
-
-    const call = firstRespondCall(respond);
-    expect(call[0]).toBe(true);
-    expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
-      nodeId: "browser-node",
-      command: "browser.proxy",
-      params: { method: "GET", path: "/profiles" },
-    });
-  });
+      });
+    },
+  );
 
   it("keeps the existing not-connected response when wake path is unavailable", async () => {
     mocks.loadApnsRegistration.mockResolvedValue(null);

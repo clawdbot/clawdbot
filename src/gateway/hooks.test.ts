@@ -154,12 +154,14 @@ describe("gateway hooks helpers", () => {
       expect(ok.value.channel).toBe("last");
       expect(ok.value.name).toBe("Hook");
       expect(ok.value.deliver).toBe(true);
+      expect(ok.value.delivery).toEqual({ mode: "none" });
     }
 
     const explicitNoDeliver = normalizeAgentPayload({ message: "hello", deliver: false });
     expect(explicitNoDeliver.ok).toBe(true);
     if (explicitNoDeliver.ok) {
       expect(explicitNoDeliver.value.deliver).toBe(false);
+      expect(explicitNoDeliver.value.delivery).toEqual({ mode: "none" });
     }
 
     setActivePluginRegistry(
@@ -171,10 +173,15 @@ describe("gateway hooks helpers", () => {
         },
       ]),
     );
-    const imsg = normalizeAgentPayload({ message: "yo", channel: "imsg" });
+    const imsg = normalizeAgentPayload({ message: "yo", channel: "imsg", to: "chat-1" });
     expect(imsg.ok).toBe(true);
     if (imsg.ok) {
       expect(imsg.value.channel).toBe("imessage");
+      expect(imsg.value.delivery).toEqual({
+        mode: "announce",
+        channel: "imessage",
+        to: "chat-1",
+      });
     }
 
     setActivePluginRegistry(
@@ -186,7 +193,11 @@ describe("gateway hooks helpers", () => {
         },
       ]),
     );
-    const aliasChannel = normalizeAgentPayload({ message: "yo", channel: "workspace-chat" });
+    const aliasChannel = normalizeAgentPayload({
+      message: "yo",
+      channel: "workspace-chat",
+      to: "room-1",
+    });
     expect(aliasChannel.ok).toBe(true);
     if (aliasChannel.ok) {
       expect(aliasChannel.value.channel).toBe("demo-alias-channel");
@@ -194,6 +205,83 @@ describe("gateway hooks helpers", () => {
 
     const bad = normalizeAgentPayload({ message: "yo", channel: "sms" });
     expect(bad.ok).toBe(false);
+  });
+
+  test("normalizeAgentPayload binds delivery only to a concrete channel and recipient", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "demo-alias-channel",
+          source: "test",
+          plugin: createDemoAliasPlugin(),
+        },
+      ]),
+    );
+    const omitted = normalizeAgentPayload({ message: "hello" });
+    expect(omitted).toMatchObject({
+      ok: true,
+      value: { channel: "last", to: undefined, delivery: { mode: "none" } },
+    });
+
+    const recipientOnly = normalizeAgentPayload({ message: "hello", to: "sensitive-recipient" });
+    expect(recipientOnly).toEqual({
+      ok: false,
+      error: "channel and to must be set together for hook delivery",
+    });
+    for (const to of [123, "   "]) {
+      expect(normalizeAgentPayload({ message: "hello", to })).toEqual({
+        ok: false,
+        error: "to must be a non-empty string for hook delivery",
+      });
+    }
+
+    const channelOnly = normalizeAgentPayload({
+      message: "hello",
+      channel: "demo-alias-channel",
+    });
+    expect(channelOnly).toEqual({
+      ok: false,
+      error: "channel and to must be set together for hook delivery",
+    });
+    expect(
+      normalizeAgentPayload({
+        message: "hello",
+        deliver: false,
+        channel: "stale-channel",
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: {
+        deliver: false,
+        channel: "last",
+        to: undefined,
+        delivery: { mode: "none" },
+      },
+    });
+    expect(
+      normalizeAgentPayload({
+        message: "hello",
+        channel: "last",
+        to: "123456",
+      }),
+    ).toEqual({
+      ok: false,
+      error: "channel must name a concrete channel for hook delivery",
+    });
+
+    const explicit = normalizeAgentPayload({
+      message: "hello",
+      channel: "demo-alias-channel",
+      to: "123456",
+    });
+    expect(explicit).toMatchObject({
+      ok: true,
+      value: {
+        channel: "demo-alias-channel",
+        to: "123456",
+        delivery: { mode: "announce", channel: "demo-alias-channel", to: "123456" },
+      },
+    });
   });
 
   test("normalizeAgentPayload passes agentId", () => {

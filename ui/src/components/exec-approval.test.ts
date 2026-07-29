@@ -162,7 +162,7 @@ describe("openclaw-exec-approval", () => {
 
     modal.dispatchEvent(chord("Enter"));
     modal.dispatchEvent(chord("Enter", { shiftKey: true }));
-    modal.dispatchEvent(chord("d", { metaKey: false, ctrlKey: true }));
+    modal.dispatchEvent(chord("в", { code: "KeyD", metaKey: false, ctrlKey: true }));
 
     expect(onDecision.mock.calls).toEqual([
       ["approval-1", "allow-once"],
@@ -268,6 +268,31 @@ describe("openclaw-exec-approval", () => {
     rendered.modal.append(editor);
     editorChild.dispatchEvent(chord("Enter", { composed: true }));
 
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { reason: "a decision is in flight", busy: true, allowedDecisions: undefined },
+    { reason: "denial is unavailable", busy: false, allowedDecisions: ["allow-once"] as const },
+  ])("keeps the pending approval visible when $reason", async ({ busy, allowedDecisions }) => {
+    const { onDecision } = await renderApproval(
+      createExecRequest({
+        request: {
+          command: "echo hello",
+          ...(allowedDecisions ? { allowedDecisions: [...allowedDecisions] } : {}),
+        },
+      }),
+      { busy },
+    );
+    const { modal } = await getRenderedModalDialog(container);
+    const cancel = new CustomEvent("modal-cancel", {
+      bubbles: true,
+      composed: true,
+      cancelable: true,
+    });
+
+    expect(modal.dispatchEvent(cancel)).toBe(false);
+    expect(cancel.defaultPrevented).toBe(true);
     expect(onDecision).not.toHaveBeenCalled();
   });
 

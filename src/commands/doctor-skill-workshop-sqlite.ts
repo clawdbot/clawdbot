@@ -13,7 +13,7 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/sessi
 import {
   hashSkillProposalContent,
   importLegacySkillProposal,
-  readSkillProposalRecord,
+  readSkillProposal,
   readSkillProposalRollback,
   validateSkillProposalRecord,
   validateSkillProposalRollback,
@@ -119,7 +119,9 @@ async function verifyImportedProposal(params: {
   record: SkillProposalRecord;
   rollback?: SkillProposalRollback;
 }): Promise<void> {
-  const imported = await readSkillProposalRecord(params.record.id, { env: params.env });
+  const imported = (
+    await readSkillProposal(params.record.id, { env: params.env }, {}, { reconcile: false })
+  )?.record;
   if (
     !imported ||
     imported.draftHash !== params.record.draftHash ||
@@ -239,7 +241,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
       migrated += 1;
     } catch (error) {
       if (isNotFoundError(error)) {
-        if (await readSkillProposalRecord(proposalId, { env })) {
+        if (await readSkillProposal(proposalId, { env }, {}, { reconcile: false })) {
           continue;
         }
       }

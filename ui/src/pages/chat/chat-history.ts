@@ -92,6 +92,8 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
+const SESSION_MESSAGE_RELEASE_RETRY_MS = 250;
+const MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS = 3;
 
 type ChatHistoryPaneRequests = {
   historyVersion: number;
@@ -298,6 +300,8 @@ export type ChatState = {
   canvasPluginSurfaceUrl?: string | null;
   settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
   sessions?: Partial<SessionCapability>;
+  chatSessionMessageSubscriptionRequestedKey?: string | null;
+  chatSessionMessageSubscription?: SessionMessageSubscription | null;
   chatBranches?: SessionBranch[];
   chatBranchesSessionKey?: string | null;
   chatBranchesConnectionEpoch?: number | null;
@@ -712,6 +716,44 @@ async function retryPendingSessionMessageSubscriptionReleases(
       }
     }),
   );
+}
+
+export function disposeSelectedSessionMessageSubscription(state: ChatState): void {
+  const requests = getChatHistoryPaneRequests(state);
+  requests.subscriptionGeneration += 1;
+  const subscriptions = new Set(requests.pendingSubscriptionReleases);
+  requests.pendingSubscriptionReleases.clear();
+  if (state.chatSessionMessageSubscription) {
+    subscriptions.add(state.chatSessionMessageSubscription);
+  }
+  state.chatSessionMessageSubscriptionRequestedKey = null;
+  state.chatSessionMessageSubscription = null;
+  const sessions = state.sessions;
+  if (!sessions?.unsubscribeMessages) {
+    return;
+  }
+  const unsubscribeMessages = sessions.unsubscribeMessages.bind(sessions);
+  for (const subscription of subscriptions) {
+    // A detached pane cannot drain another queue. Retry on its longer-lived
+    // session owner, but stop after terminal failures so timers cannot leak.
+    void (async () => {
+      let retryDelayMs = SESSION_MESSAGE_RELEASE_RETRY_MS;
+      for (let attempt = 0; attempt < MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS; attempt += 1) {
+        try {
+          await unsubscribeMessages(subscription);
+          return;
+        } catch {
+          if (attempt + 1 === MAX_SESSION_MESSAGE_RELEASE_ATTEMPTS) {
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            globalThis.setTimeout(resolve, retryDelayMs);
+          });
+          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
+        }
+      }
+    })();
+  }
 }
 
 export async function syncSelectedSessionMessageSubscription(

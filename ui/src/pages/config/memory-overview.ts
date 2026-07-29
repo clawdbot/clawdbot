@@ -1,6 +1,5 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
-import type { AgentSelectOption } from "../../components/agent-select.ts";
 import {
   createLobsterPetLook,
   lobsterLookStyle,
@@ -19,7 +18,6 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/memory-overview.css";
 import type { MemoryEngineSelection } from "./memory-schema.ts";
 import { selectedEngineId } from "./memory-schema.ts";
-import { renderMemoryAgentScope } from "./memory.ts";
 
 export type MemoryOverviewStatus =
   | { kind: "idle" | "loading" }
@@ -28,12 +26,10 @@ export type MemoryOverviewStatus =
 
 type MemoryOverviewProps = {
   agentId: string | null;
-  agents: readonly AgentSelectOption[];
   engineSelection: MemoryEngineSelection;
   engineDisabled: boolean;
   status: MemoryOverviewStatus;
   probingEmbeddings: boolean;
-  onAgentChange: (agentId: string | null) => void;
   onRefresh: () => void;
   onProbeEmbeddings: () => void;
   onNavigate: (tab: "memories" | "dreams" | "settings") => void;
@@ -301,13 +297,7 @@ export function renderMemoryOverview(props: MemoryOverviewProps) {
   const active = props.engineSelection.kind !== "off" && !props.engineDisabled;
   return html`
     <div class="settings-page memory-overview">
-      ${renderHero(props)}
-      ${renderMemoryAgentScope({
-        agentId: props.agentId,
-        agents: props.agents,
-        onAgentChange: props.onAgentChange,
-      })}
-      ${active ? renderStatusCards(props) : nothing} ${renderShortcuts(props)}
+      ${renderHero(props)} ${active ? renderStatusCards(props) : nothing} ${renderShortcuts(props)}
     </div>
   `;
 }

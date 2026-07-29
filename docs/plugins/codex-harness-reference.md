@@ -131,7 +131,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.145.0`):
+with the official plugin (currently `@openai/codex` `0.146.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -253,32 +253,60 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin blocks older, newer-unvalidated, prerelease, build-suffixed, or
-unversioned app-server handshakes. Codex app-server must report a stable version
-from `0.143.0` through the bundled `0.145.0`.
+The plugin accepts exactly stable Codex app-server `0.146.0`. Older or newer
+versions, prereleases, build-suffixed versions, and unversioned app-server
+handshakes are rejected. The same exact-version requirement applies to explicit
+custom executables, remote app-servers, and macOS desktop binaries.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
 `Authorization` header. `appServer.authToken` and each `appServer.headers.*`
 value can be a SecretInput; the secrets runtime resolves SecretRefs and env
 shorthand before OpenClaw builds app-server start options, and unresolved
-structured SecretRefs fail before any token or header is sent. When native
-Codex plugins are configured, OpenClaw uses the connected app-server's plugin
-control plane to install or refresh those plugins and then refreshes app
-inventory so plugin-owned apps are visible to the Codex thread. `app/installed`
-provides authoritative runtime state, and `app/read` provides app metadata.
-Callable apps with authorized metadata can be enabled directly. A modern
-base-disabled app owned by an explicitly configured plugin may be enabled
-provisionally in `thread/start`; OpenClaw immediately attests the effective
-thread-scoped inventory and discards the thread before its first turn unless
-the app is enabled and callable. Account-wide disabled apps and revoked,
-unauthenticated, policy-blocked, or missing apps remain excluded. Supported
-older app-server versions fall back to `app/list` only when `app/installed` is
-unavailable, and that fallback never provisionally enables a disabled app.
-This path only activates marketplace
-plugins via `plugin/install` and refreshes inventory. Only connect OpenClaw to
-remote app-servers that are trusted to accept OpenClaw-managed plugin installs
-and app inventory refreshes.
+structured SecretRefs fail before any token or header is sent.
+
+When native Codex plugins are configured, OpenClaw caches one
+runtime-and-workspace-scoped `plugin/installed` snapshot. This snapshot covers
+installed curated and workspace plugins, including disabled ownership;
+`plugin/read` resolves only exact configured plugin identities. Failed or
+incomplete installed snapshots are never cached. OpenClaw uses `plugin/list`
+only to find or repair an explicitly enabled curated plugin missing from that
+installed snapshot. It calls `plugin/install` only for an explicitly configured
+enabled curated plugin; it never installs, enables, or authenticates a
+workspace plugin.
+
+`app/installed` reports installed app runtime state, and `app/read` returns
+authenticated metadata for at most 100 requested app IDs per call. OpenClaw
+force-refreshes the first cold installed snapshot and consolidates successful
+curated installations into one app-inventory refresh. Later cached reads do
+not force repeated connector refreshes.
+
+Deny-by-default Codex app policy is evaluated per thread, so an explicitly
+allowed app can be installed and authenticated before it becomes callable.
+OpenClaw provisionally admits only ownership-proven, policy-approved apps,
+creates the thread with `_default.enabled = false` and explicit app overrides,
+then calls `app/installed` once with that thread's ID and `forceRefresh: false`.
+It exposes an app only when Codex confirms the app is enabled and callable for
+the actual thread. Managed restrictions, workspace policy, missing metadata,
+revoked auth, and unavailable tools still fail closed.
+
+Attestation completes before OpenClaw injects history, starts a turn, or
+persists the native thread binding. On failure, OpenClaw deletes a persistent
+provisional thread with `thread/delete` or unsubscribes an ephemeral thread
+with `thread/unsubscribe`. If safe cleanup cannot be confirmed, it retires the
+owning app-server connection. Supervised branches also clean up their temporary
+probe and retain recovery state when cleanup fails.
+
+With `allow_all_plugins`, an explicitly disabled configured workspace plugin
+still denies its owned apps. When `app/read` does not expose that ownership,
+OpenClaw uses its `plugin/installed` snapshot and reads only the exact
+configured plugin's details to reserve the denied app IDs. It does not scan
+unrelated marketplaces or install, enable, or authenticate the disabled plugin;
+missing ownership fails closed.
+
+Only connect OpenClaw to a `0.146.0` remote app-server trusted to accept
+configured marketplace plugin installs and inventory refreshes. Missing modern
+inventory methods and server, authentication, or transport failures fail closed.
 
 ## Approval and sandbox modes
 
@@ -352,7 +380,7 @@ The stable default is fail-closed: active OpenClaw sandboxing disables native
 Codex execution surfaces that would otherwise run from the Codex app-server
 host. Use `appServer.experimental.sandboxExecServer: true` only when you want
 to try Codex's remote environment support with OpenClaw's sandbox backend.
-This preview path works with every supported Codex app-server version.
+This preview path uses the pinned Codex `0.146.0` app-server.
 
 ```json5
 {
@@ -378,6 +406,11 @@ starts a local loopback exec-server backed by the active sandbox, registers it
 with Codex app-server, and starts the Codex thread and turn with that
 OpenClaw-owned environment. If the app-server cannot register the environment,
 the run fails closed instead of silently falling back to host execution.
+
+Sandboxed process output streams as ordered stdout, stderr, or PTY
+notifications. OpenClaw retains only a bounded recent-output buffer for polling
+and replay, so long-running processes cannot grow the app-server bridge without
+limit. Process exit and cleanup remain tied to the sandbox-owned process.
 
 This preview path is local-only. A remote WebSocket app-server cannot reach
 the loopback exec-server unless it is running on the same host, so OpenClaw
@@ -603,16 +636,23 @@ points `appServer.command` at a different Codex binary. Availability can also
 be account-scoped. Use `/codex models` on a running gateway to see the live
 catalog for that harness and account.
 
-If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
+If discovery is temporarily unavailable or times out, the subscription route
+uses offline hints derived from the bundled OpenAI model manifest:
 
-| Model id       | Display name | Reasoning efforts        |
-| -------------- | ------------ | ------------------------ |
-| `gpt-5.5`      | gpt-5.5      | low, medium, high, xhigh |
-| `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
+| Model id      | Display name | Reasoning efforts                    |
+| ------------- | ------------ | ------------------------------------ |
+| `gpt-5.6-sol` | GPT-5.6 Sol  | low, medium, high, xhigh, max, ultra |
+| `gpt-5.5`     | GPT-5.5      | low, medium, high, xhigh             |
+| `gpt-5.5-pro` | gpt-5.5-pro  | medium, high, xhigh                  |
+
+Offline hints never prove account entitlement. An authenticated discovery
+response remains authoritative even if it contains no visible models; HTTP
+`401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.145.0`. A `model/list` probe
-against that bundled app-server returned these public picker rows:
+The current bundled harness is `@openai/codex` `0.146.0`. A live `model/list`
+probe against the official `0.146.0` app-server returned these public picker
+rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |
 | --------------- | ---------------- | ------------------------------------ |
@@ -622,14 +662,14 @@ against that bundled app-server returned these public picker rows:
 | `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
 | `gpt-5.2`       | text, image      | low, medium, high, xhigh             |
 
-The app-server catalog can report `ultra`; OpenClaw reasoning controls currently
-expose levels through `max`.
+Available model IDs, input modalities, and reasoning efforts remain
+account-scoped. Run `/codex models` after starting or upgrading the gateway to
+inspect the actual public picker for your account.
 
-Live picker rows are account-scoped and can change with the account, Codex
-catalog, or bundled version; run `/codex models` for the current list rather
-than relying on any point-in-time table. Hidden models can also appear in the
-app-server catalog for internal or specialized flows without being normal
-model-picker choices.
+The app-server catalog can report `ultra`; OpenClaw reasoning controls currently
+expose levels through `max`. Hidden models can also appear in the app-server
+catalog for internal or specialized flows without being normal model-picker
+choices.
 </Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:

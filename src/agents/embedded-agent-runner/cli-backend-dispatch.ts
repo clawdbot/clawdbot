@@ -91,9 +91,6 @@ async function runEmbeddedAgentViaCliBackend(
   dispatch: EmbeddedCliBackendDispatch,
 ): Promise<EmbeddedAgentRunResult> {
   const { runCliAgent } = await import("../cli-runner.runtime.js");
-  // Dynamic import is the last asynchronous preparation before runner entry.
-  // Recheck admission so a timed-out caller cannot emit a late start signal.
-  params.abortSignal?.throwIfAborted();
   // The dispatch gate guarantees a non-empty named allowlist; translate it to
   // the selectable-backend surface: no native tools, only the listed loopback
   // MCP tools. The MCP list also bounds the loopback grant server-side (tools
@@ -120,6 +117,7 @@ async function runEmbeddedAgentViaCliBackend(
     model: params.model,
     cwd: params.cwd ?? params.workspaceDir,
     config: params.config,
+    ...(params.senderIsOwner !== undefined ? { senderIsOwner: params.senderIsOwner } : {}),
   });
   // CLI tool results arrive as agent events with transport-prefixed MCP
   // names; strip and normalize so observers and transcript records see the
@@ -155,12 +153,14 @@ async function runEmbeddedAgentViaCliBackend(
       return;
     }
     const isError = evt.data.isError === true || isToolResultError(evt.data.result);
+    const resultContentSource = evt.data.resultContentSource === "network" ? "network" : undefined;
     transcript.noteToolEvent({
       phase,
       toolName,
       toolCallId,
       result: evt.data.result,
       isError,
+      ...(resultContentSource ? { resultContentSource } : {}),
     });
     onAgentToolResult?.({
       toolName,

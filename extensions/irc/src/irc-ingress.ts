@@ -16,9 +16,6 @@ import type { IrcInboundMessage } from "./types.js";
 
 const IRC_INGRESS_PAYLOAD_VERSION = 1;
 const IRC_INGRESS_POLL_INTERVAL_MS = 1_000;
-const IRC_INGRESS_PRUNE_INTERVAL_MS = 60 * 60 * 1_000;
-const IRC_INGRESS_TOMBSTONE_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
-const IRC_INGRESS_TOMBSTONE_MAX_ENTRIES = 1_000;
 
 type IrcIngressPayload = {
   version: 1;
@@ -183,11 +180,8 @@ export function createIrcIngressMonitor(options: {
     },
     pollIntervalMs: options.pollIntervalMs ?? IRC_INGRESS_POLL_INTERVAL_MS,
     retention: {
-      pruneIntervalMs: IRC_INGRESS_PRUNE_INTERVAL_MS,
-      completedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
-      completedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
-      failedTtlMs: IRC_INGRESS_TOMBSTONE_TTL_MS,
-      failedMaxEntries: IRC_INGRESS_TOMBSTONE_MAX_ENTRIES,
+      completedMaxEntries: 1_000,
+      failedMaxEntries: 1_000,
     },
     drain: {
       resolveNonRetryableFailure: resolveIrcIngressNonRetryableFailure,

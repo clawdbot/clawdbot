@@ -22,6 +22,12 @@ const serviceMock = vi.hoisted(() => ({
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
 
+vi.mock("../../config/paths.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
+
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
 }));

@@ -20,6 +20,7 @@ import {
   removeRemoteNodeInfoForConnection,
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
+import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -284,6 +285,9 @@ export async function prepareGatewayLifecycle(params: {
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });
   const runtimeState = runtimeStateRef.current;
+  runtimeState.controlUiSessionPullRequests = createControlUiSessionPullRequestSubscriptions({
+    broadcastToConnIds,
+  });
   deps.cron = runtimeState.cronState.cron;
   const pluginHostServices = {
     get cron() {
@@ -323,6 +327,7 @@ export async function prepareGatewayLifecycle(params: {
   };
   const markClosePreludeStarted = () => {
     lifecycle.closePreludeStarted = true;
+    runtimeState.controlUiSessionPullRequests?.stop();
     unsubscribeEffectiveOperatorPairing();
     startupState.dispatchReady = false;
     gatewayInstanceRuntimeRef.current?.close();

@@ -407,7 +407,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
               params.onNavigate("profile", { hash: "#settings-profile-identity" });
               break;
             case `${COMMAND_VALUE_PREFIX}settings`:
-              params.onNavigate("config");
+              params.onNavigate("appearance");
               break;
             case `${COMMAND_VALUE_PREFIX}usage`:
               params.onNavigate("usage");

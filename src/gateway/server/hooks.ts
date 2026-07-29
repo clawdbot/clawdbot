@@ -23,11 +23,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
-import {
-  createHooksRequestHandler,
-  type HookAgentDispatchResult,
-  type HookClientIpConfig,
-} from "./hooks-request-handler.js";
+import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 /**
  * Gateway hook HTTP handler factory.
@@ -35,12 +31,6 @@ import {
  * Hooks can either enqueue wake events or spawn isolated agent turns.
  */
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-
-const HOOK_AGENT_START_ADMISSION_TIMEOUT_MS = 15_000;
-const HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR =
-  "hook agent run did not start before admission timeout";
-const HOOK_SESSION_START_CONFLICT_PATTERN =
-  /^(?:(?:CronSessionLifecycleClaimError|Error): )?Session "[^"\n]+" (?:(?:changed|was deleted) while starting work\. Retry\.|is archived\. Restore it before starting new work\.|is still initializing\. Retry after initialization completes\.)$/;
 
 function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
   return params.agentId
@@ -103,20 +93,6 @@ function formatHookRunWarningConsoleMessage(params: {
   return parts.join(" ");
 }
 
-function createHookAdmissionFailure(params: {
-  summary: string;
-  runId: string;
-  statusCode?: number;
-}): HookAgentDispatchResult {
-  return {
-    ok: false,
-    statusCode:
-      params.statusCode ?? (HOOK_SESSION_START_CONFLICT_PATTERN.test(params.summary) ? 409 : 502),
-    error: params.summary,
-    runId: params.runId,
-  };
-}
-
 function createSessionKeyedHookDispatchQueue() {
   const hookAgentDispatchTails = new Map<string, Promise<void>>();
 
@@ -147,17 +123,8 @@ export function createGatewayHooksRequestHandler(params: {
   bindHost: string;
   port: number;
   logHooks: SubsystemLogger;
-  agentStartAdmissionTimeoutMs?: number;
 }) {
-  const {
-    deps,
-    getHooksConfig,
-    getClientIpConfig,
-    bindHost,
-    port,
-    logHooks,
-    agentStartAdmissionTimeoutMs = HOOK_AGENT_START_ADMISSION_TIMEOUT_MS,
-  } = params;
+  const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
   let isolatedAgentModulePromise:
     | Promise<typeof import("../../cron/isolated-agent.js")>
@@ -175,9 +142,7 @@ export function createGatewayHooksRequestHandler(params: {
     }
   };
 
-  const dispatchAgentHook = async (
-    value: HookAgentDispatchPayload,
-  ): Promise<HookAgentDispatchResult> => {
+  const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
     // A hook name is a single-line label: it lands in logs, in cron job `name` fields,
     // and inside prompt-bound system-event text. Reuse the console sanitizer so control
@@ -186,13 +151,6 @@ export function createGatewayHooksRequestHandler(params: {
     const jobId = randomUUID();
     const runId = randomUUID();
     const nowMs = resolveDateTimestampMs(Date.now());
-    const delivery = value.deliver
-      ? {
-          mode: "announce" as const,
-          channel: value.channel,
-          to: value.to,
-        }
-      : { mode: "none" as const };
     const job: CronJob = {
       id: jobId,
       agentId: value.agentId,
@@ -212,7 +170,7 @@ export function createGatewayHooksRequestHandler(params: {
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
         externalContentSource: value.externalContentSource,
       },
-      delivery,
+      delivery: value.delivery,
       state: { nextRunAtMs: nowMs },
     };
     let hookEventSessionKey: string | undefined;
@@ -233,8 +191,10 @@ export function createGatewayHooksRequestHandler(params: {
     try {
       dispatchCfg = getRuntimeConfig();
     } catch (err) {
+      // Config resolution historically failed after the hook response returned.
+      // Preserve that detached failure contract while queue keys stay canonical.
       void runWithGatewayIndependentRootWorkContinuation(async () => reportHookFailure(err));
-      return createHookAdmissionFailure({ summary: String(err), runId });
+      return runId;
     }
     const agentId = value.agentId ?? resolveDefaultAgentId(dispatchCfg);
     const queueKey = resolveCronAgentSessionKey({
@@ -243,40 +203,13 @@ export function createGatewayHooksRequestHandler(params: {
       mainKey: dispatchCfg.session?.mainKey,
       cfg: dispatchCfg,
     });
-    let settleAdmission!: (result: HookAgentDispatchResult) => void;
-    let admissionSettled = false;
-    let admissionTimer: ReturnType<typeof setTimeout> | undefined;
-    const admission = new Promise<HookAgentDispatchResult>((resolve) => {
-      settleAdmission = (result) => {
-        if (admissionSettled) {
-          return;
-        }
-        admissionSettled = true;
-        if (admissionTimer) {
-          clearTimeout(admissionTimer);
-          admissionTimer = undefined;
-        }
-        resolve(result);
-      };
-    });
-    const startupAbortController = new AbortController();
-    admissionTimer = setTimeout(() => {
-      startupAbortController.abort(new Error(HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR));
-      settleAdmission(
-        createHookAdmissionFailure({
-          summary: HOOK_AGENT_START_ADMISSION_TIMEOUT_ERROR,
-          runId,
-          statusCode: 503,
-        }),
-      );
-    }, agentStartAdmissionTimeoutMs);
-    admissionTimer.unref?.();
-
     // Queue identity is fixed when accepted; the isolated runner still receives
     // the original session expression and fresh config, preserving hook routing.
     void runWithGatewayIndependentRootWorkContinuation(() =>
       enqueueHookAgentDispatch(queueKey, async () => {
         try {
+          // Agent hooks run after the HTTP response path has returned, so failure
+          // handling must record a system event instead of throwing to the caller.
           const cfg = getRuntimeConfig();
           // Keep an omitted agent omitted for event routing so global session scope
           // stays global; runner identity is frozen separately via accepted agentId.
@@ -295,19 +228,8 @@ export function createGatewayHooksRequestHandler(params: {
             // already-stable cron: key), so accepted agentId closes reload drift.
             agentId,
             lane: "cron",
-            abortSignal: startupAbortController.signal,
-            onExecutionStarted: () => {
-              settleAdmission({ ok: true, runId });
-            },
           });
           const summary = resolveHookRunSummary(result);
-          if (!admissionSettled) {
-            settleAdmission(
-              result.status === "ok"
-                ? { ok: true, runId }
-                : createHookAdmissionFailure({ summary, runId }),
-            );
-          }
           const prefix =
             result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
           const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
@@ -349,18 +271,12 @@ export function createGatewayHooksRequestHandler(params: {
             });
           }
         } catch (err) {
-          if (!admissionSettled) {
-            settleAdmission(createHookAdmissionFailure({ summary: String(err), runId }));
-          }
           reportHookFailure(err);
         }
       }),
-    ).catch((err: unknown) => {
-      settleAdmission(createHookAdmissionFailure({ summary: String(err), runId }));
-      reportHookFailure(err);
-    });
+    );
 
-    return await admission;
+    return runId;
   };
 
   return createHooksRequestHandler({

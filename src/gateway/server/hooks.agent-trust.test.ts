@@ -62,7 +62,7 @@ function waitForFast<T>(
   return vi.waitFor(callback, { interval: 1, ...options });
 }
 
-function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
+function buildMinimalParams() {
   return {
     deps: {} as never,
     getHooksConfig: () => null,
@@ -75,7 +75,6 @@ function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number }
       info: logHooksInfoMock,
       error: vi.fn(),
     } as never,
-    ...overrides,
   };
 }
 
@@ -91,6 +90,7 @@ function buildAgentPayload(name: string, agentId?: string) {
     deliver: false,
     channel: "last" as const,
     to: undefined,
+    delivery: { mode: "none" as const },
     model: undefined,
     thinking: undefined,
     timeoutSeconds: undefined,
@@ -164,6 +164,33 @@ describe("dispatchAgentHook trust handling", () => {
   afterEach(() => {
     resetGatewayWorkAdmission();
     vi.restoreAllMocks();
+  });
+
+  it("passes normalized delivery through to the isolated CronJob", async () => {
+    const delivery = {
+      mode: "announce" as const,
+      channel: "telegram" as const,
+      to: "123456",
+    };
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: true,
+    });
+
+    dispatchAgentHook({
+      ...buildAgentPayload("Explicit delivery"),
+      deliver: true,
+      channel: delivery.channel,
+      to: delivery.to,
+      delivery,
+    });
+
+    await waitForFast(() => expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1));
+    expect(runCronIsolatedAgentTurnMock.mock.calls[0]?.[0]).toMatchObject({
+      job: { delivery },
+    });
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
   it("retains detached agent work after the hook request releases admission", async () => {
@@ -342,14 +369,14 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it("reports runtime-config failures as failed admission", async () => {
+  it("reports runtime-config failures after returning a run id", async () => {
     loadConfigMock.mockImplementationOnce(() => {
       throw new Error("config exploded");
     });
 
-    const result = await dispatchAgentHook(buildAgentPayload("Config"));
+    const runId = dispatchAgentHook(buildAgentPayload("Config"));
 
-    expect(result).toMatchObject({ ok: false, statusCode: 502, runId: expect.any(String) });
+    expect(runId).toEqual(expect.any(String));
     await waitForFast(() =>
       expect(enqueueSystemEventMock).toHaveBeenCalledWith(
         "Hook Config (error): Error: config exploded",
@@ -357,38 +384,6 @@ describe("dispatchAgentHook trust handling", () => {
       ),
     );
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-  });
-
-  it("aborts admission timeout without allowing a late start", async () => {
-    capturedDispatchAgentHook = undefined;
-    createGatewayHooksRequestHandler(buildMinimalParams({ agentStartAdmissionTimeoutMs: 10 }));
-    const releasePreparation = createDeferred();
-    const onExecutionStarted = vi.fn();
-    let abortSignal: AbortSignal | undefined;
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(
-      async (params: { abortSignal?: AbortSignal; onExecutionStarted?: () => void }) => {
-        abortSignal = params.abortSignal;
-        await releasePreparation.promise;
-        if (!params.abortSignal?.aborted) {
-          onExecutionStarted.mockImplementation(params.onExecutionStarted ?? (() => {}));
-          onExecutionStarted();
-        }
-        return { status: "ok", summary: "done", delivered: false };
-      },
-    );
-
-    const result = await dispatchAgentHook(buildAgentPayload("Timeout"));
-    expect(result).toMatchObject({
-      ok: false,
-      statusCode: 503,
-      error: "hook agent run did not start before admission timeout",
-      runId: expect.any(String),
-    });
-    expect(abortSignal?.aborted).toBe(true);
-
-    releasePreparation.resolve();
-    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-    expect(onExecutionStarted).not.toHaveBeenCalled();
   });
 
   it("does not announce successful deliver:false hook results", async () => {

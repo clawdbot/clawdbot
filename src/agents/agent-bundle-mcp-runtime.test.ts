@@ -1330,6 +1330,13 @@ describe("session MCP runtime", () => {
     });
 
     try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["search_docs"]);
+      expect(catalog.sessionDeniedTools).toMatchObject([
+        { serverName: "docs", toolName: "read_docs", deniedBySession: true },
+      ]);
+      expect(catalog.servers.docs?.toolCount).toBe(1);
+
       const materialized = await materializeBundleMcpToolsForRun({ runtime });
       expect(materialized.tools.map((tool) => tool.name)).toEqual([
         "docs__resources_list",

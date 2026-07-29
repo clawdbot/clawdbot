@@ -320,8 +320,11 @@ describe("dreaming view", () => {
     viewState = createDreamingViewState();
   });
 
-  it("renders the active dream scene chrome and status", () => {
-    const container = renderInto(buildProps({ dreamingOf: "reindexing old chats\u2026" }));
+  it("renders the active dream scene chrome and selects another view", () => {
+    const onViewStateChange = vi.fn();
+    const container = renderInto(
+      buildProps({ dreamingOf: "reindexing old chats\u2026", onViewStateChange }),
+    );
 
     expectElement(container, ".dreams__lobster svg");
 
@@ -371,10 +374,14 @@ describe("dreaming view", () => {
       "off",
     );
 
-    const buttons = [...container.querySelectorAll("button")].map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(buttons).toEqual(["Scene", "Diary", "Advanced"]);
+    const tabs = [...container.querySelectorAll(".dreams-hub-tabs .hub-tab")];
+    expect(tabs.map((node) => node.textContent?.trim())).toEqual(["Scene", "Diary", "Advanced"]);
+    expect(container.querySelector("#dreams-tab-scene")?.hasAttribute("active")).toBe(true);
+    container
+      .querySelector("#dreams-tab-diary")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    expect(viewState.activeSubTab).toBe("diary");
+    expect(onViewStateChange).toHaveBeenCalledOnce();
     expectElement(container, ".dreams__bubble");
     const text = container.querySelector(".dreams__bubble-text");
     expect(text?.textContent).toBe("reindexing old chats\u2026");
@@ -384,8 +391,6 @@ describe("dreaming view", () => {
     expect(detail?.textContent?.trim().replace(/\s+/g, " ")).toBe(
       "12 promoted · next sweep 4:00 AM · America/Los_Angeles",
     );
-    const tabs = container.querySelectorAll(".dreams__tab");
-    expect([...tabs].map((tab) => tab.textContent?.trim())).toEqual(["Scene", "Diary", "Advanced"]);
   });
 
   it("renders idle and unavailable scene states", () => {
@@ -414,16 +419,24 @@ describe("dreaming view", () => {
   it("renders imported memory topics inside the diary tab", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
-    const container = renderInto(buildProps());
-    const subtabs = [...container.querySelectorAll(".dreams-diary__subtab")].map((tab) => ({
-      label: tab.textContent?.trim(),
-      active: tab.classList.contains("dreams-diary__subtab--active"),
-    }));
+    const onViewStateChange = vi.fn();
+    const container = renderInto(buildProps({ onViewStateChange }));
+    const subtabs = [...container.querySelectorAll(".dream-diary-hub-tabs .hub-tab")].map(
+      (tab) => ({
+        label: tab.textContent?.trim(),
+        active: tab.hasAttribute("active"),
+      }),
+    );
     expect(subtabs).toEqual([
       { label: "Dreams", active: false },
       { label: "Imported Insights", active: true },
       { label: "Memory Palace", active: false },
     ]);
+    container
+      .querySelector("#dream-diary-tab-palace")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    expect(viewState.activeDiarySubTab).toBe("palace");
+    expect(onViewStateChange).toHaveBeenCalledOnce();
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
       "Travel · 1 chats · 1 signals",
     );

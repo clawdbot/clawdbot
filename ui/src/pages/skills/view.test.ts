@@ -782,12 +782,14 @@ describe("renderSkills", () => {
       skills: [linkedSkill],
     };
     const verdictKey = "https://clawhub.ai\u0000agentreceipt\u00001.2.3";
+    const onDetailTabChange = vi.fn();
 
     render(
       renderSkills(
         createProps({
           report,
           detailKey: "agentreceipt",
+          onDetailTabChange,
           clawhubVerdicts: {
             [verdictKey]: {
               registry: "https://clawhub.ai",
@@ -815,6 +817,13 @@ describe("renderSkills", () => {
     expect(
       container.querySelector<HTMLAnchorElement>('a[href*="security-audit"]')?.textContent?.trim(),
     ).toBe("Full security report");
+    expect(container.querySelector("#skill-detail-tab-overview")?.hasAttribute("active")).toBe(
+      true,
+    );
+    container
+      .querySelector("#skill-detail-tab-card")
+      ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+    expect(onDetailTabChange).toHaveBeenCalledWith("card");
 
     render(
       renderSkills(
@@ -845,6 +854,7 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
+    expect(container.querySelector("#skill-detail-tab-card")?.hasAttribute("active")).toBe(true);
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("trust");
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });

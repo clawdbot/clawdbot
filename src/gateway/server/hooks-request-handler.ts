@@ -49,14 +49,8 @@ export type HooksRequestHandler = (req: IncomingMessage, res: ServerResponse) =>
 
 type HookDispatchers = {
   dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
-  dispatchAgentHook: (
-    value: HookAgentDispatchPayload,
-  ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
+  dispatchAgentHook: (value: HookAgentDispatchPayload) => string;
 };
-
-export type HookAgentDispatchResult =
-  | { ok: true; runId: string }
-  | { ok: false; statusCode: number; error: string; runId?: string };
 
 type HookReplayEntry = {
   ts: number;
@@ -88,7 +82,6 @@ export function createHooksRequestHandler(
 ): HooksRequestHandler {
   const { getHooksConfig, logHooks, dispatchAgentHook, dispatchWakeHook, getClientIpConfig } = opts;
   const hookReplayCache = new Map<string, HookReplayEntry>();
-  const pendingHookReplays = new Map<string, Promise<HookAgentDispatchResult>>();
   const hookAuthLimiter = createAuthRateLimiter({
     maxAttempts: HOOK_AUTH_FAILURE_LIMIT,
     windowMs: HOOK_AUTH_FAILURE_WINDOW_MS,
@@ -167,62 +160,6 @@ export function createHooksRequestHandler(
     hookReplayCache.delete(key);
     hookReplayCache.set(key, { ts: now, runId });
     pruneHookReplayCache(now);
-  };
-
-  const resolveHookReplay = (
-    key: string | undefined,
-    now: number,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> | undefined => {
-    if (!key) {
-      return undefined;
-    }
-    const cachedRunId = resolveCachedHookRunId(key, now);
-    if (cachedRunId) {
-      return { ok: true, runId: cachedRunId };
-    }
-    return pendingHookReplays.get(key);
-  };
-
-  const dispatchAgentHookWithReplay = (
-    key: string | undefined,
-    now: number,
-    dispatch: () => HookAgentDispatchResult | Promise<HookAgentDispatchResult>,
-  ): HookAgentDispatchResult | Promise<HookAgentDispatchResult> => {
-    if (!key) {
-      return dispatch();
-    }
-    const existing = resolveHookReplay(key, now);
-    if (existing) {
-      return existing;
-    }
-    const pending = Promise.resolve()
-      .then(dispatch)
-      .then((result) => {
-        if (result.ok) {
-          rememberHookRunId(key, result.runId, now);
-        }
-        return result;
-      })
-      .finally(() => {
-        // Failed admission stays retryable; identity guards against deleting a newer replay.
-        if (pendingHookReplays.get(key) === pending) {
-          pendingHookReplays.delete(key);
-        }
-      });
-    pendingHookReplays.set(key, pending);
-    return pending;
-  };
-
-  const sendAgentDispatchResult = (res: ServerResponse, result: HookAgentDispatchResult) => {
-    if (result.ok) {
-      sendJson(res, 200, { ok: true, runId: result.runId });
-      return;
-    }
-    sendJson(res, result.statusCode, {
-      ok: false,
-      error: result.error,
-      ...(result.runId ? { runId: result.runId } : {}),
-    });
   };
 
   return async (req, res) => {
@@ -373,9 +310,9 @@ export function createHooksRequestHandler(
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
         },
       });
-      const replay = resolveHookReplay(replayKey, now);
-      if (replay) {
-        sendAgentDispatchResult(res, await replay);
+      const cachedRunId = resolveCachedHookRunId(replayKey, now);
+      if (cachedRunId) {
+        sendJson(res, 200, { ok: true, runId: cachedRunId });
         return true;
       }
       const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
@@ -385,17 +322,16 @@ export function createHooksRequestHandler(
       if (dispatchSessionKey === null) {
         return true;
       }
-      const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
-        dispatchAgentHook({
-          ...normalized.value,
-          idempotencyKey,
-          sessionKey: dispatchSessionKey,
-          sourcePath: `${basePath}/agent`,
-          agentId: targetAgentId,
-          externalContentSource: "webhook",
-        }),
-      );
-      sendAgentDispatchResult(res, dispatched);
+      const runId = dispatchAgentHook({
+        ...normalized.value,
+        idempotencyKey,
+        sessionKey: dispatchSessionKey,
+        sourcePath: `${basePath}/agent`,
+        agentId: targetAgentId,
+        externalContentSource: "webhook",
+      });
+      rememberHookRunId(replayKey, runId, now);
+      sendJson(res, 200, { ok: true, runId });
       return true;
     }
 
@@ -425,29 +361,37 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
           }
-          const action = mapped.action;
-          const channel = resolveHookChannel(action.channel);
+          const channel = resolveHookChannel(mapped.action.channel);
           if (!channel) {
             sendJson(res, 400, { ok: false, error: getHookChannelError() });
             return true;
           }
-          if (!isHookAgentAllowed(hooksConfig, action.agentId)) {
+          const deliver = resolveHookDeliver(mapped.action.deliver);
+          const delivery = deliver
+            ? {
+                mode: "announce" as const,
+                channel,
+                to: mapped.action.to,
+              }
+            : { mode: "none" as const };
+          if (!isHookAgentAllowed(hooksConfig, mapped.action.agentId)) {
             sendJson(res, 400, { ok: false, error: getHookAgentPolicyError() });
             return true;
           }
           const sessionKey = resolveHookSessionKey({
             hooksConfig,
-            source: action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
-            sessionKey: action.sessionKey,
+            source:
+              mapped.action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",
+            sessionKey: mapped.action.sessionKey,
           });
           if (!sessionKey.ok) {
             sendJson(res, 400, { ok: false, error: sessionKey.error });
             return true;
           }
-          const targetAgentId = resolveHookTargetAgentId(hooksConfig, action.agentId);
+          const targetAgentId = resolveHookTargetAgentId(hooksConfig, mapped.action.agentId);
           const effectiveTargetAgentId = resolveEffectiveHookTargetAgentId(
             hooksConfig,
-            action.agentId,
+            mapped.action.agentId,
           );
           const dispatchSessionKey = resolveDispatchSessionKeyOrRespond(
             sessionKey.value,
@@ -462,46 +406,47 @@ export function createHooksRequestHandler(
             idempotencyKey,
             dispatchScope: {
               agentId: effectiveTargetAgentId,
-              sessionKey: action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
-              message: action.message,
-              name: action.name ?? "Hook",
-              wakeMode: action.wakeMode,
-              deliver: resolveHookDeliver(action.deliver),
+              sessionKey:
+                mapped.action.sessionKey ?? hooksConfig.sessionPolicy.defaultSessionKey ?? null,
+              message: mapped.action.message,
+              name: mapped.action.name ?? "Hook",
+              wakeMode: mapped.action.wakeMode,
+              deliver,
               channel,
-              to: action.to ?? null,
-              model: action.model ?? null,
-              thinking: action.thinking ?? null,
-              timeoutSeconds: action.timeoutSeconds ?? null,
+              to: mapped.action.to ?? null,
+              model: mapped.action.model ?? null,
+              thinking: mapped.action.thinking ?? null,
+              timeoutSeconds: mapped.action.timeoutSeconds ?? null,
             },
           });
-          const replay = resolveHookReplay(replayKey, now);
-          if (replay) {
-            sendAgentDispatchResult(res, await replay);
+          const cachedRunId = resolveCachedHookRunId(replayKey, now);
+          if (cachedRunId) {
+            sendJson(res, 200, { ok: true, runId: cachedRunId });
             return true;
           }
-          const dispatched = await dispatchAgentHookWithReplay(replayKey, now, () =>
-            dispatchAgentHook({
-              message: action.message,
-              name: action.name ?? "Hook",
-              idempotencyKey,
-              agentId: targetAgentId,
-              wakeMode: action.wakeMode,
-              sessionKey: dispatchSessionKey,
-              sourcePath: `${basePath}/${subPath}`,
-              deliver: resolveHookDeliver(action.deliver),
-              channel,
-              to: action.to,
-              model: action.model,
-              thinking: action.thinking,
-              timeoutSeconds: action.timeoutSeconds,
-              allowUnsafeExternalContent: action.allowUnsafeExternalContent,
-              externalContentSource: resolveMappedHookExternalContentSource({
-                subPath,
-                sessionKey: sessionKey.value,
-              }),
+          const runId = dispatchAgentHook({
+            message: mapped.action.message,
+            name: mapped.action.name ?? "Hook",
+            idempotencyKey,
+            agentId: targetAgentId,
+            wakeMode: mapped.action.wakeMode,
+            sessionKey: dispatchSessionKey,
+            sourcePath: `${basePath}/${subPath}`,
+            deliver,
+            channel,
+            to: mapped.action.to,
+            delivery,
+            model: mapped.action.model,
+            thinking: mapped.action.thinking,
+            timeoutSeconds: mapped.action.timeoutSeconds,
+            allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
+            externalContentSource: resolveMappedHookExternalContentSource({
+              subPath,
+              sessionKey: sessionKey.value,
             }),
-          );
-          sendAgentDispatchResult(res, dispatched);
+          });
+          rememberHookRunId(replayKey, runId, now);
+          sendJson(res, 200, { ok: true, runId });
           return true;
         }
       } catch (err) {

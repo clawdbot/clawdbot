@@ -565,7 +565,27 @@ public struct OpenClawChatMetadataCapabilities: Codable, Sendable, Equatable {
     }
 }
 
-public struct OpenClawChatLoadedImage: Sendable {
+public enum OpenClawChatMediaKind: String, Sendable {
+    case image
+    case audio
+    case video
+
+    public var mimeTypePrefix: String {
+        "\(self.rawValue)/"
+    }
+
+    public func acceptsManagedArtifactID(_ artifactID: String) -> Bool {
+        let normalized = artifactID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return switch self {
+        case .image:
+            normalized.hasPrefix("artifact_managed_image_")
+        case .audio, .video:
+            normalized.hasPrefix("artifact_managed_media_")
+        }
+    }
+}
+
+public struct OpenClawChatMediaData: Sendable {
     public let data: Data
     public let mimeType: String
 
@@ -573,6 +593,23 @@ public struct OpenClawChatLoadedImage: Sendable {
         self.data = data
         self.mimeType = mimeType
     }
+}
+
+public struct OpenClawChatMediaStream: Sendable {
+    public let url: URL
+    public let mimeType: String?
+    public let sizeBytes: Int?
+
+    public init(url: URL, mimeType: String? = nil, sizeBytes: Int? = nil) {
+        self.url = url
+        self.mimeType = mimeType
+        self.sizeBytes = sizeBytes
+    }
+}
+
+public enum OpenClawChatLoadedMedia: Sendable {
+    case data(OpenClawChatMediaData)
+    case stream(OpenClawChatMediaStream)
 }
 
 /// One physical Gateway route for Swarm capability discovery and child paging.
@@ -698,7 +735,10 @@ public protocol OpenClawChatTransport: Sendable {
         path: String,
         replacing failedResource: OpenClawChatWidgetResource?) async -> OpenClawChatWidgetResource?
     func resolveInlineWidgetURL(path: String, replacing failedURL: URL?) async -> URL?
-    func loadImageArtifact(sessionKey: String, artifactId: String) async throws -> OpenClawChatLoadedImage?
+    func loadMediaArtifact(
+        sessionKey: String,
+        artifactId: String,
+        kind: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
 
     func setActiveSessionKey(_ sessionKey: String) async throws
     func resetSession(sessionKey: String) async throws
@@ -706,9 +746,10 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
-    public func loadImageArtifact(
+    public func loadMediaArtifact(
         sessionKey _: String,
-        artifactId _: String) async throws -> OpenClawChatLoadedImage?
+        artifactId _: String,
+        kind _: OpenClawChatMediaKind) async throws -> OpenClawChatLoadedMedia?
     {
         nil
     }

@@ -314,7 +314,7 @@ export function resolveFinalDoctorHealthContributions(params: {
         async detect(ctx) {
           const { collectWhatsappResponsivenessHealthFindings } =
             await import("../commands/doctor-whatsapp-responsiveness.js");
-          let status: import("../commands/status.types.js").StatusSummary | undefined;
+          let status: import("../status/types.js").StatusSummary | undefined;
           if (
             !(
               (await hasActiveGatewayExecCredential({ cfg: ctx.cfg })) &&
@@ -322,7 +322,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             )
           ) {
             const { callGateway } = await import("../gateway/call.js");
-            status = await callGateway<import("../commands/status.types.js").StatusSummary>({
+            status = await callGateway<import("../status/types.js").StatusSummary>({
               method: "status",
               params: { includeChannelSummary: false },
               timeoutMs: 3000,

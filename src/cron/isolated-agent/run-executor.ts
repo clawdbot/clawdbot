@@ -415,10 +415,8 @@ function createCronPromptExecutor(params: {
               agentId: params.agentId,
               runId,
             },
-            () => {
-              // Async candidate preparation above can outlive hook admission.
-              params.abortSignal?.throwIfAborted();
-              return runCliAgent({
+            () =>
+              runCliAgent({
                 sessionId: params.cronSession.sessionEntry.sessionId,
                 sessionKey: params.runSessionKey,
                 sessionEntry: params.cronSession.sessionEntry,
@@ -468,8 +466,7 @@ function createCronPromptExecutor(params: {
                 suppressNextUserMessagePersistence:
                   userTurnTranscriptRecorder.hasPersisted() ||
                   userTurnTranscriptRecorder.isBlocked(),
-              });
-            },
+              }),
           );
           bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
             result.meta?.systemPromptReport,
@@ -489,8 +486,6 @@ function createCronPromptExecutor(params: {
           to: params.resolvedDelivery.to,
           threadId: params.resolvedDelivery.threadId,
         });
-        // Current-channel discovery is the last async step before native runner entry.
-        params.abortSignal?.throwIfAborted();
         // Embedded runs receive both the explicit route and the current-channel
         // id so message-tool policy can target the same chat as fallback delivery.
         const result = await runEmbeddedAgent({

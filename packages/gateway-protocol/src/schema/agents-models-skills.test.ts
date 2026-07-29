@@ -210,6 +210,46 @@ describe("ModelsProbe schemas", () => {
 });
 
 describe("ToolsEffectiveResultSchema", () => {
+  it("accepts MCP identity and a true session-denial marker", () => {
+    const result = {
+      ...toolsEffectiveResult(),
+      groups: [
+        ...toolsEffectiveResult().groups,
+        {
+          id: "mcp",
+          label: "MCP server tools",
+          source: "mcp",
+          tools: [
+            {
+              id: "notion__delete-page",
+              label: "Delete page",
+              description: "Delete a page",
+              rawDescription: "Delete a page",
+              source: "mcp",
+              mcpServer: "notion",
+              mcpToolName: "delete_page",
+              deniedBySession: true,
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(Value.Check(ToolsEffectiveResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(ToolsEffectiveResultSchema, {
+        ...result,
+        groups: [
+          ...result.groups.slice(0, -1),
+          {
+            ...result.groups.at(-1),
+            tools: [{ ...result.groups.at(-1)?.tools[0], deniedBySession: false }],
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
   it("accepts runtime tool quarantine notices", () => {
     const result = {
       ...toolsEffectiveResult(),

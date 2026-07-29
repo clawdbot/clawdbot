@@ -497,9 +497,6 @@ async function runCliAgentInternal(
   diagnosticLifecycle?: ClaudeCliRunDiagnosticLifecycle,
 ): Promise<EmbeddedAgentRunResult> {
   assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration!);
-  // Admission callbacks authorize runner entry; an expired caller must not
-  // observe entry or allocate backend resources after its timeout response.
-  params.abortSignal?.throwIfAborted();
   // The hook gate must fire before prepareCliRunContext — that call allocates
   // backend resources released only by runPreparedCliAgent's try…finally.
   params.onExecutionStarted?.();
@@ -584,9 +581,15 @@ async function runCliAgentInternal(
     }
   }
   if (params.cleanupBundleMcpOnRunEnd === true) {
+    // The run's session ID is immutable; its session key can already belong to
+    // a newer run. Never retire the newer runtime or close the shared listener.
     try {
-      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
-      await closeMcpLoopbackServer();
+      const { retireSessionMcpRuntime } = await import("./agent-bundle-mcp-tools.js");
+      await retireSessionMcpRuntime({
+        sessionId: params.sessionId,
+        reason: "cli-run-end",
+        onError: recordCleanupError,
+      });
     } catch (error) {
       recordCleanupError(error);
     }

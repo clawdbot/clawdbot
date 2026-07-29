@@ -693,6 +693,8 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
+  abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
   toolName: string;
   /** Host-authoritative discriminator for tools that intentionally share names. */

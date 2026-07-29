@@ -105,27 +105,6 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   },
 };
 
-function createPreparedModelRuntimeLease(input: Record<string, unknown>) {
-  return {
-    snapshot: {
-      agentId: input.agentId,
-      agentDir: input.agentDir,
-      config: input.config,
-      workspaceDir: input.workspaceDir,
-      metadataSnapshot: {
-        ...emptyPluginMetadataSnapshot,
-        workspaceDir: input.workspaceDir as string | undefined,
-      },
-      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-    },
-    release: vi.fn(),
-  };
-}
-
-export const mockedAcquireAgentRunPreparedModelRuntime = vi.fn(
-  async (input: Record<string, unknown>) => createPreparedModelRuntimeLease(input),
-);
-
 type MockAgentDiscoveryStores = {
   authStorage: {
     setRuntimeApiKey: ReturnType<typeof vi.fn>;
@@ -661,10 +640,6 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedRunPostCompactionSideEffects.mockResolvedValue(undefined);
   mockedSleepWithAbort.mockReset();
   mockedSleepWithAbort.mockResolvedValue(undefined);
-  mockedAcquireAgentRunPreparedModelRuntime.mockReset();
-  mockedAcquireAgentRunPreparedModelRuntime.mockImplementation(async (input) =>
-    createPreparedModelRuntimeLease(input),
-  );
 }
 
 /** Install module mocks, import the runner, and return the mocked entrypoint. */
@@ -946,7 +921,20 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../prepared-model-runtime.js", () => ({
     activateStandalonePreparedModelRuntime: vi.fn(async () => {}),
-    acquireAgentRunPreparedModelRuntime: mockedAcquireAgentRunPreparedModelRuntime,
+    acquireAgentRunPreparedModelRuntime: vi.fn(async (input: Record<string, unknown>) => ({
+      snapshot: {
+        agentId: input.agentId,
+        agentDir: input.agentDir,
+        config: input.config,
+        workspaceDir: input.workspaceDir,
+        metadataSnapshot: {
+          ...emptyPluginMetadataSnapshot,
+          workspaceDir: input.workspaceDir as string | undefined,
+        },
+        createStores: () => ({ authStorage: {}, modelRegistry: {} }),
+      },
+      release: vi.fn(),
+    })),
     prepareModelRuntimeSnapshot: vi.fn(async () => ({
       createStores: () => ({ authStorage: {}, modelRegistry: {} }),
     })),
