@@ -688,7 +688,7 @@ $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding ut
 ${windowsScopedEnvFunction}
 $script:OpenClawUpdateExit = 0
 Invoke-WithScopedEnv @{ OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'; OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'${devTargetEntry} } {
-  Invoke-OpenClaw update --channel dev --yes --json
+  Invoke-OpenClaw update --channel dev --yes --json --no-restart
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
 if ($script:OpenClawUpdateExit -ne 0) { throw "openclaw update failed with exit code $script:OpenClawUpdateExit" }

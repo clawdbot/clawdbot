@@ -2553,6 +2553,16 @@ setInterval(() => {}, 1000);
     );
   });
 
+  it("keeps Parallels dev updates on the test-owned gateway lifecycle", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    for (const script of [macos, windows]) {
+      expect(script).toContain("update --channel dev --yes --json --no-restart");
+      expect(script).toContain("--install-daemon");
+    }
+  });
+
   it("writes Parallels phase timing artifacts", () => {
     const phaseRunner = readFileSync(TS_PATHS.phaseRunner, "utf8");
     const npmUpdate = readFileSync(TS_PATHS.npmUpdate, "utf8");
