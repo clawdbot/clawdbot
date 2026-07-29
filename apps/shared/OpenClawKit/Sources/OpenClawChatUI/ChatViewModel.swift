@@ -6,12 +6,6 @@ import OSLog
 // Module-internal: ChatViewModel extension files share this logger.
 let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 
-struct ChatLiveRunState: Equatable, Sendable {
-    let sequence: Int
-    let outputTokens: Int?
-    let terminal: Bool
-}
-
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
@@ -90,23 +84,9 @@ public final class OpenClawChatViewModel {
     public internal(set) var isLoadingSessionBranches = false
     @ObservationIgnored
     var sessionBranchesRefreshGeneration: UInt64 = 0
-    struct SessionBranchSwitchActivity: Equatable {
-        let session: SessionSnapshot
-        let generation: UInt64
-    }
-
     var sessionBranchSwitchActivity: SessionBranchSwitchActivity?
     @ObservationIgnored
     var nextSessionBranchSwitchGeneration: UInt64 = 0
-
-    var isSwitchingSessionBranch: Bool {
-        self.sessionBranchSwitchActivity != nil
-    }
-
-    /// True when this view model owns a gateway-scoped durable text outbox.
-    public var supportsOfflineTextOutbox: Bool {
-        self.outbox != nil
-    }
 
     public private(set) var pendingRunCount: Int = 0
     public internal(set) var questionCards: [OpenClawQuestionCardModel] = []

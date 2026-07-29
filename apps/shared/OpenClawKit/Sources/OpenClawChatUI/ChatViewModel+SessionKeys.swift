@@ -1,5 +1,11 @@
 import Foundation
 
+struct ChatLiveRunState: Equatable, Sendable {
+    let sequence: Int
+    let outputTokens: Int?
+    let terminal: Bool
+}
+
 extension OpenClawChatViewModel {
     nonisolated static func chatContextUsageFraction(for session: OpenClawChatSessionEntry?) -> Double? {
         guard session?.totalTokensFresh != false,
