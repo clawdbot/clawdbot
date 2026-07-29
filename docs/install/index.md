@@ -87,9 +87,10 @@ If you already manage Node yourself:
     </Note>
 
     <Note>
-    npm 11 and later blocks package install scripts by default. The warning's
-    suggested `npm approve-scripts <pkg>` does not work for global installs — add
-    `--allow-scripts openclaw` to the install command instead
+    npm 12 blocks package install scripts by default (npm 11 prints the same
+    warning but still runs them). The warning's suggested
+    `npm approve-scripts <pkg>` does not work for global installs — on npm 12,
+    add `--allow-scripts openclaw` to the install command instead
     (`npm install -g openclaw@latest --allow-scripts openclaw`) so OpenClaw's
     own install scripts run.
     </Note>
