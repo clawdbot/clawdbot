@@ -27,7 +27,9 @@ use crate::{
     RuntimeError,
 };
 
-const DEFAULT_HEALTH_LISTEN: &str = "127.0.0.1:18790";
+// Avoid OpenClaw's reserved Gateway-adjacent ports by asking the OS for a free
+// loopback port. Managed hosts can configure a stable healthListen explicitly.
+const DEFAULT_HEALTH_LISTEN: &str = "127.0.0.1:0";
 const DEFAULT_STATUS_COMMAND: &str = "rust-node.status";
 const DEFAULT_AUTH_ENV: &str = "OPENCLAW_NODE_TOKEN";
 const DEFAULT_IDENTITY_SECRET_ENV: &str = "OPENCLAW_NODE_IDENTITY";
@@ -103,9 +105,9 @@ impl HostConfig {
                 "gatewayUrl must be non-empty and have no surrounding whitespace".into(),
             ));
         }
-        if !self.health_listen.ip().is_loopback() || self.health_listen.port() == 0 {
+        if !self.health_listen.ip().is_loopback() {
             return Err(HostError::Config(
-                "healthListen must use a loopback address and nonzero port".into(),
+                "healthListen must use a loopback address".into(),
             ));
         }
         let command = self.status_command.trim();
@@ -269,6 +271,9 @@ where
     let listener = TcpListener::bind(config.health_listen)
         .await
         .map_err(|error| HostError::HealthBind(error.to_string()))?;
+    let health_listen = listener
+        .local_addr()
+        .map_err(|error| HostError::HealthBind(error.to_string()))?;
     let state = Arc::new(HostState::default());
     let runtime = build_runtime(&config, &state)?;
     let health_state = Arc::clone(&state);
@@ -280,6 +285,7 @@ where
         credentials,
         runtime,
         state,
+        health_listen,
         shutdown,
     ));
     tokio::select! {
@@ -301,6 +307,7 @@ async fn run_connections<F>(
     mut credentials: HostCredentials,
     runtime: CommandRuntime,
     state: Arc<HostState>,
+    health_listen: SocketAddr,
     shutdown: F,
 ) -> Result<(), HostError>
 where
@@ -312,7 +319,7 @@ where
         "info",
         "host.starting",
         json!({
-            "healthListen": config.health_listen,
+            "healthListen": health_listen,
             "statusCommand": config.status_command,
         }),
     );
@@ -744,11 +751,14 @@ mod tests {
         format!(r#"{{"gatewayUrl":"ws://127.0.0.1:18789"{extra}}}"#)
     }
 
-    #[test]
-    fn config_defaults_are_bounded_and_local() {
+    #[tokio::test]
+    async fn config_defaults_are_bounded_local_and_collision_free() {
         let config: HostConfig = serde_json::from_str(&config_json("")).unwrap();
         config.validate().unwrap();
         assert!(config.health_listen().ip().is_loopback());
+        assert_eq!(config.health_listen().port(), 0);
+        let listener = TcpListener::bind(config.health_listen()).await.unwrap();
+        assert_ne!(listener.local_addr().unwrap().port(), 0);
         assert_eq!(config.status_command(), DEFAULT_STATUS_COMMAND);
     }
 
