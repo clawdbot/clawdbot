@@ -122,7 +122,7 @@ final class ChatComposerUITextView: UITextView {
         modifierFlags: UIKeyModifierFlags) -> Bool
     {
         let commandModifiers: UIKeyModifierFlags = [.shift, .control, .alternate, .command]
-        guard modifierFlags.intersection(commandModifiers).isEmpty else { return false }
+        guard modifierFlags.isDisjoint(with: commandModifiers) else { return false }
         switch keyCode {
         case .keyboardUpArrow:
             return self.onHistoryUp?(self.caretOnFirstLine) == true

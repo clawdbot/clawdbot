@@ -948,14 +948,10 @@ struct OpenClawChatComposer: View {
                 onFocusChange: { focused in
                     self.isFocused = focused
                 },
-                onHistoryUp: { caretOnFirstLine in
-                    guard !self.isSlashPopoverPresented else { return false }
-                    return self.viewModel.recallPreviousInput(caretOnFirstLine: caretOnFirstLine)
+                onHistoryUp: {
+                    !self.isSlashPopoverPresented && self.viewModel.recallPreviousInput(caretOnFirstLine: $0)
                 },
-                onHistoryDown: {
-                    guard !self.isSlashPopoverPresented else { return false }
-                    return self.viewModel.recallNextInput()
-                })
+                onHistoryDown: { !self.isSlashPopoverPresented && self.viewModel.recallNextInput() })
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .onChange(of: self.viewModel.input) { _, _ in
