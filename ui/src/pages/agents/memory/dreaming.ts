@@ -1,13 +1,14 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { defaultSlotIdForKey, resolveSlotSelection } from "../../../../../src/plugins/slots.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../../api/types.ts";
+import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/index.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../../lib/plugin-activation.ts";
 
 const DEFAULT_DREAM_DIARY_PATH = "DREAMS.md";
-const DEFAULT_DREAMING_PLUGIN_ID = "memory-core";
 const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 
 type DreamingPhaseStatusBase = {
@@ -333,37 +334,61 @@ function buildDreamDiaryActionSuccessMessage(
             ? payload.removedEntries
             : 0;
       const kept = typeof payload?.keptEntries === "number" ? payload.keptEntries : undefined;
-      return kept !== undefined
-        ? `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"} and kept ${kept}.`
-        : `Removed ${removed} duplicate dream ${removed === 1 ? "entry" : "entries"}.`;
+      if (kept !== undefined) {
+        return removed === 1
+          ? t("dreaming.actions.dedupeRemovedOneAndKept", {
+              removed: String(removed),
+              kept: String(kept),
+            })
+          : t("dreaming.actions.dedupeRemovedManyAndKept", {
+              removed: String(removed),
+              kept: String(kept),
+            });
+      }
+      return removed === 1
+        ? t("dreaming.actions.dedupeRemovedOne", { removed: String(removed) })
+        : t("dreaming.actions.dedupeRemovedMany", { removed: String(removed) });
     }
     case "doctor.memory.repairDreamingArtifacts": {
       const actions: string[] = [];
       const archiveDir = normalizeTrimmedString(payload?.archiveDir);
       if (payload?.archivedSessionCorpus === true) {
-        actions.push("archived session corpus");
+        actions.push(t("dreaming.actions.repairArchivedThreadCorpus"));
       }
       if (payload?.archivedSessionIngestion === true) {
-        actions.push("archived ingestion state");
+        actions.push(t("dreaming.actions.repairArchivedIngestionState"));
       }
       if (payload?.archivedDreamsDiary === true) {
-        actions.push("archived dream diary");
+        actions.push(t("dreaming.actions.repairArchivedDreamDiary"));
       }
       if (actions.length === 0) {
-        return "Dream cache repair finished with no changes.";
+        return t("dreaming.actions.repairNoChanges");
       }
       return archiveDir
-        ? `Dream cache repair complete: ${actions.join(", ")}. Archive: ${archiveDir}`
-        : `Dream cache repair complete: ${actions.join(", ")}.`;
+        ? t("dreaming.actions.repairCompleteWithArchive", {
+            actions: actions.join(", "),
+            archiveDir,
+          })
+        : t("dreaming.actions.repairComplete", { actions: actions.join(", ") });
     }
     case "doctor.memory.backfillDreamDiary":
-      return `Backfilled ${typeof payload?.written === "number" ? payload.written : 0} dream diary entries.`;
+      return t("dreaming.actions.backfillComplete", {
+        count: String(typeof payload?.written === "number" ? payload.written : 0),
+      });
     case "doctor.memory.resetDreamDiary":
-      return `Removed ${typeof payload?.removedEntries === "number" ? payload.removedEntries : 0} backfilled dream diary entries.`;
+      return t("dreaming.actions.resetDiaryComplete", {
+        count: String(typeof payload?.removedEntries === "number" ? payload.removedEntries : 0),
+      });
     case "doctor.memory.resetGroundedShortTerm":
-      return `Cleared ${typeof payload?.removedShortTermEntries === "number" ? payload.removedShortTermEntries : 0} replayed short-term entries.`;
+      return t("dreaming.actions.clearReplayedComplete", {
+        count: String(
+          typeof payload?.removedShortTermEntries === "number"
+            ? payload.removedShortTermEntries
+            : 0,
+        ),
+      });
   }
-  return "Dream diary action complete.";
+  return t("dreaming.actions.complete");
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {
@@ -432,13 +457,11 @@ function normalizePhaseStatusBase(record: Record<string, unknown> | null): Dream
 }
 
 function resolveDreamingPluginId(configValue: Record<string, unknown> | null): string {
-  const plugins = asRecord(configValue?.plugins);
-  const slots = asRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
-  if (configuredSlot && configuredSlot.toLowerCase() !== "none") {
-    return configuredSlot;
-  }
-  return DEFAULT_DREAMING_PLUGIN_ID;
+  const slots = asRecord(asRecord(configValue?.plugins)?.slots);
+  const selection = resolveSlotSelection("memory", slots?.memory);
+  // Switching the slot off does not move where dreaming config lives: it stays
+  // under the default owner so the knobs remain readable and editable.
+  return selection.kind === "off" ? defaultSlotIdForKey("memory") : selection.pluginId;
 }
 
 export function resolveConfiguredDreaming(configValue: Record<string, unknown> | null): {
@@ -1072,17 +1095,13 @@ async function runDreamDiaryAction(
   }
   if (
     method === "doctor.memory.repairDreamingArtifacts" &&
-    !confirmDreamingAction(
-      "Repair Dream Cache? This archives derived dream cache files and rebuilds them from clean inputs. Your dream diary stays untouched.",
-    )
+    !confirmDreamingAction(t("dreaming.actions.confirmRepair"))
   ) {
     return false;
   }
   if (
     method === "doctor.memory.dedupeDreamDiary" &&
-    !confirmDreamingAction(
-      "Dedupe Dream Diary? This rewrites DREAMS.md and removes only exact duplicate diary entries.",
-    )
+    !confirmDreamingAction(t("dreaming.actions.confirmDedupe"))
   ) {
     return false;
   }
@@ -1149,13 +1168,13 @@ export async function copyDreamingArchivePath(state: DreamingState): Promise<boo
   if (await copyToClipboard(path)) {
     state.dreamDiaryActionMessage = {
       kind: "success",
-      text: "Archive path copied.",
+      text: t("dreaming.actions.archivePathCopied"),
     };
     return true;
   }
   state.dreamDiaryActionMessage = {
     kind: "error",
-    text: "Could not copy archive path.",
+    text: t("dreaming.actions.archivePathCopyFailed"),
   };
   return false;
 }
@@ -1182,7 +1201,7 @@ async function writeDreamingPatch(
     });
     if (!updated) {
       state.dreamingStatusError =
-        config.state.lastError ?? state.lastError ?? "Could not update dreaming settings.";
+        config.state.lastError ?? state.lastError ?? t("dreaming.actions.updateFailed");
     }
     return updated;
   } finally {
@@ -1208,29 +1227,47 @@ function lookupDisallowsUnknownProperties(value: unknown): boolean {
   return schema?.additionalProperties === false;
 }
 
+export type DreamingConfigPathSupport = "supported" | "unsupported" | "unknown";
+
+/**
+ * Whether the slot-owning memory plugin's config schema can hold `dreaming`.
+ * Only a closed schema without the child proves it cannot. An unreachable
+ * gateway or a failed lookup answers "unknown", which callers treat as
+ * optimistic but must not cache: the gateway still has the final say, and a
+ * cached guess would survive the reconnect that could settle it.
+ * Shared by the enablement toggle and the Memory page's Dreaming tab.
+ */
+export async function resolveDreamingConfigPathSupport(
+  config: Pick<DreamingConfigCapability, "lookupSchemaPath" | "state">,
+  pluginId: string,
+): Promise<DreamingConfigPathSupport> {
+  if (!config.state.client || !config.state.connected) {
+    return "unknown";
+  }
+  try {
+    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
+    if (lookupIncludesDreamingProperty(lookup)) {
+      return "supported";
+    }
+    return lookupDisallowsUnknownProperties(lookup) ? "unsupported" : "supported";
+  } catch {
+    return "unknown";
+  }
+}
+
 async function ensureDreamingPathSupported(
   state: DreamingState,
   config: DreamingConfigCapability,
   pluginId: string,
 ): Promise<boolean> {
-  if (!config.state.client || !config.state.connected) {
+  // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
+  if ((await resolveDreamingConfigPathSupport(config, pluginId)) !== "unsupported") {
     return true;
   }
-  try {
-    const lookup = await config.lookupSchemaPath(`plugins.entries.${pluginId}.config`);
-    if (lookupIncludesDreamingProperty(lookup)) {
-      return true;
-    }
-    if (lookupDisallowsUnknownProperties(lookup)) {
-      const message = `Selected memory plugin "${pluginId}" does not support dreaming settings.`;
-      state.dreamingStatusError = message;
-      state.lastError = message;
-      return false;
-    }
-  } catch {
-    return true;
-  }
-  return true;
+  const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
+  state.dreamingStatusError = message;
+  state.lastError = message;
+  return false;
 }
 
 export async function updateDreamingEnabled(
@@ -1242,7 +1279,7 @@ export async function updateDreamingEnabled(
     return false;
   }
   if (!config.state.configSnapshot?.hash) {
-    state.dreamingStatusError = "Config hash missing; refresh and retry.";
+    state.dreamingStatusError = t("dreaming.actions.configHashMissing");
     return false;
   }
   const { pluginId } = resolveConfiguredDreaming(

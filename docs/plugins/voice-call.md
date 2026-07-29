@@ -483,9 +483,9 @@ Current runtime behavior:
 
 ## TTS for calls
 
-Voice Call uses the core `messages.tts` configuration for streaming speech on
+Voice Call uses the core `tts` configuration for streaming speech on
 calls. You can override it under the plugin config with the **same shape** —
-it deep-merges with `messages.tts`.
+it deep-merges with `tts`.
 
 ```json5
 {
@@ -522,12 +522,10 @@ Behavior notes:
   <Tab title="Core TTS only">
 ```json5
 {
-  messages: {
-    tts: {
-      provider: "openai",
-      providers: {
-        openai: { speakerVoice: "alloy" },
-      },
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { speakerVoice: "alloy" },
     },
   },
 }

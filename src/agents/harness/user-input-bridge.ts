@@ -199,6 +199,8 @@ export function buildAgentHarnessUserInputAnswers(
   }
 
   const keyed = parseKeyedAnswers(inputText);
+  // Unkeyed multi-question replies are positional. Preserve blank lines so a
+  // skipped answer cannot shift every later response onto the wrong question.
   const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
   questions.forEach((question, index) => {
     const key =
@@ -219,6 +221,8 @@ export function normalizeAgentHarnessUserInputAnswer(
 ): string | undefined {
   const trimmed = answer.trim();
   const options = question.options ?? [];
+  // Numeric replies use the one-based option numbers emitted in the prompt.
+  // Convert to zero-based only at the options-array boundary.
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
   if (indexed) {

@@ -1,7 +1,7 @@
 // Feishu delivery trace goldens: replayable wire-level lifecycle recordings.
 //
-// IN events are fed straight into the reply-dispatcher wiring (the options
-// createReplyDispatcherWithTyping receives plus replyOptions callbacks); OUT
+// IN events are fed straight into the reply-dispatcher plan (dispatcher,
+// delivery, and replyOptions callbacks); OUT
 // events are recorded at the mocked Lark SDK client and the mocked CardKit
 // HTTP fetch, so streaming-card entity calls are captured at the wire seam.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).

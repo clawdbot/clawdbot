@@ -24,6 +24,7 @@ import {
 import {
   applyDefaultMultiSpecVitestCachePaths,
   applyDefaultVitestNoOutputTimeout,
+  applyFullExtensionsHeapBudget,
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestPreflightPnpmArgs,
@@ -260,7 +261,7 @@ async function main() {
   const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
   if (unmatchedExplicitTargets.length > 0) {
     for (const unmatched of unmatchedExplicitTargets) {
-      const suffix = unmatched.includePattern ? ` (${unmatched.includePattern})` : "";
+      const suffix = unmatched.includePattern ? ` (tried: ${unmatched.includePattern})` : "";
       console.error(
         `[test] explicit test target matched no test files: ${unmatched.target}${suffix}`,
       );
@@ -299,7 +300,12 @@ async function main() {
           cwd: process.cwd(),
         });
   const runSpecs = applyDefaultMultiSpecVitestCachePaths(
-    applyDefaultVitestNoOutputTimeout(rawRunSpecs, { env: baseEnv }),
+    applyDefaultVitestNoOutputTimeout(
+      applyFullExtensionsHeapBudget(rawRunSpecs, { env: baseEnv }),
+      {
+        env: baseEnv,
+      },
+    ),
     { cwd: process.cwd(), env: baseEnv },
   );
 

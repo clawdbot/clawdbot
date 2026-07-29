@@ -218,6 +218,36 @@ describe("bedrock discovery", () => {
     },
   );
 
+  it("applies the Opus 5 contract to inference-profile-only discovery", async () => {
+    sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
+      inferenceProfileSummaries: [
+        {
+          inferenceProfileId: "global.anthropic.claude-opus-5",
+          inferenceProfileName: "Global Claude Opus 5",
+          status: "ACTIVE",
+          type: "SYSTEM_DEFINED",
+          models: [
+            {
+              modelArn: "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5",
+            },
+          ],
+        },
+      ],
+    });
+
+    const models = await discoverBedrockModels({ region: "us-east-1", clientFactory });
+
+    expectModelFields(models[0], {
+      id: "global.anthropic.claude-opus-5",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      params: { canonicalModelId: "claude-opus-5" },
+    });
+  });
+
   it("applies the Sonnet 5 contract to inference-profile-only discovery", async () => {
     sendMock.mockResolvedValueOnce({ modelSummaries: [] }).mockResolvedValueOnce({
       inferenceProfileSummaries: [
@@ -793,6 +823,34 @@ describe("bedrock discovery", () => {
     expect(pluginEnabled?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
     // 2 calls per discovery (ListFoundationModels + ListInferenceProfiles).
     expect(sendMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {
+      name: "secondary region when the primary env override is blank",
+      env: { AWS_REGION: "   ", AWS_DEFAULT_REGION: "eu-west-1" },
+      expectedRegion: "eu-west-1",
+    },
+    {
+      name: "plugin default when both region env overrides are blank",
+      env: { AWS_REGION: "", AWS_DEFAULT_REGION: "   " },
+      expectedRegion: "us-east-1",
+    },
+    {
+      name: "primary region when both env overrides are nonblank",
+      env: { AWS_REGION: "ap-southeast-2", AWS_DEFAULT_REGION: "eu-west-1" },
+      expectedRegion: "ap-southeast-2",
+    },
+  ])("uses $name", async ({ env, expectedRegion }) => {
+    mockSingleActiveSummary();
+
+    const provider = await resolveImplicitBedrockProvider({
+      pluginConfig: { discovery: { enabled: true } },
+      env,
+      clientFactory,
+    });
+
+    expect(provider?.baseUrl).toBe(`https://bedrock-runtime.${expectedRegion}.amazonaws.com`);
   });
 
   // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix

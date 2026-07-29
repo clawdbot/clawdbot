@@ -18,6 +18,22 @@ import {
 import { readCommitmentsForTest } from "./store.test-utils.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
+vi.mock("./config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./config.js")>()),
+  resolveCommitmentsConfig: () => ({
+    enabled: true,
+    maxPerDay: 3,
+    extraction: {
+      debounceMs: 15_000,
+      batchMaxItems: 8,
+      queueMaxItems: 64,
+      confidenceThreshold: 0.72,
+      careConfidenceThreshold: 0.86,
+      timeoutSeconds: 45,
+    },
+  }),
+}));
+
 installHeartbeatRunnerTestRuntime();
 
 describe("commitments full-chain integration", () => {
@@ -50,7 +66,6 @@ describe("commitments full-chain integration", () => {
           },
           channels: { telegram: { allowFrom: ["*"] } },
           session: { store: storePath },
-          commitments: { enabled: true },
         };
         await seedSessionStore(storePath, sessionKey, {
           lastChannel: "telegram",

@@ -416,7 +416,7 @@ describe("createExecApprovalChannelRuntime", () => {
     const runtime = createExecApprovalChannelRuntime({
       label: "test/exec-approvals",
       clientDisplayName: "Test Exec Approvals",
-      cfg: { gateway: { handshakeTimeoutMs: 30_000 } } as never,
+      cfg: {},
       isConfigured: () => true,
       shouldHandle: () => true,
       deliverRequested: async () => [],
@@ -429,7 +429,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     expect(mockGatewayClientStarts).not.toHaveBeenCalled();
     expect(mockGatewayClientStops).toHaveBeenCalledTimes(1);
-    expectStartGatewayClientCall(30_000);
+    expectStartGatewayClientCall();
   });
 
   it("can retry start after gateway client creation fails", async () => {

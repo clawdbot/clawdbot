@@ -13,7 +13,7 @@ import { RealtimeTalkSession } from "./realtime-talk.ts";
 type InspectableRealtimeTalkSession = {
   callbacks: RealtimeTalkCallbacks;
   options: { provider?: string; transport?: string };
-  localOptions: { inputDeviceId?: string };
+  localOptions: { inputDeviceId?: string; videoDeviceId?: string };
 };
 
 function inspectSession(state: ChatRealtimeState): InspectableRealtimeTalkSession {
@@ -48,6 +48,7 @@ describe("chat realtime actions", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
     vi.spyOn(RealtimeTalkSession.prototype, "stop").mockImplementation(() => undefined);
+    vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -58,12 +59,17 @@ describe("chat realtime actions", () => {
   });
 
   it("launches with the microphone persisted from the Settings page", async () => {
-    saveSettings({ ...loadSettings(), realtimeTalkInputDeviceId: "usb-mic" });
+    saveSettings({
+      ...loadSettings(),
+      realtimeTalkInputDeviceId: "usb-mic",
+      realtimeTalkVideoDeviceId: "desk-camera",
+    });
     const state = createState();
 
     await state.toggleRealtimeTalk();
 
     expect(inspectSession(state).localOptions.inputDeviceId).toBe("usb-mic");
+    expect(inspectSession(state).localOptions.videoDeviceId).toBe("desk-camera");
     expect(startSpy).toHaveBeenCalledOnce();
   });
 
@@ -93,7 +99,7 @@ describe("chat realtime actions", () => {
     expect(loadSettings().talkCameraAutoEnable).toBe(false);
   });
 
-  it("auto-enables camera once when the remembered preference is on", async () => {
+  it("auto-enables camera once after the session reaches listening", async () => {
     saveSettings({ ...loadSettings(), talkCameraAutoEnable: true });
     const state = createState();
     const setVideoEnabled = vi
@@ -103,10 +109,44 @@ describe("chat realtime actions", () => {
     await state.toggleRealtimeTalk();
     const session = inspectSession(state);
     session.callbacks.onVideoCapability?.(true);
-    session.callbacks.onVideoCapability?.(true);
+    await Promise.resolve();
+    expect(setVideoEnabled).not.toHaveBeenCalled();
+
+    session.callbacks.onStatus?.("listening");
+    session.callbacks.onStatus?.("listening");
     await vi.waitFor(() => expect(setVideoEnabled).toHaveBeenCalledOnce());
 
     expect(setVideoEnabled).toHaveBeenCalledWith(true);
+  });
+
+  it("uses the latest Settings camera choice on the next enable", async () => {
+    const state = createState();
+    const switchCamera = vi.spyOn(RealtimeTalkSession.prototype, "switchCamera");
+    vi.spyOn(RealtimeTalkSession.prototype, "setVideoEnabled").mockResolvedValue(undefined);
+
+    await state.toggleRealtimeTalk();
+    inspectSession(state).callbacks.onVideoCapability?.(true);
+    saveSettings({ ...loadSettings(), realtimeTalkVideoDeviceId: "back-camera" });
+    await state.toggleRealtimeTalkCamera();
+
+    expect(switchCamera).toHaveBeenCalledWith("back-camera");
+  });
+
+  it("does not touch the camera when the session never reaches listening", async () => {
+    saveSettings({ ...loadSettings(), talkCameraAutoEnable: true });
+    const state = createState();
+    const setVideoEnabled = vi
+      .spyOn(RealtimeTalkSession.prototype, "setVideoEnabled")
+      .mockResolvedValue(undefined);
+
+    await state.toggleRealtimeTalk();
+    const session = inspectSession(state);
+    session.callbacks.onVideoCapability?.(true);
+    session.callbacks.onStatus?.("error", "Microphone access failed");
+    await Promise.resolve();
+
+    expect(setVideoEnabled).not.toHaveBeenCalled();
+    expect(loadSettings().talkCameraAutoEnable).toBe(true);
   });
 
   it.each([undefined, false])(
@@ -119,7 +159,9 @@ describe("chat realtime actions", () => {
         .mockResolvedValue(undefined);
 
       await state.toggleRealtimeTalk();
-      inspectSession(state).callbacks.onVideoCapability?.(true);
+      const session = inspectSession(state);
+      session.callbacks.onVideoCapability?.(true);
+      session.callbacks.onStatus?.("listening");
       await Promise.resolve();
 
       expect(setVideoEnabled).not.toHaveBeenCalled();
@@ -134,7 +176,9 @@ describe("chat realtime actions", () => {
     );
 
     await state.toggleRealtimeTalk();
-    inspectSession(state).callbacks.onVideoCapability?.(true);
+    const failingSession = inspectSession(state);
+    failingSession.callbacks.onVideoCapability?.(true);
+    failingSession.callbacks.onStatus?.("listening");
     await vi.waitFor(() => expect(state.realtimeTalkCameraError).toBe(true));
 
     expect(state.realtimeTalkDetail).toBe("Camera access is blocked");
@@ -214,6 +258,61 @@ describe("chat realtime actions", () => {
     expect(state.realtimeTalkCameraError).toBe(true);
   });
 
+  it("cycles live cameras in enumeration order and persists the successful switch", async () => {
+    const state = createState();
+    const switchCamera = vi
+      .spyOn(RealtimeTalkSession.prototype, "switchCamera")
+      .mockResolvedValue(undefined);
+
+    await state.toggleRealtimeTalk();
+    const stream = {
+      getVideoTracks: () => [
+        {
+          getSettings: () => ({ deviceId: "front" }),
+        } as MediaStreamTrack,
+      ],
+    } as unknown as MediaStream;
+    state.realtimeTalkVideoStream = stream;
+    state.realtimeTalkCameraDevices = [
+      { deviceId: "front", label: "Front Camera" },
+      { deviceId: "back", label: "Back Camera" },
+    ];
+
+    await state.switchRealtimeTalkCamera();
+
+    expect(switchCamera).toHaveBeenCalledWith("back");
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBe("back");
+    expect(state.realtimeTalkCameraError).toBe(false);
+  });
+
+  it("keeps the restored preview and reports a failed live camera switch", async () => {
+    const state = createState();
+    vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockRejectedValue(
+      new Error("The selected camera is unavailable"),
+    );
+
+    await state.toggleRealtimeTalk();
+    const stream = {
+      getVideoTracks: () => [
+        {
+          getSettings: () => ({ deviceId: "front" }),
+        } as MediaStreamTrack,
+      ],
+    } as unknown as MediaStream;
+    state.realtimeTalkVideoStream = stream;
+    state.realtimeTalkCameraDevices = [
+      { deviceId: "front", label: "Front Camera" },
+      { deviceId: "missing", label: "Missing Camera" },
+    ];
+
+    await state.switchRealtimeTalkCamera();
+
+    expect(state.realtimeTalkVideoStream).toBe(stream);
+    expect(state.realtimeTalkCameraError).toBe(true);
+    expect(state.realtimeTalkDetail).toBe("The selected camera is unavailable");
+    expect(loadSettings().realtimeTalkVideoDeviceId).toBeUndefined();
+  });
+
   it("keeps the connection error when camera toggle is requested after failure", async () => {
     const state = createState();
     const setVideoEnabled = vi
@@ -246,6 +345,7 @@ describe("chat realtime actions", () => {
     session.callbacks.onVideoCapability?.(true);
     session.callbacks.onStatus?.("listening");
     const toggling = state.toggleRealtimeTalkCamera();
+    await Promise.resolve();
     session.callbacks.onStatus?.("error", "Realtime connection closed");
     rejectCamera(new Error("Camera access is blocked"));
     await toggling;
@@ -272,6 +372,7 @@ describe("chat realtime actions", () => {
     session.callbacks.onVideoCapability?.(true);
     session.callbacks.onStatus?.("listening");
     const toggling = state.toggleRealtimeTalkCamera();
+    await Promise.resolve();
     session.callbacks.onStatus?.("error", "Realtime connection closed");
     session.callbacks.onVideoStream?.({} as MediaStream);
     resolveCamera();

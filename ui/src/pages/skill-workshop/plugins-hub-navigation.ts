@@ -1,8 +1,9 @@
+import { pathForPluginsHubTab } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginsHubTab } from "../../components/plugins-hub-tabs.ts";
 
 export function selectPluginsHubTab(
-  context: Pick<ApplicationContext, "navigate">,
+  context: Pick<ApplicationContext, "basePath" | "navigate">,
   tab: PluginsHubTab,
 ) {
   if (tab === "workshop") {
@@ -12,5 +13,7 @@ export function selectPluginsHubTab(
     context.navigate("skills");
     return;
   }
-  context.navigate("plugins", tab === "discover" ? { search: "?tab=discover" } : undefined);
+  context.navigate("plugins", {
+    pathname: pathForPluginsHubTab(tab, context.basePath),
+  });
 }

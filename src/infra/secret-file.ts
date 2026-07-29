@@ -9,9 +9,11 @@ import {
 import { resolveUserPath } from "../utils.js";
 
 export {
+  createSecretFileAtomic,
   DEFAULT_SECRET_FILE_MAX_BYTES,
   PRIVATE_SECRET_DIR_MODE,
   PRIVATE_SECRET_FILE_MODE,
+  readSecretFile,
   readSecretFileSync,
   type SecretFileReadOptions,
 } from "@openclaw/fs-safe/secret";

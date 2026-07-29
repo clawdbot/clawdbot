@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
+import { resolveDiscordQaScenarioIds } from "./scenario-selection.js";
 
 const { testing } = discordQaScenarioSupport;
 
@@ -209,7 +210,6 @@ describe("discord live qa runtime", () => {
     expect(next.messages?.ackReactionScope).toBe("all");
     expect(next.messages?.groupChat?.visibleReplies).toBe("message_tool");
     expect(next.messages?.statusReactions?.enabled).toBe(true);
-    expect(next.messages?.statusReactions?.timing?.debounceMs).toBe(0);
     const discordAccount = next.channels?.discord?.accounts?.sut;
     expect(discordAccount?.allowBots).toBe(true);
     expect(discordAccount?.guilds?.["123456789012345678"]?.requireMention).toBe(false);
@@ -286,11 +286,9 @@ describe("discord live qa runtime", () => {
   });
 
   it("includes the Discord live scenarios", () => {
-    expect(testing.findScenario().map((scenario) => scenario.id)).toEqual([
-      "discord-canary",
-      "discord-mention-gating",
-      "discord-native-help-command-registration",
-    ]);
+    expect(testing.findScenario().map((scenario) => scenario.id)).toEqual(
+      resolveDiscordQaScenarioIds({}),
+    );
     expect(
       testing.findScenario(["discord-status-reactions-tool-only"]).map((scenario) => scenario.id),
     ).toEqual(["discord-status-reactions-tool-only"]);
@@ -466,7 +464,7 @@ describe("discord live qa runtime", () => {
 
   it("fails when any requested Discord scenario id is unknown", () => {
     expect(() => testing.findScenario(["discord-canary", "typo-scenario"])).toThrow(
-      "unknown Discord QA scenario id(s): typo-scenario",
+      "unknown QA scenario id(s): typo-scenario",
     );
   });
 

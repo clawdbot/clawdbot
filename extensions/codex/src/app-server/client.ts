@@ -6,7 +6,6 @@ import { randomUUID } from "node:crypto";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { parse as parseSemver } from "semver";
 import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
 import {
   type CodexAppServerRequestMethod,
@@ -28,13 +27,14 @@ import {
   closeCodexAppServerTransportAndWait,
   type CodexAppServerTransport,
 } from "./transport.js";
-import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
-/** Minimum supported Codex app-server version exported for callers/tests. */
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 8 * 1024 * 1024;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
+// agents_wait can use a 600s inner budget plus 30s handler grace. Keep the
+// app-server request guard outside that window so Codex receives the tool result.
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
@@ -59,6 +59,11 @@ export function getCodexAppServerClientInstanceId(client: object): string {
   const created = randomUUID();
   CODEX_APP_SERVER_CLIENT_INSTANCE_IDS.set(client, created);
   return created;
+}
+
+export function resolveCodexAppServerClientInstanceId(client: object): string {
+  const getInstanceId = (client as { getInstanceId?: () => string }).getInstanceId;
+  return getInstanceId?.call(client) ?? getCodexAppServerClientInstanceId(client);
 }
 
 /** RPC error wrapper that preserves app-server error code and data. */
@@ -204,6 +209,7 @@ export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
 
 type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  signal?: AbortSignal,
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
 /** Notification handler registered on a Codex app-server client. */
@@ -345,6 +351,11 @@ export class CodexAppServerClient {
   /** Returns runtime metadata detected during initialize. */
   getRuntimeIdentity(): CodexAppServerRuntimeIdentity | undefined {
     return this.runtimeIdentity ? { ...this.runtimeIdentity } : undefined;
+  }
+
+  /** Returns a bounded, redacted stderr diagnostic from the app-server process. */
+  getStderrDiagnostic(): string | undefined {
+    return redactCodexAppServerLinePreview(this.stderrTail) || undefined;
   }
 
   /** Stable generation id for this exact physical client instance. */
@@ -870,15 +881,16 @@ export class CodexAppServerClient {
   private async runServerRequestHandlers(
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<JsonValue | undefined> {
+    const controller = new AbortController();
     const timeoutResponse = timeoutServerRequestResponse(request);
     if (!timeoutResponse) {
-      return await this.runServerRequestHandlersWithoutTimeout(request);
+      return await this.runServerRequestHandlersWithoutTimeout(request, controller.signal);
     }
 
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       return await Promise.race([
-        this.runServerRequestHandlersWithoutTimeout(request),
+        this.runServerRequestHandlersWithoutTimeout(request, controller.signal),
         new Promise<JsonValue>((resolve) => {
           timeout = setTimeout(() => {
             embeddedAgentLog.warn("codex app-server server request timed out", {
@@ -886,6 +898,7 @@ export class CodexAppServerClient {
               method: request.method,
               timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
             });
+            controller.abort(new Error("codex app-server server request timed out"));
             resolve(timeoutResponse);
           }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
           timeout.unref?.();
@@ -900,9 +913,13 @@ export class CodexAppServerClient {
 
   private async runServerRequestHandlersWithoutTimeout(
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+    signal: AbortSignal,
   ): Promise<JsonValue | undefined> {
     for (const handler of this.requestHandlers) {
-      const result = await handler(request);
+      if (signal.aborted) {
+        return undefined;
+      }
+      const result = await handler(request, signal);
       if (result !== undefined) {
         return result;
       }
@@ -1017,7 +1034,7 @@ class CodexAppServerVersionError extends Error {
       ? `detected ${detectedVersion}`
       : "OpenClaw could not determine the running Codex version";
     super(
-      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
+      `Codex app-server ${CODEX_APP_SERVER_VERSION} is required, but ${detected}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
     this.name = "CodexAppServerVersionError";
     this.detectedVersion = detectedVersion;
@@ -1026,16 +1043,7 @@ class CodexAppServerVersionError extends Error {
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
-  const parsedVersion = parseSemver(detectedVersion ?? "");
-  if (
-    !detectedVersion ||
-    !parsedVersion ||
-    parsedVersion.compare(MIN_CODEX_APP_SERVER_VERSION) < 0 ||
-    parsedVersion.compare(MAX_CODEX_APP_SERVER_VERSION) > 0 ||
-    // Generated schemas cover stable releases only; prereleases and custom builds can drift.
-    parsedVersion.prerelease.length > 0 ||
-    parsedVersion.build.length > 0
-  ) {
+  if (detectedVersion !== CODEX_APP_SERVER_VERSION) {
     throw new CodexAppServerVersionError(detectedVersion);
   }
   return detectedVersion;

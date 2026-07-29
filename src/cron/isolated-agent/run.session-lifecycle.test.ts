@@ -53,7 +53,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     mockRunCronFallbackPassthrough();
   });
 
-  it("rejects a session that rotates during async setup", async () => {
+  it("rejects a session that rotates before async setup", async () => {
     const sessionKey = "agent:main:main";
     const initialSessionEntry = makeCronSessionEntry({ sessionId: "session-before-setup" });
     resolveCronSessionMock.mockReturnValue(
@@ -69,19 +69,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       ...initialSessionEntry,
       sessionId: "session-after-setup",
     });
-    const releasePreflight = createDeferred();
-    preflightCronModelProviderMock.mockImplementationOnce(async () => {
-      await releasePreflight.promise;
-      return { status: "available" };
-    });
-
-    const run = runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey));
-    await vi.waitFor(() => expect(preflightCronModelProviderMock).toHaveBeenCalledTimes(1));
-    releasePreflight.resolve();
-
-    await expect(run).rejects.toThrow(
+    await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
       `Session "${sessionKey}" changed while starting work. Retry.`,
     );
+    expect(preflightCronModelProviderMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
@@ -121,6 +112,81 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
 
     await expect(run).resolves.toMatchObject({ status: "ok" });
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("protects the isolated cron session throughout async model preparation", async () => {
+    const sessionKey = "agent:main:cron:test-job";
+    const initialSessionEntry = makeCronSessionEntry({
+      lifecycleRevision: "initial-revision",
+      sessionId: "previous-session",
+    });
+    const sessionEntry = makeCronSessionEntry({ sessionId: "isolated-session" });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: true,
+        sessionEntry,
+      }),
+    );
+    loadSessionEntryMock.mockImplementation((_storePath, currentSessionKey) =>
+      currentSessionKey === sessionKey ? initialSessionEntry : undefined,
+    );
+    const releasePreflight = createDeferred();
+    preflightCronModelProviderMock.mockImplementationOnce(async () => {
+      await releasePreflight.promise;
+      return { status: "available" };
+    });
+
+    const run = runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        agentId: "main",
+        sessionKey: "cron:test-job",
+        job: makeIsolatedAgentJobFixture({
+          sessionTarget: "isolated",
+          delivery: { mode: "none" },
+        }),
+      }),
+    );
+    await vi.waitFor(() => expect(preflightCronModelProviderMock).toHaveBeenCalledTimes(1));
+    const sessionIsProtectedDuringPreflight = isSessionWorkAdmissionActive(inMemoryStorePath, [
+      sessionKey,
+      "previous-session",
+      "isolated-session",
+    ]);
+    releasePreflight.resolve();
+
+    expect(sessionIsProtectedDuringPreflight).toBe(true);
+    await expect(run).resolves.toMatchObject({ status: "ok" });
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    expect(patchSessionEntryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionKey }),
+      expect.any(Function),
+      expect.objectContaining({
+        fallbackEntry: expect.objectContaining({ sessionId: "isolated-session" }),
+      }),
+    );
+  });
+
+  it("does not recreate a persistent session deleted during async setup", async () => {
+    const sessionKey = "agent:main:main";
+    const initialSessionEntry = makeCronSessionEntry({ sessionId: "persistent-session" });
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        storePath: inMemoryStorePath,
+        store: { [sessionKey]: { ...initialSessionEntry } },
+        initialSessionEntry,
+        isNewSession: false,
+        sessionEntry: { ...initialSessionEntry },
+      }),
+    );
+    loadSessionEntryMock.mockReturnValue(undefined);
+
+    await expect(runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey))).rejects.toThrow(
+      `Session "${sessionKey}" changed while starting work. Retry.`,
+    );
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("interrupts persistent cron work and waits for its lifecycle lease to release", async () => {

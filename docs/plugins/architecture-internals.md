@@ -27,10 +27,6 @@ At startup, OpenClaw does roughly this:
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
-<Note>
-`activate` is a legacy alias for `register` — the loader resolves whichever is present (`def.register ?? def.activate`) and calls it at the same point. All bundled plugins use `register`; prefer `register` for new plugins.
-</Note>
-
 Safety gates run **before** runtime execution. Discovery blocks a candidate
 when:
 
@@ -228,10 +224,9 @@ conversation, and it runs after core approval handling finishes.
 Provider plugins have three layers:
 
 - **Manifest metadata** for cheap pre-runtime lookup:
-  `setup.providers[].envVars`, deprecated compatibility `providerAuthEnvVars`,
-  `providerAuthAliases`, `providerAuthChoices`, and `channelEnvVars`.
-- **Config-time hooks**: `catalog` (legacy `discovery`) plus
-  `applyConfigDefaults`.
+  `setup.providers[].envVars`, `providerAuthAliases`, `providerAuthChoices`,
+  and `channelConfigs`.
+- **Config-time hooks**: `catalog` plus `applyConfigDefaults`.
 - **Runtime hooks**: 40+ optional hooks covering auth, model resolution,
   stream wrapping, thinking levels, replay policy, and usage endpoints. See
   [Hook order and usage](#hook-order-and-usage).
@@ -242,9 +237,7 @@ behavior without needing a whole custom inference transport.
 
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
-loading plugin runtime. Deprecated `providerAuthEnvVars` is still read by the
-compatibility adapter during the deprecation window, and non-bundled plugins
-that use it receive a manifest diagnostic. Use manifest `providerAuthAliases`
+loading plugin runtime. Use manifest `providerAuthAliases`
 when one provider id should reuse another provider id's env vars, auth profiles,
 config-backed auth, and API-key onboarding choice. Use manifest
 `providerAuthChoices` when onboarding/auth-choice CLI surfaces should know the
@@ -253,9 +246,8 @@ loading provider runtime. Keep provider runtime
 `envVars` for operator-facing hints such as onboarding labels or OAuth
 client-id/client-secret setup vars.
 
-Use manifest `channelEnvVars` when a channel has env-driven auth or setup that
-generic shell-env fallback, config/status checks, or setup prompts should see
-without loading channel runtime.
+Describe env-driven channel setup and auth through the owning
+`channelConfigs.<id>.schema` and setup descriptors.
 
 ### Hook order and usage
 
@@ -452,7 +444,7 @@ const voices = await api.runtime.tts.listVoices({
 Notes:
 
 - `textToSpeech` returns the normal core TTS output payload for file/voice-note surfaces.
-- Uses core `messages.tts` configuration and provider selection.
+- Uses core `tts` configuration and provider selection.
 - Returns PCM audio buffer + sample rate. Plugins must resample/encode for providers.
 - `listVoices` is optional per provider. Use it for vendor-owned voice pickers or setup flows.
 - Core passes a resolved request deadline to provider `listVoices` hooks; provider-specific timeout settings may override it.
@@ -571,7 +563,6 @@ Notes:
   schemas while OpenClaw owns the provider/runtime boundary.
 - Uses core media-understanding audio configuration (`tools.media.audio`) and provider fallback order.
 - Returns `{ text: undefined }` when no transcription output is produced (for example skipped/unsupported input).
-- `api.runtime.stt.transcribeAudioFile(...)` remains as a compatibility alias.
 
 Plugins can also launch background subagent runs through `api.runtime.subagent`:
 
@@ -686,12 +677,11 @@ Notes:
 Use narrow SDK subpaths instead of the monolithic `openclaw/plugin-sdk` root
 barrel when authoring new plugins. Core subpaths:
 
-| Subpath                             | Purpose                                            |
-| ----------------------------------- | -------------------------------------------------- |
-| `openclaw/plugin-sdk/plugin-entry`  | Plugin registration primitives                     |
-| `openclaw/plugin-sdk/channel-core`  | Channel entry/build helpers                        |
-| `openclaw/plugin-sdk/core`          | Generic shared helpers and umbrella contract       |
-| `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
+| Subpath                            | Purpose                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `openclaw/plugin-sdk/plugin-entry` | Plugin registration primitives               |
+| `openclaw/plugin-sdk/channel-core` | Channel entry/build helpers                  |
+| `openclaw/plugin-sdk/core`         | Generic shared helpers and umbrella contract |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
@@ -709,11 +699,10 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
-small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
-`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
-and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
-older plugins. New code should import narrower generic primitives instead.
+`openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
+`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
+are deprecated compatibility shims for older plugins. New code should import
+narrower generic primitives instead.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -1014,7 +1003,6 @@ Useful `openclaw.channel` fields beyond the minimal example:
 - `exposure.configured`: hide the channel from configured-channel listing surfaces when set to `false`
 - `exposure.setup`: hide the channel from interactive setup/configure pickers when set to `false`
 - `exposure.docs`: mark the channel as internal/private for docs navigation surfaces
-- `showConfigured` / `showInSetup`: legacy aliases still accepted for compatibility; prefer `exposure`
 - `quickstartAllowFrom`: opt the channel into the standard quickstart `allowFrom` flow
 - `forceAccountBinding`: require explicit account binding even when only one account exists
 - `preferSessionLookupForAnnounceTarget`: prefer session lookup when resolving announce targets
@@ -1070,7 +1058,6 @@ pipeline rather than just add memory search or hooks.
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("lossless-claw", (ctx) => ({
@@ -1085,7 +1072,6 @@ export default function (api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
-          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
           agentSessionKey: sessionKey,
         }),
       };
@@ -1124,7 +1110,6 @@ import {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "openclaw/plugin-sdk/core";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function (api) {
   api.registerContextEngine("my-memory-engine", (ctx) => ({
@@ -1143,7 +1128,6 @@ export default function (api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
-          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
           agentSessionKey: sessionKey,
         }),
       };

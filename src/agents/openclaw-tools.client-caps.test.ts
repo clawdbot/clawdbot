@@ -1,5 +1,6 @@
 // Verifies gateway client capabilities are hard availability requirements for tools.
 import { describe, expect, it, vi } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions: () => [],
@@ -39,6 +40,25 @@ describe("gateway client capability tool filtering", () => {
     expect(
       hasWidget(createOpenClawTools({ agentChannel: "discord", clientCaps: ["inline-widgets"] })),
     ).toBe(false);
+  });
+
+  it("keeps the core widget tool out when Canvas host config disables it", () => {
+    expect(
+      hasWidget(
+        createOpenClawTools({
+          clientCaps: ["inline-widgets"],
+          config: {
+            plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps the core widget tool out when OPENCLAW_SKIP_CANVAS_HOST is set", () => {
+    withEnv({ OPENCLAW_SKIP_CANVAS_HOST: "1" }, () => {
+      expect(hasWidget(createOpenClawTools({ clientCaps: ["inline-widgets"] }))).toBe(false);
+    });
   });
 
   it("only exposes screen to UI-command clients", () => {

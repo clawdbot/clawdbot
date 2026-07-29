@@ -6,4 +6,6 @@ export * from "./connect-auth.js";
 export * from "./device-auth.js";
 export * from "./event-loop-ready.js";
 export * from "./readiness.js";
+export * from "./session-projection.js";
+export * from "./session-subscriptions.js";
 export * from "./timeouts.js";

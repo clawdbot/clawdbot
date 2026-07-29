@@ -24,7 +24,7 @@ export function resolveDiscordVoiceAccess(params: {
   const admissionAllowFrom =
     resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
     params.discordConfig.allowFrom ??
-    params.discordConfig.dm?.allowFrom ??
+    params.discordConfig.allowFrom ??
     [];
   return {
     admissionAllowFrom,

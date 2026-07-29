@@ -262,13 +262,15 @@ describe("node.invoke approval bypass", () => {
       gateway: {
         nodes: {
           pairing: { autoApproveCidrs: ["127.0.0.1/32", "::1/128"] },
-          allowCommands: [
-            "system.run",
-            "system.run.prepare",
-            "system.which",
-            "browser.proxy",
-            "fs.listDir",
-          ],
+          commands: {
+            allow: [
+              "system.run",
+              "system.run.prepare",
+              "system.which",
+              "browser.proxy",
+              "fs.listDir",
+            ],
+          },
         },
       },
     });
@@ -618,7 +620,15 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(directProxy.ok).toBe(false);
-      expect(directProxy.error?.message ?? "").toContain("missing scope: operator.admin");
+      expect(directProxy.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.admin",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
       await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();
@@ -674,7 +684,14 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(directList.ok).toBe(false);
-      expect(directList.error?.message ?? "").toContain("missing scope: operator.admin");
+      expect(directList.error).toMatchObject({
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.admin",
+          requiredScopes: ["operator.admin"],
+        },
+      });
       await expectNoForwardedInvoke(() => sawInvoke);
     } finally {
       ws.close();

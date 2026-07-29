@@ -115,7 +115,7 @@ final class QuickChatWindowPicker {
         windowService: (any WindowManagementServiceProtocol)? = nil,
         screenCaptureService: (any ScreenCaptureServiceProtocol)? = nil,
         permissionStatusProvider: @escaping PermissionStatusProvider = {
-            await PermissionManager.status([.screenRecording])[.screenRecording] == true
+            await PermissionManager.grantedStatus([.screenRecording])[.screenRecording] == true
         },
         permissionGrantProvider: @escaping PermissionGrantProvider = {
             _ = await PermissionManager.ensure([.screenRecording], interactive: true)
@@ -159,6 +159,12 @@ final class QuickChatWindowPicker {
             // interaction now, and finishing here would tear down the newer picker.
             guard self.operationID == operationID else { return }
             self.finishInteraction()
+            return
+        }
+        // The permission check above suspends; a dismissal/reopen during it may have
+        // taken over the interaction. Re-validate before installing any picker chrome
+        // so a cancelled operation cannot strand full-screen area overlays.
+        guard self.operationID == operationID, self.isInteractionActive, !Task.isCancelled else {
             return
         }
 
@@ -487,6 +493,10 @@ final class QuickChatWindowPicker {
                     self.clearCaptureTask(for: operationID)
                     return
                 }
+                // Pixels are captured; restore the bar now (kept hidden only so it could
+                // not appear inside the selected region) so image processing and the
+                // chat.send round-trip show progress instead of a vanished panel.
+                self.finishInteraction(invalidateOperation: false)
                 let accepted = await self.model.sendCapturedImage(
                     pipelineID: pipelineID,
                     data: result.imageData,

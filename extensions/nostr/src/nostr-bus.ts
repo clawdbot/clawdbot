@@ -304,6 +304,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
   const pool = new SimplePool();
+  pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
   const guardPolicy = createDirectDmPreCryptoGuardPolicy({

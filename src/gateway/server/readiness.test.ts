@@ -35,9 +35,12 @@ function createManager(snapshot: ChannelRuntimeSnapshot): ChannelManager {
     stopChannel: vi.fn(),
     setAutostartSuppression: vi.fn(),
     getAutostartSuppression: vi.fn(() => null),
+    setAmbientAutostartSuppressedChannelIds: vi.fn(),
+    isAmbientAutostartSuppressed: vi.fn(() => false),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
+    isAutoRestartScheduled: vi.fn(() => false),
     resetRestartAttempts: vi.fn(),
   };
 }
@@ -290,6 +293,24 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("reports ambient-suppressed dev channels without failing readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: {
+          discord: stoppedAccount({
+            restartPending: false,
+            lastError: "ambient credentials suppressed",
+          }),
+        },
+      });
+      vi.mocked(manager.isAmbientAutostartSuppressed).mockImplementation(
+        (channelId) => channelId === "discord",
+      );
+
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { suppressed: ["discord"] }));
+    });
+  });
+
   it("keeps restart-pending channels ready during reconnect backoff", () => {
     withReadinessClock(() => {
       const startedAt = Date.now() - FIVE_MIN_MS;
@@ -305,6 +326,60 @@ describe("createReadinessChecker", () => {
         },
       });
       expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("keeps a dead-ingress channel ready while its restart backoff is still pending", () => {
+    // The next start re-proves ingress, so this window gets the same grace as any
+    // other restart handoff rather than flapping readiness on every retry.
+    withReadinessClock(() => {
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: false,
+            restartPending: true,
+            ingressUnavailable: true,
+            reconnectAttempts: 3,
+            lastStartAt: startedAt - 30_000,
+            lastStopAt: Date.now() - 5_000,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("fails readiness for dead ingress once the restart ladder stops retrying", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: false,
+            restartPending: false,
+            ingressUnavailable: true,
+            reconnectAttempts: 11,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("fails readiness for a running channel whose transport is up but ingress is dead", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: true,
+            connected: true,
+            restartPending: true,
+            ingressUnavailable: true,
+            lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
     });
   });
 

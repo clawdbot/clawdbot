@@ -3,9 +3,9 @@ import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,
   renderNativeHookRelayUnavailableResponse,
-  type NativeHookRelayProcessResponse,
-} from "../agents/harness/native-hook-relay.js";
-import { callGateway } from "../gateway/call.js";
+} from "../agents/harness/native-hook-relay-client.js";
+import type { NativeHookRelayProcessResponse } from "../agents/harness/native-hook-relay-types.js";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { setSafeTimeout } from "../utils/timer-delay.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
@@ -28,8 +28,20 @@ type NativeHookRelayCliDeps = {
   stdout?: NodeJS.WritableStream;
   stderr?: NodeJS.WritableStream;
   invokeBridge?: typeof invokeNativeHookRelayBridge;
-  callGateway?: typeof callGateway;
+  callGateway?: CallGateway;
 };
+
+type CallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
+
+const NATIVE_HOOK_RELAY_VALUE_FLAGS = {
+  "--provider": "provider",
+  "--relay-id": "relayId",
+  "--state-db": "stateDb",
+  "--generation": "generation",
+  "--event": "event",
+  "--pre-tool-use-unavailable": "preToolUseUnavailable",
+  "--timeout": "timeout",
+} as const satisfies Record<string, keyof NativeHookRelayCliOptions>;
 
 type NativeHookRelayDeadline = {
   expiresAtMs: number;
@@ -45,6 +57,37 @@ class NativeHookRelayDeadlineError extends Error {
   }
 }
 
+/** Parse and run the internal native relay directly from the process argument vector. */
+export async function runNativeHookRelayCliFromArgv(
+  argv: string[],
+  deps: NativeHookRelayCliDeps = {},
+): Promise<number> {
+  return await runNativeHookRelayCli(parseNativeHookRelayCliOptions(argv), deps);
+}
+
+function parseNativeHookRelayCliOptions(argv: string[]): NativeHookRelayCliOptions {
+  const relayIndex = argv.findIndex((arg, index) => arg === "relay" && argv[index - 1] === "hooks");
+  if (relayIndex < 0) {
+    throw new Error("native hook relay command path is required");
+  }
+  const opts: NativeHookRelayCliOptions = {};
+  for (let index = relayIndex + 1; index < argv.length; index += 1) {
+    const rawFlag = argv[index] ?? "";
+    const equalsIndex = rawFlag.indexOf("=");
+    const flag = equalsIndex > 0 ? rawFlag.slice(0, equalsIndex) : rawFlag;
+    const key = NATIVE_HOOK_RELAY_VALUE_FLAGS[flag as keyof typeof NATIVE_HOOK_RELAY_VALUE_FLAGS];
+    if (!key) {
+      throw new Error(`unknown native hook relay option: ${rawFlag}`);
+    }
+    const value = equalsIndex > 0 ? rawFlag.slice(equalsIndex + 1) : argv[++index];
+    if (!value) {
+      throw new Error(`native hook relay option ${flag} requires a value`);
+    }
+    opts[key] = value;
+  }
+  return opts;
+}
+
 /** Run one native hook relay invocation from stdin JSON to stdout/stderr response streams. */
 export async function runNativeHookRelayCli(
   opts: NativeHookRelayCliOptions,
@@ -54,7 +97,7 @@ export async function runNativeHookRelayCli(
   const stdout = deps.stdout ?? process.stdout;
   const stderr = deps.stderr ?? process.stderr;
   const invokeBridge = deps.invokeBridge ?? invokeNativeHookRelayBridge;
-  const callGatewayFn = deps.callGateway ?? callGateway;
+  const callGatewayFn = deps.callGateway ?? callGatewayLazy;
   const provider = readRequiredOption(opts.provider, "provider");
   const relayId = readRequiredOption(opts.relayId, "relay-id");
   const generation = opts.generation?.trim() || undefined;
@@ -158,6 +201,11 @@ export async function runNativeHookRelayCli(
   }
 }
 
+async function callGatewayLazy<T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> {
+  const { callGateway } = await import("../gateway/call.js");
+  return await callGateway<T>(opts);
+}
+
 function readRequiredOption(value: string | undefined, name: string): string {
   if (typeof value === "string" && value.trim()) {
     return value.trim();
@@ -257,24 +305,39 @@ async function withNativeHookRelayDeadline<T>(
   deadline: NativeHookRelayDeadline,
   promise: Promise<T>,
 ): Promise<T> {
-  throwIfNativeHookRelayDeadlineExpired(deadline);
   return await new Promise<T>((resolve, reject) => {
+    let settled = false;
     const cleanup = () => deadline.signal.removeEventListener("abort", abort);
     const abort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       cleanup();
       reject(createNativeHookRelayDeadlineError(deadline));
     };
     deadline.signal.addEventListener("abort", abort, { once: true });
     promise.then(
       (value) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         cleanup();
         resolve(value);
       },
       (error: unknown) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         cleanup();
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
+    if (deadline.signal.aborted || deadline.expiresAtMs <= Date.now()) {
+      abort();
+    }
   });
 }
 

@@ -182,6 +182,7 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxTranscriptItemBytes = 4 * 1024 * 1024
     private static let maxTranscriptPageBytes = 20 * 1024 * 1024
     private static let maxTruncatedTranscriptTextBytes = 512 * 1024
+    private static let cliEntrypoints: Set<String> = ["cli", "sdk-cli"]
     private static let iso8601FractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601Style = Date.ISO8601FormatStyle()
     private static let catalogDiscoveryCache = CatalogDiscoveryCache()
@@ -629,6 +630,11 @@ extension MacNodeClaudeSessionCatalog {
                 (inspection.shouldStop || reachedEnd || fileBytes >= self.metadataPrefixBytes))
     }
 
+    private static func isCLIEntrypoint(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        return self.cliEntrypoints.contains(value)
+    }
+
     private static func inspectCLIRecordLine(
         _ line: Data,
         sessionId: String,
@@ -643,18 +649,20 @@ extension MacNodeClaudeSessionCatalog {
             inspection.aiTitle = self.string(row["aiTitle"], maxLength: 500) ?? inspection.aiTitle
             return
         }
-        if let entrypoint = row["entrypoint"] as? String, entrypoint != "sdk-cli" {
+        if let entrypoint = row["entrypoint"] as? String,
+           !self.isCLIEntrypoint(entrypoint)
+        {
             inspection.shouldStop = true
             return
         }
-        if row["entrypoint"] as? String == "sdk-cli",
+        if self.isCLIEntrypoint(row["entrypoint"]),
            (row["isSidechain"] as? Bool) == true
         {
             inspection.sidechain = true
             inspection.shouldStop = true
             return
         }
-        guard row["entrypoint"] as? String == "sdk-cli",
+        guard self.isCLIEntrypoint(row["entrypoint"]),
               row["type"] as? String == "user",
               let message = row["message"] as? [String: Any],
               message["role"] as? String == "user",

@@ -5,11 +5,8 @@ import {
 import {
   registerMemoryCapability as registerGlobalMemoryCapability,
   registerMemoryCorpusSupplement as registerGlobalMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptPreparation as registerGlobalMemoryPromptPreparation,
   registerMemoryPromptSupplement as registerGlobalMemoryPromptSupplement,
-  registerMemoryPromptSectionForPlugin,
-  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
@@ -41,15 +38,6 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
   ) => {
     if (requireMemorySlot(record, "capability")) {
       registerGlobalMemoryCapability(record.id, capability);
-    }
-  };
-
-  const registerMemoryPromptSection = (
-    record: PluginRecord,
-    builder: Parameters<OpenClawPluginApi["registerMemoryPromptSection"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "prompt section")) {
-      registerMemoryPromptSectionForPlugin(record.id, builder);
     }
   };
 
@@ -92,24 +80,6 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     registerGlobalMemoryCorpusSupplement(record.id, supplement);
   };
 
-  const registerMemoryFlushPlan = (
-    record: PluginRecord,
-    resolver: Parameters<OpenClawPluginApi["registerMemoryFlushPlan"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "flush plan")) {
-      registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
-    }
-  };
-
-  const registerMemoryRuntime = (
-    record: PluginRecord,
-    runtime: Parameters<OpenClawPluginApi["registerMemoryRuntime"]>[0],
-  ) => {
-    if (requireMemorySlot(record, "runtime")) {
-      registerMemoryRuntimeForPlugin(record.id, runtime);
-    }
-  };
-
   const registerMemoryEmbeddingProvider = (
     record: PluginRecord,
     adapter: Parameters<OpenClawPluginApi["registerMemoryEmbeddingProvider"]>[0],
@@ -150,12 +120,9 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
 
   return {
     registerMemoryCapability,
-    registerMemoryPromptSection,
     registerMemoryPromptSupplement,
     registerMemoryPromptPreparation,
     registerMemoryCorpusSupplement,
-    registerMemoryFlushPlan,
-    registerMemoryRuntime,
     registerMemoryEmbeddingProvider,
   };
 }

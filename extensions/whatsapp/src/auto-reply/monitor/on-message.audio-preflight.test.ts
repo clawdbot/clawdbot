@@ -108,7 +108,7 @@ function makeAudioMsg(): WebInboundMessage {
 
 function makeLegacyAudioMsg() {
   return createTestLegacyFlatWebInboundMessage({
-    body: "<media:audio>",
+    body: "",
     mediaPath: "/tmp/voice.ogg",
     mediaType: "audio/ogg; codecs=opus",
   });
@@ -465,8 +465,13 @@ describe("createWebOnMessageHandler audio preflight", () => {
     await handler(makeAudioMsg());
 
     expect(capturedCtx).toEqual({
-      MediaPaths: ["/tmp/voice.ogg"],
-      MediaTypes: ["audio/ogg; codecs=opus"],
+      media: [
+        {
+          path: "/tmp/voice.ogg",
+          contentType: "audio/ogg; codecs=opus",
+          kind: "audio",
+        },
+      ],
       From: "+15550000002",
       To: "+15550000001",
       Provider: "whatsapp",

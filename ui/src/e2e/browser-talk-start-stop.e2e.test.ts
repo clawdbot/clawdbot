@@ -20,6 +20,15 @@ let server: ControlUiE2eServer;
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let browser: Browser;
 
+function videoTalkCatalog(activeProvider: "google" | "openai") {
+  return {
+    realtime: {
+      activeProvider,
+      providers: [{ id: activeProvider, label: activeProvider, supportsVideoFrames: true }],
+    },
+  };
+}
+
 async function installTalkBrowserFixtures(page: Page) {
   await page.addInitScript(() => {
     type InputProcessor = {
@@ -183,6 +192,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       methodResponses: {
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-browser-talk-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           clientSecret: "auth_tokens/browser-talk-e2e",
@@ -364,6 +374,7 @@ describeControlUiE2e("Control UI browser Talk", () => {
       methodResponses: {
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-controls-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -474,13 +485,15 @@ describeControlUiE2e("Control UI browser Talk", () => {
     }
   });
 
-  it("starts OpenAI Video Talk, previews a fake camera, and submits describe_view", async () => {
+  it("starts OpenAI Talk, enables a fake camera, and submits describe_view", async () => {
     const context = await browser.newContext({ permissions: ["camera", "microphone"] });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
+        "talk.catalog": videoTalkCatalog("openai"),
         "talk.client.create": {
           provider: "openai",
+          voiceSessionId: "voice-openai-video-e2e",
           transport: "webrtc",
           clientSecret: "test-client-secret",
           offerUrl: "https://api.openai.com/v1/realtime/calls",
@@ -528,14 +541,25 @@ describeControlUiE2e("Control UI browser Talk", () => {
           super();
           (
             window as Window & {
-              openclawVideoTalkE2e?: { peer: FakePeerConnection };
+              openclawVideoTalkE2e?: {
+                dataChannelCreated: boolean;
+                peer: FakePeerConnection;
+              };
             }
-          ).openclawVideoTalkE2e = { peer: this };
+          ).openclawVideoTalkE2e = { dataChannelCreated: false, peer: this };
         }
 
         addTrack() {}
 
         createDataChannel() {
+          const harness = (
+            window as Window & {
+              openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+            }
+          ).openclawVideoTalkE2e;
+          if (harness) {
+            harness.dataChannelCreated = true;
+          }
           return this.channel;
         }
 
@@ -570,13 +594,36 @@ describeControlUiE2e("Control UI browser Talk", () => {
       await page.goto(`${server.baseUrl}chat`);
       await captureVideoTalkProof(page, "01-before-video-talk.png");
 
-      await page.getByRole("button", { name: "Start video talk" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
-        capabilities: ["camera-frame"],
         sessionKey: "main",
       });
       console.info("[video-talk-e2e] session=provider:openai,transport:webrtc");
+      await expect
+        .poll(() =>
+          page.evaluate(() =>
+            Boolean(
+              (
+                window as Window & {
+                  openclawVideoTalkE2e?: { dataChannelCreated: boolean };
+                }
+              ).openclawVideoTalkE2e?.dataChannelCreated,
+            ),
+          ),
+        )
+        .toBe(true);
+      await page.evaluate(() => {
+        const channel = (
+          window as Window & {
+            openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
+          }
+        ).openclawVideoTalkE2e?.peer.channel;
+        channel?.dispatchEvent(new Event("open"));
+      });
+      const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
+      await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
+      await turnCameraOn.click();
       const preview = page.locator('video[aria-label="Camera preview"]');
       await expect.poll(() => preview.isVisible()).toBe(true);
       await expect
@@ -591,14 +638,6 @@ describeControlUiE2e("Control UI browser Talk", () => {
       console.info(
         `[video-talk-e2e] preview=live,width:${dimensions.width},height:${dimensions.height}`,
       );
-      await page.evaluate(() => {
-        const channel = (
-          window as Window & {
-            openclawVideoTalkE2e?: { peer: { channel: EventTarget } };
-          }
-        ).openclawVideoTalkE2e?.peer.channel;
-        channel?.dispatchEvent(new Event("open"));
-      });
       await captureVideoTalkProof(page, "02-live-camera-preview.png");
 
       await page.evaluate(() => {
@@ -647,7 +686,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
       const talkRequests = (await gateway.getRequests()).filter((entry) =>
         entry.method.startsWith("talk."),
       );
-      expect(talkRequests.map((entry) => entry.method)).toEqual(["talk.client.create"]);
+      expect(talkRequests.map((entry) => entry.method)).toEqual([
+        "talk.catalog",
+        "talk.client.create",
+      ]);
       console.info(
         "[video-talk-e2e] describe_view=input_image+function_output+response_create,gateway_frame_requests:0",
       );
@@ -670,13 +712,15 @@ describeControlUiE2e("Control UI browser Talk", () => {
     }
   });
 
-  it("starts Gemini Live Video Talk, streams a fake camera directly, and handles describe_view", async () => {
+  it("starts Gemini Live Talk, enables a fake camera, and handles describe_view", async () => {
     const context = await browser.newContext({ permissions: ["camera", "microphone"] });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
+        "talk.catalog": videoTalkCatalog("google"),
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-google-video-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -740,12 +784,14 @@ describeControlUiE2e("Control UI browser Talk", () => {
     try {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Start video talk" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
       const request = await gateway.waitForRequest("talk.client.create");
       expect(request.params).toMatchObject({
-        capabilities: ["camera-frame"],
         sessionKey: "main",
       });
+      const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
+      await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
+      await turnCameraOn.click();
       const preview = page.locator('video[aria-label="Camera preview"]');
       await expect.poll(() => preview.isVisible()).toBe(true);
       await expect
@@ -786,7 +832,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
       const talkRequests = (await gateway.getRequests()).filter((entry) =>
         entry.method.startsWith("talk."),
       );
-      expect(talkRequests.map((entry) => entry.method)).toEqual(["talk.client.create"]);
+      expect(talkRequests.map((entry) => entry.method)).toEqual([
+        "talk.catalog",
+        "talk.client.create",
+      ]);
       await captureVideoTalkProof(page, "05-gemini-live-camera-preview.png");
       console.info(
         "[video-talk-e2e] gemini=realtimeInput.video+functionResponse,gateway_frame_requests:0",
@@ -814,8 +863,10 @@ describeControlUiE2e("Control UI browser Talk", () => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
+        "talk.catalog": videoTalkCatalog("google"),
         "talk.client.create": {
           provider: "google",
+          voiceSessionId: "voice-blocked-camera-e2e",
           transport: "provider-websocket",
           protocol: "google-live-bidi",
           // Fake harness token, assembled so secret scanners do not flag it.
@@ -831,19 +882,32 @@ describeControlUiE2e("Control UI browser Talk", () => {
         },
       },
     });
+    await page.routeWebSocket("wss://generativelanguage.googleapis.com/**", (ws) => {
+      ws.onMessage((message) => {
+        const parsed = JSON.parse(typeof message === "string" ? message : message.toString()) as {
+          setup?: unknown;
+        };
+        if (parsed.setup) {
+          ws.send(JSON.stringify({ setupComplete: {} }));
+        }
+      });
+    });
     await installBlockedVideoTalkFixture(page);
 
     try {
       await page.setViewportSize({ width: 1366, height: 900 });
       await page.goto(`${server.baseUrl}chat`);
-      await page.getByRole("button", { name: "Start video talk" }).click();
+      await page.getByRole("button", { name: "Start voice input" }).click();
       await gateway.waitForRequest("talk.client.create");
+      const turnCameraOn = page.getByRole("button", { name: "Turn camera on" });
+      await expect.poll(() => turnCameraOn.isEnabled()).toBe(true);
+      await turnCameraOn.click();
 
       const alert = page.getByRole("alert");
       await expect.poll(() => alert.textContent()).toContain("Camera access is blocked.");
       await expect.poll(() => page.locator('video[aria-label="Camera preview"]').count()).toBe(0);
       await expect
-        .poll(() => page.getByRole("button", { name: "Start video talk" }).isVisible())
+        .poll(() => page.getByRole("button", { name: "Turn camera on" }).isVisible())
         .toBe(true);
       await captureVideoTalkProof(page, "03-camera-permission-blocked.png");
       console.info("[video-talk-e2e] camera_denial=actionable,no-audio-fallback");

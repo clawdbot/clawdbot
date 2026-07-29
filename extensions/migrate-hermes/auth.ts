@@ -444,6 +444,7 @@ export async function applyAuthItem(
   }
   const store = await updateAuthProfileStoreWithLock({
     agentDir: targets.agentDir,
+    stateDir: ctx.stateDir,
     updater: (freshStore) => {
       const existing = freshStore.profiles[profileId];
       if (!ctx.overwrite && existing) {

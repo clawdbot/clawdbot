@@ -4,6 +4,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => {
+  // Bind provider discovery to this file's mocks in non-isolated plugin workers.
+  vi.resetModules();
   const loadSource = vi.fn();
   const loaderCache = { kind: "provider-discovery-loader-cache", clear: vi.fn() };
   return {
@@ -159,7 +161,6 @@ function createManifestPluginWithEntryAndRuntimeDiscovery(): PluginManifestRecor
 
 function createManifestPluginWithoutDiscovery(params: {
   id: string;
-  providerAuthEnvVars?: Record<string, string[]>;
   setupProviders?: NonNullable<PluginManifestRecord["setup"]>["providers"];
 }): PluginManifestRecord {
   const { providerDiscoverySource: _providerDiscoverySource, ...plugin } = createManifestPlugin(
@@ -168,7 +169,6 @@ function createManifestPluginWithoutDiscovery(params: {
   return {
     ...plugin,
     ...(params.setupProviders ? { setup: { providers: params.setupProviders } } : {}),
-    ...(params.providerAuthEnvVars ? { providerAuthEnvVars: params.providerAuthEnvVars } : {}),
   };
 }
 
@@ -523,11 +523,11 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
           createManifestPlugin("deepseek"),
           createManifestPluginWithoutDiscovery({
             id: "kilocode",
-            providerAuthEnvVars: { kilocode: ["KILOCODE_API_KEY"] },
+            setupProviders: [{ id: "kilocode", envVars: ["KILOCODE_API_KEY"] }],
           }),
           createManifestPluginWithoutDiscovery({
             id: "unused",
-            providerAuthEnvVars: { unused: ["UNUSED_API_KEY"] },
+            setupProviders: [{ id: "unused", envVars: ["UNUSED_API_KEY"] }],
           }),
         ],
         diagnostics: [],

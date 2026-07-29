@@ -11,6 +11,11 @@ export {
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
 } from "./ingress-drain.js";
 export {
+  CHANNEL_INGRESS_RETENTION_DEFAULTS,
+  createChannelIngressError,
+  createChannelIngressMonitor,
+} from "./ingress-monitor.js";
+export {
   DEFAULT_INGRESS_RETRY_DEAD_LETTER_MIN_AGE_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "./ingress-retry-policy.js";
@@ -41,6 +46,10 @@ export {
   resolveChannelSourceReplyDeliveryMode,
 } from "./reply-pipeline.js";
 export type { ChannelIngressDrain } from "./ingress-drain.js";
+export type {
+  ChannelIngressMonitorDeliveryResult,
+  ChannelIngressMonitorLifecycle,
+} from "./ingress-monitor.js";
 export type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,

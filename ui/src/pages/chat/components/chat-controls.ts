@@ -31,7 +31,7 @@ function chatViewMenuRows(props: ChatControlsProps): ChatViewMenuRow[] {
   // Onboarding pins the display: no thinking noise, tool calls visible.
   const showThinking = onboarding ? false : settings.chatShowThinking;
   const showToolCalls = onboarding ? true : settings.chatShowToolCalls;
-  const persistCommentary = settings.chatPersistCommentary === true;
+  const persistCommentary = settings.chatPersistCommentary !== false;
   return [
     {
       label: t("chat.view.reasoning"),

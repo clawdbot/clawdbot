@@ -1,9 +1,10 @@
 import { listAgentIds } from "../agents/agent-scope.js";
-import type {
-  DoctorSessionSqliteIssue,
-  DoctorSessionSqliteReport,
-  DoctorSessionSqliteRestoreReport,
-} from "../commands/doctor-session-sqlite.js";
+import {
+  isSessionSqliteMigrationWarning,
+  type DoctorSessionSqliteIssue,
+  type DoctorSessionSqliteReport,
+  type DoctorSessionSqliteRestoreReport,
+} from "../commands/doctor-session-sqlite-types.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
@@ -33,14 +34,6 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
   runDoctorSessionSqlite?: SessionSqliteStartupImportRunner;
   writeSessionSqliteMigrationFailureReports?: SessionSqliteStartupFailureReportWriter;
 };
-
-const STARTUP_WARNING_ISSUE_CODES = new Set([
-  "entry_invalid",
-  "transcript_archive_failed",
-  "transcript_malformed",
-  "transcript_missing",
-  "unreferenced_jsonl_archive_failed",
-]);
 
 /**
  * Run session migrations at gateway startup before runtime session access.
@@ -194,16 +187,14 @@ function collectStartupBlockingIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
   return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => !STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
+    target.issues.filter((issue) => !isSessionSqliteMigrationWarning(issue)),
   );
 }
 
 function collectStartupWarningIssues(
   report: DoctorSessionSqliteReport,
 ): DoctorSessionSqliteIssue[] {
-  return report.targets.flatMap((target) =>
-    target.issues.filter((issue) => STARTUP_WARNING_ISSUE_CODES.has(issue.code)),
-  );
+  return report.targets.flatMap((target) => target.issues.filter(isSessionSqliteMigrationWarning));
 }
 
 function formatStartupIssueLines(issues: readonly DoctorSessionSqliteIssue[]): readonly string[] {

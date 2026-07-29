@@ -34,14 +34,13 @@ import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
   loadAgentTurnMediaRuntime,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
-import { resolveFirstContextText } from "./context-text.js";
 import {
   createAcpDispatchDeliveryCoordinator,
   type AcpDispatchDeliveryCoordinator,
@@ -128,17 +127,11 @@ type DispatchProcessedRecorder = (
   },
 ) => void;
 
-function resolveAcpPromptText(ctx: FinalizedMsgContext): string {
-  return resolveFirstContextText(ctx, [
-    "BodyForAgent",
-    "BodyForCommands",
-    "CommandBody",
-    "RawBody",
-    "Body",
-  ]).trim();
+function resolveAcpPromptText(ctx: FinalizedRuntimeMsgContext): string {
+  return ctx.agentText.trim();
 }
 
-function resolveAcpRequestId(ctx: FinalizedMsgContext): string {
+function resolveAcpRequestId(ctx: FinalizedRuntimeMsgContext): string {
   const id = ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   if (typeof id === "string") {
     const normalizedId = normalizeOptionalString(id);
@@ -394,7 +387,7 @@ async function finalizeAcpTurnOutput(params: {
 }
 
 export async function tryDispatchAcpReply(params: {
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
   runId?: string;
@@ -531,7 +524,7 @@ export async function tryDispatchAcpReply(params: {
       ...options,
       dispatcher: params.dispatcher,
       delivery,
-      getStats: () => acpManager.getObservabilitySnapshot(params.cfg),
+      getStats: () => acpManager.getObservabilitySnapshot(),
       sessionKey,
       startedAt: acpDispatchStartedAt,
       recordProcessed: params.recordProcessed,
@@ -548,6 +541,7 @@ export async function tryDispatchAcpReply(params: {
   let auditTerminalOutcome: "blocked" | undefined;
   let auditStopReason: string | undefined;
   let auditResultStatus: "completed" | "cancelled" | undefined;
+  let runtimeTurnWasCancelled = false;
   const emitAuditStart = () => {
     if (auditStarted) {
       return;
@@ -771,13 +765,18 @@ export async function tryDispatchAcpReply(params: {
         if (event.type === "done") {
           auditStopReason = event.stopReason;
           auditResultStatus = event.status;
+          runtimeTurnWasCancelled = event.status === "cancelled";
         }
         await projector.onEvent(event);
       },
     });
 
     await projector.flush(true);
-    if (params.abortSignal?.aborted) {
+    if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
+      // A cancelled runtime can return normally after the projector has already
+      // delivered partial output. Keep the bound transcript aligned with it.
+      await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
+      queuedFinal = delivery.hasDeliveredFinalReply() || queuedFinal;
       const counts = params.dispatcher.getQueuedCounts();
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_aborted" });
@@ -800,9 +799,7 @@ export async function tryDispatchAcpReply(params: {
 
     // Persist once the turn's outcome is settled. Writing before finalization
     // would leave a finalizer failure recorded as a clean success.
-    await persistTranscript(
-      delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText(),
-    );
+    await persistTranscript(delivery.getAccumulatedTranscriptText());
 
     const result = finishAttempt({
       queuedFinal,
@@ -825,7 +822,7 @@ export async function tryDispatchAcpReply(params: {
     const errorText = formatAcpRuntimeErrorText(acpError);
     // Snapshot streamed output before delivering the error: delivery accumulates
     // what it sends, so reading after would fold the error text in twice.
-    const partialText = delivery.getAccumulatedFinalText() || delivery.getAccumulatedBlockText();
+    const partialText = delivery.getAccumulatedTranscriptText();
     const delivered = await delivery.deliver("final", {
       text: errorText,
       isError: true,

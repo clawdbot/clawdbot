@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { toErrorObject } from "../infra/errors.js";
 
 const resolveMs = (value: unknown): number | undefined =>
   resolveOptionalIntegerOption(value, { min: 0 });
@@ -39,12 +40,95 @@ type DebounceBuffer<T> = {
   items: T[];
   timeout: ReturnType<typeof setTimeout> | null;
   debounceMs: number;
+  flushDeadlineMs: number;
   releaseReady: () => void;
   readyReleased: boolean;
   task: Promise<void>;
 };
 
+/** A flush releases its debounce lane at admission while completion remains drainable. */
+type InboundDebounceFlush = {
+  admission: Promise<void>;
+  completion: Promise<void>;
+};
+
+type InboundDebounceAdmissionLifecycleInput = {
+  abortSignal?: AbortSignal;
+  onAdopted?: () => void | Promise<void>;
+  onDeferred?: () => boolean | void;
+  onAdoptionFinalizing?: () => void;
+  onFailed?: (error: unknown) => void | Promise<void>;
+  onAbandoned?: () => void | Promise<void>;
+};
+
+/** Lifecycle shape passed to a channel dispatch so it can signal session-lane admission. */
+type InboundDebounceAdmissionLifecycle = {
+  abortSignal: AbortSignal;
+  onAdopted: () => Promise<void>;
+  onDeferred: () => boolean | void;
+  onAdoptionFinalizing: () => void;
+  onFailed?: (error: unknown) => Promise<void>;
+  onAbandoned: () => Promise<void>;
+};
+
+/**
+ * Start one flush and bind its admission signal to the turn lifecycle.
+ * Completion also releases admission for gated work that never enters a session lane.
+ */
+function createInboundDebounceFlush(params: {
+  lifecycle?: InboundDebounceAdmissionLifecycleInput;
+  dispatch: (lifecycle: InboundDebounceAdmissionLifecycle) => Promise<void>;
+}): InboundDebounceFlush {
+  let resolveAdmission!: () => void;
+  let admitted = false;
+  const admission = new Promise<void>((resolve) => {
+    resolveAdmission = resolve;
+  });
+  const markAdmitted = () => {
+    if (admitted) {
+      return;
+    }
+    admitted = true;
+    resolveAdmission();
+  };
+  const source = params.lifecycle;
+  const lifecycle: InboundDebounceAdmissionLifecycle = {
+    abortSignal: source?.abortSignal ?? new AbortController().signal,
+    onAdopted: async () => {
+      await source?.onAdopted?.();
+      markAdmitted();
+    },
+    onDeferred: () => {
+      const accepted = source?.onDeferred?.();
+      if (accepted !== false) {
+        markAdmitted();
+      }
+      return accepted;
+    },
+    onAdoptionFinalizing: () => source?.onAdoptionFinalizing?.(),
+    onFailed: source?.onFailed
+      ? async (error) => {
+          await source.onFailed?.(error);
+        }
+      : undefined,
+    onAbandoned: async () => {
+      await source?.onAbandoned?.();
+    },
+  };
+  let completion: Promise<void>;
+  try {
+    completion = params.dispatch(lifecycle);
+  } catch (error) {
+    completion = Promise.reject(toErrorObject(error, "Inbound debounce dispatch failed"));
+  }
+  // A skipped or failed dispatch may never call a lifecycle hook; its terminal
+  // completion must still release the keyed chain.
+  void completion.then(markAdmitted, markAdmitted);
+  return { admission, completion };
+}
+
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
+const MAX_DEBOUNCE_WINDOW_MULTIPLIER = 5;
 
 /** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
@@ -54,7 +138,7 @@ export type InboundDebounceCreateParams<T> = {
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
   serializeImmediate?: boolean;
-  onFlush: (items: T[]) => Promise<void>;
+  onFlush: (items: T[], createFlush: typeof createInboundDebounceFlush) => InboundDebounceFlush;
   onError?: (err: unknown, items: T[]) => void;
   onCancel?: (items: T[]) => void;
 };
@@ -64,6 +148,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();
   const keyGenerations = new Map<string, number>();
+  const activeCompletions = new Set<Promise<void>>();
   const defaultDebounceMs = resolveNonNegativeIntegerOption(params.debounceMs, 0);
   const maxTrackedKeys = Math.max(1, Math.trunc(params.maxTrackedKeys ?? DEFAULT_MAX_TRACKED_KEYS));
 
@@ -72,17 +157,37 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     return resolveNonNegativeIntegerOption(resolved, defaultDebounceMs);
   };
 
-  const runFlush = async (items: T[]) => {
+  const reportFlushError = (err: unknown, items: T[]) => {
     try {
-      await params.onFlush(items);
-    } catch (err) {
-      try {
-        params.onError?.(err, items);
-      } catch {
-        // Flush failures are reported via onError, but this helper stays
-        // non-throwing so keyed chains can continue processing later items.
-      }
+      params.onError?.(err, items);
+    } catch {
+      // Flush failures are reported via onError, but this helper stays
+      // non-throwing so keyed chains can continue processing later items.
     }
+  };
+
+  const runFlush = async (items: T[]) => {
+    let flush: InboundDebounceFlush;
+    try {
+      flush = params.onFlush(items, createInboundDebounceFlush);
+    } catch (err) {
+      reportFlushError(err, items);
+      return;
+    }
+    let reported = false;
+    const reportOnce = (err: unknown) => {
+      if (reported) {
+        return;
+      }
+      reported = true;
+      reportFlushError(err, items);
+    };
+    const admission = flush.admission.catch(reportOnce);
+    const completion = flush.completion.catch(reportOnce);
+    activeCompletions.add(completion);
+    const cleanup = () => activeCompletions.delete(completion);
+    void completion.then(cleanup, cleanup);
+    await Promise.race([admission, completion]);
   };
 
   const cancelItems = (items: T[]) => {
@@ -227,9 +332,15 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
+    // Keep the first item's monotonic deadline fixed so continuous arrivals
+    // and wall-clock changes cannot hold a reserved ingress lane indefinitely.
+    const delayMs = Math.min(
+      buffer.debounceMs,
+      Math.max(0, buffer.flushDeadlineMs - performance.now()),
+    );
     buffer.timeout = setTimeout(() => {
       void flushBuffer(key, buffer);
-    }, buffer.debounceMs);
+    }, delayMs);
     buffer.timeout.unref?.();
   };
 
@@ -313,6 +424,7 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       items: [item],
       timeout: null,
       debounceMs,
+      flushDeadlineMs: performance.now() + debounceMs * MAX_DEBOUNCE_WINDOW_MULTIPLIER,
       releaseReady: reservedTask.release,
       readyReleased: false,
       task: reservedTask.task,
@@ -321,5 +433,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey, cancelKey };
+  const drain = async () => {
+    // Callers flush or cancel buffers first. Waiting both registries closes the
+    // handoff gap before a queued same-key task registers its completion.
+    while (keyChains.size > 0 || activeCompletions.size > 0) {
+      await Promise.all([...keyChains.values(), ...activeCompletions]);
+    }
+  };
+
+  return { enqueue, flushKey, cancelKey, drain };
 }

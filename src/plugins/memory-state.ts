@@ -111,6 +111,15 @@ export type MemoryFlushPlan = {
   prompt: string;
   systemPrompt: string;
   relativePath: string;
+  recordWriteProvenance?: (params: {
+    workspaceDir: string;
+    relativePath: string;
+    contentBefore: string;
+    contentAfter: string;
+    originClass: "agent" | "untrusted";
+    observedAt: number;
+  }) => Promise<(() => Promise<void>) | void>;
+  clearWriteProvenance?: (params: { workspaceDir: string; relativePath: string }) => Promise<void>;
 };
 
 export type MemoryFlushPlanResolver = (params: {
@@ -240,14 +249,6 @@ export function registerMemoryCapability(
   };
 }
 
-function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability): void {
-  const current =
-    memoryPluginState.capability?.pluginId === pluginId
-      ? memoryPluginState.capability.capability
-      : {};
-  registerMemoryCapability(pluginId, { ...current, ...patch });
-}
-
 export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistration | undefined {
   return memoryPluginState.capability
     ? {
@@ -260,13 +261,6 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
 export function listMemoryCorpusSupplements(): MemoryCorpusSupplementRegistration[] {
   return [...memoryPluginState.corpusSupplements];
 }
-export function registerMemoryPromptSectionForPlugin(
-  pluginId: string,
-  builder: MemoryPromptSectionBuilder,
-): void {
-  patchMemoryCapability(pluginId, { promptBuilder: builder });
-}
-
 export function registerMemoryPromptSupplement(
   pluginId: string,
   builder: MemoryPromptSectionBuilder,
@@ -421,26 +415,12 @@ export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistratio
 export function listMemoryPromptPreparations(): MemoryPromptPreparationRegistration[] {
   return [...memoryPluginState.promptPreparations];
 }
-export function registerMemoryFlushPlanResolverForPlugin(
-  pluginId: string,
-  resolver: MemoryFlushPlanResolver,
-): void {
-  patchMemoryCapability(pluginId, { flushPlanResolver: resolver });
-}
-
 export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
 }
-export function registerMemoryRuntimeForPlugin(
-  pluginId: string,
-  runtime: MemoryPluginRuntime,
-): void {
-  patchMemoryCapability(pluginId, { runtime });
-}
-
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return memoryPluginState.capability?.capability.runtime;
 }

@@ -137,6 +137,7 @@ vi.mock("../config/sessions/paths.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: statusSummaryMocks.listSessionEntries,
+  listSessionEntriesReadOnly: statusSummaryMocks.listSessionEntries,
 }));
 
 vi.mock("../gateway/agent-list.js", () => ({
@@ -170,6 +171,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  LEGACY_IMPLICIT_AGENT_ID: "main",
   normalizeAgentId: vi.fn((value: string) => value),
   normalizeMainKey: vi.fn((value?: string) => value ?? "main"),
   parseAgentSessionKey: vi.fn(() => null),

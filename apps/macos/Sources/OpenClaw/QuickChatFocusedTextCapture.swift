@@ -216,7 +216,7 @@ enum QuickChatFocusedTextCaptureService {
             return .failed(String(localized: "Focus another app before attaching its text."))
         }
 
-        let hasPermission = await PermissionManager.status([.accessibility])[.accessibility] == true
+        let hasPermission = await PermissionManager.grantedStatus([.accessibility])[.accessibility] == true
         guard !Task.isCancelled else { return .cancelled }
         guard hasPermission else {
             guard self.confirmAccessibilityRequest(appName: appName) else { return .cancelled }
@@ -353,10 +353,11 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
                 return value
             }
         }
-        return self.stringAttribute(kAXRoleAttribute)?
-            .replacingOccurrences(of: "AX", with: "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nonEmpty
+        // Deliberately no AX-role fallback: a role name like "Window"/"Group" is structure,
+        // not readable content. Emitting it would count toward textEntryCount and let a
+        // canvas/image-only window send a chip of role words instead of failing with
+        // "No readable text".
+        return nil
     }
 
     func children(limit: Int) -> QuickChatTextTreeChildren {
