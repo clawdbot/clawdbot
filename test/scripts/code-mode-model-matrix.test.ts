@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { validateQaEvidenceSummaryJson } from "../../extensions/qa-lab/api.ts";
 import {
   buildCodeModeMatrixAgentEnv,
   classifyCodeModeMatrixCell,
@@ -611,9 +610,11 @@ describe("Code Mode model matrix artifacts", () => {
         failureCategory: "harness_error",
         error: { kind: "harness_error", message: "fixture exploded" },
       });
-      const evidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8")),
-      );
+      // The matrix runner validates this artifact before writing it; keep this
+      // core script test on the serialized contract instead of plugin internals.
+      const evidence = JSON.parse(
+        await fs.readFile(path.join(repoRoot, "artifacts", "qa-evidence.json"), "utf8"),
+      ) as { entries: unknown[] };
       expect(evidence.entries).toHaveLength(2);
       expect(evidence.entries[0]).toMatchObject({
         test: {
