@@ -145,8 +145,8 @@ async function runLoadedScenarioFlow(
       params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
       const match = stateLocal
         .getSnapshot()
-        .messages.filter((candidate) => candidate.direction === "outbound")
-        .slice(options?.sinceIndex ?? 0)
+        .messages.slice(options?.sinceIndex ?? 0)
+        .filter((candidate) => candidate.direction === "outbound")
         .find((candidate) => predicate(candidate));
       if (match) {
         return match;
@@ -404,6 +404,64 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it("keeps sinceIndex in the full message-log cursor domain", async () => {
+    const state = createQaBusState();
+    state.addInboundMessage({
+      conversation: { id: "qa-operator", kind: "direct" },
+      senderId: "qa-operator",
+      senderName: "QA Operator",
+      text: "checkpoint inbound",
+    });
+
+    const result = await runLoadedScenarioFlow("webchat-direct-reply-routing", {
+      state,
+      flow: {
+        steps: [
+          {
+            name: "observes the first outbound after an inbound checkpoint",
+            actions: [
+              {
+                set: "startIndex",
+                value: { expr: "state.getSnapshot().messages.length" },
+              },
+              {
+                call: "waitForOutboundMessage",
+                saveAs: "outbound",
+                args: [
+                  { ref: "state" },
+                  {
+                    lambda: {
+                      params: ["candidate"],
+                      expr: "candidate.text === 'first outbound after checkpoint'",
+                    },
+                  },
+                  1_000,
+                  { sinceIndex: { ref: "startIndex" } },
+                ],
+              },
+            ],
+            detailsExpr: "outbound.text",
+          },
+        ],
+      },
+      onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
+        if (waitCount !== 1) {
+          return;
+        }
+        currentState.addOutboundMessage({
+          accountId: "qa-channel",
+          to: "dm:qa-operator",
+          text: "first outbound after checkpoint",
+        });
+      },
+    });
+
+    expect(result).toMatchObject({
+      status: "pass",
+      steps: [{ details: "first outbound after checkpoint" }],
+    });
+  });
+
   it("uses agent history when fanout transport evidence does not match", async () => {
     const state = createQaBusState();
     let transportWaitCalls = 0;
