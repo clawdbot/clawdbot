@@ -264,9 +264,7 @@ function getHooksForName<K extends PluginHookName>(
         hook.eligibleTriggers.includes(trigger as PluginHookAgentTrigger)
       );
     })
-    .filter(
-      (hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName),
-    )
+    .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
     .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
 }
 

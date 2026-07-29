@@ -1,6 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export type PluginToolMatcher = readonly string[] | undefined;
+type PluginToolMatcher = readonly string[] | undefined;
 
 export type PluginToolMatcherScope = {
   matchAll: boolean;

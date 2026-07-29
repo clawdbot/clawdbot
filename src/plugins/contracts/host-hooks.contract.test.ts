@@ -25,6 +25,10 @@ import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import type {
+  AgentToolResultMiddlewareContext,
+  AgentToolResultMiddlewareEvent,
+} from "../agent-tool-result-middleware-types.js";
 import { validatePluginCommandDefinition } from "../command-registration.js";
 import { executePluginCommand } from "../commands.js";
 import { createHookRunner } from "../hooks.js";
@@ -338,7 +342,9 @@ describe("host-hook fixture plugin contract", () => {
 
   it("keeps repeated middleware runtime and matcher scopes paired", async () => {
     const { config, registry } = createPluginRegistryFixture();
-    const handler = vi.fn(() => undefined);
+    const handler = vi.fn(
+      (_event: AgentToolResultMiddlewareEvent, _ctx: AgentToolResultMiddlewareContext) => undefined,
+    );
     registerTestPlugin({
       registry,
       config,
@@ -360,11 +366,14 @@ describe("host-hook fixture plugin contract", () => {
       },
     });
 
-    const registration = expectDefined(registry.registry.agentToolResultMiddlewares[0]);
+    const registration = expectDefined(
+      registry.registry.agentToolResultMiddlewares[0],
+      "scoped middleware registration",
+    );
     const event = {
       toolCallId: "call-1",
       args: {},
-      result: { content: [{ type: "text" as const, text: "ok" }] },
+      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
     };
     await registration.handler({ ...event, toolName: "Bash" }, { runtime: "codex" });
     await registration.handler({ ...event, toolName: "apply_patch" }, { runtime: "codex" });

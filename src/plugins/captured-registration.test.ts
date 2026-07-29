@@ -175,7 +175,7 @@ describe("captured plugin registration", () => {
     const event = {
       toolCallId: "call-1",
       args: {},
-      result: { content: [{ type: "text" as const, text: "ok" }] },
+      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
     };
 
     await registration.handler({ ...event, toolName: "web_search" }, { runtime: "codex" });
