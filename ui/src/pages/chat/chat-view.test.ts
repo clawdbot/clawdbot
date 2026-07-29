@@ -629,36 +629,6 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
 
-type TestBackgroundTasks = NonNullable<Parameters<typeof renderChat>[0]["backgroundTasks"]>;
-
-function createBackgroundTasks(overrides: Partial<TestBackgroundTasks> = {}): TestBackgroundTasks {
-  return {
-    sessionKey: "agent:main:main",
-    statusRowId: "chat-tasks-status-test",
-    collapsed: false,
-    narrowLayout: false,
-    connected: true,
-    canCancel: false,
-    loading: false,
-    error: null,
-    tasks: [],
-    cancellingTaskIds: new Set<string>(),
-    finishedCollapsed: false,
-    selectedTaskId: null,
-    taskDetails: new Map(),
-    taskDetailErrors: new Map(),
-    taskDetailLoadingIds: new Set<string>(),
-    onToggleCollapsed: () => undefined,
-    onToggleFinished: () => undefined,
-    onRefresh: () => undefined,
-    onCancel: () => undefined,
-    onSelectTask: () => undefined,
-    onBackToList: () => undefined,
-    onOpenSession: () => undefined,
-    ...overrides,
-  };
-}
-
 function createChatProps(
   overrides: Partial<Parameters<typeof renderChat>[0]> = {},
 ): Parameters<typeof renderChat>[0] {
@@ -748,67 +718,6 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
-}
-
-type TestSessionSettingsPatch = Record<string, unknown>;
-type TestSessionSettingsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: { sessionId: string };
-};
-
-function createModelSettingsLaneHost(
-  options: {
-    includeFastMode?: boolean;
-    onModelChanged?: () => Promise<void>;
-    onPatch?: (patch: TestSessionSettingsPatch, result: TestSessionSettingsPatchResult) => unknown;
-  } = {},
-) {
-  const patches: TestSessionSettingsPatch[] = [];
-  const patchResult: TestSessionSettingsPatchResult = {
-    ok: true,
-    path: "",
-    key: "main",
-    entry: { sessionId: "main" },
-  };
-  const sessions = {
-    state: { modelOverrides: {} },
-    patch: vi.fn(
-      async (_key: string, patch: TestSessionSettingsPatch, patchOptions?: SessionPatchOptions) => {
-        if (patchOptions?.waitFor) {
-          await patchOptions.waitFor;
-        }
-        patches.push(patch);
-        return options.onPatch ? options.onPatch(patch, patchResult) : patchResult;
-      },
-    ),
-    refresh: async () => {},
-    setModelOverride: vi.fn(),
-    patchRowLocal: vi.fn(),
-  };
-  const host = {
-    client: {},
-    connected: true,
-    sessionKey: "main",
-    chatModelCatalog: [],
-    chatModelSwitchPromises: {},
-    chatThinkingLevel: "high",
-    sessions,
-    sessionsResult: createSessionsResultFromRows([
-      {
-        key: "main",
-        kind: "direct",
-        updatedAt: 1,
-        model: "claude-fable-5",
-        modelProvider: "anthropic",
-        thinkingLevel: "high",
-        ...(options.includeFastMode ? { fastMode: false, effectiveFastMode: false } : {}),
-      },
-    ]),
-    ...(options.onModelChanged ? { onModelChanged: options.onModelChanged } : {}),
-  } as unknown as Parameters<typeof switchChatModel>[0];
-  return { host, patches, patchResult };
 }
 
 describe("chat Swarm progress", () => {
@@ -1813,7 +1722,30 @@ describe("chat composer workbench", () => {
   });
 
   it("moves the background-tasks rail to a bottom strip on narrow panes", () => {
-    const backgroundTasks = createBackgroundTasks();
+    const backgroundTasks = {
+      sessionKey: "agent:main:main",
+      statusRowId: "chat-tasks-status-test",
+      collapsed: false,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
+      tasks: [],
+      cancellingTaskIds: new Set<string>(),
+      finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set<string>(),
+      onToggleCollapsed: () => undefined,
+      onToggleFinished: () => undefined,
+      onRefresh: () => undefined,
+      onCancel: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
+      onOpenSession: () => undefined,
+    };
 
     const wide = renderChatView({ backgroundTasks });
     const wideWorkbench = wide.querySelector(".chat-workbench");
@@ -1828,19 +1760,39 @@ describe("chat composer workbench", () => {
   });
 
   it("shows the running-tasks status row after the turn settles, not while working", () => {
-    const backgroundTasks = createBackgroundTasks({
+    const backgroundTasks = {
+      sessionKey: "agent:main:main",
+      statusRowId: "chat-tasks-status-test",
       collapsed: true,
+      narrowLayout: false,
+      connected: true,
+      canCancel: false,
+      loading: false,
+      error: null,
       tasks: [
         {
           id: "task-1",
           taskId: "task-1",
-          status: "running",
+          status: "running" as const,
           agentId: "main",
           createdAt: 1_000,
           startedAt: 1_500,
         },
       ],
-    });
+      cancellingTaskIds: new Set<string>(),
+      finishedCollapsed: false,
+      selectedTaskId: null,
+      taskDetails: new Map(),
+      taskDetailErrors: new Map(),
+      taskDetailLoadingIds: new Set<string>(),
+      onToggleCollapsed: () => undefined,
+      onToggleFinished: () => undefined,
+      onRefresh: () => undefined,
+      onCancel: () => undefined,
+      onSelectTask: () => undefined,
+      onBackToList: () => undefined,
+      onOpenSession: () => undefined,
+    };
     const messages = [{ role: "assistant", content: "done", timestamp: 1 }];
 
     const settled = renderChatView({ messages, backgroundTasks });
@@ -5125,18 +5077,55 @@ describe("chat model controls", () => {
   it("orders model-dependent patches after a pending model switch", async () => {
     const modelPatch = createDeferred<unknown>();
     const thinkingUpdate = createDeferred<unknown>();
-    const { host, patches, patchResult } = createModelSettingsLaneHost({
-      includeFastMode: true,
-      onPatch: (patch, result) => {
-        if (Object.hasOwn(patch, "model")) {
-          return modelPatch.promise;
-        }
-        if (Object.hasOwn(patch, "thinkingLevel")) {
-          return thinkingUpdate.promise;
-        }
-        return result;
-      },
-    });
+    const patches: Array<Record<string, unknown>> = [];
+    const patchResult = {
+      ok: true,
+      path: "",
+      key: "main",
+      entry: { sessionId: "main" },
+    };
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          if (Object.hasOwn(patch, "model")) {
+            return modelPatch.promise;
+          }
+          if (Object.hasOwn(patch, "thinkingLevel")) {
+            return thinkingUpdate.promise;
+          }
+          return patchResult;
+        },
+      ),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+          fastMode: false,
+          effectiveFastMode: false,
+        },
+      ]),
+    } as unknown as Parameters<typeof switchChatModel>[0];
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
@@ -5164,12 +5153,51 @@ describe("chat model controls", () => {
   it("keeps reconciliation inside the session settings lane", async () => {
     const reconciliationStarted = createDeferred<void>();
     const releaseReconciliation = createDeferred<void>();
-    const { host, patches } = createModelSettingsLaneHost({
+    const patches: Array<Record<string, unknown>> = [];
+    const patchResult = {
+      ok: true,
+      path: "",
+      key: "main",
+      entry: { sessionId: "main" },
+    };
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return patchResult;
+        },
+      ),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+        },
+      ]),
       onModelChanged: async () => {
         reconciliationStarted.resolve();
         await releaseReconciliation.promise;
       },
-    });
+    } as unknown as Parameters<typeof switchChatModel>[0];
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
@@ -5184,9 +5212,41 @@ describe("chat model controls", () => {
 
   it("validates queued settings independently after a model switch fails", async () => {
     const modelPatch = createDeferred<unknown>();
-    const { host, patches } = createModelSettingsLaneHost({
-      onPatch: () => modelPatch.promise,
-    });
+    const patches: Array<Record<string, unknown>> = [];
+    const sessions = {
+      state: { modelOverrides: {} },
+      patch: vi.fn(
+        async (_key: string, patch: Record<string, unknown>, options?: SessionPatchOptions) => {
+          if (options?.waitFor) {
+            await options.waitFor;
+          }
+          patches.push(patch);
+          return modelPatch.promise;
+        },
+      ),
+      refresh: async () => {},
+      setModelOverride: vi.fn(),
+      patchRowLocal: vi.fn(),
+    };
+    const host = {
+      client: {},
+      connected: true,
+      sessionKey: "main",
+      chatModelCatalog: [],
+      chatModelSwitchPromises: {},
+      chatThinkingLevel: "high",
+      sessions,
+      sessionsResult: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 1,
+          model: "claude-fable-5",
+          modelProvider: "anthropic",
+          thinkingLevel: "high",
+        },
+      ]),
+    } as unknown as Parameters<typeof switchChatModel>[0];
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     const thinkingPatch = switchChatThinkingLevel(host, "ultra");
