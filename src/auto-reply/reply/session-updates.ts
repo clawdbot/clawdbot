@@ -5,11 +5,10 @@ import {
   type ExecPolicyOverrides,
   resolveNodeExecEligibility,
 } from "../../agents/exec-defaults.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { projectCanonicalSessionEntryShape } from "../../config/sessions/store-entry-shape.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -370,7 +369,7 @@ export async function incrementCompactionCount(params: {
   } else if (incrementBy > 0) {
     updates.totalTokensFresh = false;
   }
-  const nextEntry = projectCanonicalSessionEntryShape({ ...entry, ...updates });
+  const nextEntry = mergeSessionEntry(entry, updates, { now });
   sessionStore[sessionKey] = nextEntry;
   const effectiveStorePath = storePath
     ? resolveSessionStorePathForScope({ agentId, sessionKey, storePath })
@@ -379,7 +378,8 @@ export async function incrementCompactionCount(params: {
     const persistedEntry = await patchSessionEntry(
       { ...(agentId ? { agentId } : {}), storePath: effectiveStorePath, sessionKey },
       () => updates,
-      { fallbackEntry: nextEntry },
+      // Preserve the pre-rotation identity so a first-write merge can detect sessionId rollover.
+      { fallbackEntry: entry },
     );
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;

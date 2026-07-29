@@ -247,6 +247,7 @@ vi.mock("../auto-reply/continuation/delegate-store.js", async (importOriginal) =
   ...(await importOriginal<typeof import("../auto-reply/continuation/delegate-store.js")>()),
   consumePendingDelegates: (sessionKey: string) => consumePendingDelegatesMock(sessionKey),
   markPendingDelegateFailed: (...args: unknown[]) => markPendingDelegateFailedMock(...args),
+  revalidatePendingDelegateForSpawn: vi.fn(() => ({ allowed: true })),
   enqueuePendingDelegate: (sessionKey: string, delegate: unknown) =>
     enqueuePendingDelegateMock(sessionKey, delegate),
   clearQueuedDelegatesChainTokensFold: (sessionKey: string) =>
