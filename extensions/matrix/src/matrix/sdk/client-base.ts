@@ -438,7 +438,7 @@ export abstract class MatrixClientBase {
           );
           if (!encContent) continue;
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await crypto.onCryptoEvent(room, {
+          await (crypto as any).onCryptoEvent(room, {
             getContent: () => encContent,
             getType: () => "m.room.encryption",
             getStateKey: () => "",
