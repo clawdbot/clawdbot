@@ -515,7 +515,10 @@ describe("Copilot attempt transcript journal", () => {
   });
 
   it("commits a hidden tool turn to SQLite in assistant request order", async () => {
-    const { bridge, journal, recorder, session, target, tempDir } = await createFixture("memory");
+    const { bridge, journal, recorder, session, target, tempDir } = await createFixture(
+      "memory",
+      new Map<string, "network">([["read", "network"]]),
+    );
     await journal.persistInitialUser();
     expect(recorder.markRuntimePersisted).toHaveBeenCalledOnce();
 
@@ -626,7 +629,9 @@ describe("Copilot attempt transcript journal", () => {
       isError: true,
       toolCallId: "call-a",
       content: [{ type: "text", text: "A failed" }],
+      __openclaw: { resultContentSource: "network" },
     });
+    expect(rows[5]?.message).toMatchObject({ __openclaw: { turnTainted: true } });
     expect(journal.snapshot()).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "copilot-sdk:sdk-session:assistant-final",
@@ -637,54 +642,6 @@ describe("Copilot attempt transcript journal", () => {
     );
     const files = await fs.readdir(tempDir, { recursive: true });
     expect(files.some((file) => file.endsWith(".jsonl"))).toBe(false);
-  });
-
-  it("persists network-result taint on the result and subsequent assistant", async () => {
-    const { bridge, journal, session, target } = await createFixture(
-      undefined,
-      new Map<string, "network">([["fake_web_tool", "network"]]),
-    );
-    await journal.persistInitialUser();
-    session.emit(event("user.message", "initial-user", { content: "inspect both files" }));
-    session.emit(
-      event("assistant.message", "assistant-tool", {
-        content: "researching",
-        messageId: "assistant-tool",
-        toolRequests: [
-          { arguments: { query: "topic" }, name: "fake_web_tool", toolCallId: "call-web" },
-        ],
-      }),
-    );
-    session.emit(
-      event("tool.execution_start", "start-web", {
-        toolCallId: "call-web",
-        toolName: "fake_web_tool",
-      }),
-    );
-    session.emit(
-      event("tool.execution_complete", "result-web", {
-        result: { content: "untrusted page" },
-        success: true,
-        toolCallId: "call-web",
-      }),
-    );
-    const finalAssistant = event("assistant.message", "assistant-final-tainted", {
-      content: "summary",
-      messageId: "assistant-final-tainted",
-    });
-    session.emit(finalAssistant);
-    bridge.recordSendResult(finalAssistant);
-    await journal.barrier("tainted turn");
-
-    const rows = transcriptMessages(await readSessionTranscriptEvents(target));
-    expect(rows[2]?.message).toMatchObject({
-      role: "toolResult",
-      __openclaw: { resultContentSource: "network" },
-    });
-    expect(rows[3]?.message).toMatchObject({
-      role: "assistant",
-      __openclaw: { turnTainted: true },
-    });
   });
 
   it("groups assistant chunks from one API call before matching tool results", async () => {
