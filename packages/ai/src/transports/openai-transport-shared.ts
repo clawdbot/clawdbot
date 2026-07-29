@@ -2,7 +2,6 @@ import type { Api, Model, OpenAICompletionsCompat, Usage } from "@openclaw/llm-c
 import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
-import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { clampOpenAIPromptCacheKey } from "../providers/openai-prompt-cache.js";
 import { transportAbortError } from "./transport-stream-shared.js";
 
