@@ -5,7 +5,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForAbortableDelay } from "./async.js";
 import { createFeishuWSClient } from "./client.js";
-import { isFeishuIngressEnvelopeDurable } from "./feishu-ingress.js";
+import type { FeishuWebhookInvoker } from "./feishu-ingress.js";
 import { buildFeishuWebhookRateLimitKey } from "./monitor-rate-limit-key.js";
 import {
   applyBasicWebhookRequestGuards,
@@ -34,6 +34,7 @@ type MonitorTransportParams = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   eventDispatcher: Lark.EventDispatcher;
+  invokeWebhookEvent?: FeishuWebhookInvoker;
   setSocketTerminator?: (terminate: (() => void) | undefined) => void;
   /**
    * Optional status sink for Feishu health tracking. Lifecycle callbacks
@@ -333,6 +334,7 @@ export async function monitorWebhook({
   runtime,
   abortSignal,
   eventDispatcher,
+  invokeWebhookEvent,
   statusSink,
 }: MonitorTransportParams): Promise<void> {
   const log = runtime?.log ?? console.log;
@@ -439,18 +441,21 @@ export async function monitorWebhook({
         }
 
         const envelope = buildFeishuWebhookEnvelope(req, payload);
-        const value = await eventDispatcher.invoke(envelope, {
-          needCheck: false,
-        });
+        const invocation = invokeWebhookEvent
+          ? await invokeWebhookEvent(envelope, { needCheck: false })
+          : {
+              kind: "non-durable" as const,
+              value: await eventDispatcher.invoke(envelope, { needCheck: false }),
+            };
         if (!res.headersSent) {
-          if (isFeishuIngressEnvelopeDurable(envelope, encryptKey)) {
-            // Only durably admitted envelopes claim the marker (#104407);
-            // challenges and non-durable event types ack without it.
+          if (invocation.kind === "durable") {
+            // The ingress owner records this fact at admission; challenges and
+            // non-durable event types ack without claiming durable acceptance.
             res.setHeader(FEISHU_WEBHOOK_ACCEPTED_HEADER, FEISHU_WEBHOOK_ACCEPTED_VALUE);
           }
           res.statusCode = 200;
           res.setHeader("Content-Type", "application/json; charset=utf-8");
-          res.end(JSON.stringify(value));
+          res.end(JSON.stringify(invocation.value));
         }
       } catch (err) {
         error(`feishu[${accountId}]: webhook handler error: ${String(err)}`);

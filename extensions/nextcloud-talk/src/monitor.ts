@@ -183,13 +183,15 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
 
         // Nextcloud retries only a few times. Acknowledge only after the raw
         // envelope is durably admitted; append failure must remain retryable.
-        await onWebhook(body);
-        // The spool persisted the envelope above; mark the ack as durable so
-        // proxies can distinguish it from other 200s (same marker as #104407).
-        res.setHeader(
-          NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER,
-          NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE,
-        );
+        const admission = await onWebhook(body);
+        if (admission === "accepted") {
+          // Ignored non-message events still receive 200 but must not claim
+          // durable adoption.
+          res.setHeader(
+            NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_HEADER,
+            NEXTCLOUD_TALK_WEBHOOK_ACCEPTED_VALUE,
+          );
+        }
         writeJsonResponse(res, 200);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {

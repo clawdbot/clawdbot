@@ -426,6 +426,10 @@ describe("Feishu webhook signed-request e2e", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
       eventDispatcher: { invoke } as never,
+      invokeWebhookEvent: async (data, params) => {
+        await invoke(data, params);
+        return { kind: "durable", value: undefined };
+      },
     });
 
     try {
@@ -485,6 +489,10 @@ describe("Feishu webhook signed-request e2e", () => {
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       abortSignal: abortController.signal,
       eventDispatcher: { invoke } as never,
+      invokeWebhookEvent: async (data, params) => {
+        await invoke(data, params);
+        return { kind: "durable", value: undefined };
+      },
     });
 
     try {
