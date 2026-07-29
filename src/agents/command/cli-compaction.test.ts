@@ -882,7 +882,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(recordCliCompactionInStore).not.toHaveBeenCalled();
   });
 
-  it("falls back to context-engine compaction when Codex owns automatic compaction", async () => {
+  it("skips context-engine fallback when Codex owns automatic compaction", async () => {
     const sessionKey = "agent:main:codex-native-auto-compaction";
     const sessionId = "session-codex-native-auto-compaction";
     const sessionFile = path.join(tmpDir, "session-codex-native-auto-compaction.jsonl");
@@ -954,20 +954,12 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "gpt-5.5",
     });
 
+    // Codex owns automatic compaction; the ownership skip must not fall back to
+    // context-engine compaction (OAuth-only sessions have no direct API key).
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
-    expect(compactCalls).toHaveLength(1);
-    expect(compactCalls[0]?.sessionId).toBe(sessionId);
-    expect(compactCalls[0]?.sessionKey).toBe(sessionKey);
-    expect(compactCalls[0]?.currentTokenCount).toBe(950);
-    expect(maintenance).toHaveBeenCalledTimes(1);
-    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "codex",
-        sessionKey,
-        tokensAfter: 100,
-      }),
-    );
-    expect(result?.compactionCount).toBe(1);
+    expect(compactCalls).toHaveLength(0);
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(result).toBe(sessionEntry);
 
     const lockedEntry: SessionEntry = { ...sessionEntry, modelSelectionLocked: true };
     sessionStore[sessionKey] = lockedEntry;
@@ -986,9 +978,8 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(compactAgentHarnessSession).toHaveBeenCalledTimes(2);
-    expect(compactCalls).toHaveLength(1);
-    expect(maintenance).toHaveBeenCalledTimes(1);
-    expect(recordCliCompactionInStore).toHaveBeenCalledTimes(1);
+    expect(compactCalls).toHaveLength(0);
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
     const lockedNativeCall = compactAgentHarnessSession.mock.calls[1]?.[0];
     expect(lockedNativeCall).toMatchObject({
       agentHarnessId: "codex",

@@ -225,7 +225,10 @@ function isViteDevPage(): boolean {
 }
 
 function formatHostWithPort(hostname: string, port: string): string {
-  const normalizedHost = hostname.includes(":") ? `[${hostname}]` : hostname;
+  // location.hostname already carries brackets for IPv6 literals; wrapping
+  // again would produce an undialable ws://[[::1]]:port default.
+  const needsBrackets = hostname.includes(":") && !hostname.startsWith("[");
+  const normalizedHost = needsBrackets ? `[${hostname}]` : hostname;
   return `${normalizedHost}:${port}`;
 }
 

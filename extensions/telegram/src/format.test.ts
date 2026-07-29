@@ -327,6 +327,27 @@ describe("markdownToTelegramHtml", () => {
     expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
   });
 
+  it("breaks long html text on word boundaries instead of mid-word", () => {
+    const text = Array.from({ length: 12 }, () => "abcde").join(" ");
+    const chunks = splitTelegramHtmlChunks(text, 13);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
+    for (const chunk of chunks) {
+      for (const token of chunk.trim().split(/\s+/)) {
+        expect(token).toBe("abcde");
+      }
+    }
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("still hard-cuts a single word longer than the html chunk limit", () => {
+    const chunks = splitTelegramHtmlChunks("A".repeat(30), 10);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expect(chunks.join("")).toBe("A".repeat(30));
+  });
+
   it("derives readable plain text from Telegram HTML fallback markup", () => {
     const html = [
       'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &amp; One</a>',

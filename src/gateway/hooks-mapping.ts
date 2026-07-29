@@ -90,6 +90,12 @@ const hookPresetMappings: Record<string, HookMappingConfig[]> = {
 };
 
 const transformCache = new Map<string, HookTransformFn>();
+let transformCacheBustVersion = 0;
+
+export function commitHookTransformMappingReload(): void {
+  transformCache.clear();
+  transformCacheBustVersion += 1;
+}
 
 type HookTransformResult = Partial<{
   kind: HookAction["kind"];
@@ -375,9 +381,16 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   if (cached) {
     return cached;
   }
-  const mod = await importFileModule({ modulePath: transform.modulePath });
+  const generation = transformCacheBustVersion;
+  const mod = await importFileModule({
+    modulePath: transform.modulePath,
+    cacheBust: true,
+    nowMs: generation,
+  });
   const fn = resolveTransformFn(mod, transform.exportName);
-  transformCache.set(cacheKey, fn);
+  if (generation === transformCacheBustVersion) {
+    transformCache.set(cacheKey, fn);
+  }
   return fn;
 }
 

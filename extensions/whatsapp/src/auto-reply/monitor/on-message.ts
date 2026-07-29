@@ -176,9 +176,9 @@ export function createWebOnMessageHandler(params: {
     }
 
     // Skip if this is a message we just sent (echo detection)
-    if (params.echoTracker.has(msg.payload.body)) {
+    if (params.echoTracker.has(msg.payload.body, conversationId)) {
       logVerbose("Skipping auto-reply: detected echo (message matches recently sent text)");
-      params.echoTracker.forget(msg.payload.body);
+      params.echoTracker.forget(msg.payload.body, conversationId);
       return;
     }
 

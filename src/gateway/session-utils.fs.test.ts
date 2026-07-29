@@ -3,24 +3,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import "../../test/helpers/session-manager-file-compat.js";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import {
+  createFileBackedSessionManagerForTest,
+  openFileBackedSessionManagerForTest,
+} from "../../test/helpers/session-manager-file-fixture.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { readSessionTranscriptIndex } from "./session-transcript-index.fs.js";
 import {
+  buildSessionPreviewItems,
   readLatestSessionUsageFromTranscriptAsync,
-  readRecentSessionUsageFromTranscript,
   readRecentSessionMessagesAsync,
   readRecentSessionMessagesWithStatsAsync,
-  readSessionMessageCountAsync,
   readSessionMessagesAsync,
   readSessionMessagesPageWithStatsAsync,
-  readSessionTitleFieldsFromTranscript,
-  readSessionTitleFieldsFromTranscriptAsync,
-  readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 
@@ -72,6 +71,22 @@ function writeTranscript(tmpDir: string, sessionId: string, lines: unknown[]): s
   return transcriptPath;
 }
 
+function createTranscriptMessage(
+  id: string,
+  parentId: string | null | undefined,
+  role: "user" | "assistant" | "toolResult",
+  content: unknown,
+  options: { message?: Record<string, unknown>; record?: Record<string, unknown> } = {},
+) {
+  return {
+    type: "message",
+    id,
+    ...(parentId === undefined ? {} : { parentId }),
+    ...options.record,
+    message: { role, content, ...options.message },
+  };
+}
+
 function writeResetArchive(
   tmpDir: string,
   sessionId: string,
@@ -107,25 +122,6 @@ function installAsyncPositionalShortReadProxy(maxPerCall = 16) {
   return () => shortReadCalls;
 }
 
-function installSyncPositionalShortReadProxy(maxPerCall = 16) {
-  const realReadSync = fs.readSync.bind(fs);
-  let shortReadCalls = 0;
-  const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
-    fd: number,
-    buffer: NodeJS.ArrayBufferView,
-    offset: number,
-    length: number,
-    position: fs.ReadPosition | null,
-  ) => {
-    const cappedLength = typeof position === "number" ? maxPerCall : length;
-    if (cappedLength < length) {
-      shortReadCalls += 1;
-    }
-    return realReadSync(fd, buffer, offset, Math.min(length, cappedLength), position);
-  }) as typeof fs.readSync);
-  return { readSpy, getShortReadCalls: () => shortReadCalls };
-}
-
 function appendBlockedUserMessageWithSessionManager(params: {
   sessionFile: string;
   originalText?: string;
@@ -133,7 +129,7 @@ function appendBlockedUserMessageWithSessionManager(params: {
   pluginId: string;
   idempotencyKey?: string;
 }): string {
-  const sessionManager = SessionManager.openFile(
+  const sessionManager = openFileBackedSessionManagerForTest(
     params.sessionFile,
     path.dirname(params.sessionFile),
   );
@@ -169,23 +165,15 @@ function appendBlockedUserMessage(
   return messageId;
 }
 
-function buildBasicSessionTranscript(
-  sessionId: string,
-  userText = "Hello world",
-  assistantText = "Hi there",
-): unknown[] {
-  return [
-    { type: "session", version: 1, id: sessionId },
-    { message: { role: "user", content: userText } },
-    { message: { role: "assistant", content: assistantText } },
-  ];
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
   }
   return value as Record<string, unknown>;
+}
+
+function expectMessageContents(messages: unknown[], expected: unknown[]) {
+  expect(messages.map((message) => requireRecord(message, "message").content)).toEqual(expected);
 }
 
 function expectMessageFields(
@@ -213,135 +201,6 @@ function expectUsageFields(usage: unknown, fields: Record<string, unknown>) {
     expect(record[key]).toEqual(value);
   }
 }
-
-describe("readSessionTitleFieldsFromTranscript cache", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
-    tmpDir = nextTmpDir;
-    storePath = nextStorePath;
-  });
-
-  test("returns cached values without re-reading when unchanged", () => {
-    const sessionId = "test-cache-1";
-    writeTranscript(tmpDir, sessionId, buildBasicSessionTranscript(sessionId));
-
-    const readSpy = vi.spyOn(fs, "readSync");
-
-    const first = readSessionTitleFieldsFromTranscript(sessionId, storePath);
-    const readsAfterFirst = readSpy.mock.calls.length;
-    expect(readsAfterFirst).toBeGreaterThan(0);
-
-    const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
-    expect(second).toEqual(first);
-    expect(readSpy.mock.calls.length).toBe(readsAfterFirst);
-    readSpy.mockRestore();
-  });
-
-  test("invalidates cache when transcript changes", () => {
-    const sessionId = "test-cache-2";
-    const transcriptPath = writeTranscript(
-      tmpDir,
-      sessionId,
-      buildBasicSessionTranscript(sessionId, "First", "Old"),
-    );
-
-    const readSpy = vi.spyOn(fs, "readSync");
-
-    const first = readSessionTitleFieldsFromTranscript(sessionId, storePath);
-    const readsAfterFirst = readSpy.mock.calls.length;
-    expect(first.lastMessagePreview).toBe("Old");
-
-    fs.appendFileSync(
-      transcriptPath,
-      `\n${JSON.stringify({ message: { role: "assistant", content: "New" } })}`,
-      "utf-8",
-    );
-
-    const second = readSessionTitleFieldsFromTranscript(sessionId, storePath);
-    expect(second.lastMessagePreview).toBe("New");
-    expect(readSpy.mock.calls.length).toBeGreaterThan(readsAfterFirst);
-    readSpy.mockRestore();
-  });
-
-  test("keeps async title extraction bounded like the sync path", async () => {
-    const sessionId = "test-cache-async-bounded";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      ...Array.from({ length: 30 }, (_, index) => ({
-        message: { role: "assistant", content: `filler ${index} ${"x".repeat(512)}` },
-      })),
-      { message: { role: "user", content: "late title should not require a full scan" } },
-      { message: { role: "assistant", content: "tail preview" } },
-    ]);
-
-    await expect(readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath)).resolves.toEqual({
-      firstUserMessage: null,
-      lastMessagePreview: "tail preview",
-    });
-  });
-
-  test("uses the selected branch for the sync last-message preview", () => {
-    const sessionId = "test-cache-selected-preview";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "active-preview",
-        parentId: null,
-        message: { role: "assistant", content: "active preview" },
-      },
-      {
-        type: "message",
-        id: "inactive-preview",
-        parentId: "active-preview",
-        message: { role: "assistant", content: "inactive side delivery" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "inactive-preview",
-        targetId: "active-preview",
-      },
-    ]);
-
-    expect(readSessionTitleFieldsFromTranscript(sessionId, storePath).lastMessagePreview).toBe(
-      "active preview",
-    );
-  });
-
-  test("uses the selected branch for the async last-message preview", async () => {
-    const sessionId = "test-cache-selected-preview-async";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "active-preview",
-        parentId: null,
-        message: { role: "assistant", content: "active preview" },
-      },
-      {
-        type: "message",
-        id: "inactive-preview",
-        parentId: "active-preview",
-        message: { role: "assistant", content: "inactive side delivery" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "inactive-preview",
-        targetId: "active-preview",
-      },
-    ]);
-
-    await expect(
-      readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
-    ).resolves.toMatchObject({
-      lastMessagePreview: "active preview",
-    });
-  });
-});
 
 describe("readSessionMessages", () => {
   let tmpDir: string;
@@ -498,71 +357,17 @@ describe("readSessionMessages", () => {
     }
   });
 
-  test("counts transcript messages asynchronously without loading the whole file", async () => {
-    const sessionId = "test-session-count-large-async";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      ...Array.from({ length: 2500 }, (_, index) =>
-        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
-      ),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-
-    try {
-      expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2500);
-      expect(readFileSpy).not.toHaveBeenCalled();
-    } finally {
-      readFileSpy.mockRestore();
-    }
-  });
-
   test("reads active tree branch asynchronously without SessionManager.open", async () => {
     const sessionId = "test-session-tree-async";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "user-1",
-        parentId: null,
-        message: { role: "user", content: "root" },
-      },
-      {
-        type: "message",
-        id: "assistant-1",
-        parentId: "user-1",
-        message: { role: "assistant", content: "active branch" },
-      },
-      {
-        type: "message",
-        id: "assistant-inactive",
-        parentId: "user-1",
-        message: { role: "assistant", content: "inactive branch" },
-      },
-      {
-        type: "message",
-        id: "user-2",
-        parentId: "assistant-1",
-        message: { role: "user", content: "latest active" },
-      },
-      {
-        type: "message",
-        id: "delivery-side-branch",
-        parentId: "user-2",
-        message: { role: "assistant", content: "side delivery" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "delivery-side-branch",
-        targetId: "user-2",
-      },
-      {
-        type: "metadata",
-        id: "opaque-after-leaf",
-        parentId: "delivery-side-branch",
-      },
+      createTranscriptMessage("user-1", null, "user", "root"),
+      createTranscriptMessage("assistant-1", "user-1", "assistant", "active branch"),
+      createTranscriptMessage("assistant-inactive", "user-1", "assistant", "inactive branch"),
+      createTranscriptMessage("user-2", "assistant-1", "user", "latest active"),
+      createTranscriptMessage("delivery-side-branch", "user-2", "assistant", "side delivery"),
+      { type: "leaf", id: "active-leaf", parentId: "delivery-side-branch", targetId: "user-2" },
+      { type: "metadata", id: "opaque-after-leaf", parentId: "delivery-side-branch" },
     ]);
     const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
     const readFileSpy = vi.spyOn(fs, "readFileSync");
@@ -572,19 +377,11 @@ describe("readSessionMessages", () => {
         mode: "full",
         reason: "test active branch selection",
       });
-      expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
-        "root",
-        "active branch",
-        "latest active",
-      ]);
+      expectMessageContents(messages, ["root", "active branch", "latest active"]);
       const recentMessages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
         maxMessages: 10,
       });
-      expect(recentMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
-        "root",
-        "active branch",
-        "latest active",
-      ]);
+      expectMessageContents(recentMessages, ["root", "active branch", "latest active"]);
       expectMessageFields(messages[2], { openclaw: { id: "user-2", seq: 3 } });
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
       expect(readFileSpy).not.toHaveBeenCalled();
@@ -598,34 +395,12 @@ describe("readSessionMessages", () => {
     const sessionId = "test-session-index-views";
     const transcriptPath = writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "root",
-        parentId: null,
-        message: { role: "user", content: "root" },
-      },
-      {
-        type: "message",
-        id: "side-assistant",
-        parentId: "root",
-        message: {
-          role: "assistant",
-          content: "side",
-          idempotencyKey: "side-idempotency",
-        },
-      },
-      {
-        type: "message",
-        id: "active-assistant",
-        parentId: "root",
-        message: { role: "assistant", content: "active" },
-      },
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-assistant",
-        targetId: "active-assistant",
-      },
+      createTranscriptMessage("root", null, "user", "root"),
+      createTranscriptMessage("side-assistant", "root", "assistant", "side", {
+        message: { idempotencyKey: "side-idempotency" },
+      }),
+      createTranscriptMessage("active-assistant", "root", "assistant", "active"),
+      { type: "leaf", id: "active-leaf", parentId: "side-assistant", targetId: "active-assistant" },
     ]);
 
     const activeIndex = await readSessionTranscriptIndex(transcriptPath);
@@ -643,25 +418,10 @@ describe("readSessionMessages", () => {
     const sessionId = "test-session-reset-boundary";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
-      { type: "message", id: "old", parentId: null, message: { role: "user", content: "old" } },
-      {
-        type: "message",
-        id: "kept-user",
-        parentId: "old",
-        message: { role: "user", content: "kept question" },
-      },
-      {
-        type: "message",
-        id: "kept-tool",
-        parentId: "kept-user",
-        message: { role: "toolResult", content: "hidden tool" },
-      },
-      {
-        type: "message",
-        id: "kept-assistant",
-        parentId: "kept-tool",
-        message: { role: "assistant", content: "kept answer" },
-      },
+      createTranscriptMessage("old", null, "user", "old"),
+      createTranscriptMessage("kept-user", "old", "user", "kept question"),
+      createTranscriptMessage("kept-tool", "kept-user", "toolResult", "hidden tool"),
+      createTranscriptMessage("kept-assistant", "kept-tool", "assistant", "kept answer"),
       {
         type: "reset",
         id: "reset-boundary",
@@ -670,12 +430,7 @@ describe("readSessionMessages", () => {
         reason: "new",
         firstKeptEntryId: "kept-user",
       },
-      {
-        type: "message",
-        id: "post-reset",
-        parentId: "reset-boundary",
-        message: { role: "user", content: "new turn" },
-      },
+      createTranscriptMessage("post-reset", "reset-boundary", "user", "new turn"),
     ]);
 
     const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
@@ -683,38 +438,17 @@ describe("readSessionMessages", () => {
       reason: "test reset boundary",
     });
 
-    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "kept question",
-      "kept answer",
-      "new turn",
-    ]);
+    expectMessageContents(messages, ["kept question", "kept answer", "new turn"]);
   });
 
   test("keeps parentless linear history after a leaf control", async () => {
     const sessionId = "test-linear-with-opaque-link";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "linear-user",
-        message: { role: "user", content: "linear root" },
-      },
-      {
-        type: "message",
-        id: "linear-assistant",
-        message: { role: "assistant", content: "linear answer" },
-      },
-      {
-        type: "metadata",
-        id: "linear-metadata",
-        parentId: "linear-assistant",
-      },
-      {
-        type: "message",
-        id: "side-assistant",
-        parentId: "linear-assistant",
-        message: { role: "assistant", content: "side answer" },
-      },
+      createTranscriptMessage("linear-user", undefined, "user", "linear root"),
+      createTranscriptMessage("linear-assistant", undefined, "assistant", "linear answer"),
+      { type: "metadata", id: "linear-metadata", parentId: "linear-assistant" },
+      createTranscriptMessage("side-assistant", "linear-assistant", "assistant", "side answer"),
       {
         type: "leaf",
         id: "active-leaf",
@@ -729,18 +463,11 @@ describe("readSessionMessages", () => {
       reason: "test parentless leaf selection",
     });
 
-    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "linear root",
-      "linear answer",
-    ]);
-    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
-    expect(
-      (
-        await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
-          maxMessages: 10,
-        })
-      ).map((message) => (message as { content?: unknown }).content),
-    ).toEqual(["linear root", "linear answer"]);
+    expectMessageContents(messages, ["linear root", "linear answer"]);
+    expectMessageContents(
+      await readRecentSessionMessagesAsync(sessionId, storePath, undefined, { maxMessages: 10 }),
+      ["linear root", "linear answer"],
+    );
   });
 
   test("falls back to the latest reset archive when the active transcript is missing", async () => {
@@ -764,8 +491,6 @@ describe("readSessionMessages", () => {
       "restored prompt",
       "restored archive",
     ]);
-    await expect(readSessionMessageCountAsync(sessionId, storePath)).resolves.toBe(0);
-
     const recent = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
       maxMessages: 1,
       maxBytes: 2048,
@@ -1012,23 +737,14 @@ describe("readSessionMessages", () => {
     const sessionId = "test-session-tree-async-incomplete-parent";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "legacy-user",
-        message: { role: "user", content: "legacy prompt" },
-      },
-      {
-        type: "message",
-        id: "tree-assistant",
-        parentId: "legacy-user",
-        message: { role: "assistant", content: "tree reply" },
-      },
-      {
-        type: "message",
-        id: "orphan-tail",
-        parentId: "missing-imported-parent",
-        message: { role: "assistant", content: "reachable orphan tail" },
-      },
+      createTranscriptMessage("legacy-user", undefined, "user", "legacy prompt"),
+      createTranscriptMessage("tree-assistant", "legacy-user", "assistant", "tree reply"),
+      createTranscriptMessage(
+        "orphan-tail",
+        "missing-imported-parent",
+        "assistant",
+        "reachable orphan tail",
+      ),
     ]);
 
     const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
@@ -1036,11 +752,7 @@ describe("readSessionMessages", () => {
       reason: "test imported partial tree selection",
     });
 
-    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "legacy prompt",
-      "tree reply",
-      "reachable orphan tail",
-    ]);
+    expectMessageContents(messages, ["legacy prompt", "tree reply", "reachable orphan tail"]);
     expectMessageFields(messages[0], { openclaw: { id: "legacy-user", seq: 1 } });
     expectMessageFields(messages[1], { openclaw: { id: "tree-assistant", seq: 2 } });
     expectMessageFields(messages[2], { openclaw: { id: "orphan-tail", seq: 3 } });
@@ -1050,17 +762,8 @@ describe("readSessionMessages", () => {
     const sessionId = "test-session-tree-async-legacy-parent";
     writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
-      {
-        type: "message",
-        id: "legacy-user",
-        message: { role: "user", content: "legacy hello" },
-      },
-      {
-        type: "message",
-        id: "tree-assistant",
-        parentId: "legacy-user",
-        message: { role: "assistant", content: "tree hello" },
-      },
+      createTranscriptMessage("legacy-user", undefined, "user", "legacy hello"),
+      createTranscriptMessage("tree-assistant", "legacy-user", "assistant", "tree hello"),
     ]);
 
     const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
@@ -1068,26 +771,23 @@ describe("readSessionMessages", () => {
       reason: "test legacy parent active tree selection",
     });
 
-    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "legacy hello",
-      "tree hello",
-    ]);
+    expectMessageContents(messages, ["legacy hello", "tree hello"]);
     expectMessageFields(messages[0], { openclaw: { id: "legacy-user", seq: 1 } });
     expectMessageFields(messages[1], { openclaw: { id: "tree-assistant", seq: 2 } });
   });
 
   test("caches async transcript indexes by file stats", async () => {
     const sessionId = "test-session-index-cache";
-    writeTranscript(tmpDir, sessionId, [
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
     ]);
-    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
+    expect((await readSessionTranscriptIndex(transcriptPath))?.entries).toHaveLength(2);
 
     const openSpy = vi.spyOn(fs.promises, "open");
     try {
-      expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
+      expect((await readSessionTranscriptIndex(transcriptPath))?.entries).toHaveLength(2);
       expect(openSpy).not.toHaveBeenCalled();
     } finally {
       openSpy.mockRestore();
@@ -1096,7 +796,7 @@ describe("readSessionMessages", () => {
 
   test("shares concurrent async transcript index builds", async () => {
     const sessionId = "test-session-index-cache-concurrent";
-    writeTranscript(tmpDir, sessionId, [
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
@@ -1104,11 +804,12 @@ describe("readSessionMessages", () => {
 
     const openSpy = vi.spyOn(fs.promises, "open");
     try {
-      await expect(
-        Promise.all(
-          Array.from({ length: 8 }, () => readSessionMessageCountAsync(sessionId, storePath)),
-        ),
-      ).resolves.toEqual(Array.from({ length: 8 }, () => 2));
+      const indexes = await Promise.all(
+        Array.from({ length: 8 }, () => readSessionTranscriptIndex(transcriptPath)),
+      );
+      expect(indexes.map((index) => index?.entries.length)).toEqual(
+        Array.from({ length: 8 }, () => 2),
+      );
       expect(openSpy).toHaveBeenCalledTimes(1);
     } finally {
       openSpy.mockRestore();
@@ -1142,8 +843,11 @@ describe("readSessionMessages", () => {
 
   test("reads only the active branch when transcript rewrites abandon older entries", async () => {
     const sessionId = "test-session-active-branch";
-    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
+    const recordTimestamp = (second: number) => ({
+      record: { timestamp: `2026-04-27T00:00:0${second}.000Z` },
+      message: { timestamp: second },
+    });
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
       {
         type: "session",
         version: 3,
@@ -1151,47 +855,38 @@ describe("readSessionMessages", () => {
         cwd: tmpDir,
         timestamp: "2026-04-27T00:00:00.000Z",
       },
-      {
-        type: "message",
-        id: "original",
-        parentId: null,
-        timestamp: "2026-04-27T00:00:01.000Z",
-        message: {
-          role: "user",
-          content: "Sender: webchat\n\noriginal wrapped prompt",
-          timestamp: 1,
+      createTranscriptMessage(
+        "original",
+        null,
+        "user",
+        "Sender: webchat\n\noriginal wrapped prompt",
+        recordTimestamp(1),
+      ),
+      createTranscriptMessage("clean", null, "user", "clean prompt", recordTimestamp(2)),
+      createTranscriptMessage(
+        "answer",
+        "clean",
+        "assistant",
+        [{ type: "text", text: "clean answer" }],
+        {
+          record: recordTimestamp(3).record,
+          message: {
+            ...recordTimestamp(3).message,
+            api: "chat",
+            provider: "openclaw",
+            model: "test",
+            usage: {},
+            stopReason: "stop",
+          },
         },
-      },
-      {
-        type: "message",
-        id: "clean",
-        parentId: null,
-        timestamp: "2026-04-27T00:00:02.000Z",
-        message: { role: "user", content: "clean prompt", timestamp: 2 },
-      },
-      {
-        type: "message",
-        id: "answer",
-        parentId: "clean",
-        timestamp: "2026-04-27T00:00:03.000Z",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "clean answer" }],
-          api: "chat",
-          provider: "openclaw",
-          model: "test",
-          usage: {},
-          stopReason: "stop",
-          timestamp: 3,
-        },
-      },
-      {
-        type: "message",
-        id: "delivery-side-branch",
-        parentId: "answer",
-        timestamp: "2026-04-27T00:00:04.000Z",
-        message: { role: "assistant", content: "side delivery", timestamp: 4 },
-      },
+      ),
+      createTranscriptMessage(
+        "delivery-side-branch",
+        "answer",
+        "assistant",
+        "side delivery",
+        recordTimestamp(4),
+      ),
       {
         type: "leaf",
         id: "active-leaf",
@@ -1199,8 +894,7 @@ describe("readSessionMessages", () => {
         timestamp: "2026-04-27T00:00:05.000Z",
         targetId: "answer",
       },
-    ];
-    fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+    ]);
     const rawTranscript = fs.readFileSync(sessionFile, "utf-8");
     expect(rawTranscript).toContain("original wrapped prompt");
     expect(rawTranscript).toContain("clean prompt");
@@ -1211,7 +905,6 @@ describe("readSessionMessages", () => {
         mode: "full",
         reason: "test",
       });
-      expect(out).toHaveLength(2);
       expect(out).toHaveLength(2);
       expectMessageFields(out[0], { role: "user", content: "clean prompt", openclaw: { seq: 1 } });
       expectMessageFields(out[1], {
@@ -1225,32 +918,6 @@ describe("readSessionMessages", () => {
     } finally {
       sessionManagerOpenSpy.mockRestore();
     }
-  });
-
-  test("keeps legacy messages when a mixed transcript lacks a complete branch tree", async () => {
-    const sessionId = "mixed-legacy-tree-session";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      { type: "session", version: 1, id: sessionId },
-      { type: "message", id: "legacy-user", message: { role: "user", content: "legacy hello" } },
-      {
-        type: "message",
-        id: "tree-assistant",
-        parentId: "legacy-user",
-        message: { role: "assistant", content: "tree hello" },
-      },
-    ];
-    fs.writeFileSync(transcriptPath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
-
-    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
-      mode: "full",
-      reason: "test",
-    });
-
-    expect(out.map((message) => (message as { content?: unknown }).content)).toEqual([
-      "legacy hello",
-      "tree hello",
-    ]);
   });
 
   test.each([
@@ -1293,7 +960,7 @@ describe("readSessionMessages", () => {
 
   test("reads only the active SessionManager branch after a transcript rewrite", async () => {
     const sessionId = "branched-session";
-    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
     const decoratedPrompt = 'Sender:\n```json\n{"label":"ui"}\n```\n\nhello';
     const visiblePrompt = "hello";
     sessionManager.appendMessage({
@@ -1342,45 +1009,27 @@ describe("readSessionMessages", () => {
 
   test("keeps compaction markers when reading only the active SessionManager branch", async () => {
     const sessionId = "branched-session-with-compaction";
-    const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      {
-        type: "session",
-        version: 1,
-        id: sessionId,
-      },
-      {
-        type: "message",
-        id: "user-old",
-        parentId: null,
-        message: { role: "user", content: "old prompt", timestamp: 1 },
-      },
-      {
-        type: "message",
-        id: "assistant-old",
-        parentId: "user-old",
-        message: { role: "assistant", content: "old answer", timestamp: 2 },
-      },
+    const sessionFile = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      createTranscriptMessage("user-old", null, "user", "old prompt", {
+        message: { timestamp: 1 },
+      }),
+      createTranscriptMessage("assistant-old", "user-old", "assistant", "old answer", {
+        message: { timestamp: 2 },
+      }),
       {
         type: "compaction",
         id: "comp-1",
         timestamp: "2026-02-07T00:00:00.000Z",
         summary: "Compacted history",
       },
-      {
-        type: "message",
-        id: "user-active",
-        parentId: null,
-        message: { role: "user", content: "active prompt", timestamp: 3 },
-      },
-      {
-        type: "message",
-        id: "assistant-active",
-        parentId: "user-active",
-        message: { role: "assistant", content: "active answer", timestamp: 4 },
-      },
-    ];
-    fs.writeFileSync(sessionFile, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+      createTranscriptMessage("user-active", null, "user", "active prompt", {
+        message: { timestamp: 3 },
+      }),
+      createTranscriptMessage("assistant-active", "user-active", "assistant", "active answer", {
+        message: { timestamp: 4 },
+      }),
+    ]);
 
     const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
       mode: "full",
@@ -1404,42 +1053,17 @@ describe("readSessionMessages", () => {
     const sessionId = "paginated-branch-with-compaction";
     const sessionFile = writeTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
-      {
-        type: "message",
-        id: "old-user",
-        parentId: null,
-        message: { role: "user", content: "old prompt" },
-      },
-      {
-        type: "message",
-        id: "old-assistant",
-        parentId: "old-user",
-        message: { role: "assistant", content: "old answer" },
-      },
+      createTranscriptMessage("old-user", null, "user", "old prompt"),
+      createTranscriptMessage("old-assistant", "old-user", "assistant", "old answer"),
       {
         type: "compaction",
         id: "comp-1",
         timestamp: "2026-02-07T00:00:00.000Z",
         summary: "Compacted history",
       },
-      {
-        type: "message",
-        id: "active-user",
-        parentId: null,
-        message: { role: "user", content: "active prompt" },
-      },
-      {
-        type: "message",
-        id: "active-assistant",
-        parentId: "active-user",
-        message: { role: "assistant", content: "active answer" },
-      },
-      {
-        type: "message",
-        id: "side-branch",
-        parentId: "active-assistant",
-        message: { role: "assistant", content: "side branch" },
-      },
+      createTranscriptMessage("active-user", null, "user", "active prompt"),
+      createTranscriptMessage("active-assistant", "active-user", "assistant", "active answer"),
+      createTranscriptMessage("side-branch", "active-assistant", "assistant", "side branch"),
       { type: "leaf", id: "active-leaf", parentId: "side-branch", targetId: "active-assistant" },
     ]);
     const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
@@ -1528,11 +1152,11 @@ describe("readSessionMessages", () => {
 
   test("keeps repeated blocked hook messages together in a new session", async () => {
     const sessionKey = "agent:main:explicit:repeated-blocked-hook";
-    const sessionManager = SessionManager.create(tmpDir, tmpDir);
+    const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
     const sessionId = sessionManager.getSessionId();
     const sessionFile = sessionManager.getSessionFile();
     if (!sessionFile) {
-      throw new Error("expected SessionManager.create to return a session file");
+      throw new Error("expected a file-backed session manager");
     }
     fs.writeFileSync(
       storePath,
@@ -1576,36 +1200,19 @@ describe("readSessionMessages", () => {
   });
 });
 
-describe("readSessionPreviewItemsFromTranscript", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  registerTempSessionStore("openclaw-session-preview-test-", (nextTmpDir, nextStorePath) => {
-    tmpDir = nextTmpDir;
-    storePath = nextStorePath;
-  });
-
-  function writeTranscriptLines(sessionId: string, lines: string[]) {
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-  }
-
-  function readPreview(sessionId: string, maxItems = 3, maxChars = 120) {
-    return readSessionPreviewItemsFromTranscript(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      maxItems,
-      maxChars,
-    );
+describe("buildSessionPreviewItems", () => {
+  function readPreview(lines: string[], maxItems = 3, maxChars = 120) {
+    const messages = lines.flatMap((line) => {
+      const record = JSON.parse(line) as { message?: unknown };
+      return record.message === undefined ? [] : [record.message];
+    });
+    return buildSessionPreviewItems(messages, maxItems, maxChars);
   }
 
   test("returns recent preview items with tool summary", () => {
     const sessionId = "preview-session";
     const lines = createToolSummaryPreviewTranscriptLines(sessionId);
-    writeTranscriptLines(sessionId, lines);
-    const result = readPreview(sessionId);
+    const result = readPreview(lines);
 
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call weather");
@@ -1628,8 +1235,7 @@ describe("readSessionPreviewItemsFromTranscript", () => {
       }),
       JSON.stringify({ message: { role: "assistant", content: "Done" } }),
     ];
-    writeTranscriptLines(sessionId, lines);
-    const result = readPreview(sessionId);
+    const result = readPreview(lines);
 
     expect(result.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
     expect(result[1]?.text).toContain("call");
@@ -1639,97 +1245,53 @@ describe("readSessionPreviewItemsFromTranscript", () => {
     expect(result[1]?.text).toMatch(/\+\d+/);
   });
 
-  test("truncates preview text to max chars", () => {
-    const sessionId = "preview-truncate";
-    const longText = "a".repeat(60);
-    const lines = [JSON.stringify({ message: { role: "assistant", content: longText } })];
-    writeTranscriptLines(sessionId, lines);
-    const result = readPreview(sessionId, 1, 24);
+  const commentaryText = {
+    type: "text",
+    text: "thinking like caveman",
+    textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
+  };
 
-    expect(result).toHaveLength(1);
-    expect(result[0]?.text.length).toBe(24);
-    expect(result[0]?.text.endsWith("...")).toBe(true);
-  });
-
-  test("keeps preview text valid when the limit bisects an emoji", () => {
-    const sessionId = "preview-truncate-utf16";
-    const lines = [
-      JSON.stringify({
-        message: { role: "assistant", content: `${"t".repeat(196)}🚀xyz` },
-      }),
-    ];
-    writeTranscriptLines(sessionId, lines);
-
-    expect(readPreview(sessionId, 1, 200)).toEqual([
-      { role: "assistant", text: `${"t".repeat(196)}...` },
-    ]);
-  });
-
-  test("strips inline directives from preview items", () => {
-    const sessionId = "preview-strip-inline-directives";
-    const lines = [
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "A [[reply_to:abc-123]] B [[audio_as_voice]]",
+  test.each([
+    {
+      name: "truncates preview text to max chars",
+      content: "a".repeat(60),
+      maxChars: 24,
+      expected: [{ role: "assistant", text: `${"a".repeat(21)}...` }],
+    },
+    {
+      name: "keeps preview text valid when the limit bisects an emoji",
+      content: `${"t".repeat(196)}🚀xyz`,
+      maxChars: 200,
+      expected: [{ role: "assistant", text: `${"t".repeat(196)}...` }],
+    },
+    {
+      name: "strips inline directives from preview items",
+      content: "A [[reply_to:abc-123]] B [[audio_as_voice]]",
+      maxChars: 120,
+      expected: [{ role: "assistant", text: "A  B" }],
+    },
+    {
+      name: "prefers final_answer text for assistant preview items",
+      content: [
+        commentaryText,
+        {
+          type: "text",
+          text: "Actual final answer",
+          textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
         },
-      }),
-    ];
-    writeTranscriptLines(sessionId, lines);
-    const result = readPreview(sessionId, 1, 120);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.text).toBe("A  B");
-  });
-
-  test("prefers final_answer text for assistant preview items", () => {
-    const sessionId = "preview-final-answer";
-    const lines = [
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "thinking like caveman",
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
-            {
-              type: "text",
-              text: "Actual final answer",
-              textSignature: JSON.stringify({ v: 1, id: "msg_final", phase: "final_answer" }),
-            },
-          ],
-        },
-      }),
-    ];
-    writeTranscriptLines(sessionId, lines);
-    const result = readPreview(sessionId, 1, 120);
-
-    expect(result).toHaveLength(1);
-    expect(result[0]?.text).toBe("Actual final answer");
-  });
-
-  test("hides commentary-only assistant preview items", () => {
-    const sessionId = "preview-commentary-only";
-    const lines = [
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "thinking like caveman",
-              textSignature: JSON.stringify({ v: 1, id: "msg_commentary", phase: "commentary" }),
-            },
-          ],
-        },
-      }),
-    ];
-    writeTranscriptLines(sessionId, lines);
-    const result = readPreview(sessionId, 1, 120);
-
-    expect(result).toHaveLength(0);
+      ],
+      maxChars: 120,
+      expected: [{ role: "assistant", text: "Actual final answer" }],
+    },
+    {
+      name: "hides commentary-only assistant preview items",
+      content: [commentaryText],
+      maxChars: 120,
+      expected: [],
+    },
+  ])("$name", ({ content, maxChars, expected }) => {
+    const line = JSON.stringify({ message: { role: "assistant", content } });
+    expect(readPreview([line], 1, maxChars)).toEqual(expected);
   });
 });
 
@@ -1791,50 +1353,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     }
   });
 
-  test("bounds recent usage reads for bulk session listing", () => {
-    const sessionId = "usage-recent-large";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      ...Array.from({ length: 2500 }, (_, index) =>
-        JSON.stringify({
-          message: { role: "user", content: `filler ${index} ${"x".repeat(700)}` },
-        }),
-      ),
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: {
-            input: 900,
-            output: 100,
-            cost: { total: 0.003 },
-          },
-        },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-    const readFileSpy = vi.spyOn(fs, "readFileSync");
-
-    try {
-      expectUsageFields(
-        readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
-        {
-          modelProvider: "openai",
-          model: "gpt-5.4",
-          inputTokens: 900,
-          outputTokens: 100,
-          totalTokens: 900,
-        },
-      );
-      expect(readFileSpy).not.toHaveBeenCalled();
-    } finally {
-      readFileSpy.mockRestore();
-    }
-  });
-
-  test("estimates recent transcript context when local model telemetry is missing", () => {
+  test("estimates transcript context when local model telemetry is missing", async () => {
     const sessionId = "usage-local-missing-telemetry";
     const userText = "local prompt ".repeat(200);
     const assistantText = "local response ".repeat(120);
@@ -1854,15 +1373,12 @@ describe("readLatestSessionUsageFromTranscript", () => {
       estimateStringChars(userText) + estimateStringChars(assistantText),
     );
 
-    expectUsageFields(
-      readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
-      {
-        modelProvider: "openai-completions",
-        model: "local-llama",
-        totalTokens: expectedTotalTokens,
-        totalTokensFresh: true,
-      },
-    );
+    expectUsageFields(await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath), {
+      modelProvider: "openai-completions",
+      model: "local-llama",
+      totalTokens: expectedTotalTokens,
+      totalTokensFresh: true,
+    });
   });
 });
 
@@ -1935,46 +1451,25 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     );
   });
 
-  test("keeps explicit custom sessionFile ahead of synthesized fallback", () => {
+  test.each([
+    { name: "explicit custom sessionFile", filename: "custom-transcript.jsonl" },
+    { name: "custom topic-like transcript paths", filename: "custom-topic-notes.jsonl" },
+    {
+      name: "forked transcript paths",
+      filename: "2026-03-23T16-30-00-000Z_11111111-1111-4111-8111-111111111111.jsonl",
+    },
+    {
+      name: "timestamped custom transcript paths",
+      filename: "2026-03-23T16-30-00-000Z_notes.jsonl",
+    },
+  ])("keeps $name ahead of synthesized fallback", ({ filename }) => {
     const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-transcript.jsonl";
+    const sessionFile = path.join(path.dirname(storePath), filename);
     const candidates = resolveSessionTranscriptCandidates(
       "11111111-1111-4111-8111-111111111111",
       storePath,
       sessionFile,
     );
-
-    expect(candidates[0]).toBe(path.resolve(sessionFile));
-  });
-
-  test("keeps custom topic-like transcript paths ahead of synthesized fallback", () => {
-    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    const sessionFile = "/tmp/openclaw/agents/main/sessions/custom-topic-notes.jsonl";
-    const candidates = resolveSessionTranscriptCandidates(
-      "11111111-1111-4111-8111-111111111111",
-      storePath,
-      sessionFile,
-    );
-
-    expect(candidates[0]).toBe(path.resolve(sessionFile));
-  });
-
-  test("keeps forked transcript paths ahead of synthesized fallback", () => {
-    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    const sessionId = "11111111-1111-4111-8111-111111111111";
-    const sessionFile =
-      "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_11111111-1111-4111-8111-111111111111.jsonl";
-    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
-
-    expect(candidates[0]).toBe(path.resolve(sessionFile));
-  });
-
-  test("keeps timestamped custom transcript paths ahead of synthesized fallback", () => {
-    const storePath = "/tmp/openclaw/agents/main/sessions/sessions.json";
-    const sessionId = "11111111-1111-4111-8111-111111111111";
-    const sessionFile = "/tmp/openclaw/agents/main/sessions/2026-03-23T16-30-00-000Z_notes.jsonl";
-    const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
-
     expect(candidates[0]).toBe(path.resolve(sessionFile));
   });
 
@@ -2003,15 +1498,13 @@ describe("oversized transcript line guards", () => {
 
   test("readRecentSessionMessagesAsync replaces oversized JSONL lines with placeholders", async () => {
     const sessionId = "test-oversized-recent";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const oversizedContent = "x".repeat(300 * 1024);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "user", content: "start" } }),
-      JSON.stringify({ message: { role: "assistant", content: oversizedContent } }),
-      JSON.stringify({ message: { role: "user", content: "after oversized" } }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "start" } },
+      { message: { role: "assistant", content: oversizedContent } },
+      { message: { role: "user", content: "after oversized" } },
+    ]);
 
     const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
@@ -2025,24 +1518,12 @@ describe("oversized transcript line guards", () => {
 
   test("readRecentSessionMessagesAsync keeps oversized active-tree leaves", async () => {
     const sessionId = "test-oversized-tree-tail";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const oversizedContent = "z".repeat(300 * 1024);
-    const lines = [
-      JSON.stringify({ type: "session", version: 3, id: sessionId }),
-      JSON.stringify({
-        type: "message",
-        id: "root",
-        parentId: null,
-        message: { role: "user", content: "root" },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "oversized-leaf",
-        parentId: "root",
-        message: { role: "assistant", content: oversizedContent },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("root", null, "user", "root"),
+      createTranscriptMessage("oversized-leaf", "root", "assistant", oversizedContent),
+    ]);
 
     const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
@@ -2055,33 +1536,40 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("[chat.history omitted: message too large]");
   });
 
-  test("recent reads stay bounded when a leaf target is outside the tail window", async () => {
-    const sessionId = "test-leaf-target-before-tail-window";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 3, id: sessionId }),
-      JSON.stringify({
-        type: "message",
-        id: "active-root",
-        parentId: null,
-        message: { role: "user", content: "active root" },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "side-delivery",
-        parentId: "active-root",
-        message: { role: "assistant", content: "x".repeat(16 * 1024) },
-      }),
-      JSON.stringify({
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-delivery",
-        targetId: "active-root",
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+  test.each([
+    {
+      name: "recent reads stay bounded when a leaf target is outside the tail window",
+      sessionId: "test-leaf-target-before-tail-window",
+      sideRecords: [
+        createTranscriptMessage("side-delivery", "active-root", "assistant", "x".repeat(16 * 1024)),
+      ],
+    },
+    {
+      name: "bounded recent reads do not expose a compact inactive side message",
+      sessionId: "test-compact-side-before-bounded-leaf-target",
+      sideRecords: [
+        {
+          type: "metadata",
+          id: "large-padding",
+          parentId: "active-root",
+          payload: { padding: "x".repeat(16 * 1024) },
+        },
+        createTranscriptMessage(
+          "side-delivery",
+          "active-root",
+          "assistant",
+          "compact side delivery",
+        ),
+      ],
+    },
+  ])("$name", async ({ sessionId, sideRecords }) => {
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("active-root", null, "user", "active root"),
+      ...sideRecords,
+      { type: "leaf", id: "active-leaf", parentId: "side-delivery", targetId: "active-root" },
+    ]);
     const readFileSpy = vi.spyOn(fs, "readFileSync");
-
     try {
       await expect(
         readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
@@ -2096,73 +1584,18 @@ describe("oversized transcript line guards", () => {
     }
   });
 
-  test("bounded recent reads do not expose a compact inactive side message", async () => {
-    const sessionId = "test-compact-side-before-bounded-leaf-target";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 3, id: sessionId }),
-      JSON.stringify({
-        type: "message",
-        id: "active-root",
-        parentId: null,
-        message: { role: "user", content: "active root" },
-      }),
-      JSON.stringify({
-        type: "metadata",
-        id: "large-padding",
-        parentId: "active-root",
-        payload: { padding: "x".repeat(16 * 1024) },
-      }),
-      JSON.stringify({
-        type: "message",
-        id: "side-delivery",
-        parentId: "active-root",
-        message: { role: "assistant", content: "compact side delivery" },
-      }),
-      JSON.stringify({
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-delivery",
-        targetId: "active-root",
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
-
-    await expect(
-      readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
-        maxMessages: 10,
-        maxBytes: 1024,
-        maxLines: 10,
-      }),
-    ).resolves.toEqual([]);
-  });
-
   test("oversized line metadata extraction preserves id and parentId", async () => {
     const sessionId = "test-oversized-metadata-extract";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const timestamp = "2026-05-16T16:00:33.000Z";
     const oversizedContent = "w".repeat(300 * 1024);
-    const lines = [
-      JSON.stringify({ type: "session", version: 3, id: sessionId }),
-      JSON.stringify({
-        type: "message",
-        id: "root-msg",
-        parentId: null,
-        message: { role: "user", content: "root" },
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 3, id: sessionId },
+      createTranscriptMessage("root-msg", null, "user", "root"),
+      createTranscriptMessage("oversized-child", "root-msg", "assistant", oversizedContent, {
+        record: { timestamp },
+        message: { idempotencyKey: "oversized-key" },
       }),
-      JSON.stringify({
-        type: "message",
-        timestamp,
-        id: "oversized-child",
-        parentId: "root-msg",
-        message: {
-          role: "assistant",
-          content: oversizedContent,
-          idempotencyKey: "oversized-key",
-        },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    ]);
 
     const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
@@ -2210,22 +1643,6 @@ describe("oversized transcript line guards", () => {
     expect(serialized).toContain("[chat.history omitted: message too large]");
     expect(serialized).not.toContain(oversizedContent);
   });
-
-  test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
-    const sessionId = "test-async-title-bounded";
-    writeTranscript(
-      tmpDir,
-      sessionId,
-      buildBasicSessionTranscript(sessionId, "User says hi", "Bot says hello"),
-    );
-
-    const syncResult = readSessionTitleFieldsFromTranscript(sessionId, storePath);
-    const asyncResult = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
-
-    expect(asyncResult).toEqual(syncResult);
-    expect(asyncResult.firstUserMessage).toBe("User says hi");
-    expect(asyncResult.lastMessagePreview).toBe("Bot says hello");
-  });
 });
 
 describe("short read resilience", () => {
@@ -2236,17 +1653,6 @@ describe("short read resilience", () => {
     tmpDir = nextTmpDir;
     storePath = nextStorePath;
   });
-
-  function buildLargeTitleTranscript(sessionId: string) {
-    return [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "user", content: "head title" } },
-      ...Array.from({ length: 40 }, (_, index) => ({
-        message: { role: "assistant", content: `filler ${index} ${"x".repeat(512)}` },
-      })),
-      { message: { role: "assistant", content: "tail preview" } },
-    ];
-  }
 
   test("readRecentSessionMessagesAsync survives 16-byte tail read caps", async () => {
     const sessionId = "test-short-read-recent";
@@ -2306,87 +1712,6 @@ describe("short read resilience", () => {
       expect(getShortReadCalls()).toBeGreaterThan(1);
     } finally {
       vi.restoreAllMocks();
-    }
-  });
-
-  test("reads async title fields across short positional reads", async () => {
-    const sessionId = "test-short-read-title-async";
-    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
-
-    const getShortReadCalls = installAsyncPositionalShortReadProxy(16);
-    try {
-      await expect(
-        readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath),
-      ).resolves.toEqual({
-        firstUserMessage: "head title",
-        lastMessagePreview: "tail preview",
-      });
-      expect(getShortReadCalls()).toBeGreaterThan(1);
-    } finally {
-      vi.restoreAllMocks();
-    }
-  });
-
-  test("reads sync title fields across short positional reads", () => {
-    const sessionId = "test-short-read-title-sync";
-    writeTranscript(tmpDir, sessionId, buildLargeTitleTranscript(sessionId));
-
-    const { readSpy, getShortReadCalls } = installSyncPositionalShortReadProxy(16);
-    try {
-      expect(readSessionTitleFieldsFromTranscript(sessionId, storePath)).toEqual({
-        firstUserMessage: "head title",
-        lastMessagePreview: "tail preview",
-      });
-      expect(getShortReadCalls()).toBeGreaterThan(1);
-    } finally {
-      readSpy.mockRestore();
-    }
-  });
-
-  test("reads sync usage and preview windows across short positional reads", () => {
-    const sessionId = "test-short-read-sync-windows";
-    writeTranscript(tmpDir, sessionId, [
-      { type: "session", version: 1, id: sessionId },
-      ...Array.from({ length: 120 }, (_, index) => ({
-        message: { role: "user", content: `filler ${index} ${"x".repeat(1024)}` },
-      })),
-      {
-        message: {
-          role: "assistant",
-          content: "tail preview",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage: { input: 900, output: 100, cost: { total: 0.003 } },
-        },
-      },
-    ]);
-
-    const expectedUsage = readRecentSessionUsageFromTranscript(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      64 * 1024,
-    );
-    const expectedPreview = readSessionPreviewItemsFromTranscript(
-      sessionId,
-      storePath,
-      undefined,
-      undefined,
-      1,
-      120,
-    );
-    const { readSpy, getShortReadCalls } = installSyncPositionalShortReadProxy(4096);
-    try {
-      expect(
-        readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
-      ).toEqual(expectedUsage);
-      expect(
-        readSessionPreviewItemsFromTranscript(sessionId, storePath, undefined, undefined, 1, 120),
-      ).toEqual(expectedPreview);
-      expect(getShortReadCalls()).toBeGreaterThan(2);
-    } finally {
-      readSpy.mockRestore();
     }
   });
 });

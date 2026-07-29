@@ -439,34 +439,42 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     binding.rolloutPath,
   );
   const compaction = readCompactionConfig(params.config);
+  const maxBytes = parseCodexAppServerByteLimit(compaction?.maxActiveTranscriptBytes);
   const shouldDeferByteGuard =
-    compaction?.truncateAfterCompaction === true &&
+    maxBytes !== undefined &&
     params.contextEngineActive === true &&
     hasContextEngineThreadBootstrapProjection(binding);
-  if (compaction?.truncateAfterCompaction === true && !shouldDeferByteGuard) {
-    const maxBytes = parseCodexAppServerByteLimit(compaction.maxActiveTranscriptBytes);
-    if (maxBytes !== undefined) {
-      const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
-      if (oversizedFiles.length > 0) {
-        await Promise.all(
-          rolloutFiles.map(async (file) => {
-            await file.handle?.close();
-          }),
-        );
-        embeddedAgentLog.warn(
-          "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
-          {
-            threadId: binding.threadId,
-            maxBytes,
-            files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
-          },
-        );
-        await params.bindingStore.mutate(params.identity, {
-          kind: "clear",
+  if (shouldDeferByteGuard) {
+    embeddedAgentLog.debug(
+      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
+      {
+        threadId: binding.threadId,
+        engineId: binding.contextEngine?.engineId,
+        epoch: binding.contextEngine?.projection?.epoch,
+        fingerprint: binding.contextEngine?.projection?.fingerprint,
+      },
+    );
+  } else if (maxBytes !== undefined) {
+    const oversizedFiles = rolloutFiles.filter((file) => file.bytes >= maxBytes);
+    if (oversizedFiles.length > 0) {
+      await Promise.all(
+        rolloutFiles.map(async (file) => {
+          await file.handle?.close();
+        }),
+      );
+      embeddedAgentLog.warn(
+        "codex app-server native transcript exceeded active byte limit; starting a fresh thread",
+        {
           threadId: binding.threadId,
-        });
-        return undefined;
-      }
+          maxBytes,
+          files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
+        },
+      );
+      await params.bindingStore.mutate(params.identity, {
+        kind: "clear",
+        threadId: binding.threadId,
+      });
+      return undefined;
     }
   }
   const nativeTokenSnapshots = await Promise.all(
@@ -519,21 +527,6 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       threadId: binding.threadId,
     });
     return undefined;
-  }
-  if (compaction?.truncateAfterCompaction !== true) {
-    return binding;
-  }
-  if (shouldDeferByteGuard) {
-    embeddedAgentLog.debug(
-      "codex app-server deferring native transcript byte guard for context-engine thread bootstrap",
-      {
-        threadId: binding.threadId,
-        engineId: binding.contextEngine?.engineId,
-        epoch: binding.contextEngine?.projection?.epoch,
-        fingerprint: binding.contextEngine?.projection?.fingerprint,
-      },
-    );
-    return binding;
   }
   return binding;
 }

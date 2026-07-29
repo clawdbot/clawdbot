@@ -8,7 +8,7 @@ import type { ModelFallbackRouteResolution } from "../../../agents/model-fallbac
 import type { SilentReplyPromptMode } from "../../../agents/system-prompt.types.js";
 import type { ChatType } from "../../../channels/chat-type.js";
 import type { InboundEventKind } from "../../../channels/inbound-event/kind.js";
-import type { SessionEntry } from "../../../config/sessions.js";
+import type { SessionEntry, SessionToolOverrides } from "../../../config/sessions.js";
 import type { ReplyToMode } from "../../../config/types.base.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { MediaFact } from "../../../media/media-facts.js";
@@ -153,6 +153,7 @@ export type FollowupRun = {
     /** Task working directory for runtime execution. Defaults to workspaceDir. */
     cwd?: string;
     config: OpenClawConfig;
+    toolOverrides?: SessionToolOverrides;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;

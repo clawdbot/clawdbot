@@ -40,7 +40,14 @@ function isSameStoredTranscript(
   if (anchorSessionId && candidate.sessionId?.trim() === anchorSessionId) {
     return true;
   }
-  return false;
+  const anchorSessionFile = (anchor as { sessionFile?: unknown }).sessionFile;
+  const candidateSessionFile = (candidate as { sessionFile?: unknown }).sessionFile;
+  return (
+    typeof anchorSessionFile === "string" &&
+    anchorSessionFile.trim().length > 0 &&
+    typeof candidateSessionFile === "string" &&
+    candidateSessionFile.trim() === anchorSessionFile.trim()
+  );
 }
 
 function isPrivateConversation(params: {
@@ -250,9 +257,8 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
   };
 
   const expandRecallAliasKeys = (keys: string[]): string[] => {
-    // Alias resolution by session id can miss a group/channel alias that shares
-    // the same transcript file under a different session id. Recall must judge
-    // every alias, so expand candidates by stored transcript identity.
+    // Recall must judge every store key for the canonical transcript identity,
+    // including group/channel aliases that were not in the initial key set.
     const expanded = new Set(keys);
     for (const key of keys) {
       const entry = combinedSessionStore[key];

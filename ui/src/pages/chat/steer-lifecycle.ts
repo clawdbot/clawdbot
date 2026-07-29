@@ -23,6 +23,7 @@ import {
   type ChatSendAck,
   type TerminalFailureChatSendAck,
 } from "./chat-send-ack.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
 import { scheduleChatScroll } from "./scroll.ts";
 import {
@@ -37,6 +38,8 @@ type SteerLifecycleHost = ChatQueueScopedSessionHost & {
   connected: boolean;
   chatRunId: string | null;
   chatMessages: unknown[];
+  currentSessionId?: string | null;
+  chatDisplayedLeafEntryId?: string | null;
   chatMessagesBySession?: ChatMessageCache;
   sessionsResult?: SessionsListResult | null;
   lastError?: string | null;
@@ -150,7 +153,17 @@ export function preserveQueuedUserTurn(state: SteerLifecycleHost, item: ChatQueu
   };
   if (visibleSessionMatches(state, sessionKey, item.agentId)) {
     if (!chatMessagesContainQueuedSend(state.chatMessages, item, true)) {
-      state.chatMessages = [...state.chatMessages, userMessage];
+      const scope = readChatSessionProjectionScope(state, {
+        sessionKey,
+        agentId: item.agentId,
+      });
+      // Steer retirement and history recovery must retain the same pending
+      // entry; rendering a separate row loses it during a concurrent snapshot.
+      reduceChatSessionProjection(
+        state,
+        { type: "sendPending", runId, message: userMessage },
+        { scope },
+      );
     }
     return;
   }

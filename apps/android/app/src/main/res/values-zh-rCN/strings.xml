@@ -175,6 +175,7 @@
     <string name="native_199e261f8ee0e97f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已连接（操作员离线）"</string>
     <string name="native_19fc7a47df16fb1f" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"功能未批准"</string>
     <string name="native_1a00f329f4ad8941" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"这将从 Gateway 中永久移除该自动化及其计划。"</string>
+    <string name="native_1a0c3289c8bd184b" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"正在加载图片…"</string>
     <string name="native_1a2303ede07493ac" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"连接"</string>
     <string name="native_1a3421ff23362bbc" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"批准节点访问"</string>
     <string name="native_1a6b66544dcfe305" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"添加 Gateway"</string>
@@ -212,6 +213,7 @@
     <string name="native_2065cc867eba1b39" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"无法加载提供商模型配置。"</string>
     <string name="native_207ccb22d618db05" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"允许 %1$s 个应用转发。"</string>
     <string name="native_209b9e597963e7e1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"语音设置"</string>
+    <string name="native_20d4f92989f4fd3e" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"已隐藏其他图片：%1$s"</string>
     <string name="native_211988ba9dd0570a" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"拒绝配对请求？"</string>
     <string name="native_2132066dc9475cb7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"This skill is installed but not available to the current agent. Agent filters stay on desktop or CLI."</string>
     <string name="native_21378545892f1fe2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"发布者"</string>
@@ -905,6 +907,7 @@
     <string name="native_8cac4b77b9c54695" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"cron 操作失败。"</string>
     <string name="native_8cb2bab2ce6a17b2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"在 Gateway 电脑上运行："</string>
     <string name="native_8d0839802b4d6aca" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"刷新日志"</string>
+    <string name="native_8d0ee7798129f41c" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"图片不可用 · 点按重试"</string>
     <string name="native_8d20273207a2fe99" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"openclaw nodes approve %1$s"</string>
     <string name="native_8d57374bc09c8756" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"语音消息 · %1$s"</string>
     <string name="native_8d59829c1e15afe1" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"用量"</string>

@@ -278,6 +278,72 @@ describe("acquireSessionWriteLock", () => {
     await expectPathMissing(path.resolve(`${sessionKey}.lock`));
   });
 
+  it("preserves session-key leases while another SIGTERM handler drains", async () => {
+    const sessionKey = `agent:main:write-lock-graceful-sigterm-${Date.now()}`;
+    const gracefulShutdown = () => {};
+    let lock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
+    process.on("SIGTERM", gracefulShutdown);
+
+    try {
+      lock = await acquireSessionWriteLock({
+        sessionFile: sessionKey,
+        targetKind: "session-key",
+      });
+
+      testing.handleTerminationSignal("SIGTERM");
+
+      expect(lock.assertOwned).toBeDefined();
+      expect(() => lock?.assertOwned?.()).not.toThrow();
+      await expect(
+        acquireSessionWriteLock({
+          sessionFile: sessionKey,
+          targetKind: "session-key",
+          timeoutMs: 5,
+        }),
+      ).rejects.toThrow(/session file locked/);
+
+      await lock.release();
+      lock = undefined;
+      const nextLock = await acquireSessionWriteLock({
+        sessionFile: sessionKey,
+        targetKind: "session-key",
+        timeoutMs: 500,
+      });
+      await nextLock.release();
+    } finally {
+      await lock?.release();
+      process.off("SIGTERM", gracefulShutdown);
+    }
+  });
+
+  it("releases session-key leases before reraising a sole termination signal", async () => {
+    const sessionKey = `agent:main:write-lock-sole-sigterm-${Date.now()}`;
+    const lock = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+    });
+    const listenerCount = vi.spyOn(process, "listenerCount").mockReturnValueOnce(1);
+    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+
+    try {
+      testing.handleTerminationSignal("SIGTERM");
+
+      expect(() => lock.assertOwned?.()).toThrow(/lease-lost/);
+      expect(kill).toHaveBeenCalledWith(process.pid, "SIGTERM");
+    } finally {
+      listenerCount.mockRestore();
+      kill.mockRestore();
+      await lock.release();
+    }
+
+    const nextLock = await acquireSessionWriteLock({
+      sessionFile: sessionKey,
+      targetKind: "session-key",
+      timeoutMs: 500,
+    });
+    await nextLock.release();
+  });
+
   it("namespaces unqualified session-key leases by transcript target", async () => {
     const first = await acquireSessionWriteLock({
       sessionFile: resolveSessionWriteLockTargetKey({

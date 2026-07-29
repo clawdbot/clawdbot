@@ -69,6 +69,11 @@ type StoredChatOutboxDrainLane = {
   rerun: boolean;
 };
 
+type StoredChatOutboxClientState = {
+  lanes: Map<string, StoredChatOutboxDrainLane>;
+  retryTimers: Map<string, ReturnType<typeof setTimeout>>;
+};
+
 const STORED_OUTBOX_RETRY_DEFAULT_MS = 500;
 const STORED_OUTBOX_RETRY_MIN_MS = 100;
 const STORED_OUTBOX_RETRY_MAX_MS = 30_000;
@@ -77,25 +82,15 @@ export const UNCONFIRMED_CHAT_SEND_ERROR =
 const UNCERTAIN_CLEAR_SUCCESSOR_ERROR =
   "A preceding /clear may have completed. Review the current conversation before retrying.";
 
-const storedChatOutboxDrainLanesByClient = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, StoredChatOutboxDrainLane>
->();
-const storedChatOutboxRetryTimersByClient = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, ReturnType<typeof setTimeout>>
->();
+const storedChatOutboxClients = new WeakMap<GatewayBrowserClient, StoredChatOutboxClientState>();
 
-function storedChatOutboxClientMap<T>(
-  store: WeakMap<GatewayBrowserClient, Map<string, T>>,
-  client: GatewayBrowserClient,
-): Map<string, T> {
-  const existing = store.get(client);
+function getStoredChatOutboxClientState(client: GatewayBrowserClient): StoredChatOutboxClientState {
+  const existing = storedChatOutboxClients.get(client);
   if (existing) {
     return existing;
   }
-  const created = new Map<string, T>();
-  store.set(client, created);
+  const created = { lanes: new Map(), retryTimers: new Map() };
+  storedChatOutboxClients.set(client, created);
   return created;
 }
 
@@ -118,7 +113,7 @@ export function scheduleStoredChatOutboxRetry(
     return;
   }
   const connectionEpoch = host.connectionEpoch;
-  const timers = storedChatOutboxClientMap(storedChatOutboxRetryTimersByClient, client);
+  const timers = getStoredChatOutboxClientState(client).retryTimers;
   const key = storedChatOutboxScopeKey(scope);
   if (timers.has(key)) {
     return;
@@ -542,15 +537,14 @@ export async function scheduleStoredChatOutboxDrain(
     return;
   }
   const key = storedChatOutboxScopeKey(scope);
-  const retryTimers = storedChatOutboxRetryTimersByClient.get(client);
-  const retryTimer = retryTimers?.get(key);
+  const { lanes, retryTimers } = getStoredChatOutboxClientState(client);
+  const retryTimer = retryTimers.get(key);
   if (retryTimer !== undefined) {
     clearTimeout(retryTimer);
-    retryTimers?.delete(key);
+    retryTimers.delete(key);
   }
   // Drain ownership follows the live gateway client. A disconnected client can
   // leave an RPC pending, but its lane must never capture a replacement client.
-  const lanes = storedChatOutboxClientMap(storedChatOutboxDrainLanesByClient, client);
   const existing = lanes.get(key);
   if (existing) {
     const existingHostOwnsScope =

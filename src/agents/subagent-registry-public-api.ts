@@ -10,13 +10,13 @@ import {
   countActiveDescendantRunsFromRuns,
   countActiveRunsForSessionFromRuns,
   countPendingDescendantRunsFromRuns,
+  getLatestSubagentRunByChildSessionKeyFromRuns,
   getSubagentRunByChildSessionKeyFromRuns,
   listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
 } from "./subagent-registry-queries.js";
 import { markRequesterTurnYieldedInRuns } from "./subagent-registry-requester-yield.js";
 import type { SubagentRunRecord, SwarmStructuredOutputState } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 
 export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
@@ -256,17 +256,12 @@ export function createSubagentRegistryPublicApi(config: {
       return null;
     }
 
-    let latest: SubagentRunRecord | null = null;
-    for (const entry of deps().getSubagentRunsSnapshotForChildSession(runs, key).values()) {
-      if (entry.childSessionKey !== key) {
-        continue;
-      }
-      if (!latest || compareSubagentRunGeneration(entry, latest) > 0) {
-        latest = entry;
-      }
-    }
-
-    return latest;
+    return (
+      getLatestSubagentRunByChildSessionKeyFromRuns(
+        deps().getSubagentRunsSnapshotForChildSession(runs, key),
+        key,
+      ) ?? null
+    );
   }
 
   /** Re-admits a delivered child batch after its requester explicitly yields. */

@@ -1,6 +1,7 @@
 // Control UI chat module implements user message content behavior.
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import { hasVideoMediaFileExtension } from "../../lib/media-file-extension.ts";
 import { getChatAttachmentPreviewUrl } from "./attachment-payload-store.ts";
 
 type UserChatMessageContentBlock = {
@@ -10,7 +11,7 @@ type UserChatMessageContentBlock = {
   source?: unknown;
   attachment?: {
     url: string;
-    kind: Extract<MediaKind, "audio" | "document">;
+    kind: Extract<MediaKind, "audio" | "video" | "document">;
     label: string;
     mimeType?: string;
   };
@@ -56,11 +57,16 @@ export function buildUserChatMessageContentBlocks(
       });
       continue;
     }
+    const normalizedMimeType = attachment.mimeType.trim().toLowerCase();
+    const isVideo =
+      normalizedMimeType.startsWith("video/") ||
+      ((normalizedMimeType === "" || normalizedMimeType === "application/octet-stream") &&
+        hasVideoMediaFileExtension(attachment.fileName ?? ""));
     blocks.push({
       type: "attachment",
       attachment: {
         url: previewUrl,
-        kind: attachment.mimeType.startsWith("audio/") ? "audio" : "document",
+        kind: attachment.mimeType.startsWith("audio/") ? "audio" : isVideo ? "video" : "document",
         label: attachment.fileName?.trim() || "Attached file",
         mimeType: attachment.mimeType,
       },

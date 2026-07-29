@@ -1,16 +1,18 @@
 import { consume } from "@lit/context";
+import { initialState, Task } from "@lit/task";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import {
@@ -40,6 +42,8 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNodes } from "./view.ts";
 import type { InventoryRemovalPrompt } from "./view.types.ts";
+
+const NODES_DOCS_URL = "https://docs.openclaw.ai/nodes";
 
 export type NodesRouteData = {
   // Client identity alone cannot distinguish provider replacement or reconnect epochs.
@@ -98,8 +102,28 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
 
   private routeDataInitialized = false;
   private hasBoundGateway = false;
-  private presenceRequestId = 0;
   private gatewaySource: ApplicationContext["gateway"] | null = null;
+  private readonly presenceTask = new Task(this, {
+    autoRun: false,
+    // Gateway identity invalidates same-client reconnects and source replacements.
+    args: () =>
+      [
+        this.connected ? this.gatewaySource : null,
+        this.connected ? this.context?.gateway.snapshot.client : null,
+      ] as const,
+    task: ([gateway, client], { signal }) =>
+      gateway && client ? client.request("system-presence", {}, { signal }) : initialState,
+    onComplete: (response) => {
+      if (Array.isArray(response)) {
+        this.presence = response as PresenceEntry[];
+      }
+    },
+    onError: (error) => {
+      if (isMissingOperatorReadScopeError(error)) {
+        this.presence = [];
+      }
+    },
+  });
   private readonly polling = new PollController(
     this,
     NODES_ACTIVE_POLL_INTERVAL_MS,
@@ -146,7 +170,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
             const connectivityChanged =
               presenceConnectivitySignature(presence) !==
               presenceConnectivitySignature(this.presence);
-            this.presenceRequestId += 1;
+            void this.presenceTask.run([null, null]);
             this.presence = presence;
             if (connectivityChanged) {
               void loadDevices(this, { quiet: true });
@@ -177,7 +201,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
   override disconnectedCallback() {
     this.subscriptions.clear();
     this.requestGeneration += 1;
-    this.presenceRequestId += 1;
+    void this.presenceTask.run([null, null]);
     this.client = null;
     this.connected = false;
     this.presence = [];
@@ -269,7 +293,7 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     });
     this.nodesLoading = next.nodesLoading;
     this.nodes = next.nodes;
-    this.presenceRequestId += 1;
+    void this.presenceTask.run([null, null]);
     this.presence = [];
     this.lastError = next.lastError;
     this.chatError = next.chatError ?? null;
@@ -311,41 +335,13 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
     this.polling.stop();
   }
 
-  private async loadPresence() {
+  private loadPresence(): Promise<void> {
     const gateway = this.context.gateway.snapshot;
     const client = gateway.client;
     if (gateway.phase !== "connected" || !client) {
-      return;
+      return Promise.resolve();
     }
-    const generation = this.requestGeneration;
-    const requestId = ++this.presenceRequestId;
-    try {
-      const response = await client.request("system-presence", {});
-      if (this.isCurrentPresenceRequest(client, generation, requestId) && Array.isArray(response)) {
-        this.presence = response as PresenceEntry[];
-      }
-    } catch (error) {
-      if (
-        this.isCurrentPresenceRequest(client, generation, requestId) &&
-        isMissingOperatorReadScopeError(error)
-      ) {
-        this.presence = [];
-      }
-    }
-  }
-
-  private isCurrentPresenceRequest(
-    client: GatewayBrowserClient,
-    generation: number,
-    requestId: number,
-  ): boolean {
-    const snapshot = this.context.gateway.snapshot;
-    return (
-      snapshot.phase === "connected" &&
-      snapshot.client === client &&
-      this.requestGeneration === generation &&
-      this.presenceRequestId === requestId
-    );
+    return this.presenceTask.run([this.context.gateway, client]);
   }
 
   private confirmInventoryRemoval() {
@@ -378,6 +374,9 @@ class NodesPage extends OpenClawLightDomElement implements NodesPageDataState {
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("nodes")}</div>
+          <div class="page-subtitle">
+            ${subtitleForRoute("nodes")} ${renderDocsLink(NODES_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
       </section>
       ${renderSettingsWorkspace(

@@ -25,8 +25,12 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { readExternalCliBootstrapCredential as readExternalCliBootstrapCredentialImpl } from "../auth-profiles/external-cli-sync.js";
 import { resolveApiKeyForProfile as resolveApiKeyForProfileImpl } from "../auth-profiles/oauth.js";
-import { saveAuthProfileStore } from "../auth-profiles/store.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../auth-profiles/store.js";
 import {
   resetCliAuthEpochTestDeps,
   setCliAuthEpochTestDeps,
@@ -336,6 +340,7 @@ describe("prepareCliRunContext", () => {
         cleanup: vi.fn(async () => undefined),
       })),
       getClaudeLiveSessionGenerationForOwner: vi.fn(() => undefined),
+      readExternalCliBootstrapCredential: readExternalCliBootstrapCredentialImpl,
       resolveApiKeyForProfile: resolveApiKeyForProfileImpl,
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -782,11 +787,18 @@ describe("prepareCliRunContext", () => {
     expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
   });
 
-  it("refreshes and forwards a selected Claude CLI OAuth profile", async () => {
+  it("persists and forwards a refreshed managed Anthropic OAuth profile", async () => {
     const { dir } = fixture.session;
     const agentDir = path.join(dir, "agents", "main", "agent");
-    const authProfileId = "anthropic:claude-cli";
+    const authProfileId = "anthropic:openclaw-managed";
     const prepareExecution = vi.fn(async () => undefined);
+    const refreshedCredential = {
+      type: "oauth" as const,
+      provider: "anthropic",
+      access: "refreshed-access-token",
+      refresh: "refreshed-refresh-token",
+      expires: Date.now() + 60 * 60_000,
+    };
     fs.mkdirSync(agentDir, { recursive: true });
     saveAuthProfileStore(
       {
@@ -794,30 +806,37 @@ describe("prepareCliRunContext", () => {
         profiles: {
           [authProfileId]: {
             type: "oauth",
-            provider: "claude-cli",
-            access: "stored-access-token",
+            provider: "anthropic",
+            access: "expired-access-token",
             refresh: "stored-refresh-token",
-            expires: Date.now() + 60 * 60_000,
+            expires: Date.now() - 60_000,
           },
         },
       },
       agentDir,
     );
     setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
-    setCliRunnerPrepareTestDeps({
-      resolveApiKeyForProfile: vi.fn(async () => ({
-        apiKey: "stored-access-token",
-        provider: "claude-cli",
-        profileId: authProfileId,
-        profileType: "oauth",
-        credential: {
-          type: "oauth",
-          provider: "claude-cli",
-          access: "stored-access-token",
-          refresh: "stored-refresh-token",
-          expires: Date.now() + 60 * 60_000,
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async ({ store }) => {
+      saveAuthProfileStore(
+        {
+          ...store,
+          profiles: {
+            ...store.profiles,
+            [authProfileId]: refreshedCredential,
+          },
         },
-      })),
+        agentDir,
+      );
+      return {
+        apiKey: refreshedCredential.access,
+        provider: refreshedCredential.provider,
+        profileId: authProfileId,
+        profileType: refreshedCredential.type,
+        credential: refreshedCredential,
+      };
+    });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
     });
 
     await fixture.prepare({
@@ -834,11 +853,306 @@ describe("prepareCliRunContext", () => {
         authProfileId,
         authCredential: expect.objectContaining({
           type: "oauth",
-          provider: "claude-cli",
-          access: "stored-access-token",
+          provider: "anthropic",
+          access: refreshedCredential.access,
+          refresh: refreshedCredential.refresh,
         }),
       }),
     );
+    expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[authProfileId]).toEqual(
+      refreshedCredential,
+    );
+    expect(resolveApiKeyForProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: authProfileId,
+        agentDir,
+        allowProfileFallback: false,
+      }),
+    );
+  });
+
+  it("runs an imported Claude CLI login natively without forwarding a credential", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "expired-imported-access",
+            refresh: "imported-refresh",
+            expires: Date.now() - 60_000,
+            email: "owner@example.com",
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    const resolveApiKeyForProfile = vi.fn<typeof resolveApiKeyForProfileImpl>(async () => null);
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile,
+      // Live login is expired too: expiry is Claude's to repair via its own
+      // refresh token, so passthrough must not gate on it.
+      readExternalCliBootstrapCredential: vi.fn(() => ({
+        type: "oauth" as const,
+        provider: "claude-cli",
+        access: "live-native-access",
+        refresh: "live-native-refresh",
+        expires: Date.now() - 30_000,
+        email: "owner@example.com",
+      })),
+    });
+
+    await fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+
+    expect(prepareExecution).toHaveBeenCalledTimes(1);
+    expect(prepareExecution).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId, authCredential: undefined }),
+    );
+    expect(resolveApiKeyForProfile).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the imported Claude CLI login is gone from the host", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "expired-imported-access",
+            refresh: "imported-refresh",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      readExternalCliBootstrapCredential: vi.fn(() => null),
+    });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+    await expect(preparation).rejects.toThrow("no reusable Claude CLI login is available");
+    await expect(preparation).rejects.toThrow("claude auth login");
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the host Claude CLI login is a different account", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "imported-access",
+            refresh: "imported-refresh",
+            expires: Date.now() + 60 * 60_000,
+            accountId: "acct-selected",
+            email: "owner@example.com",
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      readExternalCliBootstrapCredential: vi.fn(() => ({
+        type: "oauth" as const,
+        provider: "claude-cli",
+        access: "other-account-access",
+        refresh: "other-account-refresh",
+        expires: Date.now() + 60 * 60_000,
+        accountId: "acct-other",
+        email: "other@example.com",
+      })),
+    });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+    await expect(preparation).rejects.toThrow(
+      "current Claude CLI login belongs to a different account",
+    );
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("does not revive a selected managed credential when auth resolution returns null", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:openclaw-managed";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => null),
+    });
+
+    const preparation = fixture.prepare({
+      sessionKey: "agent:main:main",
+      agentDir,
+      provider: "claude-cli",
+      model: "sonnet",
+      authProfileId,
+      config: {},
+    });
+    await expect(preparation).rejects.toThrow(
+      `could not materialize selected auth profile "${authProfileId}"`,
+    );
+    await expect(preparation).rejects.toThrow("openclaw models auth login --provider anthropic");
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("does not replace an explicit Claude CLI profile with a resolver fallback", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:account-a";
+    const fallbackProfileId = "anthropic:account-b";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-account-a-access",
+            refresh: "account-a-refresh",
+            expires: Date.now() - 60_000,
+          },
+          [fallbackProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "account-b-access",
+            refresh: "account-b-refresh",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => ({
+        apiKey: "account-b-access",
+        provider: "anthropic",
+        profileId: fallbackProfileId,
+        profileType: "oauth",
+        credential: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "account-b-access",
+          refresh: "account-b-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      })),
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toThrow(`resolved as "${fallbackProfileId}"`);
+    expect(prepareExecution).not.toHaveBeenCalled();
+  });
+
+  it("surfaces managed profile refresh failures before backend preparation", async () => {
+    const { dir } = fixture.session;
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:openclaw-managed";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "expired-access-token",
+            refresh: "expired-refresh-token",
+            expires: Date.now() - 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => {
+        throw new Error("OAuth refresh failed. Run claude auth login.");
+      }),
+    });
+
+    await expect(
+      fixture.prepare({
+        sessionKey: "agent:main:main",
+        agentDir,
+        provider: "claude-cli",
+        model: "sonnet",
+        authProfileId,
+        config: {},
+      }),
+    ).rejects.toThrow("Run claude auth login");
+    expect(prepareExecution).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -920,6 +1234,50 @@ describe("prepareCliRunContext", () => {
     expect(context.preparedBackend.env).toMatchObject({
       CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR: "3",
     });
+  });
+
+  it("carries projected network-result capability into the prepared CLI context", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "network-tool-cli",
+      pluginId: "network-tool-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      config: {
+        command: "network-tool-cli",
+        args: ["--print"],
+        output: "text",
+        input: "arg",
+        sessionMode: "none",
+      },
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "fake_web_tool",
+            label: "Fake web tool",
+            description: "Test network content capability",
+            parameters: Type.Object({}, { additionalProperties: false }),
+            resultContentSource: "network" as const,
+            execute: vi.fn(async () => ({ content: [] })),
+          },
+        ],
+      })),
+    });
+
+    const context = await fixture.prepare({
+      provider: "network-tool-cli",
+      model: "test-model",
+      config: createCliBackendConfig({ bundleMcp: true }),
+    });
+
+    expect(context.resultContentSourceByToolName?.get("fake_web_tool")).toBe("network");
   });
 
   it("lets Gemini CLI preparation override generated MCP system settings auth", async () => {
@@ -2857,7 +3215,72 @@ describe("prepareCliRunContext", () => {
     );
   });
 
-  it("requires prepared-execution backends to acknowledge exact enforcement and cleans up", async () => {
+  it("translates disableTools into an exact empty cap for selectable backends", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    setCliRunnerPrepareTestDeps({ getActiveMcpLoopbackRuntime });
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: true,
+      bundleMcpMode: "claude-config-file",
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      disableTools: true,
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+    expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+  });
+
+  it("lets disableTools override a selectable backend toolsAllow projection", async () => {
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      bundleMcp: false,
+      nativeToolMode: "selectable",
+      toolAvailabilityEnforcement: "execution-args",
+      resolveExecutionArgs,
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    const context = await fixture.prepare({
+      provider: "selectable-cli",
+      disableTools: true,
+      toolsAllow: ["write"],
+    });
+
+    expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+  });
+
+  it("requires prepared-execution backends to enforce the derived disabled-tools cap", async () => {
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ cleanup }));
     setRawCliBackendForPrepareTest({
@@ -2879,7 +3302,7 @@ describe("prepareCliRunContext", () => {
     await expect(
       fixture.prepare({
         provider: "settings-cli",
-        cliToolAvailability: { native: [], openClaw: [] },
+        disableTools: true,
       }),
     ).rejects.toThrow(
       "did not enforce exact per-run tool availability during execution preparation",
@@ -2888,6 +3311,30 @@ describe("prepareCliRunContext", () => {
       expect.objectContaining({ toolAvailability: { native: [], openClaw: [], mcp: [] } }),
     );
     expect(cleanup).toHaveBeenCalledOnce();
+  });
+
+  it("still rejects disableTools when a selectable backend cannot enforce an exact cap", async () => {
+    setRawCliBackendForPrepareTest({
+      id: "selectable-cli",
+      pluginId: "selectable-plugin",
+      nativeToolMode: "selectable",
+      config: {
+        command: "selectable-cli",
+        args: ["--print"],
+        output: "jsonl",
+        input: "stdin",
+        sessionMode: "existing",
+      },
+    });
+
+    await expect(
+      fixture.prepare({
+        provider: "selectable-cli",
+        disableTools: true,
+      }),
+    ).rejects.toThrow(
+      "CLI backend selectable-cli cannot run with tools disabled because it exposes native tools",
+    );
   });
 
   it("accepts a positive prepared-execution enforcement acknowledgement", async () => {

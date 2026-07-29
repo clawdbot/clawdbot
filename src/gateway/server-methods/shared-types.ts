@@ -11,7 +11,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import type { HealthSummary } from "../../commands/health.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginApprovalRequest,
@@ -26,6 +25,7 @@ import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { HealthSummary } from "../health/types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
@@ -124,7 +124,10 @@ type SystemAgentHistoryTurn = {
 
 type GatewaySystemAgentSession = {
   engine: {
-    handle: (message: string) => Promise<{
+    handle: (
+      message: string,
+      options?: { uiContext?: { page: string } },
+    ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
       sensitive?: boolean;
@@ -155,6 +158,9 @@ export type GatewayRequestContext = {
   cron: GatewayCronServiceContract;
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
+  controlUiSessionPullRequests?: ReturnType<
+    typeof import("../control-ui-session-pr-subscriptions.js").createControlUiSessionPullRequestSubscriptions
+  >;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
   notifyPluginMetadataChanged: () => void;
@@ -311,6 +317,8 @@ export type GatewayRequestOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   methodRegistry?: GatewayMethodRegistryView;
+  /** In-process caller lifetime; never serialized into a Gateway request frame. */
+  signal?: AbortSignal;
 };
 
 /** Commit-time guard captured by the pre-dispatch session participation check. */
@@ -328,6 +336,8 @@ export type GatewayRequestHandlerOptions = {
   respond: RespondFn;
   context: GatewayRequestContext;
   sessionMutationAuthorization?: SessionMutationAuthorization;
+  /** In-process caller lifetime; absent for ordinary transport requests. */
+  signal?: AbortSignal;
 };
 
 /** Single gateway method implementation. */

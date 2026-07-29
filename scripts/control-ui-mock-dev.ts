@@ -4,9 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
-import type { UserProfile } from "../packages/gateway-protocol/src/index.js";
+import type {
+  RequestFrame,
+  SystemAgentChatHistoryResult,
+  SystemAgentChatQuestion,
+  SystemAgentChatResult,
+  SystemChangesListResult,
+  UserProfile,
+} from "../packages/gateway-protocol/src/index.js";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { applySharedChannelFieldHelp } from "../src/config/schema.channel-field-help.js";
+import { buildBaseHints } from "../src/config/schema.hints.js";
 import { applyConfigTierHints, applyResolvedConfigTierHints } from "../src/config/schema.tiers.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../src/gateway/control-ui-contract.js";
 import {
@@ -65,6 +73,7 @@ const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
 const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
 const OBSERVER_DEMO_SESSION_KEY = "agent:main:session-observer-demo";
 const OBSERVER_DEMO_RUN_ID = "mock-session-observer-run";
+const CUSTODIAN_CHAT_REPLY_DELAY_MS = 600;
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -685,6 +694,38 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
           },
         },
       },
+      talk: {
+        type: "object",
+        title: "Talk",
+        properties: {
+          interruptOnSpeech: {
+            type: "boolean",
+            title: "Talk Interrupt on Speech",
+            description: "Stop speaking when the user talks over the assistant.",
+          },
+          realtime: {
+            type: "object",
+            title: "Talk Realtime",
+            properties: {
+              provider: {
+                type: "string",
+                title: "Talk Realtime Provider",
+                description: "Active realtime voice provider id, such as openai or google.",
+              },
+              model: {
+                type: "string",
+                title: "Talk Realtime Model",
+                description: "Realtime voice model for browser Talk sessions.",
+              },
+              speakerVoice: {
+                type: "string",
+                title: "Talk Realtime Speaker Voice",
+                description: "Built-in realtime voice id.",
+              },
+            },
+          },
+        },
+      },
       messages: {
         type: "object",
         title: "Messages",
@@ -793,16 +834,33 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       },
     },
   };
+  const get = {
+    path: "~/.openclaw/openclaw.json",
+    exists: true,
+    raw: `${JSON.stringify(config, null, 2)}\n`,
+    hash: "mock-config-hash",
+    appliedConfigHash: "mock-config-hash",
+    valid: true,
+    config,
+    issues: [],
+  };
+  const writeAck = { ok: true, path: get.path, hash: get.hash, config };
   return {
-    get: {
-      path: "~/.openclaw/openclaw.json",
-      exists: true,
-      raw: `${JSON.stringify(config, null, 2)}\n`,
-      hash: "mock-config-hash",
-      appliedConfigHash: "mock-config-hash",
-      valid: true,
-      config,
-      issues: [],
+    get,
+    set: writeAck,
+    apply: {
+      ...writeAck,
+      sentinel: {
+        persisted: true,
+        payload: {
+          kind: "config-apply",
+          status: "ok",
+          ts: 0,
+          message: null,
+          doctorHint: "openclaw doctor --non-interactive",
+          stats: { mode: "config.apply", root: get.path, requiresRestart: false },
+        },
+      },
     },
     schema: {
       schema,
@@ -811,7 +869,9 @@ function buildConfigMocks(options: { swarmEnabled?: boolean } = {}) {
       uiHints: applySharedChannelFieldHelp(
         applyResolvedConfigTierHints(
           schema,
-          applyConfigTierHints({}, { includePluginOwnedChannels: true }),
+          // Seed with base hints so the mock carries the gateway's labels,
+          // help, and docsUrl metadata instead of bare tier scaffolding.
+          applyConfigTierHints(buildBaseHints(), { includePluginOwnedChannels: true }),
         ),
       ),
       version: "mock-config-schema",
@@ -1343,6 +1403,53 @@ async function createChatPickerScenario(
   const cronMocks = buildCronMocks(Date.now());
   const channelWizard = buildChannelWizardMocks();
   const configMocks = buildConfigMocks({ swarmEnabled: fixture === "swarm" });
+  const custodianHistory = {
+    turns: [
+      {
+        role: "user",
+        text: "Can you check whether this system is ready?",
+        at: baseTime - 18 * 60_000,
+      },
+      {
+        role: "assistant",
+        text: "Everything important is connected. I’ll keep watching for changes.",
+        at: baseTime - 17 * 60_000,
+      },
+      {
+        role: "user",
+        text: "Please remember that I prefer concise updates.",
+        at: baseTime - 16 * 60_000,
+      },
+    ],
+  } satisfies SystemAgentChatHistoryResult;
+  const custodianChanges = {
+    entries: [
+      {
+        id: "mock-system-agent-model",
+        at: baseTime - 6 * 60_000,
+        kind: "operation",
+        source: "system-agent",
+        summary: "Updated the default model for the main agent",
+        changedPaths: ["agents.defaults.model"],
+      },
+      {
+        id: "mock-plugin-install",
+        at: baseTime - 42 * 60_000,
+        kind: "config-write",
+        source: "plugin-install",
+        summary: "Enabled the Telegram plugin",
+        changedPaths: ["plugins.entries.telegram.enabled"],
+      },
+      {
+        id: "mock-doctor-repair",
+        at: baseTime - 2 * 60 * 60_000,
+        kind: "config-write",
+        source: "doctor",
+        summary: "Repaired a stale channel account reference",
+        changedPaths: ["channels.whatsapp.defaultAccount"],
+      },
+    ],
+  } satisfies SystemChangesListResult;
   return {
     assistantAgentId: "main",
     assistantName: "Molty",
@@ -1351,6 +1458,9 @@ async function createChatPickerScenario(
       "chat.metadata",
       "chat.startup",
       "question.list",
+      "openclaw.changes.list",
+      "openclaw.chat",
+      "openclaw.chat.history",
       "sessions.diff",
       "sessions.files.set",
       "system.info",
@@ -1372,6 +1482,61 @@ async function createChatPickerScenario(
       ...buildBackgroundTasksMock(baseTime),
       ...cronMocks,
       "users.self": { profile: selfProfile },
+      // Talk settings page pickers: realtime catalog with the model/voice
+      // suggestion lists the gateway emits for provider entries.
+      "talk.catalog": {
+        modes: ["realtime", "stt-tts", "transcription"],
+        transports: ["webrtc", "provider-websocket", "gateway-relay", "managed-room"],
+        brains: ["agent-consult", "direct-tools", "none"],
+        speech: { providers: [] },
+        transcription: { providers: [] },
+        realtime: {
+          ready: true,
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI Realtime Voice",
+              configured: true,
+              defaultModel: "gpt-realtime-2.1",
+              transports: ["webrtc", "gateway-relay"],
+              models: [
+                "gpt-realtime-2.1",
+                "gpt-realtime-2.1-mini",
+                "gpt-realtime-2",
+                "gpt-live-1-codex",
+                "gpt-live-1-boulder-alpha",
+              ],
+              voices: [
+                "alloy",
+                "ash",
+                "ballad",
+                "cedar",
+                "coral",
+                "echo",
+                "marin",
+                "sage",
+                "shimmer",
+                "verse",
+              ],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: true,
+            },
+            {
+              id: "xai",
+              label: "xAI Grok Voice",
+              configured: false,
+              defaultModel: "grok-voice-latest",
+              transports: ["gateway-relay"],
+              voices: ["eve", "ara", "rex", "sal", "leo"],
+              modes: ["realtime"],
+              brains: ["agent-consult"],
+              supportsBrowserSession: false,
+            },
+          ],
+        },
+      },
       // Custom session group catalog so the sidebar's category zone (and its
       // drag-reordering against built-in sections) is exercised in the mock.
       "sessions.groups.list": { groups: [{ name: "Research", position: 0 }] },
@@ -1472,7 +1637,11 @@ async function createChatPickerScenario(
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
+      "config.set": configMocks.set,
+      "config.apply": configMocks.apply,
       "config.schema": configMocks.schema,
+      "openclaw.chat.history": custodianHistory,
+      "openclaw.changes.list": custodianChanges,
       // The sidebar recovers pending questions through question.list after the
       // hello handshake, so this remains visible after a mock-page refresh.
       "question.list": {
@@ -1997,8 +2166,117 @@ function escapeScriptContent(script: string): string {
   return script.replaceAll("</script", "<\\/script");
 }
 
+/** Adds the one stateful mock surface the generic scenario fixture cannot express. */
+function installControlUiCustodianMock(replyDelayMs: number): void {
+  type MockGatewayControls = {
+    deferNext: (method: string) => void;
+    resolveDeferred: (method: string, payload: unknown) => void;
+  };
+  type MockWindow = Window & {
+    openclawControlUiE2eGateway?: MockGatewayControls;
+  };
+
+  const gateway = (window as MockWindow).openclawControlUiE2eGateway;
+  const MockWebSocket = window.WebSocket;
+  if (!gateway || !MockWebSocket) {
+    return;
+  }
+  const sendDescriptor = Object.getOwnPropertyDescriptor(MockWebSocket.prototype, "send");
+  const originalSend = sendDescriptor?.value as WebSocket["send"] | undefined;
+  if (typeof originalSend !== "function") {
+    return;
+  }
+  const sendOriginal = (socket: WebSocket, data: Parameters<WebSocket["send"]>[0]): void => {
+    Reflect.apply(originalSend, socket, [data]);
+  };
+  const sessionTurns = new Map<string, number>();
+  MockWebSocket.prototype.send = function (data): void {
+    let frame: RequestFrame | null = null;
+    if (typeof data === "string") {
+      try {
+        frame = JSON.parse(data) as RequestFrame;
+      } catch {
+        frame = null;
+      }
+    }
+    if (frame?.type !== "req" || frame.method !== "openclaw.chat") {
+      sendOriginal(this, data);
+      return;
+    }
+
+    const params =
+      frame.params && typeof frame.params === "object"
+        ? (frame.params as { message?: unknown; sessionId?: unknown })
+        : {};
+    const sessionId =
+      typeof params.sessionId === "string" && params.sessionId.trim()
+        ? params.sessionId
+        : "control-ui-custodian-mock";
+    const message = typeof params.message === "string" ? params.message : undefined;
+    const turn = sessionTurns.get(sessionId) ?? 0;
+    sessionTurns.set(sessionId, turn + 1);
+    const channelQuestion = {
+      id: "mock-channel-choice",
+      header: "Channel setup",
+      question: "Which channel would you like to work on?",
+      options: [
+        {
+          label: "WhatsApp",
+          reply: "help me connect WhatsApp",
+          description: "Review linking and account status.",
+          recommended: true,
+        },
+        {
+          label: "Telegram",
+          reply: "help me connect Telegram",
+          description: "Review the bot token and delivery status.",
+        },
+        {
+          label: "Discord",
+          reply: "help me connect Discord",
+          description: "Review the bot and server connection.",
+        },
+      ],
+      isOther: true,
+    } satisfies SystemAgentChatQuestion;
+    const response: SystemAgentChatResult = message
+      ? message.toLowerCase().includes("channel")
+        ? {
+            sessionId,
+            reply: "I can help with that.\n\nChoose a channel to continue.",
+            action: "none",
+            question: channelQuestion,
+          }
+        : {
+            sessionId,
+            reply: `I checked the mock system. Everything looks healthy.\n\nThat was demo turn ${turn}.`,
+            action: "none",
+          }
+      : {
+          sessionId,
+          reply:
+            "Hi — I’m OpenClaw, your system caretaker.\n\nAsk me about setup, channels, or recent changes.",
+          action: "none",
+        };
+
+    // Defer before forwarding so the generic gateway records the request but
+    // cannot race its normal immediate response against this stateful reply.
+    gateway.deferNext("openclaw.chat");
+    sendOriginal(this, data);
+    window.setTimeout(
+      () => gateway.resolveDeferred("openclaw.chat", response),
+      message === undefined ? 0 : replyDelayMs,
+    );
+  };
+}
+
+function createCustodianMockInitScript(): string {
+  return `(() => { const __name = (target) => target; (${installControlUiCustodianMock.toString()})(${CUSTODIAN_CHAT_REPLY_DELAY_MS}); })();`;
+}
+
 function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin {
   const initScript = escapeScriptContent(createControlUiMockGatewayInitScript(scenario));
+  const custodianInitScript = escapeScriptContent(createCustodianMockInitScript());
   const bootstrapBody = JSON.stringify(createControlUiMockBootstrapConfig(scenario));
   return {
     configureServer(server) {
@@ -2012,7 +2290,7 @@ function createMockGatewayPlugin(scenario: ControlUiMockGatewayScenario): Plugin
     transformIndexHtml(html) {
       return html.replace(
         "</head>",
-        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n    </script>\n  </head>`,
+        `    <script data-openclaw-control-ui-mock-gateway>\n${initScript}\n${custodianInitScript}\n    </script>\n  </head>`,
       );
     },
   };

@@ -20,6 +20,7 @@ struct CanvasWindowSmokeTests {
             presentation: .panel(anchorProvider: anchor))
 
         #expect(controller.directoryPath.contains("main_invalid__") == true)
+        #expect(controller.webView.configuration.preferences.tabFocusesLinks)
 
         controller.applyPreferredPlacement(CanvasPlacement(x: 120, y: 200, width: 520, height: 680))
         controller.showCanvas(path: "/")

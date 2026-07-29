@@ -28,6 +28,13 @@ import type {
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
 } from "./hook-message.types.js";
+import type {
+  PluginHookSkillChangedEvent,
+  PluginHookSkillContext,
+  PluginHookSkillProposalChangedEvent,
+  PluginHookSkillProposalEvaluateEvent,
+  PluginHookSkillProposalEvaluateResult,
+} from "./hook-skill.types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
 import type {
   PluginAgentTurnPrepareEvent,
@@ -70,6 +77,19 @@ export {
   type PluginApprovalResolution,
   type PluginHookBeforeToolCallResult,
 } from "./hook-before-tool-call-result.js";
+export type {
+  PluginHookSkillArtifact,
+  PluginHookSkillBundleFile,
+  PluginHookSkillBundleSnapshot,
+  PluginHookSkillChangedEvent,
+  PluginHookSkillContext,
+  PluginHookSkillEvaluationFinding,
+  PluginHookSkillProposalChangedEvent,
+  PluginHookSkillProposalEvaluateEvent,
+  PluginHookSkillProposalEvaluateResult,
+  PluginHookSkillProposalEvaluationOutcome,
+  PluginHookSkillProposalKind,
+} from "./hook-skill.types.js";
 
 export type PluginHookName =
   | "before_model_resolve"
@@ -114,6 +134,9 @@ export type PluginHookName =
   | "heartbeat_prompt_contribution"
   | "cron_reconciled"
   | "cron_changed"
+  | "skill_proposal_evaluate"
+  | "skill_proposal_changed"
+  | "skill_changed"
   | "before_dispatch"
   | "reply_dispatch"
   | "before_install"
@@ -157,6 +180,9 @@ const PLUGIN_HOOK_NAMES = [
   "heartbeat_prompt_contribution",
   "cron_reconciled",
   "cron_changed",
+  "skill_proposal_evaluate",
+  "skill_proposal_changed",
+  "skill_changed",
   "before_dispatch",
   "reply_dispatch",
   "before_install",
@@ -238,6 +264,8 @@ export const isPromptInjectionHookName = (hookName: PluginHookName): boolean =>
 
 const CONVERSATION_HOOK_NAMES = [
   "before_model_resolve",
+  "agent_turn_prepare",
+  "before_prompt_build",
   "before_agent_reply",
   "llm_input",
   "llm_output",
@@ -251,6 +279,26 @@ const conversationHookNameSet = new Set<PluginHookName>(CONVERSATION_HOOK_NAMES)
 export const isConversationHookName = (hookName: PluginHookName): boolean =>
   conversationHookNameSet.has(hookName);
 
+const PLUGIN_HOOK_AGENT_TRIGGERS = ["cron", "heartbeat", "user"] as const;
+
+export type PluginHookAgentTrigger = (typeof PLUGIN_HOOK_AGENT_TRIGGERS)[number];
+
+const pluginHookAgentTriggerSet = new Set<PluginHookAgentTrigger>(PLUGIN_HOOK_AGENT_TRIGGERS);
+
+export const isPluginHookAgentTrigger = (trigger: unknown): trigger is PluginHookAgentTrigger =>
+  typeof trigger === "string" && pluginHookAgentTriggerSet.has(trigger as PluginHookAgentTrigger);
+
+export type PluginHookRegistrationOptions<K extends PluginHookName> = {
+  priority?: number;
+  registrationId?: string;
+  timeoutMs?: number;
+} & (K extends "before_agent_reply"
+  ? {
+      /** Host-enforced turn triggers that may invoke this reply hook. */
+      eligibleTriggers?: readonly [PluginHookAgentTrigger, ...PluginHookAgentTrigger[]];
+    }
+  : { eligibleTriggers?: never });
+
 export type PluginHookAgentContext = {
   runId?: string;
   jobId?: string;
@@ -259,11 +307,15 @@ export type PluginHookAgentContext = {
   sessionKey?: string;
   sessionId?: string;
   workspaceDir?: string;
+  /** Run-prepared repository identities; empty when the turn is outside a repository. */
+  activeProjectKeys?: string[];
   modelProviderId?: string;
   modelId?: string;
   messageProvider?: string;
   /** Channel/plugin id for channel-originated runs, e.g. `discord`. */
   channel?: string;
+  /** Channel account used by the agent when multiple accounts are configured. */
+  accountId?: string;
   /** Conversation target id for channel-originated runs. Mirrors `channelId` for compatibility. */
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */
@@ -641,6 +693,8 @@ export type PluginHookToolContext = {
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
+  /** Aborts when the owning tool call is cancelled. Hook timeout expiry does not abort this signal. */
+  abortSignal?: AbortSignal;
   trace?: DiagnosticTraceContext;
   toolName: string;
   /** Host-authoritative discriminator for tools that intentionally share names. */
@@ -943,6 +997,7 @@ type PluginHookGatewayCronJobState = {
 
 export type PluginHookGatewayCronJob = {
   id: string;
+  declarationKey?: string;
   /** Agent id that owns this cron job. */
   agentId?: string;
   name?: string;
@@ -1014,6 +1069,7 @@ export type PluginHookCronChangedEvent = {
 };
 
 type PluginHookGatewayCronCreateInput = {
+  declarationKey?: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -1041,6 +1097,11 @@ export type PluginHookGatewayCronService = {
   add: (input: PluginHookGatewayCronCreateInput) => Promise<unknown>;
   update: (id: string, patch: PluginHookGatewayCronUpdateInput) => Promise<unknown>;
   remove: (id: string) => Promise<PluginHookGatewayCronRemoveResult>;
+  removeStaleJobFamily: (family: {
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }) => Promise<number>;
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";
@@ -1340,6 +1401,21 @@ export type PluginHookHandlerMap = {
     event: PluginHookCronChangedEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  skill_proposal_evaluate: (
+    event: PluginHookSkillProposalEvaluateEvent,
+    ctx: PluginHookSkillContext,
+  ) =>
+    | Promise<PluginHookSkillProposalEvaluateResult | void>
+    | PluginHookSkillProposalEvaluateResult
+    | void;
+  skill_proposal_changed: (
+    event: PluginHookSkillProposalChangedEvent,
+    ctx: PluginHookSkillContext,
+  ) => Promise<void> | void;
+  skill_changed: (
+    event: PluginHookSkillChangedEvent,
+    ctx: PluginHookSkillContext,
+  ) => Promise<void> | void;
   before_install: (
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
@@ -1356,10 +1432,12 @@ export type PluginHookHandlerMap = {
 
 export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = {
   pluginId: string;
+  registrationId?: string;
   hookName: K;
   handler: PluginHookHandlerMap[K];
   priority?: number;
   timeoutMs?: number;
+  eligibleTriggers?: readonly PluginHookAgentTrigger[];
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

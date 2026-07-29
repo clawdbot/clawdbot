@@ -12,6 +12,7 @@ import type {
   GatewayServiceState,
 } from "../../daemon/service.js";
 import { formatGatewayServiceStartRepairIssues } from "../../daemon/service.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mergeInstallInvocationEnv } from "./install.js";
@@ -48,6 +49,7 @@ export async function repairLoadedGatewayServiceForStart(
   warnings?: string[];
   loaded: boolean;
 }> {
+  assertGatewayServiceMutationAllowed("repair the gateway service");
   const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;

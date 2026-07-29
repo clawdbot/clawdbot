@@ -2,6 +2,7 @@
 // Control UI tests cover operator question parsing and lifecycle state.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../api/gateway.ts";
+import { i18n } from "../i18n/index.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   cancelQuestionPrompt,
@@ -87,6 +88,7 @@ afterEach(() => {
   for (const state of states.splice(0)) {
     disposeQuestionPromptState(state);
   }
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -351,6 +353,11 @@ describe("question prompt state", () => {
   });
 
   it("surfaces a retryable error when submission happens while disconnected", async () => {
+    const translate = vi
+      .spyOn(i18n, "t")
+      .mockImplementation((key) =>
+        key === "chat.questions.disconnected" ? "Localized reconnect guidance" : key,
+      );
     const state = createState();
     handleQuestionPromptEvent(state, {
       event: "question.requested",
@@ -362,8 +369,9 @@ describe("question prompt state", () => {
     expect(state.prompts.get("question-1")).toMatchObject({
       status: "pending",
       submitting: false,
-      error: "Not connected. Try again after reconnecting.",
+      error: "Localized reconnect guidance",
     });
+    expect(translate).toHaveBeenCalledWith("chat.questions.disconnected", undefined);
   });
 });
 

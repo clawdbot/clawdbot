@@ -50,6 +50,19 @@ describe("qa scenario catalog channel contracts", () => {
     }
   });
 
+  it("marks live transport modules as live-driver-only", () => {
+    for (const scenarioId of [
+      "matrix-approval-exec-metadata-single-event",
+      "matrix-mxid-prefixed-command-block",
+      "slack-codex-approval-exec-native",
+      "slack-codex-approval-plugin-native",
+    ]) {
+      expect(readQaScenarioExecutionConfig(scenarioId)?.requiredChannelDriver, scenarioId).toBe(
+        "live",
+      );
+    }
+  });
+
   it("isolates scenarios that own asynchronous transport state", () => {
     const channelBaseline = requireFlowScenario(readQaScenarioById("channel-chat-baseline"));
     const subagentFanout = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
@@ -61,19 +74,21 @@ describe("qa scenario catalog channel contracts", () => {
   it("uses durable subagent completion evidence before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
-    const completionWait = flow.indexOf('"items":{"expr":"config.expectedChildCompletionMarkers"}');
+    const completionWait = flow.indexOf('"saveAs":"completedFanout"');
     const storeReads = [...flow.matchAll(/readRawQaSessionStore/gu)].map((match) => match.index);
 
     expect(flow).toContain("readSessionTranscriptSummary(env, sessionKey)");
     expect(flow).not.toContain("waitForAgentHistoryReply");
-    expect(
-      flow.split("String(candidate.text ?? '').trim() === childCompletionMarker").length - 1,
-    ).toBe(1);
+    expect(flow).not.toContain('"call":"waitForOutboundMessage"');
+    expect(flow).not.toContain("childCompletionMarker");
+    expect(flow).toContain("entry.spawnedBy === sessionKey");
     expect(flow).toContain(
-      "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && timeoutSpawnRequests.length >= 2",
+      "timeoutSawAlpha && timeoutSawBeta && timeoutAlphaOk && timeoutBetaOk && (!env.mock || timeoutSpawnRequests.length >= 2)",
     );
     expect(flow).toContain("Boolean(env.mock) ? config.expectedChildCompletionMarkers[0] : 'ok'");
     expect(flow).toContain('saveAs":"timeoutEvidence');
+    expect(flow).toContain('saveAs":"recoveredParentTranscript');
+    expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
     expect(flow).toContain("Promise.all([readSessionTranscriptSummary");
     expect(completionWait).toBeGreaterThan(-1);
     expect(storeReads).toHaveLength(2);

@@ -1,12 +1,15 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
+import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelsProbeResult } from "../../api/types.ts";
+import type { FastMode, ModelsProbeResult } from "../../api/types.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderDocsLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
@@ -34,6 +37,8 @@ import {
   DEFAULT_MODELS_REPLACE_PATHS,
 } from "./mutations.ts";
 import { renderModelProviders, type ModelProviderRowMessage } from "./view.ts";
+
+const MODEL_PROVIDERS_DOCS_URL = "https://docs.openclaw.ai/concepts/model-providers";
 
 export type ModelProvidersRouteData = {
   data: ModelProvidersData;
@@ -94,7 +99,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   @property({ attribute: false }) routeData: ModelProvidersRouteData | undefined;
 
   @state() private data: ModelProvidersData | null = null;
-  @state() private refreshing = false;
   @state() private busy: Record<string, boolean> = {};
   @state() private messages: Record<string, ModelProviderRowMessage> = {};
   @state() private probeResults: Record<string, ModelsProbeResult> = {};
@@ -112,13 +116,47 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private dataClient: GatewayBrowserClient | null = null;
   private observedClient: GatewayBrowserClient | null = null;
   private clientEpoch = 0;
-  private refreshEpoch = 0;
-  private refreshQueue: Promise<void> = Promise.resolve();
   private probeEpochs = new Map<string, number>();
+  private readonly refreshTask = new Task(this, {
+    autoRun: false,
+    args: () =>
+      [
+        this.context?.gateway.snapshot.phase === "connected"
+          ? (this.context.gateway.snapshot.client ?? null)
+          : null,
+        this.selectedAgentId,
+        false as boolean,
+      ] as const,
+    task: ([client, agentId, force], { signal }) =>
+      client
+        ? loadModelProvidersData(client, {
+            agentId,
+            ...(force ? { refresh: true } : {}),
+            signal,
+          }).then((data) => ({ client, data }))
+        : initialState,
+    onComplete: ({ client, data }) => {
+      this.data = data;
+      this.dataClient = client;
+    },
+  });
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
       (gateway, notify) => gateway.subscribe(notify),
+    )
+    .watch(
+      () => this.context?.runtimeConfig,
+      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      (runtimeConfig) => {
+        if (!runtimeConfig.state.configSnapshot && !runtimeConfig.state.configLoading) {
+          void runtimeConfig.ensureLoaded().catch(() => undefined);
+        }
+      },
+    )
+    .watch(
+      () => this.context?.overlays,
+      (overlays, notify) => overlays.subscribe(notify),
     )
     .watch(
       () => this.context?.agents,
@@ -131,7 +169,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     );
 
   override disconnectedCallback() {
-    this.refreshEpoch += 1;
+    void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -158,7 +196,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     if (!this.context.agents.state.agentsList && !this.context.agents.state.agentsLoading) {
       void this.context.agents.ensureList();
     }
-    if (snapshot.phase !== "connected" || !snapshot.client || this.refreshing) {
+    if (
+      snapshot.phase !== "connected" ||
+      !snapshot.client ||
+      this.refreshTask.status === TaskStatus.PENDING
+    ) {
       return;
     }
     const stale = this.data === null || this.data.updatedAt === null;
@@ -170,8 +212,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   private resetClientState(client: GatewayBrowserClient | null) {
     this.observedClient = client;
     this.clientEpoch += 1;
-    this.refreshEpoch += 1;
-    this.refreshing = false;
+    void this.refreshTask.run([null, this.selectedAgentId, false]);
     this.busy = {};
     this.messages = {};
     this.probeResults = {};
@@ -214,7 +255,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       return;
     }
     this.selectedAgentId = agentId;
-    this.refreshEpoch += 1;
+    void this.refreshTask.run([null, agentId, false]);
     this.data = null;
     this.busy = {};
     this.pendingLogoutProvider = null;
@@ -227,40 +268,11 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private refresh(opts: { force: boolean }): Promise<void> {
-    const task = this.refreshQueue.then(() => this.performRefresh(opts));
-    this.refreshQueue = task.catch(() => undefined);
-    return task;
-  }
-
-  private async performRefresh(opts: { force: boolean }) {
     const client = this.context.gateway.snapshot.client;
     if (!client) {
-      return;
+      return Promise.resolve();
     }
-    const agentId = this.selectedAgentId;
-    const epoch = ++this.refreshEpoch;
-    this.refreshing = true;
-    try {
-      const data = await loadModelProvidersData(client, {
-        agentId,
-        ...(opts.force ? { refresh: true } : {}),
-      });
-      if (
-        epoch === this.refreshEpoch &&
-        this.selectedAgentId === agentId &&
-        this.context.gateway.snapshot.client === client
-      ) {
-        this.data = data;
-        this.dataClient = client;
-      }
-    } finally {
-      // refreshQueue serializes performRefresh calls, so this is always the
-      // only in-flight refresh: clear unconditionally. An epoch-guarded clear
-      // orphans `refreshing` when a selection change invalidates us mid-await,
-      // permanently blocking maybeRefresh for the new agent.
-      this.refreshing = false;
-      this.requestUpdate();
-    }
+    return this.refreshTask.run([client, this.selectedAgentId, opts.force]);
   }
 
   private mutationBlockedReason(): string | null {
@@ -561,15 +573,32 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   override render() {
     const gatewaySnapshot = this.context.gateway.snapshot;
     const agents = this.context.agents.state.agentsList?.agents ?? [];
-    const selectedAgent = agents.find(
-      (agent) => normalizeAgentId(agent.id) === this.selectedAgentId,
-    );
-    const selectedAgentLabel = selectedAgent
-      ? normalizeAgentLabel(selectedAgent)
-      : this.selectedAgentId;
+    const selected = agents.find((agent) => normalizeAgentId(agent.id) === this.selectedAgentId);
+    const selectedAgentLabel = selected ? normalizeAgentLabel(selected) : this.selectedAgentId;
     const data = this.data ?? EMPTY_MODEL_PROVIDERS_DATA;
     const config = readModelProviderConfig(data.config);
     const defaults = this.defaultsDraft ?? config.defaults;
+    const runtimeConfig = this.context.runtimeConfig;
+    const runtimeState = runtimeConfig.state;
+    const configObject =
+      asConfigRecord(runtimeState.configForm ?? runtimeState.configSnapshot?.config) ??
+      asConfigRecord(data.config) ??
+      {};
+    const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
+    const thinkingLevel =
+      typeof agentsDefaults?.thinkingDefault === "string" ? agentsDefaults.thinkingDefault : "off";
+    const fastValue = agentsDefaults?.fastModeDefault;
+    const fastMode = fastValue === "auto" || typeof fastValue === "boolean" ? fastValue : false;
+    const update = this.context.overlays.snapshot;
+    // The overlay update states replace General's old configUpdating prop,
+    // which config-page derived from this same snapshot (isUpdateBusy); the
+    // busy gate is behavior-identical to the pre-move General controls.
+    const configBusy =
+      runtimeState.configLoading ||
+      runtimeState.configSaving ||
+      runtimeState.configApplying ||
+      update.updateRunning ||
+      update.updateReconciliationPending;
     const cards = buildModelProviderCards({
       ...data,
       configProviderIds: config.providerIds,
@@ -587,7 +616,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     const body = renderModelProviders({
       connected: gatewaySnapshot.phase === "connected",
       loading: gatewaySnapshot.phase === "connected" && this.data === null,
-      refreshing: this.refreshing,
+      refreshing: this.refreshTask.status === TaskStatus.PENDING,
       error: data.error,
       updatedAt: data.updatedAt,
       costDays: MODEL_PROVIDERS_COST_DAYS,
@@ -596,6 +625,9 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       configuredModels: buildSelectableDefaultModels(data.models, defaults),
       defaultModels: defaults,
       defaultModelsDirty: this.defaultsDraft !== null,
+      thinkingLevel,
+      fastMode,
+      configBusy,
       unconfiguredProviders: buildUnconfiguredProviderOptions(
         data.catalogModels,
         configuredProviderIds,
@@ -661,11 +693,19 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         this.defaultsDraft = null;
         this.setMessage("defaults", null);
       },
+      onThinkingChange: (level) =>
+        runtimeConfig.patchForm(["agents", "defaults", "thinkingDefault"], level),
+      onFastModeChange: (mode: FastMode) =>
+        runtimeConfig.patchForm(["agents", "defaults", "fastModeDefault"], mode),
     });
     return html`
       <section class="content-header">
         <div>
           <div class="page-title">${titleForRoute("model-providers")}</div>
+          <div class="page-subtitle">
+            ${t("modelProviders.subtitle")}
+            ${renderDocsLink(MODEL_PROVIDERS_DOCS_URL, t("common.learnMore"))}
+          </div>
         </div>
         <div class="page-header-actions">
           ${renderAgentScopeControl({

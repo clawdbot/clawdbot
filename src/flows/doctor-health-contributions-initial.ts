@@ -5,6 +5,7 @@ import {
 } from "./doctor-health-contribution-runners.gateway.js";
 import {
   runChannelIngressDeadLettersHealth,
+  runAgentMemorySchemaHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
@@ -16,6 +17,7 @@ import {
   runSandboxHealth,
   runSessionLocksHealth,
   runSessionSnapshotsHealth,
+  runSessionTranscriptHeadersHealth,
   runSessionTranscriptLabelsHealth,
   runSessionTranscriptsHealth,
   runStateIntegrityHealth,
@@ -112,6 +114,11 @@ export function resolveInitialDoctorHealthContributions(params: {
       label: "Legacy state",
       healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: params.runLegacyStateHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:agent-memory-schema",
+      label: "Agent memory schema",
+      run: runAgentMemorySchemaHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
@@ -318,6 +325,11 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor session transcript contribution owns transcript rewrites"),
       },
       run: runSessionTranscriptsHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:session-transcript-headers",
+      label: "Session transcript headers",
+      run: runSessionTranscriptHeadersHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:session-transcript-labels",

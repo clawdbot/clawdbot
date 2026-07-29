@@ -190,8 +190,8 @@ describe.sequential("TUI PTY harness", () => {
     STARTUP_TEST_TIMEOUT_MS,
   );
 
-  it.each([{ failures: 1 }, { failures: 2 }])(
-    "bounds session subscription recovery after $failures startup failures",
+  it.each([{ failures: 1 }, { failures: 2 }, { failures: 3 }, { failures: 4 }])(
+    "recovers session subscription after $failures startup failures",
     async ({ failures }) => {
       const subscriptionFixture = await startTuiFixture({
         env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: String(failures) },
@@ -200,7 +200,7 @@ describe.sequential("TUI PTY harness", () => {
         await subscriptionFixture.run.waitForOutput("local ready | idle", STARTUP_TIMEOUT_MS);
         const entries = await readFixtureLog(subscriptionFixture.logPath);
         expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
-          2,
+          failures + 1,
         );
         expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
           failures,
@@ -211,6 +211,33 @@ describe.sequential("TUI PTY harness", () => {
           "PTY_RESPONSE: after subscription recovery proof",
           STARTUP_TIMEOUT_MS,
         );
+      } finally {
+        await subscriptionFixture.cleanup();
+      }
+    },
+    STARTUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "never reports ready after exhausting session subscription recovery",
+    async () => {
+      const subscriptionFixture = await startTuiFixture({
+        env: { OPENCLAW_TUI_PTY_SUBSCRIBE_FAILURES: "5" },
+      });
+      try {
+        await subscriptionFixture.run.waitForOutput(
+          "session event subscribe failed",
+          STARTUP_TIMEOUT_MS,
+        );
+        const entries = await readFixtureLog(subscriptionFixture.logPath);
+        expect(entries.filter((entry) => entry.method === "subscribeSessionEvents")).toHaveLength(
+          5,
+        );
+        expect(entries.filter((entry) => entry.method === "subscribeSessionFailure")).toHaveLength(
+          5,
+        );
+        expect(entries.some((entry) => entry.method === "loadHistory")).toBe(false);
+        expect(subscriptionFixture.run.visibleOutput()).not.toContain("local ready | idle");
       } finally {
         await subscriptionFixture.cleanup();
       }

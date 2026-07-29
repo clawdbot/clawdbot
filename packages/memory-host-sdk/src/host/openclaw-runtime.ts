@@ -53,6 +53,10 @@ export {
 } from "../../../../src/config/sessions/artifacts.js";
 export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
 export {
+  listSessionTranscriptInstances,
+  type SessionTranscriptInstance,
+} from "../../../../src/config/sessions/session-history.js";
+export {
   resolveSessionFilePath,
   resolveSessionTranscriptsDirForAgent,
 } from "../../../../src/config/sessions/paths.js";

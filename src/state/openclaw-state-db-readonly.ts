@@ -7,6 +7,7 @@ import {
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
 import {
+  evictOpenClawStateDatabaseAfterCorruption,
   getOpenClawStateDatabaseIfOpen,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -50,10 +51,15 @@ export function withOpenClawStateDatabaseReadOnly<T>(
   // uncommitted rows a fresh read-only connection could not have seen.
   const opened = getOpenClawStateDatabaseIfOpen(options);
   if (opened && !opened.db.isTransaction) {
-    // A newer build can migrate this file while the handle stays open, so the
-    // forward-compatibility gate still runs before any reused read.
-    assertSupportedSchemaVersion(opened.db, pathname);
-    return operation(opened);
+    try {
+      // A newer build can migrate this file while the handle stays open, so the
+      // forward-compatibility gate still runs before any reused read.
+      assertSupportedSchemaVersion(opened.db, pathname);
+      return operation(opened);
+    } catch (error) {
+      evictOpenClawStateDatabaseAfterCorruption(opened, error);
+      throw error;
+    }
   }
   const db = openNodeSqliteDatabase(pathname, { readOnly: true });
   try {

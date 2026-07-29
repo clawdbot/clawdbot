@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
@@ -10,6 +11,33 @@ import {
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
+
+describe("OpenClaw chat params protocol", () => {
+  const base = { sessionId: "session-1", message: "What about this page?" };
+
+  it("accepts the additive page context and remains backward compatible", () => {
+    expect(validateSystemAgentChatParams(base)).toBe(true);
+    expect(validateSystemAgentChatParams({ ...base, context: { page: "channels" } })).toBe(true);
+    expect(
+      validateSystemAgentChatParams({ ...base, context: { page: "/settings/channels" } }),
+    ).toBe(true);
+  });
+
+  it("rejects unsafe page ids and unknown context fields", () => {
+    expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
+      false,
+    );
+    expect(validateSystemAgentChatParams({ ...base, context: { page: "a".repeat(65) } })).toBe(
+      false,
+    );
+    expect(
+      validateSystemAgentChatParams({
+        ...base,
+        context: { page: "channels", source: "client" },
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("OpenClaw chat question protocol", () => {
   const question = {
@@ -71,6 +99,17 @@ describe("OpenClaw setup detection protocol", () => {
           website: "https://ollama.com/download",
         },
       ],
+      unavailableCandidates: [
+        {
+          id: "gemini-cli",
+          brandId: "google-gemini-cli",
+          label: "Gemini CLI",
+          detail: "installed; login status unavailable",
+          reason: "Reconnect through OpenClaw or use a Gemini API key.",
+          authOptionId: "google-gemini-cli",
+          manualProviderId: "gemini-api-key",
+        },
+      ],
       manualProviders: [
         {
           id: "ollama",
@@ -100,6 +139,9 @@ describe("OpenClaw setup detection protocol", () => {
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,
         candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
+        unavailableCandidates: result.unavailableCandidates.map(
+          ({ brandId: _brandId, ...candidate }) => candidate,
+        ),
         manualProviders: result.manualProviders.map(
           ({ brandId: _brandId, ...provider }) => provider,
         ),

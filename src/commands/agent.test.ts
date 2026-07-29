@@ -1502,9 +1502,12 @@ describe("agentCommand", () => {
           authProfileOverride: "profile-legacy",
           authProfileOverrideSource: "user",
           authProfileOverrideCompactionCount: 2,
-          fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
-          fallbackNoticeActiveModel: "openai/gpt-4.1-mini",
-          fallbackNoticeReason: "fallback",
+          fallbackNotice: {
+            kind: "active",
+            selectedModel: "anthropic/claude-opus-4-6",
+            activeModel: "openai/gpt-4.1-mini",
+            reason: "fallback",
+          },
         },
       });
 
@@ -1534,9 +1537,7 @@ describe("agentCommand", () => {
         authProfileOverride?: string;
         authProfileOverrideSource?: string;
         authProfileOverrideCompactionCount?: number;
-        fallbackNoticeSelectedModel?: string;
-        fallbackNoticeActiveModel?: string;
-        fallbackNoticeReason?: string;
+        fallbackNotice?: unknown;
       }>(clearStore);
       const entry = cleared["agent:main:subagent:clear-overrides"];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1544,9 +1545,7 @@ describe("agentCommand", () => {
       expect(entry?.authProfileOverride).toBeUndefined();
       expect(entry?.authProfileOverrideSource).toBeUndefined();
       expect(entry?.authProfileOverrideCompactionCount).toBeUndefined();
-      expect(entry?.fallbackNoticeSelectedModel).toBeUndefined();
-      expect(entry?.fallbackNoticeActiveModel).toBeUndefined();
-      expect(entry?.fallbackNoticeReason).toBeUndefined();
+      expect(entry?.fallbackNotice).toBeUndefined();
     });
   });
 

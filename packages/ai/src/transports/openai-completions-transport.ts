@@ -8,6 +8,7 @@ import { getEnvApiKey } from "../env-api-keys.js";
 import { applyProviderReportedUsageCost, calculateCost } from "../model-utils.js";
 import { convertMessages } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
@@ -63,13 +64,13 @@ import {
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   getCompat,
+  resolveCodeModeResponsesVisibleToolNames,
   resolveOpenAIStrictToolFlagWithDiagnostics,
 } from "./openai-transport-params.js";
 import {
   GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP,
   createModelStreamCooperativeScheduler,
   log,
-  resolveCacheRetention,
   resolvePromptCacheKey,
   sortTransportToolsByName,
   throwIfModelStreamAborted,
@@ -321,8 +322,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
         ) {
-          enforceCodeModeResponsesToolSurface(params);
-          assertCodeModeResponsesToolSurface(params);
+          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+          assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
         const compat = getCompat(model as OpenAIModeModel);
         if (compat.requiresNonEmptyUserOrAssistantMessage) {

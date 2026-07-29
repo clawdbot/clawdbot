@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
+import { resolveSessionTranscriptsDirForAgent as resolveTestSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   firstWrittenJsonArg,
   spyRuntimeErrors,
@@ -36,6 +39,31 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
   expect(error).toBeInstanceOf(Error);
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
+async function seedCliBackfillTranscript(sessionId: string, days: string[]): Promise<void> {
+  const agentId = "main";
+  const sessionsDir = resolveTestSessionTranscriptsDirForAgent(agentId);
+  const storePath = path.join(sessionsDir, "sessions.json");
+  const sessionKey = `agent:${agentId}:cli-session-backfill:${sessionId}`;
+  const entry = { sessionId, updatedAt: Date.parse(`${days.at(-1)}T12:00:00.000Z`) };
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
+  for (const day of days) {
+    await appendSessionTranscriptMessageByIdentity({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      message: {
+        role: "user",
+        content: `CLI lifecycle note for ${day}`,
+        timestamp: `${day}T12:00:00.000Z`,
+        __openclaw: { senderIsOwner: true },
+      },
+    });
+  }
+  await upsertSessionEntry({ agentId, sessionKey, storePath, entry });
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
@@ -119,6 +147,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   process.exitCode = undefined;
   setVerbose(false);
 });
@@ -240,6 +269,40 @@ describe("memory cli", () => {
     registerMemoryCli(program, hostOptions);
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
+
+  it("drains session backfill in one apply command before preview", async () => {
+    const workspaceDir = path.join(workspaceFixtureRoot, `session-backfill-${workspaceCaseId++}`);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, "state"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(workspaceDir, "openclaw.json"));
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await seedCliBackfillTranscript("drain", ["2026-01-01", "2026-01-02", "2026-01-03"]);
+
+    mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
+    const applyJson = spyRuntimeJson(defaultRuntime);
+    await runMemoryCli([
+      "session-backfill",
+      "--agent",
+      "main",
+      "--limit-days",
+      "1",
+      "--apply",
+      "--json",
+    ]);
+    const applied = firstWrittenJsonArg<{
+      batchCount: number;
+      batches: Array<{ candidates: number }>;
+      candidateCount: number;
+    }>(applyJson);
+    expect(applied).toMatchObject({ batchCount: 3, candidateCount: 3 });
+    expect(applied?.batches.map((batch) => batch.candidates)).toEqual([1, 1, 1]);
+
+    mockManager({ status: () => makeMemoryStatus({ workspaceDir }), close: vi.fn() });
+    applyJson.mockClear();
+    await runMemoryCli(["session-backfill", "--agent", "main", "--limit-days", "1", "--json"]);
+    expect(firstWrittenJsonArg<{ candidateCount: number }>(applyJson)).toMatchObject({
+      candidateCount: 0,
+    });
+  });
 
   it("rejects invalid memory search numeric options before running the command", async () => {
     const program = new Command();
@@ -803,7 +866,8 @@ describe("memory cli", () => {
       await runMemoryCli(["status"]);
 
       expectLogged(log, "Recall store: 1 entries");
-      expectLogged(log, "Dreaming: off");
+      // Dreaming is on by default, so status prints the phase-config detail line.
+      expectLogged(log, "Dreaming: light=");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -1776,8 +1840,10 @@ describe("memory cli", () => {
       expect(payload?.sourceFiles).toEqual([historyPath]);
       expect(payload?.historicalImport?.importedFileCount).toBe(1);
       expect(payload?.historicalImport?.importedSignalCount).toBeGreaterThan(0);
-      expect(payload?.deep?.candidates?.[0]?.snippet).toContain("Happy Together");
-      expect(payload?.deep?.candidates?.[0]?.path).toBe("memory/2025-01-01-vendor-pitch.md");
+      const calendarCandidate = payload?.deep?.candidates?.find((candidate) =>
+        candidate.snippet?.includes("Happy Together"),
+      );
+      expect(calendarCandidate?.path).toBe("memory/2025-01-01-vendor-pitch.md");
       expect(close).toHaveBeenCalled();
     });
   });
@@ -2357,18 +2423,7 @@ describe("memory cli", () => {
     });
   });
 
-  async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
-    let value: T | undefined;
-    await vi.waitFor(
-      async () => {
-        value = await task();
-      },
-      { interval: 1, timeout: timeoutMs },
-    );
-    return value as T;
-  }
-
-  it("records short-term recall entries from memory search hits", async () => {
+  it("awaits short-term recall persistence before memory search returns", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const close = vi.fn(async () => {});
       const search = vi.fn(async () => [
@@ -2402,11 +2457,7 @@ describe("memory cli", () => {
 
       await runMemoryCli(["search", "glacier", "--json"]);
 
-      const entries = await waitFor(async () => {
-        const recalled = await readShortTermRecallEntries({ workspaceDir });
-        expect(recalled).toHaveLength(1);
-        return recalled;
-      });
+      const entries = await readShortTermRecallEntries({ workspaceDir });
       expect(entries).toHaveLength(1);
       const entry = entries[0];
       if (!entry) {
@@ -2424,6 +2475,8 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         recallDays: ["<today>"],
         queryHashes: ["<hash>"],
+        claimHash: entry.claimHash ? "<claim>" : undefined,
+        provenance: entry.provenance ? { ...entry.provenance, observedAt: 0 } : undefined,
       }).toEqual({
         key: "memory:memory/2026-04-03.md:1:2",
         path: "memory/2026-04-03.md",
@@ -2440,7 +2493,11 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
         recallDays: ["<today>"],
+        claimHash: "<claim>",
         conceptTags: ["backup", "backups", "glacier", "s3"],
+        // Memory-source recalls default to agent provenance (workspace files
+        // are owner-controlled); see mergeRecallProvenance.
+        provenance: { originClass: "agent", sessionKind: "unknown", observedAt: 0 },
       });
       expect(close).toHaveBeenCalled();
     });

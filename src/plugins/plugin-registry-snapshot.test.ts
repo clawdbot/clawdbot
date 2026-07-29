@@ -1043,6 +1043,35 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["codex", "whatsapp"]);
   });
 
+  it("resolves a persisted bundled root only once per registry load", () => {
+    const tempRoot = makeTempDir();
+    const packageRoot = path.join(tempRoot, "openclaw");
+    const bundledRoot = path.join(packageRoot, "dist", "extensions");
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_VERSION: "2026.4.26",
+      VITEST: "true",
+    };
+    const pluginIds = ["bundled-one", "bundled-two", "bundled-three", "bundled-four"];
+
+    for (const pluginId of pluginIds) {
+      writeBundledPlugin(path.join(bundledRoot, pluginId), pluginId, "index.js");
+    }
+    const index = loadInstalledPluginIndex({ config: {}, env, stateDir });
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId).toSorted()).toEqual(
+      pluginIds.toSorted(),
+    );
+    expect(realpathSpy.mock.calls.filter(([filePath]) => filePath === bundledRoot)).toHaveLength(1);
+  });
+
   it("treats a persisted source bundled root as stale once its built peer appears", () => {
     const tempRoot = makeTempDir();
     const packageRoot = path.join(tempRoot, "openclaw");

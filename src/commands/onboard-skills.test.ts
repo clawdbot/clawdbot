@@ -285,6 +285,29 @@ describe("setupSkills", () => {
     expect(installNote?.message).not.toContain("repo-helper");
   });
 
+  it("rechecks persistent-effect authority immediately before each dependency install", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+    const beforePersistentEffect = vi.fn(async () => {});
+
+    const { prompter } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
+      beforePersistentEffect,
+    });
+
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.installSkill.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
   it("uses the requested node manager for node-backed auto installs", async () => {
     mockMissingBrewStatus([
       createBundledSkill({

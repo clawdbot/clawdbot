@@ -27,14 +27,14 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import {
-  attachWebInboxToSocket,
   readWhatsAppBaileysCacheEntry,
   type WhatsAppBaileysGroupMetadataCache,
   type WhatsAppBaileysMessageCache,
-  type WhatsAppGroupMetadataCache,
-} from "../inbound/monitor.js";
+} from "../inbound/baileys-cache.js";
+import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
+import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
+import { attachWebInboxToSocket } from "../inbound/monitor.js";
 import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,

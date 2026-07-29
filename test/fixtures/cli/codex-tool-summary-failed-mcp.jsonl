@@ -1,0 +1,5 @@
+{"type":"thread.started","thread_id":"thread-failed"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"mcp-failed","type":"mcp_tool_call","server":"docs","tool":"read","arguments":{"path":"missing"},"error":{"message":"not found"},"status":"failed"}}
+{"type":"item.completed","item":{"id":"message-failed","type":"agent_message","text":"handled failure"}}
+{"type":"turn.completed","usage":{"input_tokens":6,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":3,"reasoning_output_tokens":0}}

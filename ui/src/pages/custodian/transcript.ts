@@ -139,6 +139,7 @@ function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterI
 export function renderCustodianTranscriptEntry(params: {
   message: CustodianMessage;
   boundaryAfterId: number | null;
+  assistantAvatar: string;
   showQuestion: boolean;
   questionDisabled: boolean;
   onSelect: (label: string) => void;
@@ -151,7 +152,7 @@ export function renderCustodianTranscriptEntry(params: {
           showReasoning: false,
           showToolCalls: false,
           assistantName: t("custodian.title"),
-          assistantAvatar: "OC",
+          assistantAvatar: params.assistantAvatar,
         })
       : nothing}
     ${renderCustodianEarlierDivider(params.message, params.boundaryAfterId)}

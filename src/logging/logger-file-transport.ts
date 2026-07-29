@@ -36,6 +36,7 @@ let scheduledFlush: NodeJS.Immediate | null = null;
 let flushPromise: Promise<void> | null = null;
 let drainGeneration = 0;
 let processExiting = false;
+let processHooksInstalled = false;
 let appendFile: FileLogAppender = appendRegularFile;
 const warnedRotationFiles = new Map<string, number>();
 
@@ -248,13 +249,38 @@ function scheduleFlush(): void {
   });
 }
 
-process.on("beforeExit", () => {
+function handleProcessBeforeExit(): void {
   void flushFileLogQueue();
-});
-process.on("exit", () => {
+}
+
+function handleProcessExit(): void {
   processExiting = true;
   drainFileLogQueueSync();
-});
+}
+
+function installProcessHooks(): void {
+  if (processHooksInstalled) {
+    return;
+  }
+  processHooksInstalled = true;
+  process.on("beforeExit", handleProcessBeforeExit);
+  process.on("exit", handleProcessExit);
+}
+
+function removeProcessHooks(): void {
+  if (!processHooksInstalled) {
+    return;
+  }
+  process.removeListener("beforeExit", handleProcessBeforeExit);
+  process.removeListener("exit", handleProcessExit);
+  processHooksInstalled = false;
+}
+
+// Production installs eagerly so logs emitted by another exit listener are still rescued.
+// Vitest shared workers reload modules, so defer there until file logging is actually used.
+if (process.env.VITEST !== "true") {
+  installProcessHooks();
+}
 
 /** Enqueues one serialized record without waiting for filesystem I/O. */
 export function enqueueFileLog(entry: FileLogQueueEntry): void {
@@ -262,6 +288,7 @@ export function enqueueFileLog(entry: FileLogQueueEntry): void {
     writeEntriesSync([entry]);
     return;
   }
+  installProcessHooks();
   // Keep the newest diagnostics and report every eviction once in the next drain batch.
   if (queue.length >= maxQueuedRecords) {
     const dropped = queue[queueStart];
@@ -322,6 +349,8 @@ export function setFileLogAppenderForTests(value?: FileLogAppender): void {
 
 export function resetFileLogTransportForTests(): void {
   drainFileLogQueueSync();
+  removeProcessHooks();
+  processExiting = false;
   appendFile = appendRegularFile;
   maxQueuedRecords = DEFAULT_MAX_QUEUED_RECORDS;
   warnedRotationFiles.clear();
