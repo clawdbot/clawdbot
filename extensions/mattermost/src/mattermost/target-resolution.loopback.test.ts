@@ -86,6 +86,7 @@ describe("Mattermost opaque channel resolution over real HTTP", () => {
           expect(route).toMatchObject({
             peer: { kind: testCase.kind, id: testCase.id },
             chatType: testCase.kind,
+            from: `mattermost:${testCase.kind}:${testCase.id}`,
             to: `channel:${testCase.id}`,
             sessionKey: `agent:main:mattermost:${testCase.kind}:${testCase.id}:thread:loopback-thread`,
           });

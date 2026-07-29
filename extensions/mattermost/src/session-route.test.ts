@@ -157,6 +157,7 @@ describe("mattermost session route", () => {
     expect(groupRoute.peer.kind).toBe("group");
     expect(groupRoute.peer.id).toBe("priv123");
     expect(groupRoute.chatType).toBe("group");
+    expect(groupRoute.from).toBe("mattermost:group:priv123");
     expect(groupRoute.baseSessionKey).toBe("agent:main:mattermost:group:priv123");
     // Wire target stays channel:<id>; the group distinction lives in the session key.
     expect(groupRoute.to).toBe("channel:priv123");
@@ -174,6 +175,7 @@ describe("mattermost session route", () => {
     const groupRoute = expectRoute(route);
     expect(groupRoute.peer.kind).toBe("group");
     expect(groupRoute.chatType).toBe("group");
+    expect(groupRoute.from).toBe("mattermost:group:priv123");
     // Outbound now shares the inbound group:<id> namespace instead of forking channel:<id>.
     expect(groupRoute.sessionKey).toBe("agent:main:mattermost:group:priv123:thread:root-post");
     expect(groupRoute.threadId).toBe("root-post");
