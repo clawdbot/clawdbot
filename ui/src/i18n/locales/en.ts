@@ -4844,6 +4844,7 @@ export const en: TranslationMap = {
       pause: "Pause",
       seek: "Seek media",
       download: "Download {filename}",
+      preparing: "Preparing playback…",
       videoUnavailable: "Can't play this format — download instead.",
     },
     modelControls: {
