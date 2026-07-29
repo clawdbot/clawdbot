@@ -2695,6 +2695,11 @@ export const en: TranslationMap = {
       description:
         "Keep a bounded tool directory visible and defer the rest behind search, so large MCP and plugin catalogs stop crowding the prompt.",
     },
+    loopDetection: {
+      title: "Tool-loop detection",
+      description:
+        "Enable rolling-history guards that warn or block repeated tool calls when an agent stops making progress.",
+    },
     localModelLean: {
       title: "Lean tools for local models",
       description:
