@@ -570,6 +570,11 @@ export function capEntryCount(
       }),
   );
   if (keys.length <= maxRemovableEntries) {
+    // All unprotected entries fit within the removable budget. If protected entries still exceed
+    // the cap (e.g. thread sessions grow without bound), cull the oldest thread entries.
+    if (Object.keys(store).length > maxEntries) {
+      return cullProtectedThreadEntries(store, maxEntries, opts);
+    }
     return 0;
   }
 
@@ -590,6 +595,59 @@ export function capEntryCount(
   }
   if (opts.log !== false) {
     log.info("capped session entry count", { removed: toRemove.length, maxEntries });
+  }
+  return toRemove.length;
+}
+
+function cullProtectedThreadEntries(
+  store: Record<string, SessionEntry>,
+  maxEntries: number,
+  opts: {
+    log?: boolean;
+    onCapped?: (params: { key: string; entry: SessionEntry }) => void;
+  } = {},
+): number {
+  const threadKeys = Object.keys(store).filter((key) => {
+    const entry = store[key];
+    if (!entry) {
+      return false;
+    }
+    if (!shouldPreserveMaintenanceEntry({ key, entry })) {
+      return false;
+    }
+    if (parseSessionThreadInfoFast(key).threadId) {
+      return true;
+    }
+    const chatType = normalizeLowercaseStringOrEmpty(
+      entry.chatType ?? sessionDeliveryOrigin(entry)?.chatType,
+    );
+    return chatType === "thread";
+  });
+
+  if (threadKeys.length === 0) {
+    return 0;
+  }
+
+  const nonThreadCount = Object.keys(store).length - threadKeys.length;
+  const maxThreadSlots = Math.max(0, maxEntries - nonThreadCount);
+  if (threadKeys.length <= maxThreadSlots) {
+    return 0;
+  }
+
+  const toCull = threadKeys.length - maxThreadSlots;
+  const sorted = threadKeys.toSorted((a, b) => {
+    const aTime = getEntryUpdatedAt(store[a]);
+    const bTime = getEntryUpdatedAt(store[b]);
+    return bTime - aTime;
+  });
+
+  const toRemove = sorted.slice(-toCull);
+  for (const key of toRemove) {
+    opts.onCapped?.({ key, entry: store[key]! });
+    delete store[key];
+  }
+  if (opts.log !== false) {
+    log.info("culled protected thread entries", { removed: toRemove.length, maxEntries });
   }
   return toRemove.length;
 }

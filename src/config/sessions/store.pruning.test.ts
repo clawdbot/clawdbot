@@ -671,11 +671,9 @@ describe("capEntryCount", () => {
     expect(store.old).toBeUndefined();
   });
 
-  it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
+  it("culls the oldest thread entries when protected entries fill the cap (#115338)", () => {
     const now = Date.now();
     const mainKey = "agent:main:main";
-    // `main` is the oldest entry, so pre-fix it was the first unprotected eviction target once
-    // protected thread entries (>= maxEntries) left zero removable budget.
     const store = makeStore([
       [mainKey, makeEntry(now - 10 * DAY_MS)],
       ["agent:main:slack:channel:C1:thread:1", makeEntry(now - 3 * DAY_MS)],
@@ -685,10 +683,29 @@ describe("capEntryCount", () => {
 
     const evicted = capEntryCount(store, 2);
 
-    // Every entry is now protected (main + threads), so nothing is evicted and `main` survives.
+    // main survives, oldest 2 thread entries are culled, newest thread entry remains.
     expect(store).toHaveProperty(mainKey);
+    expect(store).toHaveProperty("agent:main:slack:channel:C3:thread:3");
+    expect(store["agent:main:slack:channel:C1:thread:1"]).toBeUndefined();
+    expect(store["agent:main:slack:channel:C2:thread:2"]).toBeUndefined();
+    expect(evicted).toBe(2);
+    expect(Object.keys(store)).toHaveLength(2);
+  });
+
+  it("preserves all thread entries when under the cap", () => {
+    const now = Date.now();
+    const mainKey = "agent:main:main";
+    const store = makeStore([
+      [mainKey, makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:channel:C1:thread:1", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 3);
+
+    expect(store).toHaveProperty(mainKey);
+    expect(store).toHaveProperty("agent:main:slack:channel:C1:thread:1");
     expect(evicted).toBe(0);
-    expect(Object.keys(store)).toHaveLength(4);
+    expect(Object.keys(store)).toHaveLength(2);
   });
 
   it("preserves model-locked harness sessions when capping", () => {
