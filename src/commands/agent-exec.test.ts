@@ -635,6 +635,41 @@ describe("agent exec command composition", () => {
     expect(hostExecDatabaseUrl).toBeUndefined();
   });
 
+  it("reads stored credentials from the configured agent directory", async () => {
+    const stateDir = await makeTempRoot("openclaw-agent-exec-cfg-auth-");
+    const customAgentDir = path.join(stateDir, "custom-home");
+    await fs.mkdir(customAgentDir, { recursive: true });
+    const seedPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(
+      seedPath,
+      JSON.stringify({
+        agents: { entries: { main: { agentDir: customAgentDir } } },
+      }),
+      "utf8",
+    );
+    const { saveAuthProfileStore } = await import("../agents/auth-profiles.js");
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: { "openai:stored": { type: "api_key", provider: "openai", key: "test-key" } },
+      },
+      customAgentDir,
+    );
+    const { runtime } = createRuntime();
+    let scopedProfileIds: string[] = [];
+
+    await agentExecCommand("inspect", { config: seedPath }, runtime, {
+      runAgent: vi.fn(async () => {
+        scopedProfileIds = Object.keys(loadAuthProfileStoreForRuntime()?.profiles ?? {});
+        return successResult();
+      }),
+    });
+
+    // The run config strips agentDir to keep run state ephemeral, but credential
+    // ownership must still follow the operator's configured directory.
+    expect(scopedProfileIds).toContain("openai:stored");
+  });
+
   it("blocks direct persisted credential reads under --auth-env-only", async () => {
     const normalStateDir = await makeTempRoot("openclaw-agent-exec-hidden-auth-");
     const normalAgentDir = path.join(normalStateDir, "agents", "main", "agent");

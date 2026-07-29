@@ -597,7 +597,14 @@ export async function agentExecCommand(
     const timeout = normalizeTimeoutSeconds(opts.timeout);
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
     const { resolveDefaultAgentDir } = await import("../agents/agent-scope-config.js");
-    const storedAuthAgentDir = resolveDefaultAgentDir({});
+    // Resolve from the inherited config, not `{}`: the default agent may declare
+    // its own `agentDir`, and that is where its stored auth profiles live. This
+    // reads `baseConfig` rather than `runConfig` because the run config
+    // deliberately strips agent directories to keep run state ephemeral, while
+    // credential ownership must still follow the operator's configuration.
+    // Computed before the environment repoints the state dir so the unconfigured
+    // case still resolves against the real one.
+    const storedAuthAgentDir = resolveDefaultAgentDir(baseConfig);
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths = await import("../config/paths.js");
     runtimePaths.pinRuntimePaths();
