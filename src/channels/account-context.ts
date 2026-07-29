@@ -1,10 +1,10 @@
-// Resolves a channel plugin's default account with strict or read-only diagnostics.
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
+// Resolves a channel plugin's default account with strict or read-only diagnostics.
+import { resolveChannelDefaultAccountId } from "./plugins/helpers.js";
+import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import { inspectReadOnlyChannelAccount } from "./read-only-account-inspect.js";
 
 type ChannelDefaultAccountContext = {
   accountIds: string[];

@@ -44,6 +44,19 @@ export type SandboxFsBridge = {
     mkdir?: boolean;
     signal?: AbortSignal;
   }): Promise<void>;
+  /**
+   * Atomically creates a file only when no entry already exists at the path.
+   * Backends without this capability must omit it rather than emulate it with
+   * a check followed by writeFile.
+   */
+  createFileExclusive?(params: {
+    filePath: string;
+    cwd?: string;
+    data: Buffer | string;
+    encoding?: BufferEncoding;
+    mkdir?: boolean;
+    signal?: AbortSignal;
+  }): Promise<"created" | "exists">;
   mkdirp(params: { filePath: string; cwd?: string; signal?: AbortSignal }): Promise<void>;
   remove(params: {
     filePath: string;

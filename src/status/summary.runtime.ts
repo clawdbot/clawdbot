@@ -19,7 +19,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
-import { resolveAgentRuntimeLabel } from "../status/agent-runtime-label.js";
+import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;

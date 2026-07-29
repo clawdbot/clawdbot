@@ -101,6 +101,8 @@ const rootEntries = [
   "openclaw.mjs!",
   "src/index.ts!",
   "src/entry.ts!",
+  // Shipped compatibility facade for statusCommand and getStatusSummary.
+  "src/commands/status.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.

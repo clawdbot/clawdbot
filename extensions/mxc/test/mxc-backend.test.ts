@@ -737,6 +737,25 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
       expect(bridge).toBeDefined();
 
+      const createFileExclusive = bridge?.createFileExclusive?.bind(bridge);
+      expect(createFileExclusive).toBeTypeOf("function");
+      await expect(
+        createFileExclusive!({ filePath: "notes/exclusive.txt", data: "first", cwd: workdir }),
+      ).resolves.toBe("created");
+      await expect(
+        createFileExclusive!({
+          filePath: "notes/exclusive.txt",
+          data: "replacement",
+          cwd: workdir,
+        }),
+      ).resolves.toBe("exists");
+      expect(readFileSync(path.join(workdir, "notes", "exclusive.txt"), "utf-8")).toBe("first");
+      const raceOutcomes = await Promise.all([
+        createFileExclusive!({ filePath: "notes/race.txt", data: "one", cwd: workdir }),
+        createFileExclusive!({ filePath: "notes/race.txt", data: "two", cwd: workdir }),
+      ]);
+      expect(raceOutcomes.toSorted()).toEqual(["created", "exists"]);
+
       await bridge?.writeFile({ filePath: "notes/one.txt", data: "hello mxc", cwd: workdir });
       expect(await bridge?.readFile({ filePath: "notes/one.txt", cwd: workdir })).toEqual(
         Buffer.from("hello mxc"),

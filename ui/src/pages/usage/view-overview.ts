@@ -101,7 +101,7 @@ function renderFilterChips(
     ? truncateUtf16Safe(selectedSession.label || selectedSession.key, 20) +
       ((selectedSession.label || selectedSession.key).length > 20 ? "…" : "")
     : selectedSessions.length === 1
-      ? selectedSessionKey.slice(0, 8) + "…"
+      ? truncateUtf16Safe(selectedSessionKey, 8) + "…"
       : t("usage.filters.sessionsCount", { count: String(selectedSessions.length) });
   const sessionsFullName = selectedSession
     ? selectedSession.label || selectedSession.key

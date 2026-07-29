@@ -1,11 +1,11 @@
 // Resolves the first channel that can report linked/unlinked auth state for status summaries.
 // Channel-specific linking logic stays inside plugin status hooks.
 
+import { resolveDefaultChannelAccountContext } from "../channels/account-context.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 type LinkChannelContext = {
   linked: boolean;

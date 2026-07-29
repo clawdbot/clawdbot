@@ -152,7 +152,7 @@ vi.mock("../infra/device-pairing.js", () => ({
   updatePairedDevicePresence: updatePairedDevicePresenceMock,
 }));
 import type { CliDeps } from "../cli/deps.js";
-import type { HealthSummary } from "../commands/health.js";
+import type { HealthSummary } from "./health/types.js";
 import type { NodeEventContext } from "./server-node-events-types.js";
 import { handleNodeEvent } from "./server-node-events.js";
 

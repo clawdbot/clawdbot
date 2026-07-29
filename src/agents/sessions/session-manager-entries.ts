@@ -35,7 +35,19 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     if (!isIndexedSessionEntry(canonicalEntry)) {
       throw new Error(`Invalid session transcript entry: ${entry.type}`);
     }
-    this.persist(canonicalEntry, options);
+    const activeBranchAppend =
+      !this.pendingDeliberateAppend &&
+      this.appendMode !== "side" &&
+      !isSessionTranscriptSideAppendEntry(canonicalEntry);
+    const effectiveParentId = this.persist(canonicalEntry, {
+      ...options,
+      ...(activeBranchAppend ? { appendIntent: "active-branch" } : {}),
+    });
+    if (effectiveParentId !== undefined && effectiveParentId !== canonicalEntry.parentId) {
+      this.reloadPersistedTranscript();
+      this.pendingDeliberateAppend = false;
+      return;
+    }
     if (
       !isSessionTranscriptSideAppendEntry(canonicalEntry) &&
       canonicalEntry.parentId === this.appendParentId &&
@@ -46,6 +58,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.fileEntries.push(canonicalEntry);
     this.byId.set(canonicalEntry.id, canonicalEntry);
     this.appendParentId = canonicalEntry.id;
+    this.pendingDeliberateAppend = false;
     if (isSessionTranscriptSideAppendEntry(canonicalEntry)) {
       this.appendMode = "side";
       this.promptReleasedSideBranchParentId = canonicalEntry.id;
@@ -244,6 +257,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendMode = params.appendMode;
     this.promptReleasedSideBranchParentId =
       params.appendMode === "side" ? params.appendParentId : undefined;
+    this.pendingDeliberateAppend = false;
     return entry;
   }
 
@@ -379,6 +393,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendParentId = branchTargetId;
     this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = true;
   }
 
   resetLeaf(): void {
@@ -386,6 +401,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     this.appendParentId = null;
     this.appendMode = undefined;
     this.promptReleasedSideBranchParentId = undefined;
+    this.pendingDeliberateAppend = true;
   }
 
   branchWithSummary(

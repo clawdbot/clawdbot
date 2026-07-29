@@ -32,7 +32,7 @@ import {
   summarizeRetainedLostTaskAuditFindings,
 } from "../tasks/task-registry.audit.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
-import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
+import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./types.js";
 
 const RECENT_SESSION_LIMIT = 10;
 
@@ -42,7 +42,7 @@ const channelSummaryModuleLoader = createLazyImportLoader(
 const channelPluginIdsModuleLoader = createLazyImportLoader(
   () => import("../plugins/channel-plugin-ids.js"),
 );
-const linkChannelModuleLoader = createLazyImportLoader(() => import("./status.link-channel.js"));
+const linkChannelModuleLoader = createLazyImportLoader(() => import("./link-channel.js"));
 const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
   () => import("../tasks/task-registry.maintenance.js"),
 );
@@ -70,7 +70,7 @@ function loadLinkChannelModule() {
 }
 
 const loadStatusSummaryRuntimeModule = createLazyRuntimeSurface(
-  () => import("./status.summary.runtime.js"),
+  () => import("./summary.runtime.js"),
   ({ statusSummaryRuntime }) => statusSummaryRuntime,
 );
 

@@ -158,6 +158,12 @@ public enum SessionFileKind: String, Codable, Sendable {
     case read = "read"
 }
 
+public enum SessionFilePreviewKind: String, Codable, Sendable {
+    case text = "text"
+    case image = "image"
+    case unsupported = "unsupported"
+}
+
 public enum SessionFileRelevance: String, Codable, Sendable {
     case modified = "modified"
     case read = "read"
@@ -6898,6 +6904,9 @@ public struct SessionFileEntry: Codable, Sendable {
     public let updatedatms: Int?
     public let content: String?
     public let hash: String?
+    public let mimetype: String?
+    public let contentencoding: AnyCodable?
+    public let previewkind: SessionFilePreviewKind?
 
     public init(
         path: String,
@@ -6908,7 +6917,10 @@ public struct SessionFileEntry: Codable, Sendable {
         size: Int? = nil,
         updatedatms: Int? = nil,
         content: String? = nil,
-        hash: String? = nil)
+        hash: String? = nil,
+        mimetype: String? = nil,
+        contentencoding: AnyCodable? = nil,
+        previewkind: SessionFilePreviewKind? = nil)
     {
         self.path = path
         self.workspacepath = workspacepath
@@ -6919,6 +6931,9 @@ public struct SessionFileEntry: Codable, Sendable {
         self.updatedatms = updatedatms
         self.content = content
         self.hash = hash
+        self.mimetype = mimetype
+        self.contentencoding = contentencoding
+        self.previewkind = previewkind
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -6931,6 +6946,9 @@ public struct SessionFileEntry: Codable, Sendable {
         case updatedatms = "updatedAtMs"
         case content
         case hash
+        case mimetype = "mimeType"
+        case contentencoding = "contentEncoding"
+        case previewkind = "previewKind"
     }
 }
 
@@ -12354,6 +12372,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
     public let source: AnyCodable
     public let pluginid: String?
     public let channelid: String?
+    public let mcpserver: String?
+    public let mcptoolname: String?
+    public let deniedbysession: Bool?
     public let risk: AnyCodable?
     public let tags: [String]?
 
@@ -12365,6 +12386,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         source: AnyCodable,
         pluginid: String? = nil,
         channelid: String? = nil,
+        mcpserver: String? = nil,
+        mcptoolname: String? = nil,
+        deniedbysession: Bool? = nil,
         risk: AnyCodable? = nil,
         tags: [String]? = nil)
     {
@@ -12375,6 +12399,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         self.source = source
         self.pluginid = pluginid
         self.channelid = channelid
+        self.mcpserver = mcpserver
+        self.mcptoolname = mcptoolname
+        self.deniedbysession = deniedbysession
         self.risk = risk
         self.tags = tags
     }
@@ -12387,6 +12414,9 @@ public struct ToolsEffectiveEntry: Codable, Sendable {
         case source
         case pluginid = "pluginId"
         case channelid = "channelId"
+        case mcpserver = "mcpServer"
+        case mcptoolname = "mcpToolName"
+        case deniedbysession = "deniedBySession"
         case risk
         case tags
     }

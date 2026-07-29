@@ -27,7 +27,10 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 // `runDreamingSweepPhases` is the only binding the dreaming trigger imports from this module.
 const runDreamingSweepPhasesMock = vi.hoisted(() =>
-  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => {}),
+  vi.fn(async (_params: { agentId?: string; workspaceDir: string }) => ({
+    degradedPhases: 0,
+    pendingNarratives: 0,
+  })),
 );
 vi.mock("./dreaming-phases.js", () => ({
   runDreamingSweepPhases: runDreamingSweepPhasesMock,
@@ -64,6 +67,7 @@ type CronPayload =
   | { kind: "systemEvent"; text: string }
   | { kind: "agentTurn"; message: string; lightContext?: boolean };
 type CronAddInput = {
+  declarationKey: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -76,6 +80,7 @@ type CronAddInput = {
 type CronPatch = Partial<CronAddInput>;
 type CronJobLike = {
   id: string;
+  declarationKey?: string;
   name?: string;
   description?: string;
   enabled?: boolean;
@@ -123,6 +128,7 @@ function createCronHarness(
   const addCalls: CronAddInput[] = [];
   const updateCalls: Array<{ id: string; patch: CronPatch }> = [];
   const removeCalls: string[] = [];
+  const mutationCalls: string[] = [];
 
   const cron: CronParam = {
     async list() {
@@ -138,9 +144,11 @@ function createCronHarness(
       }));
     },
     async add(input) {
+      mutationCalls.push("add");
       addCalls.push(input);
       jobs.push({
         id: `job-${jobs.length + 1}`,
+        declarationKey: input.declarationKey,
         name: input.name,
         description: input.description,
         enabled: input.enabled,
@@ -154,6 +162,7 @@ function createCronHarness(
       return {};
     },
     async update(id, patch) {
+      mutationCalls.push(`update:${id}`);
       updateCalls.push({ id, patch });
       const index = jobs.findIndex((entry) => entry.id === id);
       if (index < 0) {
@@ -174,6 +183,7 @@ function createCronHarness(
       return {};
     },
     async remove(id) {
+      mutationCalls.push(`remove:${id}`);
       removeCalls.push(id);
       if (opts?.removeThrowsForIds?.includes(id)) {
         throw new Error(`remove failed for ${id}`);
@@ -195,6 +205,7 @@ function createCronHarness(
     addCalls,
     updateCalls,
     removeCalls,
+    mutationCalls,
     get listCalls() {
       return listCalls;
     },
@@ -684,6 +695,7 @@ describe("gateway startup reconciliation", () => {
 
       expect(harness.addCalls).toHaveLength(1);
       const addCall = requireAddCall(harness, 0);
+      expect(addCall.declarationKey).toBe("memory-core:memory-dreaming-promotion");
       expectCronSchedule(addCall.schedule, "15 4 * * *", "UTC");
       expect(addCall.delivery?.mode).toBe("none");
       expectLogContains(logger.info, "created managed dreaming cron job");
@@ -1028,6 +1040,111 @@ describe("gateway startup reconciliation", () => {
         "America/Los_Angeles",
       );
     } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("updates a seeded old-schedule managed job in place by its stable name", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness([
+      {
+        id: "job-old-schedule",
+        name: constants.MANAGED_DREAMING_CRON_NAME,
+        description: `${constants.MANAGED_DREAMING_CRON_TAG} legacy managed dreaming job`,
+        enabled: true,
+        schedule: { kind: "cron", expr: "0 3 * * *" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "legacy-dreaming-payload" },
+        delivery: { mode: "none" },
+        createdAtMs: 10,
+      },
+    ]);
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: { dreaming: { enabled: true, frequency: "*/3 * * * *" } },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.removeCalls).toEqual(["job-old-schedule"]);
+      expect(harness.mutationCalls).toEqual(["add", "remove:job-old-schedule"]);
+      expect(harness.updateCalls).toHaveLength(0);
+      expect(requireAddCall(harness, 0).declarationKey).toBe(
+        "memory-core:memory-dreaming-promotion",
+      );
+      expectCronSchedule(requireAddCall(harness, 0).schedule, "*/3 * * * *");
+      expect(harness.jobs).toHaveLength(1);
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      clearInternalHooks();
+    }
+  });
+
+  it("removes seeded stale managed duplicates before reconciling the survivor", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const seeded = (id: string, createdAtMs: number, expr: string): CronJobLike => ({
+      id,
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} legacy managed dreaming job`,
+      enabled: true,
+      schedule: { kind: "cron", expr },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "legacy-dreaming-payload" },
+      delivery: { mode: "none" },
+      createdAtMs,
+    });
+    const harness = createCronHarness([
+      seeded("job-oldest", 10, "0 3 * * *"),
+      seeded("job-duplicate", 20, "*/5 * * * *"),
+    ]);
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: { dreaming: { enabled: true, frequency: "*/3 * * * *" } },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+
+      expect(harness.addCalls).toHaveLength(1);
+      expect(harness.removeCalls).toEqual(["job-oldest", "job-duplicate"]);
+      expect(harness.updateCalls).toHaveLength(0);
+      expectCronSchedule(requireAddCall(harness, 0).schedule, "*/3 * * * *");
+      expect(harness.jobs).toHaveLength(1);
+      expect(harness.jobs[0]?.declarationKey).toBe("memory-core:memory-dreaming-promotion");
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
       clearInternalHooks();
     }
   });
@@ -1605,7 +1722,8 @@ describe("gateway startup reconciliation", () => {
     const logger = createLogger();
     const managedJob: CronJobLike = {
       id: "job-managed",
-      name: constants.MANAGED_DREAMING_CRON_NAME,
+      declarationKey: "memory-core:memory-dreaming-promotion",
+      name: "Historical Dreaming Promotion Name",
       description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
       enabled: true,
       schedule: { kind: "cron", expr: "0 3 * * *" },
@@ -2104,6 +2222,57 @@ describe("gateway startup reconciliation", () => {
       )[0];
       expect(sweepArgs.agentId).toBe("researcher");
       expect(sweepArgs.workspaceDir).toBe(workspaceDir);
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("reports a degraded sweep when narrative cleanup fails", async () => {
+    clearInternalHooks();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-cleanup-degraded-");
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    runDreamingSweepPhasesMock.mockResolvedValueOnce({
+      degradedPhases: 1,
+      pendingNarratives: 0,
+    });
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        agents: { defaults: { workspace: workspaceDir } },
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  limit: 1,
+                  phases: { light: { enabled: false }, rem: { enabled: false } },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+      const result = await getBeforeAgentReplyHandler(onMock)(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "cron", agentId: "main", workspaceDir },
+      );
+
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming degraded",
+      });
+      expectLogContains(logger.warn, "failed=0, degraded=1, narrativesPending=0");
     } finally {
       clearInternalHooks();
     }

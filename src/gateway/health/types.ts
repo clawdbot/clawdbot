@@ -20,7 +20,7 @@ export type AgentHealthSummary = {
   agentId: string;
   name?: string;
   isDefault: boolean;
-  heartbeat: import("../infra/heartbeat-summary.js").HeartbeatSummary;
+  heartbeat: import("../../infra/heartbeat-summary.js").HeartbeatSummary;
   sessions: HealthSummary["sessions"];
 };
 
@@ -44,7 +44,7 @@ export type PluginHealthSummary = {
     state: "configured-unavailable";
     diagnostic: {
       kind: "plugin-verification";
-      reason: import("../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
+      reason: import("../../plugins/runtime-degraded-state.js").PluginVerificationFailureReason;
       detail: string;
     };
   }>;
@@ -81,7 +81,7 @@ export type DeliveryQueueHealthSummary = {
 
 /** Config hot-reload watcher status, present only when a reloader is running. */
 type ConfigReloadHealthSummary = {
-  hotReloadStatus: import("../gateway/config-reload-status.types.js").GatewayHotReloadStatus;
+  hotReloadStatus: import("../config-reload-status.types.js").GatewayHotReloadStatus;
 };
 
 /** Full gateway health payload consumed by `openclaw health`. */
@@ -89,7 +89,7 @@ export type HealthSummary = {
   ok: true;
   ts: number;
   durationMs: number;
-  eventLoop?: import("../gateway/server/event-loop-health.js").GatewayEventLoopHealth;
+  eventLoop?: import("../server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   contextEngines?: ContextEngineHealthSummary;
   deliveryQueues?: DeliveryQueueHealthSummary;

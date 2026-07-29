@@ -4,6 +4,9 @@ import {
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
+import { GatewayEventListeners } from "./event-listeners.js";
+import type { GatewayPendingRequest } from "./pending-request.js";
+import { clearGatewayConnectTimeout, startGatewayConnectTimeout } from "./timeouts.js";
 
 export type GatewayProtocolSocket = {
   isOpen: () => boolean;
@@ -146,17 +149,6 @@ type ConnectTimingState = {
   usedFallback: boolean;
 };
 type CloseSnapshot = Omit<GatewayProtocolCloseContext, "code" | "reason">;
-type PendingRequest = {
-  resolve: (value: unknown) => void;
-  reject: (error: Error) => void;
-  expectFinal: boolean;
-  acceptedNotified: boolean;
-  onAccepted?: (payload: unknown) => void;
-  cleanup?: () => void;
-  unbounded: boolean;
-  method: string;
-  startedAtMs: number;
-};
 
 /**
  * Browser-safe gateway wire client. Environment adapters own transport and auth
@@ -164,8 +156,8 @@ type PendingRequest = {
  */
 export class GatewayProtocolClient<TPlan> {
   private socket: GatewayProtocolSocket | null = null;
-  private readonly pending = new Map<string, PendingRequest>();
-  private listeners = new Set<(event: EventFrame) => void>();
+  private readonly pending = new Map<string, GatewayPendingRequest>();
+  private readonly listeners = new GatewayEventListeners<EventFrame>();
   private stopped = true;
   private generation = 0;
   private lastSeq: number | null = null;
@@ -250,7 +242,7 @@ export class GatewayProtocolClient<TPlan> {
       options?.timeoutMs === null ? undefined : (options?.timeoutMs ?? this.opts.requestTimeoutMs);
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | undefined;
-      const pending: PendingRequest = {
+      const pending: GatewayPendingRequest = {
         resolve: (value) => resolve(value as T),
         reject,
         expectFinal: options?.expectFinal === true,
@@ -312,8 +304,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   addEventListener(listener: (event: EventFrame) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return this.listeners.add(listener);
   }
 
   closeSocket(code?: number, reason?: string): void {
@@ -448,6 +439,13 @@ export class GatewayProtocolClient<TPlan> {
     }
     this.connectSent = true;
     this.clearHandshakeTimer();
+    // The challenge timer ends before asynchronous device preparation. Keep
+    // the same socket supervised until hello so a silent peer cannot strand it.
+    this.handshakeTimer = startGatewayConnectTimeout(() => {
+      if (this.isActive(socket, generation) && !this.helloReceived) {
+        socket.close(4000, "connect timeout");
+      }
+    });
     let planOrPromise: TPlan | Promise<TPlan>;
     try {
       planOrPromise = this.opts.buildConnectPlan({
@@ -501,6 +499,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.clearHandshakeTimer();
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
         this.recordTiming("hello", generation, plan);
@@ -572,9 +571,17 @@ export class GatewayProtocolClient<TPlan> {
         }
         this.lastSeq = seq;
       }
+      // An owner may replace the socket while handling this frame. Snapshot
+      // first so replacement listeners cannot inherit a retired event.
+      const listeners = this.listeners.snapshot();
       this.invoke("event", () => this.opts.onEvent?.(parsed));
-      for (const listener of this.listeners) {
-        this.invoke("event listener", () => listener(parsed));
+      for (const [listener, subscription] of listeners) {
+        if (!this.isActive(socket, generation)) {
+          return;
+        }
+        if (this.listeners.isCurrent(listener, subscription)) {
+          this.invoke("event listener", () => listener(parsed));
+        }
       }
       return;
     }
@@ -665,7 +672,7 @@ export class GatewayProtocolClient<TPlan> {
 
   private finishRequestTiming(
     id: string,
-    pending: PendingRequest,
+    pending: GatewayPendingRequest,
     ok: boolean,
     errorCode?: string,
   ): void {
@@ -730,10 +737,7 @@ export class GatewayProtocolClient<TPlan> {
   }
 
   private clearHandshakeTimer(): void {
-    if (this.handshakeTimer) {
-      clearTimeout(this.handshakeTimer);
-      this.handshakeTimer = null;
-    }
+    this.handshakeTimer = clearGatewayConnectTimeout(this.handshakeTimer);
   }
 
   private invoke(label: string, callback: () => void): void {
