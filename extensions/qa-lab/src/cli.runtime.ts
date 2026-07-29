@@ -648,22 +648,20 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
     (opts.scenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean),
   );
   const taxonomyScenarios = membership.selectedScenarios;
-  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
-    throw new Error(
-      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
-    );
-  }
   const missingScenarioIds = membership.excludedScenarioIds;
-  if (missingScenarioIds.length > 0) {
-    throw new Error(
-      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
-    );
-  }
   const providerMode = opts.providerMode ?? defaultQaRunProfileProviderMode(profile);
   const normalizedProviderMode = normalizeQaProviderMode(providerMode);
   const primaryModel = opts.primaryModel?.trim() || defaultQaModelForMode(normalizedProviderMode);
+  const missingScenarioIdSet = new Set(missingScenarioIds);
+  const executionScenarios =
+    missingScenarioIds.length > 0
+      ? [
+          ...taxonomyScenarios,
+          ...scenarioPack.scenarios.filter((scenario) => missingScenarioIdSet.has(scenario.id)),
+        ]
+      : taxonomyScenarios;
   const executionSelection = resolveQaRunProfileExecutionSelection({
-    scenarios: taxonomyScenarios,
+    scenarios: executionScenarios,
     providerMode: normalizedProviderMode,
     primaryModel,
     channelDriver: profileReport.channelDriver,
@@ -678,6 +676,16 @@ export async function runQaProfileCommand(opts: QaProfileCommandOptions) {
       .join(", ");
     throw new Error(
       `qa run --qa-profile ${profile} cannot run explicitly selected scenario(s): ${exclusions}.`,
+    );
+  }
+  if (requestedScenarioIds.length > 0 && taxonomyScenarios.length === 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${requestedScenarioIds.join(",")}.`,
+    );
+  }
+  if (missingScenarioIds.length > 0) {
+    throw new Error(
+      `qa run did not find taxonomy scenarios for ${formatQaRunProfileFilterList(opts)} --scenario ${missingScenarioIds.join(",")}.`,
     );
   }
   const scenarios = executionSelection.selectedScenarios;
