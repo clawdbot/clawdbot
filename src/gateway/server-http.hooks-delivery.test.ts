@@ -34,7 +34,10 @@ vi.mock("./hooks.js", async () => {
 });
 
 function createDeliveryHandler(params?: { mappings?: HookMappingResolved[] }) {
-  const dispatchAgentHook = vi.fn((_value: HookAgentDispatchPayload) => "run-1");
+  const dispatchAgentHook = vi.fn((_value: HookAgentDispatchPayload) => ({
+    ok: true as const,
+    runId: "run-1",
+  }));
   const hooksConfig = {
     ...createHooksConfig(),
     mappings: params?.mappings ?? [],

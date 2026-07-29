@@ -542,9 +542,15 @@ Query-string tokens are rejected.
     - Setting `deliver: false` keeps the run completion-only and ignores any delivery destination.
     - Supplying both a concrete `channel` and `to` enables direct announce delivery.
 
+    The HTTP response waits only for runner admission, not for the agent turn to finish. A `200` may take up to 15 seconds and means the run entered its agent runner. Pre-run failures return `{ ok: false, error, runId }` with:
+
+    - `409` when the target session changed or otherwise rejects new work; retry after resolving the session conflict.
+    - `502` when Gateway or cron preparation fails before runner entry.
+    - `503` when runner admission does not complete within 15 seconds. Timed-out queued work is canceled and does not start later.
+
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
-    Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms.
+    Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms. Mapped `agent` actions use the same 15-second admission and `200`/`409`/`502`/`503` response contract as `POST /hooks/agent`.
   </Accordion>
 </AccordionGroup>
 
