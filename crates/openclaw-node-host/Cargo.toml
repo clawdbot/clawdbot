@@ -1,0 +1,34 @@
+[package]
+name = "openclaw-node-host"
+version = "0.1.0"
+description = "Reusable Rust OpenClaw node runtime and headless host"
+edition = "2021"
+rust-version = "1.93"
+publish = false
+license = "MIT"
+
+[dependencies]
+futures-util = "0.3.32"
+base64 = "0.22.1"
+ed25519-dalek = "3.0.0"
+getrandom = "0.4.3"
+openclaw-gateway-client = { path = "../openclaw-gateway-client" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+thiserror = "2.0.19"
+tokio = { version = "1.52.3", features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
+
+[[bin]]
+name = "openclaw-node"
+path = "src/main.rs"
+
+[dev-dependencies]
+tokio-tungstenite = "0.30.0"
