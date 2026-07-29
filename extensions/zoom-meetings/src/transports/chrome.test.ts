@@ -1,6 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveZoomMeetingsConfig } from "../config.js";
+import { zoomMeetingsConfig } from "../config.js";
+
+const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
 
 const engineMocks = vi.hoisted(() => ({
   localDispose: vi.fn(async () => {}),

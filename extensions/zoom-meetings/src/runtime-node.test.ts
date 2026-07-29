@@ -1,6 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { resolveZoomMeetingsConfig } from "./config.js";
+import { zoomMeetingsConfig } from "./config.js";
+
+const resolveZoomMeetingsConfig = zoomMeetingsConfig.resolveConfig;
 
 const realtimeMocks = vi.hoisted(() => ({
   healths: [] as Array<{ bridgeClosed: boolean }>,

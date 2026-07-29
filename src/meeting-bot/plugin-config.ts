@@ -17,8 +17,7 @@ import {
   type MeetingSoxAudioCommandParams,
 } from "./sox-audio-command.js";
 
-export type MeetingPluginMode = "agent" | "bidi" | "transcribe";
-export type MeetingPluginTransport = "chrome" | "chrome-node";
+type MeetingPluginMode = "agent" | "bidi" | "transcribe";
 
 export type MeetingPluginConfig = MeetingRealtimeEngineConfig & {
   enabled: boolean;

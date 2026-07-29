@@ -1,9 +1,6 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  ZOOM_MEETINGS_CONFIG_SCHEMA,
-  resolveZoomMeetingsGatewayOperationTimeoutMs,
-} from "./src/config.js";
+import { zoomMeetingsConfig } from "./src/config.js";
 import { ZoomMeetingsInvalidRequestError, zoomMeetingsInvalidRequest } from "./src/errors.js";
 import { handleZoomMeetingsNodeHostCommand } from "./src/node-host.js";
 import { createZoomMeetingsNodeInvokePolicy } from "./src/node-invoke-policy.js";
@@ -14,10 +11,10 @@ export default MeetingPlatformAdapter.createPluginShellEntry({
   platform: ZOOM_MEETINGS_PLATFORM_ADAPTER,
   browserGuestLabel: "Zoom meeting",
   sessionLabel: "Zoom meeting",
-  configSchema: ZOOM_MEETINGS_CONFIG_SCHEMA,
+  configSchema: zoomMeetingsConfig.configSchema,
   invalidRequest: zoomMeetingsInvalidRequest,
   isInvalidRequest: (error) => error instanceof ZoomMeetingsInvalidRequestError,
-  resolveGatewayTimeoutMs: resolveZoomMeetingsGatewayOperationTimeoutMs,
+  resolveGatewayTimeoutMs: zoomMeetingsConfig.resolveGatewayOperationTimeoutMs,
   normalizeRequesterSessionKey: (value, trustedOwner) =>
     trustedOwner && typeof value === "string" && value.trim() ? value.trim() : undefined,
   normalizeToolAgentId: (agentId) => normalizeAgentId(agentId),

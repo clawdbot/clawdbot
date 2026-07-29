@@ -1,6 +1,8 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveTeamsMeetingsConfig } from "../config.js";
+import { teamsMeetingsConfig } from "../config.js";
+
+const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
 
 const engineMocks = vi.hoisted(() => ({
   localDispose: vi.fn(async () => {}),

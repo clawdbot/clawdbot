@@ -2,8 +2,7 @@ import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
-import type { TeamsMeetingsConfig } from "./config.js";
-import { resolveTeamsMeetingsGatewayOperationTimeoutMs } from "./config.js";
+import { teamsMeetingsConfig, type TeamsMeetingsConfig } from "./config.js";
 
 export function registerTeamsMeetingsCli(params: {
   program: Command;
@@ -25,7 +24,7 @@ export function registerTeamsMeetingsCli(params: {
     },
     resolveGatewayTimeoutMs: ({ config, requestedTimeoutMs }) =>
       Math.max(
-        resolveTeamsMeetingsGatewayOperationTimeoutMs(config),
+        teamsMeetingsConfig.resolveGatewayOperationTimeoutMs(config),
         requestedTimeoutMs === undefined
           ? 0
           : (addTimerTimeoutGraceMs(requestedTimeoutMs, 30_000) ?? 1),

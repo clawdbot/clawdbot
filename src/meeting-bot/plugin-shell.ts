@@ -117,14 +117,12 @@ export function createMeetingPluginCliMetadata(options: {
 }) {
   const descriptor = createMeetingPluginCliDescriptor(options.commandName, options.description);
   return {
+    id: options.id,
+    name: options.name,
+    description: `${options.name} CLI metadata`,
     descriptor,
-    entry: {
-      id: options.id,
-      name: options.name,
-      description: `${options.name} CLI metadata`,
-      register(api: OpenClawPluginApi) {
-        api.registerCli(() => {}, { descriptors: [descriptor] });
-      },
+    register(api: OpenClawPluginApi) {
+      api.registerCli(() => {}, { descriptors: [descriptor] });
     },
   };
 }

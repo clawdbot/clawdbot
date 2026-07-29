@@ -1,9 +1,6 @@
 import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
-import {
-  TEAMS_MEETINGS_CONFIG_SCHEMA,
-  resolveTeamsMeetingsGatewayOperationTimeoutMs,
-} from "./src/config.js";
+import { teamsMeetingsConfig } from "./src/config.js";
 import { handleTeamsMeetingsNodeHostCommand } from "./src/node-host.js";
 import { createTeamsMeetingsNodeInvokePolicy } from "./src/node-invoke-policy.js";
 import { TeamsMeetingsRuntime } from "./src/runtime.js";
@@ -14,10 +11,10 @@ class TeamsMeetingsInvalidRequestError extends Error {}
 export default MeetingPlatformAdapter.createPluginShellEntry({
   platform: TEAMS_MEETINGS_PLATFORM_ADAPTER,
   browserGuestLabel: "Microsoft Teams meeting",
-  configSchema: TEAMS_MEETINGS_CONFIG_SCHEMA,
+  configSchema: teamsMeetingsConfig.configSchema,
   invalidRequest: (message) => new TeamsMeetingsInvalidRequestError(message),
   isInvalidRequest: (error) => error instanceof TeamsMeetingsInvalidRequestError,
-  resolveGatewayTimeoutMs: resolveTeamsMeetingsGatewayOperationTimeoutMs,
+  resolveGatewayTimeoutMs: teamsMeetingsConfig.resolveGatewayOperationTimeoutMs,
   normalizeRequesterSessionKey: (value) =>
     typeof value === "string" && value.trim() ? value.trim() : undefined,
   normalizeToolAgentId: (agentId) => (agentId ? normalizeAgentId(agentId) : undefined),
