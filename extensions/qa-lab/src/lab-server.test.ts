@@ -758,6 +758,8 @@ describe("qa-lab server", () => {
     expect(bootstrap.runner.selection.scenarioIds).toBeNull();
     expect(bootstrap.runnerCatalog.profiles.map((profile) => profile.id)).toEqual([
       "smoke-ci",
+      "personal-agent",
+      "observability",
       "release",
       "all",
     ]);
