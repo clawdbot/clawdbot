@@ -401,12 +401,14 @@ async function canonicalizeExistingPathPrefix(value: string): Promise<string> {
 
 async function runtimeArtifactDirectories(repoRoot: string, outputDir: string): Promise<string[]> {
   const packagesRoot = path.join(repoRoot, "packages");
-  const packageEntries = await fs.readdir(packagesRoot, { withFileTypes: true }).catch((error: unknown) => {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return [];
-    }
-    throw error;
-  });
+  const packageEntries = await fs
+    .readdir(packagesRoot, { withFileTypes: true })
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return [];
+      }
+      throw error;
+    });
   const artifacts = [
     path.join(repoRoot, "dist"),
     ...packageEntries
