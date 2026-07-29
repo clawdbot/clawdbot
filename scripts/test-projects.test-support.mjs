@@ -7,7 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  agentsCoreIsolatedTestFiles,
+  agentVitestProjectOwners,
+  embeddedAgentVitestProjectOwners,
   isAgentsCoreIsolatedTestFile,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { isChannelSurfaceTestFile } from "../test/vitest/vitest.channel-paths.mjs";
@@ -88,18 +89,18 @@ import {
 } from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
-const AGENTS_CORE_ISOLATED_VITEST_CONFIG = "test/vitest/vitest.agents-core-isolated.config.ts";
-const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
-const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = "test/vitest/vitest.agents-embedded-agent.config.ts";
+const AGENTS_EMBEDDED_AGENT_TEST_ROOT = agentVitestProjectOwners.embedded.root;
+const AGENTS_CORE_ISOLATED_VITEST_CONFIG = agentVitestProjectOwners.coreIsolated.config;
+const AGENTS_CORE_VITEST_CONFIG = agentVitestProjectOwners.core.config;
+const AGENTS_EMBEDDED_AGENT_VITEST_CONFIG = agentVitestProjectOwners.embedded.config;
 const AGENTS_EMBEDDED_AGENT_INCOMPLETE_TURN_VITEST_CONFIG =
-  "test/vitest/vitest.agents-embedded-agent-incomplete-turn.config.ts";
+  agentVitestProjectOwners.embeddedIncompleteTurn.config;
 const AGENTS_EMBEDDED_AGENT_OVERFLOW_COMPACTION_VITEST_CONFIG =
-  "test/vitest/vitest.agents-embedded-agent-overflow-compaction.config.ts";
-const AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG =
-  "test/vitest/vitest.agents-embedded-agent-run.config.ts";
-const AGENTS_SUPPORT_VITEST_CONFIG = "test/vitest/vitest.agents-support.config.ts";
-const AGENTS_TOOLS_VITEST_CONFIG = "test/vitest/vitest.agents-tools.config.ts";
-const AGENTS_VITEST_CONFIG = "test/vitest/vitest.agents.config.ts";
+  agentVitestProjectOwners.embeddedOverflowCompaction.config;
+const AGENTS_EMBEDDED_AGENT_RUN_VITEST_CONFIG = agentVitestProjectOwners.embeddedRun.config;
+const AGENTS_SUPPORT_VITEST_CONFIG = agentVitestProjectOwners.support.config;
+const AGENTS_TOOLS_VITEST_CONFIG = agentVitestProjectOwners.tools.config;
+const AGENTS_VITEST_CONFIG = agentVitestProjectOwners.all.config;
 const ACP_VITEST_CONFIG = "test/vitest/vitest.acp.config.ts";
 const AUTO_REPLY_CORE_VITEST_CONFIG = "test/vitest/vitest.auto-reply-core.config.ts";
 const AUTO_REPLY_VITEST_CONFIG = "test/vitest/vitest.auto-reply.config.ts";
@@ -446,6 +447,17 @@ const BROAD_CHANGED_FALLBACK_PATTERNS = [
   /^test\/helpers\//u,
 ];
 const PRECISE_SOURCE_TEST_TARGETS = new Map([
+  ...[
+    "src/system-agent/setup-inference-persist.ts",
+    "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
+    "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
+  ].map((sourcePath) => [
+    sourcePath,
+    [
+      "src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts",
+      "src/commands/onboard-guided.inference.e2e.test.ts",
+    ],
+  ]),
   [
     "src/plugins/contracts/tts-contract-suites.ts",
     [
@@ -2799,7 +2811,7 @@ function listUnitFastFullSuiteTestTargets() {
 }
 
 function listAgentsCoreFullSuiteTestTargets(cwd) {
-  const isolatedTests = new Set(agentsCoreIsolatedTestFiles);
+  const isolatedTests = new Set(agentVitestProjectOwners.coreIsolated.include);
   const agentsDir = path.join(cwd, "src/agents");
   if (!fs.existsSync(agentsDir)) {
     return [];
@@ -4038,7 +4050,7 @@ function classifyTarget(arg, cwd) {
     return configTargetKind;
   }
   if (isAgentsCoreIsolatedTestFile(relative)) {
-    return "agentsCoreIsolated";
+    return agentVitestProjectOwners.coreIsolated.kind;
   }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
@@ -4246,8 +4258,41 @@ function classifyTarget(arg, cwd) {
   if (isPathAtOrUnder(relative, "src/auto-reply")) {
     return "autoReply";
   }
-  if (isPathAtOrUnder(relative, "src/agents")) {
-    return "agent";
+  if (isPathAtOrUnder(relative, agentVitestProjectOwners.all.root)) {
+    // Focused runs must preserve the full suite's isolated harness and hook-timeout contracts.
+    if (
+      relative === agentVitestProjectOwners.all.root ||
+      relative === AGENTS_EMBEDDED_AGENT_TEST_ROOT
+    ) {
+      return agentVitestProjectOwners.all.kind;
+    }
+    if (agentVitestProjectOwners.embeddedIncompleteTurn.include.includes(relative)) {
+      return agentVitestProjectOwners.embeddedIncompleteTurn.kind;
+    }
+    if (agentVitestProjectOwners.embeddedOverflowCompaction.include.includes(relative)) {
+      return agentVitestProjectOwners.embeddedOverflowCompaction.kind;
+    }
+    if (isPathAtOrUnder(relative, agentVitestProjectOwners.embeddedRun.root)) {
+      return agentVitestProjectOwners.embeddedRun.kind;
+    }
+    if (isPathAtOrUnder(relative, AGENTS_EMBEDDED_AGENT_TEST_ROOT)) {
+      return isGlobTarget(relative)
+        ? agentVitestProjectOwners.all.kind
+        : agentVitestProjectOwners.embedded.kind;
+    }
+    if (isPathAtOrUnder(relative, agentVitestProjectOwners.tools.root)) {
+      return agentVitestProjectOwners.tools.kind;
+    }
+    if (isGlobTarget(relative)) {
+      const owner = relative.slice(agentVitestProjectOwners.all.root.length + 1).split("/", 1)[0];
+      return isGlobTarget(owner)
+        ? agentVitestProjectOwners.all.kind
+        : agentVitestProjectOwners.support.kind;
+    }
+    return isFileLikeTarget(relative) &&
+      path.posix.dirname(relative) === agentVitestProjectOwners.core.root
+      ? agentVitestProjectOwners.core.kind
+      : agentVitestProjectOwners.support.kind;
   }
   if (isPathAtOrUnder(relative, "src/plugins")) {
     return "plugin";
@@ -4409,6 +4454,20 @@ export function buildVitestRunPlans(
 
   const groupedTargets = new Map();
   for (const targetArg of activeTargetArgs) {
+    if (!watchMode && toRepoRelativeTarget(targetArg, cwd) === AGENTS_EMBEDDED_AGENT_TEST_ROOT) {
+      // The recursive parent spans four harness owners; keep every isolated project intact.
+      for (const { kind, include: targets } of embeddedAgentVitestProjectOwners) {
+        const current = groupedTargets.get(kind) ?? [];
+        for (const target of targets) {
+          if (!current.includes(target)) {
+            current.push(target);
+          }
+        }
+        groupedTargets.set(kind, current);
+      }
+      continue;
+    }
+
     const kind = classifyTarget(targetArg, cwd);
     const current = groupedTargets.get(kind) ?? [];
     current.push(targetArg);
@@ -4789,6 +4848,45 @@ function hasConservativeVitestWorkerBudget(env) {
       : "OPENCLAW_VITEST_MAX_WORKERS",
   );
   return workerBudget !== null && workerBudget <= 1;
+}
+
+const FULL_EXTENSIONS_CONFIG = "test/vitest/vitest.full-extensions.config.ts";
+const FULL_EXTENSIONS_MIN_HEAP_MB = 8192;
+
+function ensureMaxOldSpaceSize(nodeOptions, minimumMb) {
+  const normalized = nodeOptions?.trim() ?? "";
+  const matches = Array.from(
+    normalized.matchAll(/(^|\s)--max[-_]old[-_]space[-_]size(?:=|\s+)(\d+)(?=\s|$)/gu),
+  );
+  const match = matches.at(-1);
+  if (!match) {
+    return [normalized, `--max-old-space-size=${minimumMb}`].filter(Boolean).join(" ");
+  }
+  const currentMb = Number(match[2]);
+  if (Number.isSafeInteger(currentMb) && currentMb >= minimumMb) {
+    return normalized;
+  }
+  const start = match.index;
+  const replacement = match[0].replace(/\d+$/u, String(minimumMb));
+  return `${normalized.slice(0, start)}${replacement}${normalized.slice(start + match[0].length)}`;
+}
+
+export function applyFullExtensionsHeapBudget(specs, params = {}) {
+  const baseEnv = params.env ?? {};
+  return specs.map((spec) =>
+    spec.config === FULL_EXTENSIONS_CONFIG
+      ? {
+          ...spec,
+          env: {
+            ...spec.env,
+            NODE_OPTIONS: ensureMaxOldSpaceSize(
+              spec.env?.NODE_OPTIONS ?? baseEnv.NODE_OPTIONS,
+              FULL_EXTENSIONS_MIN_HEAP_MB,
+            ),
+          },
+        }
+      : spec,
+  );
 }
 
 export function resolveParallelFullSuiteConcurrency(specCount, envInput, hostInfo) {

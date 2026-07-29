@@ -21,7 +21,7 @@ type OpenAIReasoningSignature = {
 };
 
 type DowngradeOpenAIReasoningBlocksOptions = {
-  dropReplayableReasoning?: boolean;
+  dropReplayableReasoningBefore?: number;
 };
 
 const OPENAI_RESPONSES_ID_MAX_LENGTH = 64;
@@ -56,6 +56,17 @@ function parseOpenAIReasoningSignature(value: unknown): OpenAIReasoningSignature
   }
   if (type === "reasoning" || type.startsWith("reasoning.")) {
     return { id, type };
+  }
+  return null;
+}
+
+function parseTimestampMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
   }
   return null;
 }
@@ -434,6 +445,12 @@ export function downgradeOpenAIReasoningBlocks(
       out.push(msg);
       continue;
     }
+    const messageTimestamp = parseTimestampMs((assistantMsg as { timestamp?: unknown }).timestamp);
+    // Timestamp-less legacy entries cannot prove they belong to the new route;
+    // treat them as pre-switch so stale provider ids never re-enter replay.
+    const dropReplayableReasoning =
+      options.dropReplayableReasoningBefore !== undefined &&
+      (messageTimestamp === null || messageTimestamp <= options.dropReplayableReasoningBefore);
 
     let changed = false;
     let droppedReplayableReasoning = false;
@@ -459,7 +476,7 @@ export function downgradeOpenAIReasoningBlocks(
         nextContent.push(block);
         continue;
       }
-      if (options.dropReplayableReasoning) {
+      if (dropReplayableReasoning) {
         changed = true;
         droppedReplayableReasoning = true;
         continue;

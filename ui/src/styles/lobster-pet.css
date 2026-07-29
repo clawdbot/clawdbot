@@ -93,16 +93,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   opacity: 0.62;
 }
 
-/* Abyss: deep-sea navy with bioluminescent eye glow. */
-.lobster-pet--palette-abyss {
-  --lob-glint: #52f5e3;
-}
-
-.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(3),
-.lobster-pet--palette-abyss .lob-eye-open circle:nth-of-type(4) {
-  filter: drop-shadow(0 0 2.5px rgba(82, 245, 227, 0.9));
-}
-
 /* Lumen: photophore running lights. They pulse and glow in the dark theme;
    daylight (light theme) washes them down to faint speckles. */
 .lobster-pet--palette-lumen {
@@ -195,6 +185,53 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
   to {
     transform: translate(1.5px, -0.5px) rotate(0.8deg);
+  }
+}
+
+/* Figlet's glyph art is terminal-light by default; light cards need real
+   ink or the text washes out (mood-style var passthrough carries it). */
+.lobster-pet--palette-ascii {
+  --lob-ascii-ink: #d8dee6;
+}
+
+:root[data-theme-mode="light"] .lobster-pet--palette-ascii {
+  --lob-ascii-ink: #46525e;
+}
+
+.lob-balloon-frame {
+  animation: lobster-pet-balloon-float 4.5s ease-in-out infinite alternate;
+  transform-origin: 60px 54px;
+}
+
+@keyframes lobster-pet-balloon-float {
+  from {
+    transform: translateY(-2px) rotate(-1.5deg);
+  }
+  to {
+    transform: translateY(2px) rotate(1.5deg);
+  }
+}
+
+.lob-portal-ring {
+  animation: lobster-pet-portal-pulse 4s ease-in-out infinite alternate;
+}
+
+.lob-portal-ring--blue {
+  color: #4a9df8;
+  filter: drop-shadow(0 0 4px #4a9df8);
+}
+
+.lob-portal-ring--orange {
+  color: #ff9a2e;
+  filter: drop-shadow(0 0 4px #ff9a2e);
+}
+
+@keyframes lobster-pet-portal-pulse {
+  from {
+    opacity: 0.68;
+  }
+  to {
+    opacity: 1;
   }
 }
 
@@ -1307,6 +1344,8 @@ openclaw-lobster-pet[data-dex-complete]::after {
   .lob-glass-glints,
   .lob-heisenbug-frame,
   .lob-cryptid-frame,
+  .lob-balloon-frame,
+  .lob-portal-ring,
   .lob-skeleton__block,
   .lob-led,
   .lob-pixel-frame,

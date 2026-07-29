@@ -1,0 +1,6 @@
+{"type":"thread.started","thread_id":"thread-collab-close"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"collab-close","type":"collab_tool_call","tool":"close_agent","sender_thread_id":"thread-parent","receiver_thread_ids":["thread-child"],"prompt":null,"agents_states":{"thread-child":{"status":"running","message":null}},"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"collab-close","type":"collab_tool_call","tool":"close_agent","sender_thread_id":"thread-parent","receiver_thread_ids":["thread-child"],"prompt":null,"agents_states":{"thread-child":{"status":"shutdown","message":null}},"status":"completed"}}
+{"type":"item.completed","item":{"id":"message-collab-close","type":"agent_message","text":"collab closed"}}
+{"type":"turn.completed","usage":{"input_tokens":4,"cached_input_tokens":0,"cache_write_input_tokens":0,"output_tokens":2,"reasoning_output_tokens":0}}

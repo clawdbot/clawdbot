@@ -224,6 +224,11 @@ async function postCronWebhook(params: {
         throw new Error(`Webhook request failed with HTTP ${result.response.status}`);
       }
     } finally {
+      // Guard release closes the dispatcher, not an unread response stream.
+      // Settle the terminal body first so streaming webhooks cannot retain the socket.
+      if (!result.response.bodyUsed) {
+        await result.response.body?.cancel().catch(() => undefined);
+      }
       await result.release();
     }
   } catch (err) {

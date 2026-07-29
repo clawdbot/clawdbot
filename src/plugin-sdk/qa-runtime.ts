@@ -13,6 +13,8 @@ import type { QaRunnerCliRegistration } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
 
+export { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
+
 type QaRuntimeSurface = {
   defaultQaRuntimeModelForMode: (
     mode: string,

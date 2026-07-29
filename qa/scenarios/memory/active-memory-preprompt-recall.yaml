@@ -18,6 +18,7 @@ scenario:
           enabled: true
           config:
             enabled: true
+            mode: always
             agents:
               - qa
             allowedChatTypes:
@@ -48,11 +49,13 @@ scenario:
     config:
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
-      memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
+      memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese. <!-- trigger: apply the global memory guidance --> <!-- importance: 9 -->"
       memoryQuery: "QA movie night snack lemon pepper wings blue cheese"
       expectedNeedle: lemon pepper wings
       prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
       promptSnippet: "Silent snack recall check"
+      laneOneConversationId: qa-active-memory-lane-one
+      laneOnePrompt: "Apply the global memory guidance, then describe my usual QA movie night snack in one short sentence."
 
 flow:
   steps:
@@ -222,4 +225,63 @@ flow:
               - assert:
                   expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_get')"
                   message: expected mock Active Memory memory_get request
+              - call: patchConfig
+                args:
+                  - env:
+                      ref: env
+                    patch:
+                      plugins:
+                        entries:
+                          active-memory:
+                            config:
+                              mode: "off"
+              - call: waitForGatewayHealthy
+                args:
+                  - ref: env
+                  - 60000
+              - call: waitForQaChannelReady
+                args:
+                  - ref: env
+                  - 60000
+              - set: laneOneRequestCursor
+                value:
+                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+              - set: laneOneStartIndex
+                value:
+                  expr: "state.getSnapshot().messages.length"
+              - sendInbound:
+                  conversation:
+                    id:
+                      expr: config.laneOneConversationId
+                    kind: dm
+                  senderId:
+                    expr: config.laneOneConversationId
+                  senderName: Active Memory Lane One
+                  text:
+                    expr: config.laneOnePrompt
+              - call: waitForOutboundMessage
+                saveAs: laneOneOutbound
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === config.laneOneConversationId && candidate.conversation.kind === 'direct'"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - sinceIndex:
+                      ref: laneOneStartIndex
+              - call: waitForCondition
+                saveAs: laneOneRequests
+                args:
+                  - lambda:
+                      async: true
+                      expr: "await (async () => { const requests = await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${laneOneRequestCursor}`); return requests.some((request) => String(request.allInputText ?? '').includes(config.laneOnePrompt)) ? requests : undefined; })()"
+                  - expr: liveTurnTimeoutMs(env, 30000)
+                  - 100
+              - assert:
+                  expr: "laneOneRequests.some((request) => String(request.allInputText ?? '').includes(config.laneOnePrompt) && String(request.allInputText ?? '').includes('<active_memory_plugin>') && String(request.allInputText ?? '').includes(config.expectedNeedle))"
+                  message:
+                    expr: "`qa-channel lane-1 turn missed injected Active Memory context: ${JSON.stringify(laneOneRequests)}`"
+              - assert:
+                  expr: "laneOneRequests.every((request) => !String(request.allInputText ?? '').includes('You are a memory search agent.'))"
+                  message: mode=off lane-1 regression unexpectedly escalated to the recall sub-agent
       detailsExpr: activeOutbound.text

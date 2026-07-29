@@ -7,6 +7,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
 } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { getCurrentActiveNodeContext, setActiveNodeContext } from "../infra/active-node-context.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -816,6 +817,138 @@ describe("gateway/node-registry", () => {
     await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
   });
 
+  it("does not probe an invalidated node connection", async () => {
+    const registry = createTestNodeRegistry();
+    const socket = makeConnectivitySocket(true);
+    const ping = vi.spyOn(socket, "ping");
+    const client = makeClient("conn-invalidated", "node-1", [], { socket });
+    registerNodeSession(registry, client, {});
+    client.invalidated = true;
+
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({
+      ok: false,
+      error: { code: "NOT_CONNECTED", message: "node not connected" },
+    });
+    expect(ping).not.toHaveBeenCalled();
+  });
+
+  it("does not report an old websocket as connected after its node reconnects", async () => {
+    const registry = createTestNodeRegistry();
+    const oldSocket = makeConnectivitySocket(false);
+    registerNodeSession(registry, makeClient("conn-old", "node-1", [], { socket: oldSocket }), {});
+
+    const connectivity = registry.checkConnectivity("node-1", 50);
+    const replacement = registerNodeSession(
+      registry,
+      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      {},
+    );
+    (oldSocket as unknown as EventEmitter).emit("pong");
+
+    await expect(connectivity).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "NOT_CONNECTED",
+        message: "node connection changed during connectivity probe",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+    await expect(registry.checkConnectivity("node-1", 50)).resolves.toEqual({ ok: true });
+  });
+
+  it("does not report a replaced polling transport as connected", async () => {
+    const registry = createTestNodeRegistry();
+    let resolveProbe: ((result: { ok: true }) => void) | undefined;
+    const transportProbe = new Promise<{ ok: true }>((resolve) => {
+      resolveProbe = resolve;
+    });
+    registry.registerTransport(
+      makeClient("conn-old", "node-1"),
+      { pairingIdentity: "identity-a" },
+      {
+        send: () => true,
+        sendRaw: () => true,
+        checkConnectivity: () => transportProbe,
+      },
+    );
+
+    const connectivity = registry.checkConnectivity("node-1", 50);
+    const replacement = registerNodeSession(
+      registry,
+      makeClient("conn-new", "node-1", [], { socket: makeConnectivitySocket(true) }),
+      {},
+    );
+    resolveProbe?.({ ok: true });
+
+    await expect(connectivity).resolves.toEqual({
+      ok: false,
+      error: {
+        code: "NOT_CONNECTED",
+        message: "node connection changed during connectivity probe",
+      },
+    });
+    expect(registry.get("node-1")).toBe(replacement);
+  });
+
+  it("keeps connectivity and invocations isolated across repeated node reconnects", async () => {
+    const registry = createTestNodeRegistry();
+    const makeTrackedSocket = (sent: string[]) => {
+      const trackedSocket = makeConnectivitySocket(false);
+      (trackedSocket as unknown as { send: (frame: unknown) => void }).send = (frame) => {
+        if (typeof frame === "string") {
+          sent.push(frame);
+        }
+      };
+      return trackedSocket;
+    };
+    let frames: string[] = [];
+    let socket = makeTrackedSocket(frames);
+    registerNodeSession(registry, makeClient("conn-0", "node-1", frames, { socket }), {});
+
+    for (let attempt = 1; attempt <= 50; attempt += 1) {
+      const previousSocket = socket;
+      const previousFrames = frames;
+      const connectivity = registry.checkConnectivity("node-1", 1_000);
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "debug.ping",
+        timeoutMs: 0,
+      });
+      const disconnected = invoke.catch((error: unknown) => error);
+      const request = JSON.parse(previousFrames[0] ?? "{}") as {
+        payload?: { id?: string };
+      };
+      expect(request.payload?.id).toEqual(expect.any(String));
+
+      frames = [];
+      socket = makeTrackedSocket(frames);
+      const replacement = registerNodeSession(
+        registry,
+        makeClient(`conn-${attempt}`, "node-1", frames, { socket }),
+        {},
+      );
+      (previousSocket as unknown as EventEmitter).emit("pong");
+
+      await expect(connectivity).resolves.toEqual({
+        ok: false,
+        error: {
+          code: "NOT_CONNECTED",
+          message: "node connection changed during connectivity probe",
+        },
+      });
+      await expect(disconnected).resolves.toEqual(new Error("node disconnected (debug.ping)"));
+      expect(
+        registry.handleInvokeResult({
+          id: request.payload?.id ?? "",
+          nodeId: "node-1",
+          connId: `conn-${attempt - 1}`,
+          ok: true,
+        }),
+      ).toBe(false);
+      expect(registry.get("node-1")).toBe(replacement);
+    }
+  });
+
   it("reports stale node websocket connectivity before invoke timeout", async () => {
     const registry = createTestNodeRegistry();
     registerNodeSession(
@@ -1388,6 +1521,79 @@ describe("gateway/node-registry", () => {
         chunk: "late",
       }),
     ).toBe(false);
+  });
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards cancellation of first-party non-streaming %s calls",
+    async (command) => {
+      const registry = createNodeRegistry();
+      const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+      const controller = new AbortController();
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command,
+        timeoutMs: 1_000,
+        signal: controller.signal,
+      });
+      const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+      controller.abort();
+
+      await expect(invoke).resolves.toMatchObject({
+        ok: false,
+        error: { code: "ABORTED" },
+      });
+      expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+        event: "node.invoke.cancel",
+        payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+      });
+    },
+  );
+
+  it.each(["mcp.tools.call.v1", "system.run"])(
+    "forwards timeouts of first-party non-streaming %s calls",
+    async (command) => {
+      vi.useFakeTimers();
+      try {
+        const registry = createNodeRegistry();
+        const frames = registerNode(registry, { clientId: GATEWAY_CLIENT_IDS.NODE_HOST });
+        const invoke = registry.invoke({ nodeId: "node-1", command, timeoutMs: 100 });
+        const request = JSON.parse(frames[0] ?? "{}") as { payload?: { id?: string } };
+
+        await vi.advanceTimersByTimeAsync(100);
+
+        await expect(invoke).resolves.toMatchObject({
+          ok: false,
+          error: { code: "TIMEOUT" },
+        });
+        expect(JSON.parse(frames[1] ?? "{}")).toMatchObject({
+          event: "node.invoke.cancel",
+          payload: { invokeId: request.payload?.id, nodeId: "node-1" },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("preserves legacy non-streaming node cancellation behavior", async () => {
+    const registry = createNodeRegistry();
+    const frames = registerNode(registry);
+    const controller = new AbortController();
+    const invoke = registry.invoke({
+      nodeId: "node-1",
+      command: "system.run",
+      timeoutMs: 1_000,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(invoke).resolves.toMatchObject({
+      ok: false,
+      error: { code: "ABORTED" },
+    });
+    expect(frames).toHaveLength(1);
   });
 
   it("cancels the node when a streamed progress consumer fails", async () => {

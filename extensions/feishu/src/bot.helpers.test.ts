@@ -64,6 +64,13 @@ describe("buildFeishuAgentBody", () => {
 });
 
 describe("parseMessageContent media captions", () => {
+  it.each(["text", "image", "audio", "file", "video"])(
+    "keeps an empty %s message body empty",
+    (messageType) => {
+      expect(parseMessageContent("", messageType)).toBe("");
+    },
+  );
+
   it("keeps an audio-only body empty instead of leaking raw file_key JSON", () => {
     expect(
       parseMessageContent(JSON.stringify({ file_key: "file_audio", duration: 1200 }), "audio"),

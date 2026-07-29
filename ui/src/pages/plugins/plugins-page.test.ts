@@ -11,6 +11,8 @@ import {
   createContext,
   createGateway,
   createPlugin,
+  createPluginsRouteData,
+  createPluginsRouteLocation,
   createResult,
   createRuntimeConfigHarness,
   deferred,
@@ -19,6 +21,12 @@ import {
   type RuntimeConfigTestState,
 } from "./plugins-page.test-support.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
+
+function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
+  page
+    .querySelector(`#plugins-tab-${tab}`)
+    ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
+}
 
 describe("PluginsPage", () => {
   beforeEach(async () => {
@@ -31,21 +39,9 @@ describe("PluginsPage", () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
     const result = createResult();
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result,
-      error: null,
-    };
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
 
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     expect(page.result).toBe(result);
     expect(request).not.toHaveBeenCalled();
@@ -58,12 +54,7 @@ describe("PluginsPage", () => {
       throw new Error("catalog unavailable");
     });
     const harness = createGateway(client);
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-    );
+    const { page } = await mountPage(createContext(harness.gateway));
 
     await waitForFast(() =>
       expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
@@ -114,21 +105,9 @@ describe("PluginsPage", () => {
     const result = createResult(
       createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
     );
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result,
-      error: null,
-    };
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
 
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     await waitForFast(() => {
       expect(
@@ -180,17 +159,8 @@ describe("PluginsPage", () => {
     );
 
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result,
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, result),
     );
 
     await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
@@ -198,67 +168,6 @@ describe("PluginsPage", () => {
     expect(
       page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
     ).toContain("UI");
-  });
-
-  it("applies a ?tab=discover deep link from route data", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      result: createResult(),
-      error: null,
-      initialTab: "discover",
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
-
-    expect(page.activeTab).toBe("discover");
-    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
-    );
-    await tabGroup?.updateComplete;
-    expect(
-      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
-    ).toBe(true);
-  });
-
-  it("routes the skills and workshop hub tabs through navigation", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const context = createContext(
-      harness.gateway,
-      vi.fn(async () => undefined),
-    );
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: createResult(),
-      error: null,
-    };
-    const { page } = await mountPage(context, routeData);
-
-    page.querySelector<HTMLButtonElement>("#plugins-tab-skills")?.click();
-    expect(context.navigate).toHaveBeenCalledWith("skills");
-    page.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
-    expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
-    expect(page.activeTab).toBe("installed");
-
-    // Catalog tabs switch locally for instant feedback and keep the URL in
-    // sync with the ?tab=discover deep link.
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
-    expect(page.activeTab).toBe("discover");
-    expect(context.navigate).toHaveBeenCalledWith("plugins", { search: "?tab=discover" });
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>("#plugins-tab-installed")?.click();
-    expect(page.activeTab).toBe("installed");
-    expect(context.navigate).toHaveBeenCalledWith("plugins", undefined);
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
@@ -270,20 +179,8 @@ describe("PluginsPage", () => {
       throw new Error(`Unexpected method ${method}`);
     });
     const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: createResult(),
-      error: null,
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway);
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     harness.emit(client, false);
     harness.emit(client, true);
@@ -306,20 +203,11 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "w";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -352,17 +240,12 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
+      createContext(harness.gateway),
+      createPluginsRouteData(
         harness.gateway,
-        vi.fn(async () => undefined),
+        createResult(),
+        createPluginsRouteLocation("/settings/plugins/discover"),
       ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: "discover",
-        result: createResult(),
-        error: null,
-      },
     );
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "first";
@@ -418,13 +301,7 @@ describe("PluginsPage", () => {
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
@@ -447,17 +324,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
@@ -489,20 +357,11 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "calendar";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -539,17 +398,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
@@ -591,13 +441,7 @@ describe("PluginsPage", () => {
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
@@ -641,13 +485,10 @@ describe("PluginsPage", () => {
     const refreshConfig = vi.fn(async () => {
       await replacementClient.request("config.get", {});
     });
-    const { page } = await mountPage(createContext(harness.gateway, refreshConfig), {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: disabledResult,
-      error: null,
-    });
+    const { page } = await mountPage(
+      createContext(harness.gateway, refreshConfig),
+      createPluginsRouteData(harness.gateway, disabledResult),
+    );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
@@ -692,17 +533,12 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
     );
 
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
@@ -750,7 +586,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -822,7 +658,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -863,13 +699,13 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
@@ -903,7 +739,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },

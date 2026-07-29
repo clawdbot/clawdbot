@@ -9,6 +9,7 @@ import {
 } from "../../core-tool-factory-descriptors.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import {
+  attachToolAllowlistIntersection,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   expandToolGroups,
@@ -105,7 +106,17 @@ export function mergeForcedEmbeddedAttemptToolsAllow(
   }
   const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
   const missing = required.filter((name) => !normalized.has(normalizeToolName(name)));
-  return missing.length === 0 ? toolsAllow : [...toolsAllow, ...missing];
+  if (missing.length === 0) {
+    return toolsAllow;
+  }
+  const restrictions = readToolAllowlistIntersection(toolsAllow);
+  const merged = [...toolsAllow, ...missing];
+  return restrictions
+    ? attachToolAllowlistIntersection(
+        merged,
+        restrictions.map((restriction) => restriction.concat(missing)),
+      )
+    : merged;
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(

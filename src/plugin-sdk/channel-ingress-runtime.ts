@@ -72,6 +72,9 @@ export function fanInChannelIngressLifecycles(
   const abandonAll = async () => {
     await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onAbandoned()));
   };
+  const failAll = async (error: unknown) => {
+    await Promise.all(lifecycles.map(async (lifecycle) => await lifecycle.onFailed?.(error)));
+  };
 
   return {
     lifecycle: {
@@ -93,6 +96,10 @@ export function fanInChannelIngressLifecycles(
         for (const lifecycle of lifecycles) {
           lifecycle.onAdoptionFinalizing();
         }
+      },
+      onFailed: async (error) => {
+        handedOff = true;
+        await failAll(error);
       },
       onAbandoned: async () => {
         handedOff = true;

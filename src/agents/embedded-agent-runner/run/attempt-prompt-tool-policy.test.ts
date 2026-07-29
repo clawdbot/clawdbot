@@ -65,6 +65,26 @@ describe("applyPromptBuildToolsAllow", () => {
     expect(fixture.readNames()).toEqual([]);
   });
 
+  it("keeps host-required tools when a hook denies optional tools", () => {
+    const fixture = createSession(["message", "read"]);
+
+    const result = applyPromptBuildToolsAllow({
+      session: fixture.session,
+      toolsAllow: [],
+      forceToolNames: ["message"],
+      baseline: createBaseline(fixture.readNames()),
+      effectiveTools: [{ name: "message" }, { name: "read" }],
+      uncompactedEffectiveTools: [{ name: "message" }, { name: "read" }],
+      tools: [{ name: "message" }, { name: "read" }],
+      codeModeControlsEnabled: false,
+    });
+
+    expect(result.activeToolNames).toEqual(["message"]);
+    expect(result.effectiveTools).toEqual([{ name: "message" }]);
+    expect(result.uncompactedEffectiveTools).toEqual([{ name: "message" }]);
+    expect(result.tools).toEqual([{ name: "message" }]);
+  });
+
   it("keeps search controls only for catalog entries allowed by the hook", () => {
     const fixture = createSession(["tool_search", "message"]);
     const catalogRef: ToolSearchCatalogRef = {

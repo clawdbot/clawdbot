@@ -2,15 +2,135 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessionsHarness,
   createSessionState,
   deferred,
   mountSidebar,
+  TWO_AGENTS,
 } from "../app-sidebar.ts";
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar gateway session pagination", () => {
+  it.each(["archived", "all"] as const)(
+    "keeps a pending %s first page across a stable same-client Gateway notification",
+    async (statusFilter) => {
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const result = createSessionState("main", ["agent:main:current-archive"]).result;
+      if (!result) {
+        throw new Error("expected a scoped session result");
+      }
+      const pendingPage = deferred<typeof result>();
+      harness.list.mockImplementation(async () => await pendingPage.promise);
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+
+      const pendingRefresh = sidebar.sessionData.refreshSidebarSessions("main");
+      const generation = sidebar.sessionData.sessionScopeGeneration;
+
+      gateway.publish({ offlineStable: true });
+      await sidebar.updateComplete;
+
+      expect(sidebar.sessionData.sessionScopeGeneration).toBe(generation);
+      expect(harness.list).toHaveBeenCalledTimes(1);
+
+      pendingPage.resolve(result);
+      await pendingRefresh;
+      await sidebar.updateComplete;
+
+      expect(sidebar.sessionData.sessionsAgentId).toBe("main");
+      expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:current-archive",
+      ]);
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "retires a pending %s first page when the selected agent changes",
+    async (statusFilter) => {
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const mainResult = createSessionState("main", ["agent:main:stale-archive"]).result;
+      const researchResult = createSessionState("research", ["agent:research:current"]).result;
+      if (!mainResult || !researchResult) {
+        throw new Error("expected scoped session results");
+      }
+      const pendingMain = deferred<typeof mainResult>();
+      harness.list.mockImplementation(async (options) =>
+        options?.agentId === "research" ? researchResult : await pendingMain.promise,
+      );
+      const { sidebar, context } = await mountSidebar(
+        createGateway({} as GatewayBrowserClient),
+        harness.sessions,
+        "panel",
+        TWO_AGENTS,
+      );
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+
+      const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
+      context.agentSelection.state.selectedId = "research";
+      context.agentSelection.state.scopeId = "research";
+      sidebar.requestUpdate();
+      await sidebar.updateComplete;
+
+      expect(harness.list).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "research", archivedFilter: statusFilter }),
+      );
+
+      pendingMain.resolve(mainResult);
+      await staleRefresh;
+      await sidebar.updateComplete;
+
+      expect(sidebar.sessionData.sessionsAgentId).toBe("research");
+      expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+        "agent:research:current",
+      ]);
+    },
+  );
+
+  it.each(["archived", "all"] as const)(
+    "retires a pending %s first page across a same-client reconnect",
+    async (statusFilter) => {
+      const harness = createSessionsHarness("main", ["agent:main:canonical-active"]);
+      const staleResult = createSessionState("main", ["agent:main:before-reconnect"]).result;
+      const freshResult = createSessionState("main", ["agent:main:after-reconnect"]).result;
+      if (!staleResult || !freshResult) {
+        throw new Error("expected reconnect session results");
+      }
+      const pendingPage = deferred<typeof staleResult>();
+      harness.list
+        .mockImplementationOnce(async () => await pendingPage.promise)
+        .mockResolvedValue(freshResult);
+      const gateway = createGatewayHarness({} as GatewayBrowserClient);
+      const { sidebar } = await mountSidebar(gateway.gateway, harness.sessions);
+      (sidebar as unknown as { sessionsStatusFilter: "archived" | "all" }).sessionsStatusFilter =
+        statusFilter;
+      sidebar.sessionData.resetForStatusFilter(statusFilter);
+
+      const staleRefresh = sidebar.sessionData.refreshSidebarSessions("main");
+      gateway.publish({ phase: "reconnecting" });
+      await sidebar.updateComplete;
+      gateway.publish({ phase: "connected" });
+      await sidebar.updateComplete;
+
+      expect(harness.list).toHaveBeenCalledTimes(2);
+
+      pendingPage.resolve(staleResult);
+      await staleRefresh;
+      await sidebar.updateComplete;
+
+      expect(sidebar.sessionData.sessionsAgentId).toBe("main");
+      expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
+        "agent:main:after-reconnect",
+      ]);
+    },
+  );
+
   it.each(["archived", "all"] as const)(
     "does not append a stale %s page during a full session refresh",
     async (statusFilter) => {

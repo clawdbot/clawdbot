@@ -70,20 +70,26 @@ type CodeModeToolContext = ToolSearchToolContext;
 
 const MAX_CODE_MODE_CATALOG_INDEX_CHARS = 8_000;
 
+const CODE_MODE_CATALOG_INDEX_HEADING = [
+  "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
+  "Each line is `id input -> output`; `-> ?` means unknown.",
+  "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
+  "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+].join("\n");
+
+function codeModeCatalogIndexFooter(included: number, total: number): string {
+  const omitted = total - included;
+  return omitted > 0
+    ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
+    : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
+}
+
 function renderCodeModeCatalogIndex(lines: readonly string[], total: number): string {
-  const omitted = total - lines.length;
-  const footer =
-    omitted > 0
-      ? `${omitted} additional OpenClaw/plugin tools omitted from this prompt index. Use ALL_TOOLS or tools.search inside exec to find them.`
-      : "Use these exact ids with tools.callValue; use ALL_TOOLS or tools.search inside exec when lookup is ambiguous.";
   return [
-    "OpenClaw/plugin tool quick index (exact ids; descriptions are intentionally deferred):",
-    "Each line is `id input -> output`; `-> ?` means unknown.",
-    "OUTPUT DECLARED RULE: use declared fields for dependent calls in the first exec.",
-    "OUTPUT UNKNOWN RULE: return the raw tool value unchanged; inspect or map it only in a later exec.",
+    CODE_MODE_CATALOG_INDEX_HEADING,
     ...lines,
     "",
-    footer,
+    codeModeCatalogIndexFooter(lines.length, total),
   ].join("\n");
 }
 
@@ -115,12 +121,17 @@ function formatCodeModeCatalogIndex(catalog: readonly ToolSearchCatalogEntry[]):
   // entries stay discoverable through ALL_TOOLS, and the stable input order
   // keeps prompt bytes deterministic for provider caches.
   const included: string[] = [];
+  let includedLineLength = 0;
   for (const line of lines) {
-    if (
-      renderCodeModeCatalogIndex([...included, line], lines.length).length <=
-      MAX_CODE_MODE_CATALOG_INDEX_CHARS
-    ) {
+    const candidateLineLength = includedLineLength + 1 + line.length;
+    const candidateLength =
+      CODE_MODE_CATALOG_INDEX_HEADING.length +
+      candidateLineLength +
+      2 +
+      codeModeCatalogIndexFooter(included.length + 1, lines.length).length;
+    if (candidateLength <= MAX_CODE_MODE_CATALOG_INDEX_CHARS) {
       included.push(line);
+      includedLineLength = candidateLineLength;
     }
   }
   return renderCodeModeCatalogIndex(included, lines.length);
@@ -158,7 +169,7 @@ function createCodeModeExecDescription(
     nodesGuidance +
     skillsGuidance +
     ' The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.' +
-    " Both `code` and `command` contain JavaScript or TypeScript, never a shell command. " +
+    " The `code` field contains JavaScript or TypeScript, never a shell command. " +
     "For shell or file operations, call the exact catalog tool from guest JavaScript; do not retry failed shell source." +
     (namespacePrompt ? `\n\n${namespacePrompt}` : "") +
     (catalogIndex ? `\n\n${catalogIndex}` : "")
@@ -171,18 +182,12 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     label: "exec",
     description: createCodeModeExecDescription(ctx),
     parameters: Type.Object({
-      code: Type.Optional(
-        Type.String({
-          description:
-            "JavaScript or TypeScript for one complete workflow. Select exact ids from `ALL_TOOLS` or `tools.search`; never invent ids. `tools.search` takes a query string, not an object. Keep dependent calls in order; never put dependent calls in Promise.all. Return the final value. Node built-in modules are not available.",
-        }),
-      ),
-      command: Type.Optional(
-        Type.String({
-          description:
-            "Alias for JavaScript or TypeScript code, provided for exec-compatible hook policies. Not a shell command.",
-        }),
-      ),
+      // `command` stays runtime-only for hook compatibility. Requiring the sole
+      // model-facing field prevents schema-valid empty calls from constrained models.
+      code: Type.String({
+        description:
+          'Required JS/TS; no Python, shell, `require`, `import`. Use explicit `return value`; a trailing expression is discarded and yields `null`. Use `callValue`, not `call`, for data; `call` wraps it under `.result`. Core text reads: `{kind:"text",content:string}`; use `.content`. Unknown format: return it first, then parse it in a later exec; never guess separators. Example: `const file=await tools.callValue("openclaw:core:read", { path: "notes.txt" }); if(file.kind!=="text") return file; return file.content;`. Use exact ids from `ALL_TOOLS` or `tools.search(query)`; never invent ids or parallelize dependent calls.',
+      }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
           'Source language. Must be "javascript" or "typescript". Defaults to javascript.',

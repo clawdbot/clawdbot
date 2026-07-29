@@ -1,3 +1,4 @@
+import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 
 const liveTerminalRunIds = new WeakMap<object, string>();
@@ -31,23 +32,6 @@ export function clearAuthoritativeTerminal(host: object): void {
   authoritativeTerminals.delete(host);
 }
 
-function readTerminalAssistantMessageIdentity(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const record = payload as Record<string, unknown>;
-  const message = record.message;
-  if (
-    !message ||
-    typeof message !== "object" ||
-    Array.isArray(message) ||
-    (message as Record<string, unknown>).role !== "assistant"
-  ) {
-    return null;
-  }
-  return typeof record.messageId === "string" && record.messageId.trim() ? record.messageId : null;
-}
-
 export function rememberAuthoritativeTerminal(options: {
   event: {
     clientRunId?: string | null;
@@ -60,7 +44,14 @@ export function rememberAuthoritativeTerminal(options: {
   payload: unknown;
   runIdBeforeApply: string | null;
 }): void {
-  const messageId = readTerminalAssistantMessageIdentity(options.payload);
+  const payload =
+    options.payload && typeof options.payload === "object" && !Array.isArray(options.payload)
+      ? (options.payload as Record<string, unknown>)
+      : null;
+  const identity = readSessionMessageIdentity(payload?.message, {
+    messageId: payload?.messageId,
+  });
+  const messageId = identity?.role === "assistant" && !identity.isImported ? identity.id : null;
   if (
     !options.runIdBeforeApply ||
     !options.matchesChat ||
@@ -77,43 +68,30 @@ export function rememberAuthoritativeTerminal(options: {
   });
 }
 
-function messageOpenClawId(message: unknown): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  const meta = (message as Record<string, unknown>)["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return null;
-  }
-  const value = (meta as Record<string, unknown>)["id"];
-  return typeof value === "string" && value.trim() ? value : null;
-}
-
 export function reconcileAuthoritativeTerminalHistory<T>(options: {
-  currentMessages: T[];
   host: object;
   previousMessages: T[];
   sessionKey: string;
   visibleMessages: T[];
-}): { currentMessages: T[]; previousMessages: T[] } {
+}): T[] {
   const terminal = authoritativeTerminals.get(options.host);
   const historyContainsTerminal = Boolean(
     terminal &&
     areUiSessionKeysEquivalent(terminal.sessionKey, options.sessionKey) &&
-    options.visibleMessages.some((message) => messageOpenClawId(message) === terminal.messageId),
+    options.visibleMessages.some((message) => {
+      const identity = readSessionMessageIdentity(message);
+      return (
+        identity?.role === "assistant" && !identity.isImported && identity.id === terminal.messageId
+      );
+    }),
   );
   if (!terminal || !historyContainsTerminal) {
-    return options;
+    return options.previousMessages;
   }
   authoritativeTerminals.set(options.host, { ...terminal, historyApplied: true });
-  return {
-    currentMessages: options.currentMessages.filter(
-      (message) => !isLiveTerminalForRun(message, terminal.runId),
-    ),
-    previousMessages: options.previousMessages.filter(
-      (message) => !isLiveTerminalForRun(message, terminal.runId),
-    ),
-  };
+  return options.previousMessages.filter(
+    (message) => !isLiveTerminalForRun(message, terminal.runId),
+  );
 }
 
 export function authoritativeHistoryAppliedForRun(host: object, runId: string): boolean {

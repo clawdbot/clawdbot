@@ -1,9 +1,17 @@
 // Slack tests cover message handler plugin behavior.
+import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type InboundDebounceFlush = { admission: Promise<void>; completion: Promise<void> };
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
-const onFlushCallbacks: Array<(entries: Array<Record<string, unknown>>) => Promise<void>> = [];
+const onFlushCallbacks: Array<
+  (
+    entries: Array<Record<string, unknown>>,
+    createFlush: typeof createTestInboundDebounceFlush,
+  ) => InboundDebounceFlush
+> = [];
 const prepareSlackMessageMock = vi.fn(async () => ({ ctxPayload: {} }));
 const dispatchPreparedSlackMessageMock = vi.fn(async (_prepared: unknown) => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
@@ -18,7 +26,10 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   return {
     ...actual,
     createChannelInboundDebouncer: (params: {
-      onFlush: (entries: Array<Record<string, unknown>>) => Promise<void>;
+      onFlush: (
+        entries: Array<Record<string, unknown>>,
+        createFlush: typeof createTestInboundDebounceFlush,
+      ) => InboundDebounceFlush;
     }) => {
       onFlushCallbacks.push(params.onFlush);
       return {
@@ -26,6 +37,8 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
         debouncer: {
           enqueue: (entry: unknown) => enqueueMock(entry),
           flushKey: (key: string) => flushKeyMock(key),
+          cancelKey: () => false,
+          drain: async () => {},
         },
       };
     },
@@ -38,6 +51,14 @@ vi.mock("./thread-resolution.js", () => ({
     resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
   }),
 }));
+
+function runOnFlush(entries: Array<Record<string, unknown>>): Promise<void> {
+  const flush = onFlushCallbacks[0]?.(entries, createTestInboundDebounceFlush);
+  if (!flush) {
+    throw new Error("Slack inbound debounce callback missing");
+  }
+  return flush.completion;
+}
 
 vi.mock("./message-handler/pipeline.runtime.js", () => ({
   prepareSlackMessage: prepareSlackMessageMock,
@@ -307,7 +328,7 @@ describe("createSlackMessageHandler", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    await onFlushCallbacks[0]?.([entry]);
+    await runOnFlush([entry]);
     await expect(handled).resolves.toBeUndefined();
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
   });
@@ -334,7 +355,7 @@ describe("createSlackMessageHandler", () => {
 
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    await onFlushCallbacks[0]?.([entry]);
+    await runOnFlush([entry]);
     await handled;
 
     // The flush wraps the lifecycle to settle dispatch-dedupe claims, so assert
@@ -369,7 +390,7 @@ describe("createSlackMessageHandler", () => {
     );
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
     const first = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
-    await onFlushCallbacks[0]?.([first]);
+    await runOnFlush([first]);
     await asMessage;
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
 
@@ -385,9 +406,98 @@ describe("createSlackMessageHandler", () => {
     );
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
     const second = enqueueMock.mock.calls[1]?.[0] as Record<string, unknown>;
-    await onFlushCallbacks[0]?.([second]);
+    await runOnFlush([second]);
     await asMention;
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["message", "app_mention"],
+    ["app_mention", "message"],
+  ] as const)(
+    "deduplicates message/app_mention twins in one flush (%s before %s)",
+    async (firstSource, secondSource) => {
+      const { handler } = createHandlerWithTracker();
+      const twinTs = firstSource === "message" ? "1709000000.001777" : "1709000000.001778";
+      const message = {
+        type: "message" as const,
+        channel: "C111",
+        user: "U111",
+        ts: twinTs,
+        text: "<@UBOT> hello",
+      };
+      const handleTwin = (source: "message" | "app_mention") =>
+        handler(message as never, {
+          source,
+          awaitDispatch: true,
+          ...(source === "app_mention" ? { wasMentioned: true } : {}),
+        });
+
+      const first = handleTwin(firstSource);
+      const second = handleTwin(secondSource);
+      await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+
+      const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<
+        Record<string, unknown>
+      >;
+      await runOnFlush(entries);
+
+      await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
+      expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          message: expect.objectContaining({ text: message.text, ts: twinTs }),
+          opts: expect.objectContaining({ source: "app_mention", wasMentioned: true }),
+        }),
+      );
+      expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+      const prepared = dispatchPreparedSlackMessageMock.mock.calls[0]?.[0] as {
+        ctxPayload: { MessageSids?: string[] };
+      };
+      expect(prepared.ctxPayload.MessageSids).toBeUndefined();
+    },
+  );
+
+  it("preserves distinct messages and identities in the same debounced flush", async () => {
+    const { handler } = createHandlerWithTracker();
+    const messages = [
+      { ts: "1709000000.001779", text: "first message" },
+      { ts: "1709000000.001780", text: "second message" },
+    ] as const;
+    const handled = messages.map((message) =>
+      handler(
+        {
+          type: "message",
+          channel: "D111",
+          user: "U111",
+          ...message,
+        } as never,
+        { source: "message", awaitDispatch: true },
+      ),
+    );
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(2));
+
+    const entries = enqueueMock.mock.calls.map((call) => call[0]) as Array<Record<string, unknown>>;
+    await runOnFlush(entries);
+
+    await expect(Promise.all(handled)).resolves.toEqual([undefined, undefined]);
+    expect(prepareSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: expect.objectContaining({ text: "first message\nsecond message" }),
+      }),
+    );
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+    const prepared = dispatchPreparedSlackMessageMock.mock.calls[0]?.[0] as {
+      ctxPayload: {
+        MessageSids?: string[];
+        MessageSidFirst?: string;
+        MessageSidLast?: string;
+      };
+    };
+    expect(prepared.ctxPayload).toMatchObject({
+      MessageSids: [messages[0].ts, messages[1].ts],
+      MessageSidFirst: messages[0].ts,
+      MessageSidLast: messages[1].ts,
+    });
   });
 
   it("propagates debounced dispatch failures to relay delivery", async () => {
@@ -407,7 +517,7 @@ describe("createSlackMessageHandler", () => {
     await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
     const handledFailure = expect(handled).rejects.toThrow("dispatch failed");
-    const flushFailure = expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow("dispatch failed");
+    const flushFailure = expect(runOnFlush([entry])).rejects.toThrow("dispatch failed");
     await Promise.all([handledFailure, flushFailure]);
   });
 
@@ -434,7 +544,7 @@ describe("createSlackMessageHandler", () => {
     const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
     vi.useFakeTimers();
     try {
-      await expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow("Slack dispatch failed");
+      await expect(runOnFlush([entry])).rejects.toThrow("Slack dispatch failed");
       await vi.advanceTimersByTimeAsync(1000);
 
       expect(enqueueMock).toHaveBeenCalledTimes(2);
@@ -474,9 +584,7 @@ describe("createSlackMessageHandler", () => {
     vi.useFakeTimers();
     try {
       const handledFailure = expect(handled).rejects.toThrow("Slack dispatch failed");
-      const flushFailure = expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow(
-        "Slack dispatch failed",
-      );
+      const flushFailure = expect(runOnFlush([entry])).rejects.toThrow("Slack dispatch failed");
       await Promise.all([handledFailure, flushFailure]);
       await vi.advanceTimersByTimeAsync(1000);
 

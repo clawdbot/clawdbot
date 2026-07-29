@@ -127,12 +127,12 @@ describe("phase hooks merger", () => {
       hooks: [
         {
           pluginId: "high",
-          result: { toolsAllow: ["group:fs", "web_*"] },
+          result: { toolsAllow: ["group:fs", "web_*"] as string[] },
           priority: 10,
         },
         {
           pluginId: "low",
-          result: { toolsAllow: ["read", "web_search"] },
+          result: { toolsAllow: ["read", "web_search"] as string[] },
           priority: 1,
         },
       ],
@@ -151,12 +151,12 @@ describe("phase hooks merger", () => {
       hooks: [
         {
           pluginId: "high",
-          result: { toolsAllow: [] },
+          result: { toolsAllow: [] as string[] },
           priority: 10,
         },
         {
           pluginId: "low",
-          result: { toolsAllow: ["read"] },
+          result: { toolsAllow: ["read"] as string[] },
           priority: 1,
         },
       ],
@@ -207,6 +207,20 @@ describe("phase hooks merger", () => {
     },
   ] as const)("$name", async ({ hookName, hooks, expected }) => {
     await expectPhaseHookMerge({ hookName, hooks, expected });
+  });
+
+  it("accepts a frozen toolsAllow returned by a plugin", async () => {
+    const result = await runPhaseHook({
+      hookName: "before_prompt_build",
+      hooks: [
+        {
+          pluginId: "frozen",
+          result: { toolsAllow: Object.freeze(["read"]) as unknown as string[] },
+        },
+      ],
+    });
+
+    expect(result).toMatchObject({ toolsAllow: ["read"] });
   });
 
   it("preserves overlapping glob restrictions for concrete-surface evaluation", async () => {

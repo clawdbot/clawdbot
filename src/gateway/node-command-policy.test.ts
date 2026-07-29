@@ -445,10 +445,11 @@ describe("gateway/node-command-policy", () => {
       connId: "conn-1",
       platform: "linux",
       deviceFamily: "Linux",
-      commands: ["browser.proxy", "system.run"],
+      commands: ["browser.proxy", "browser.proxy.upload.v1", "system.run"],
     });
 
     expect(allowlist.has("browser.proxy")).toBe(true);
+    expect(allowlist.has("browser.proxy.upload.v1")).toBe(true);
     expect(allowlist.has("system.run")).toBe(true);
   });
 

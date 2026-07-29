@@ -243,6 +243,10 @@ export async function runEmbeddedAttemptSettledPhase(
         tools,
         codeModeControlsEnabled: toolBase.codeModeControlsEnabledForRun,
         toolSearchCatalogRef: toolBase.toolSearchCatalogRef,
+        forceToolNames: [
+          ...(toolBase.forceDirectMessageTool ? ["message"] : []),
+          ...(attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : []),
+        ],
       },
       preflight: {
         ...(input.activeContextEngine ? { activeContextEngine: input.activeContextEngine } : {}),

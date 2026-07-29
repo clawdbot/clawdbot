@@ -53,6 +53,15 @@ const resolveMatrixMentionsForBodyMock = vi.hoisted(() =>
     };
   }),
 );
+const getGlobalHookRunnerMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/plugin-runtime")>();
+  return {
+    ...actual,
+    getGlobalHookRunner: getGlobalHookRunnerMock,
+  };
+});
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
@@ -116,6 +125,7 @@ async function writeMatrixSessionMeta(
 beforeEach(() => {
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   installMatrixMonitorTestRuntime();
+  getGlobalHookRunnerMock.mockReset().mockReturnValue(null);
   prepareMatrixSingleTextMock.mockReset().mockImplementation((text: string) => {
     const trimmedText = text.trim();
     return {
@@ -2969,6 +2979,28 @@ describe("matrix monitor handler draft streaming", () => {
     return { dispatch, redactEventMock };
   }
 
+  it("shares first-reply state between tool and final Matrix deliveries", async () => {
+    const { dispatch } = createStreamingHarness({ replyToMode: "first", streaming: "off" });
+    const { deliver, finish } = await dispatch();
+
+    await deliver({ text: "tool result", replyToId: "$msg1" }, { kind: "tool" });
+    await deliver({ text: "final result" }, { kind: "final" });
+
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(2);
+    const toolDelivery = requireRecord(
+      callArg(deliverMatrixRepliesMock, 0, 0, "Matrix tool reply"),
+      "Matrix tool reply",
+    );
+    const finalDelivery = requireRecord(
+      callArg(deliverMatrixRepliesMock, 1, 0, "Matrix final reply"),
+      "Matrix final reply",
+    );
+    expect(toolDelivery.hasRepliedRef).toEqual({ value: false });
+    expect(finalDelivery.hasRepliedRef).toBe(toolDelivery.hasRepliedRef);
+
+    await finish();
+  });
+
   it("finalizes a single quiet-preview block in place when block streaming is enabled", async () => {
     const { dispatch, redactEventMock } = createStreamingHarness({ blockStreamingEnabled: true });
     const { deliver, opts, finish } = await dispatch();
@@ -2985,6 +3017,53 @@ describe("matrix monitor handler draft streaming", () => {
     expectFinalizedPreviewEdit("$draft1", "Single block");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("preserves provider previews for observer-only hooks", async () => {
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => hookName === "message_sent"),
+    });
+    const { dispatch } = createStreamingHarness({ streaming: "partial" });
+    const { deliver, opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Visible preview" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    });
+    await deliver({ text: "Visible preview" }, { kind: "final" });
+
+    expectEditLiveFlag("$draft1", "Visible preview", false);
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it.each([
+    { label: "reply_payload_sending", hooks: ["reply_payload_sending"] },
+    { label: "message_sending", hooks: ["message_sending"] },
+    {
+      label: "both modifying hooks",
+      hooks: ["reply_payload_sending", "message_sending"],
+    },
+  ])("suppresses provider previews when $label is registered", async ({ hooks }) => {
+    const registered = new Set(hooks);
+    getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((hookName: string) => registered.has(hookName)),
+    });
+    const { dispatch } = createStreamingHarness({
+      previewToolProgressEnabled: true,
+      streaming: "progress",
+    });
+    const { deliver, opts, finish } = await dispatch();
+
+    expect(opts.onPartialReply).toBeUndefined();
+    expect(opts.onToolStart).toBeUndefined();
+    expect(opts.suppressDefaultToolProgressMessages).toBeUndefined();
+    await deliver({ text: "Durable final" }, { kind: "final" });
+
+    expect(sendSingleTextMessageMatrixMock).not.toHaveBeenCalled();
+    expect(editMessageMatrixMock).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     await finish();
   });
 

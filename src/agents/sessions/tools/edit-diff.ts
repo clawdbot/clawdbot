@@ -7,27 +7,8 @@ import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { createPatch, FILE_HEADERS_ONLY, structuredPatch } from "diff";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
+import { normalizeToLF } from "../../line-endings.js";
 import { resolveToCwd } from "./path-utils.js";
-
-export function detectLineEnding(content: string): "\r\n" | "\n" {
-  const crlfIdx = content.indexOf("\r\n");
-  const lfIdx = content.indexOf("\n");
-  if (lfIdx === -1) {
-    return "\n";
-  }
-  if (crlfIdx === -1) {
-    return "\n";
-  }
-  return crlfIdx < lfIdx ? "\r\n" : "\n";
-}
-
-export function normalizeToLF(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-}
-
-export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string {
-  return ending === "\r\n" ? text.replace(/\n/g, "\r\n") : text;
-}
 
 /**
  * Normalize text for fuzzy matching. Applies progressive transformations:
@@ -264,6 +245,10 @@ function countOccurrences(content: string, oldText: string): number {
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
+function countExactOccurrences(content: string, oldText: string): number {
+  return content.split(oldText).length - 1;
+}
+
 const EDIT_CANDIDATE_LIMIT = 3;
 const EDIT_CANDIDATE_MAX_LINES = 1000;
 const EDIT_CANDIDATE_MAX_SCAN_CHARS = 128 * 1024;
@@ -490,7 +475,12 @@ export function applyEditsToNormalizedContent(
       throw getNotFoundError(path, i, normalizedEdits.length, normalizedContent, edit.oldText);
     }
 
-    const occurrences = countOccurrences(replacementBaseContent, edit.oldText);
+    // Count in the same space the match was found in. Fuzzy counting collapses
+    // distinctions the exact match relied on, which would reject a genuinely
+    // unique edit as ambiguous.
+    const occurrences = matchResult.usedFuzzyMatch
+      ? countOccurrences(replacementBaseContent, edit.oldText)
+      : countExactOccurrences(replacementBaseContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }

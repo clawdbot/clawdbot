@@ -71,6 +71,12 @@ ownership. An explicit profile coverage ID selects every eligible primary owner
 for that ID, deduplicated by scenario. Scenario file and taxonomy order do not
 affect membership or execution order.
 
+`scenario.execution.channels` is an OR eligibility list: a channel-specific
+runner may execute the scenario on any one listed channel. Profile-backed
+execution expands that same list across every channel supported by the selected
+driver, and the profile run passes only when every expanded channel execution
+passes. This applies uniformly to every taxonomy profile.
+
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
 
@@ -204,12 +210,7 @@ declares Matrix eligibility through `execution.channel` or
 `--fail-fast` for a shorter feedback loop or repeat `--scenario <id>` for an
 explicit subset, including portable scenarios with no channel restriction.
 
-Declarative scenario metadata is the only default-membership source. The
-Matrix runner has no named profiles or scenario-id allowlists. The run chooses
-the channel driver; deterministic `--shard <index>/<total>` partitioning only
-distributes the selected catalog and does not define semantic membership or
-execution priority.
-Their live implementations live under
+Matrix live implementations live under
 `extensions/qa-lab/src/live-transports/matrix/scenarios/`.
 
 The adapter provisions a disposable Tuwunel homeserver in Docker (default
@@ -224,7 +225,6 @@ Common options:
 | Flag                     | Default           | Purpose                                                                              |
 | ------------------------ | ----------------- | ------------------------------------------------------------------------------------ |
 | `--scenario <id>`        | -                 | Select one scenario; repeatable.                                                     |
-| `--shard <index/total>`  | -                 | Run one deterministic, balanced partition of the selected Matrix catalog.            |
 | `--fail-fast`            | off               | Stop after the first failed check or scenario.                                       |
 | `--allow-failures`       | off               | Write artifacts without returning a failing exit code for scenario failures.         |
 | `--provider-mode <mode>` | `live-frontier`   | Use `mock-openai` for deterministic dispatch or `live-frontier` for a live provider. |
@@ -405,7 +405,8 @@ when the maintainer secret is present.
 
 The root `taxonomy.yaml` defines semantic coverage IDs. Scenario YAML files
 under `qa/scenarios/` map each scenario to those IDs and own execution
-metadata; `channel` is the only channel requirement. Taxonomy profiles select
+metadata; `execution.channel` or `execution.channels` declares channel
+requirements. Taxonomy profiles select
 coverage IDs or whole categories, and the catalog resolves their primary
 scenario owners. Transport runners apply channel and provider eligibility to
 that result instead of keeping scenario-ID allowlists. The channel driver is
@@ -660,6 +661,8 @@ Slack YAML module scenarios (`qa/scenarios/channels/slack-*.yaml`):
 
 - `slack-canary`
 - `slack-mention-gating`
+- `slack-mpim-app-mention-dedupe` - opens a real C-prefixed group DM, sends one
+  mention, verifies exactly one SUT reply in that MPIM, then closes it.
 - `slack-allowlist-block`
 - `slack-channel-disabled-warning` - opt-in real-Slack probe that confirms a
   configured disabled channel emits a structured warning without replying.

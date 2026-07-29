@@ -1,3 +1,4 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -60,6 +61,23 @@ export function createPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
 
 export function createResult(plugin = createPlugin()): PluginListResult {
   return { plugins: [plugin], diagnostics: [], mutationAllowed: true };
+}
+
+export function createPluginsRouteLocation(url = "/settings/plugins"): RouteLocation {
+  const parsed = new URL(url, "https://control.test");
+  return {
+    pathname: parsed.pathname,
+    search: parsed.search,
+    hash: parsed.hash,
+  };
+}
+
+export function createPluginsRouteData(
+  gateway: ApplicationGateway,
+  result: PluginListResult | null = createResult(),
+  location = createPluginsRouteLocation(),
+): PluginsRouteData {
+  return { gateway, gatewaySnapshot: gateway.snapshot, location, result, error: null };
 }
 
 export function createClient(handler: RequestHandler) {
@@ -176,7 +194,7 @@ export function createRuntimeConfigHarness(
 
 export function createContext(
   gateway: ApplicationGateway,
-  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
+  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"] = vi.fn(async () => undefined),
   runtimeConfigState: RuntimeConfigTestState = {
     configFormDirty: false,
     lastError: null,
@@ -188,6 +206,7 @@ export function createContext(
     basePath: "",
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
+    replace: vi.fn(),
   } as unknown as ApplicationContext;
 }
 

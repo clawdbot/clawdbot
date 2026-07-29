@@ -12,7 +12,10 @@ import {
   type ToolSearchCatalogRef,
 } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-import { applyEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
+import {
+  applyEmbeddedAttemptToolsAllow,
+  mergeForcedEmbeddedAttemptToolsAllow,
+} from "./attempt-tool-construction-plan.js";
 
 type NamedTool = { name: string };
 type PromptToolSession = Pick<AgentSession, "getActiveToolNames" | "setActiveToolsByName">;
@@ -63,15 +66,19 @@ export function applyPromptBuildToolsAllow<
   tools: TTool[];
   catalogRef?: ToolSearchCatalogRef;
   codeModeControlsEnabled: boolean;
+  forceToolNames?: readonly string[];
 }): {
   activeToolNames: string[];
   effectiveTools: TEffectiveTool[];
   uncompactedEffectiveTools: TUncompactedTool[];
   tools: TTool[];
 } {
+  const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
+    forceToolNames: params.forceToolNames,
+  });
   const allowedCatalogEntries = applyToolsAllow<ToolSearchCatalogEntry>(
     params.baseline.catalogEntries,
-    params.toolsAllow,
+    toolsAllow,
     (entry) => getPluginToolMeta(entry.tool as AnyAgentTool),
   );
   const catalogToolCount = restrictToolSearchCatalog({
@@ -79,16 +86,13 @@ export function applyPromptBuildToolsAllow<
     allowedToolNames: new Set(allowedCatalogEntries.map((entry) => entry.name)),
     baselineEntries: params.baseline.catalogEntries,
   });
-  const allowedEffectiveTools = applyToolsAllow(params.effectiveTools, params.toolsAllow);
-  const allowedUncompactedTools = applyToolsAllow(
-    params.uncompactedEffectiveTools,
-    params.toolsAllow,
-  );
-  const allowedTools = applyToolsAllow(params.tools, params.toolsAllow);
+  const allowedEffectiveTools = applyToolsAllow(params.effectiveTools, toolsAllow);
+  const allowedUncompactedTools = applyToolsAllow(params.uncompactedEffectiveTools, toolsAllow);
+  const allowedTools = applyToolsAllow(params.tools, toolsAllow);
   const allowedActiveNames = new Set(
     applyToolsAllow(
       params.baseline.activeToolNames.map((name) => ({ name })),
-      params.toolsAllow,
+      toolsAllow,
     ).map((tool) => normalizeToolName(tool.name)),
   );
   for (const tool of [...allowedEffectiveTools, ...allowedUncompactedTools, ...allowedTools]) {

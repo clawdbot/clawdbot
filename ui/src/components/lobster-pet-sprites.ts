@@ -75,8 +75,8 @@ export const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, Tem
   `,
 };
 
-// Light speckle trait, distinct from calico's bold mottling; skipped on
-// palettes whose identity is already pattern-driven (see renderLobsterSvg).
+// Light speckle trait; skipped on palettes whose identity is already
+// pattern-driven (see renderLobsterSvg).
 export const FRECKLE_SPOTS = svg`
   <g class="lob-freckles" fill="#ffffff" opacity="0.3">
     <circle cx="42" cy="45" r="1.6" />
@@ -240,7 +240,6 @@ export function PIXEL_LOBSTER(openEyeStyle: string, closedEyeStyle: string): Tem
 // Palettes whose identity is already pattern-driven skip the freckle trait;
 // stacking speckle sets reads as noise, not a variant.
 export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
-  "calico",
   "split",
   "retro",
   "lumen",
@@ -263,6 +262,7 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "sourdough",
   "zombie",
   "plush",
+  "balloon",
   "disco",
   "cryptid",
   "flatpack",
@@ -272,6 +272,8 @@ export const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
   "notexture",
   "loading",
   "eclipse",
+  "ascii",
+  "portal",
   "invisible",
   "goldenretro",
 ]);
@@ -354,20 +356,7 @@ const DISCO_FACETS = svg`
   </g>
 `;
 
-// Calico mottling: dark blotches scattered clear of the eye line.
-const CALICO_SPOTS = svg`
-  <g class="lob-spots" fill="#2a1f16" opacity="0.8">
-    <ellipse cx="40" cy="50" rx="6" ry="4" transform="rotate(-15 40 50)" />
-    <ellipse cx="72" cy="62" rx="7" ry="4.5" transform="rotate(18 72 62)" />
-    <ellipse cx="55" cy="76" rx="5" ry="3.5" transform="rotate(-8 55 76)" />
-    <ellipse cx="84" cy="42" rx="4" ry="3" transform="rotate(25 84 42)" />
-    <ellipse cx="47" cy="18" rx="4.5" ry="3" transform="rotate(-20 47 18)" />
-    <ellipse cx="30" cy="64" rx="4" ry="3" transform="rotate(12 30 64)" />
-  </g>
-`;
-
 export const PALETTE_OVERLAYS: Partial<Record<LobsterPetPaletteId, TemplateResult>> = {
-  calico: CALICO_SPOTS,
   lumen: LUMEN_SPOTS,
   magma: MAGMA_SEAMS,
   oilslick: OILSLICK_SHEEN,

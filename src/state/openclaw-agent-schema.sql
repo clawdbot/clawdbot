@@ -422,9 +422,15 @@ CREATE TABLE IF NOT EXISTS memory_index_chunks (
   model TEXT NOT NULL,
   text TEXT NOT NULL,
   embedding TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS memory_index_chunk_recall_metadata (
+  chunk_id TEXT PRIMARY KEY,
   importance INTEGER CHECK (importance IS NULL OR importance BETWEEN 1 AND 10),
-  triggers TEXT
+  triggers TEXT,
+  project_key TEXT,
+  FOREIGN KEY (chunk_id) REFERENCES memory_index_chunks(id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS memory_index_chunk_provenance (
@@ -579,22 +585,6 @@ CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_delete
 AFTER DELETE ON memory_index_chunks
 BEGIN
   UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunk_provenance_after_insert
-AFTER INSERT ON memory_index_chunks
-BEGIN
-  -- Workspace memory files are owner-controlled and default to 'agent' so they
-  -- stay eligible for dreaming promotion; session-transcript chunks default to
-  -- 'untrusted' until ingestion classifies each message by sender.
-  INSERT OR IGNORE INTO memory_index_chunk_provenance (
-    chunk_id, origin_class, session_kind, observed_at
-  ) VALUES (
-    NEW.id,
-    CASE WHEN NEW.source = 'memory' THEN 'agent' ELSE 'untrusted' END,
-    'unknown',
-    NEW.updated_at
-  );
 END;
 
 CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at

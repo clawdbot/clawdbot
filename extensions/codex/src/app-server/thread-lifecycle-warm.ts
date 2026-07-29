@@ -6,6 +6,7 @@ import {
 } from "./attempt-client-cleanup.js";
 import { consumeCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   mergeCodexThreadConfigs,
@@ -40,6 +41,7 @@ type CodexWarmThreadReuseParams = {
   dynamicToolsFingerprint: string;
   hostSystemAgentActive: boolean;
   lifecycleTiming: CodexThreadLifecycleTimingTracker;
+  nativeSkillIsolation?: Parameters<typeof applyCodexNativeSkillIsolation>[1];
   releaseConsumedThread: (threadId: string, cause?: unknown) => Promise<void>;
   ringZeroActive: boolean;
   ringZeroInheritedMcpServerNames: string[];
@@ -123,6 +125,7 @@ export async function tryReuseCodexLiveThread(
     dynamicToolsFingerprint,
     hostSystemAgentActive,
     lifecycleTiming,
+    nativeSkillIsolation,
     releaseConsumedThread,
     ringZeroActive,
     ringZeroInheritedMcpServerNames,
@@ -171,7 +174,7 @@ export async function tryReuseCodexLiveThread(
       appServer: params.appServer,
       dynamicTools: params.dynamicTools,
       developerInstructions: params.developerInstructions,
-      config: resumeConfig,
+      config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,

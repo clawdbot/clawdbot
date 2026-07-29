@@ -424,9 +424,7 @@ function applySessionRouteStateRepair(params: {
     clear("modelProvider");
     clear("contextTokens");
     clear("systemPromptReport");
-    clear("fallbackNoticeSelectedModel");
-    clear("fallbackNoticeActiveModel");
-    clear("fallbackNoticeReason");
+    clear("fallbackNotice");
   }
   if (params.repair.reasons.includes("pinned runtime")) {
     for (const key of params.repair.pinnedRuntimeKeys) {

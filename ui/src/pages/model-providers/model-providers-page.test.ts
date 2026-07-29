@@ -15,8 +15,6 @@ type ModelProvidersPageTestElement = HTMLElement & {
   data: ModelProvidersData | null;
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
-  refreshQueue: Promise<void>;
-  refreshing: boolean;
   routeData: ModelProvidersRouteData | undefined;
   selectedAgentId: string;
 };
@@ -158,6 +156,16 @@ afterEach(() => {
 });
 
 describe("ModelProvidersPage agent scope", () => {
+  it("links the page subtitle to the model providers guide", async () => {
+    const { context } = createHarness("main");
+    const page = appendPage(context);
+    await page.updateComplete;
+
+    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(link?.textContent?.trim()).toBe("Learn more");
+    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
+  });
+
   it("patches thinking and fast mode through the shared config draft", async () => {
     const { context, runtimeConfig } = createHarness("main");
     const page = appendPage(context);
@@ -182,27 +190,16 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
-  it("wires model config recovery and apply actions to the shared capability", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.state.configAutoSaveStatus = "error";
-    runtimeConfig.state.configNeedsApply = true;
-    const page = appendPage(context);
-    await vi.waitFor(() => expect(page.querySelector(".config-apply-banner")).not.toBeNull());
-
-    const buttons = [...page.querySelectorAll<HTMLButtonElement>("button")];
-    buttons.find((entry) => entry.textContent?.trim() === "Retry")?.click();
-    buttons.find((entry) => entry.textContent?.trim() === "Restart & apply")?.click();
-
-    expect(runtimeConfig.save).toHaveBeenCalledTimes(1);
-    expect(runtimeConfig.apply).toHaveBeenCalledTimes(1);
-  });
-
   it("reloads credential status when the agent selector changes", async () => {
     const { agentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "main" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "main" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
 
     request.mockClear();
@@ -211,9 +208,12 @@ describe("ModelProvidersPage agent scope", () => {
     notifySelection();
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
-    await page.refreshQueue;
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(1);
     expect(page.busy).toEqual({});
   });
@@ -225,7 +225,11 @@ describe("ModelProvidersPage agent scope", () => {
     const page = appendPage(context);
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "main" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "main" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     // Invalidate the in-flight refresh mid-await; the stale completion must
     // clear `refreshing` so the new agent's load can proceed.
@@ -234,10 +238,13 @@ describe("ModelProvidersPage agent scope", () => {
     release();
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
-    await page.refreshQueue;
-    expect(page.refreshing).toBe(false);
+    await vi.waitFor(() => expect(page.data?.updatedAt).toEqual(expect.any(Number)));
   });
 
   it("discards stale route data when selection changes during preload", async () => {
@@ -251,7 +258,11 @@ describe("ModelProvidersPage agent scope", () => {
     document.body.append(page);
 
     await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("models.authStatus", { agentId: "writer" }),
+      expect(request).toHaveBeenCalledWith(
+        "models.authStatus",
+        { agentId: "writer" },
+        { signal: expect.any(AbortSignal) },
+      ),
     );
     expect(page.selectedAgentId).toBe("writer");
     expect(page.data).not.toBe(staleData);

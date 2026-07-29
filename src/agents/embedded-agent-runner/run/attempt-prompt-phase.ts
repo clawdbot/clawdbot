@@ -79,6 +79,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
     tools: Array<{ name: string }>;
     toolSearchCatalogRef?: Parameters<typeof applyPromptBuildToolsAllow>[0]["catalogRef"];
     codeModeControlsEnabled: boolean;
+    forceToolNames?: readonly string[];
   };
   preflight: PromptPreflightPhaseInput;
   submission: PromptSubmissionPhaseInput;
@@ -172,6 +173,7 @@ export async function runEmbeddedAttemptPromptPhase(input: {
         tools: input.toolPolicy.tools,
         catalogRef: input.toolPolicy.toolSearchCatalogRef,
         codeModeControlsEnabled: input.toolPolicy.codeModeControlsEnabled,
+        forceToolNames: input.toolPolicy.forceToolNames,
       });
       return promptToolSurface.activeToolNames;
     },

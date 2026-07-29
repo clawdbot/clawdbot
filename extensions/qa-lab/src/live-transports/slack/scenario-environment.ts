@@ -35,6 +35,19 @@ export type SlackQaScenarioEnvironment = {
   sutWriteClient: WebClient;
 };
 
+function resolveSlackQaReplacePaths(accountId: string, channelId: string): string[] {
+  return [
+    "agents",
+    "approvals",
+    "channels.slack",
+    `channels.slack.accounts.${accountId}.allowFrom`,
+    `channels.slack.accounts.${accountId}.channels.${channelId}.users`,
+    "messages",
+    "plugins",
+    "tools",
+  ];
+}
+
 export function createSlackQaScenarioEnvironment(params: {
   accountId: string;
   channelId: string;
@@ -51,7 +64,7 @@ export function createSlackQaScenarioEnvironment(params: {
   const prepareFlow = async (input: FlowPreparationInput) => {
     const scenarioId = input.config.slackScenarioId;
     if (typeof scenarioId !== "string") {
-      throw new Error("Slack QA module flow requires config.slackScenarioId");
+      return undefined;
     }
     if (!input.primaryModel) {
       throw new Error("Slack QA module flow requires a primary model");
@@ -75,7 +88,7 @@ export function createSlackQaScenarioEnvironment(params: {
     await patchLiveQaGatewayConfig({
       gateway: input.gateway,
       patch: cfg as Record<string, unknown>,
-      replacePaths: ["agents", "approvals", "channels.slack", "messages", "plugins", "tools"],
+      replacePaths: resolveSlackQaReplacePaths(params.accountId, params.channelId),
       timeoutMs: input.timeoutMs,
       waitForConfigRestartSettle: input.waitForConfigRestartSettle,
     });

@@ -83,6 +83,11 @@ describe("loadChatRoute", () => {
         search: "?draft=ship",
         hash: "",
       },
+      canonicalLocationSource: {
+        pathname: "/chat/wrong/not-the-name-12345678",
+        search: "?draft=ship",
+        hash: "",
+      },
     });
 
     await expect(
@@ -357,6 +362,7 @@ describe("loadChatRoute", () => {
       draft: undefined,
       face: "chat",
       canonicalLocation: { pathname: "/chat/main", search: "", hash: "" },
+      canonicalLocationSource: { pathname: "/chat/main/workspace", search: "", hash: "" },
     });
     expect(list).not.toHaveBeenCalled();
   });
@@ -377,6 +383,11 @@ describe("loadChatRoute", () => {
       face: "chat",
       canonicalLocation: {
         pathname: "/chat/research",
+        search: "?draft=ship",
+        hash: "#pane",
+      },
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
         search: "?draft=ship",
         hash: "#pane",
       },
@@ -435,6 +446,11 @@ describe("loadChatRoute", () => {
       draft: undefined,
       face: "chat",
       canonicalLocation: { pathname: "/chat/research", search: "", hash: "" },
+      canonicalLocationSource: {
+        pathname: "/chat/research/workspace",
+        search: "",
+        hash: "",
+      },
     });
   });
 

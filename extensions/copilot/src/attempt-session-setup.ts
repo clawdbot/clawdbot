@@ -17,7 +17,7 @@ import type {
   ModelRef,
 } from "./attempt-types.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
-import { filterCopilotToolsForAllowlist } from "./tool-bridge.js";
+import { filterCopilotToolsForAllowlist, shouldForceCopilotMessageTool } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
 import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
 export async function createCopilotSessionSetup(params: {
@@ -77,7 +77,11 @@ export async function createCopilotSessionSetup(params: {
         });
   const attemptInput =
     promptBuild.prompt === input.prompt ? input : { ...input, prompt: promptBuild.prompt };
-  const promptTools = filterCopilotToolsForAllowlist(sdkTools, promptBuild.toolsAllow);
+  const promptTools = filterCopilotToolsForAllowlist(
+    sdkTools,
+    promptBuild.toolsAllow,
+    shouldForceCopilotMessageTool(input) ? { forceToolNames: ["message"] } : undefined,
+  );
   let promptImagesCount = 0;
   const emitLlmInput = (prompt: string, additionalContext?: string) => {
     if (settledToolFinalization) {

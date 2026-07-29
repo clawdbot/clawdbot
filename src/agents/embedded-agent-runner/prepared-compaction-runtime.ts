@@ -60,6 +60,7 @@ import {
   filterRuntimeCompatibleTools,
 } from "../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../tool-schema-quarantine.js";
+import { prepareWatchedSessionsPrompt } from "../watched-sessions-prompt.js";
 import { resolveCompactionContextTokenBudget } from "./compaction-runtime-context.js";
 import type { DirectCompactionPreparation } from "./direct-compaction-preparation.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
@@ -321,6 +322,7 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
           workspaceDir: effectiveWorkspace,
           spawnWorkspaceDir,
           config: params.config,
+          webSearchEnabled: params.toolOverrides?.webSearch !== false,
           abortSignal: runAbortController.signal,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           modelProvider: effectiveModel.provider,
@@ -540,6 +542,19 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
       agentSessionKey: runtimeInfo.sessionKey,
       sandboxed: sandboxInfo?.enabled === true,
     });
+    // Compaction must build byte-identical prompt sections to live turns, or
+    // the compaction run misses the transcript's cached prompt prefix. The
+    // allowlist doubles as the capability set so a session-read tool reachable
+    // only through capability names gates the section the same way live turns do.
+    const preparedWatchedSessions = prepareWatchedSessionsPrompt({
+      enabled: promptMode === "full",
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sandboxed: sandboxInfo?.enabled === true,
+      toolNames: effectiveTools.map((tool) => tool.name),
+      capabilityToolNames: allowedToolNames,
+    });
+    const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
     const buildSystemPromptText = (defaultThinkLevel: ThinkLevel) => {
       const builtSystemPrompt = buildEmbeddedSystemPrompt({
         config: params.config,
@@ -574,7 +589,9 @@ export async function buildPreparedCompactionRuntime(prepared: DirectCompactionP
         userTime,
         userTimeFormat,
         contextFiles,
+        activeProjectKeys,
         preparedMemoryPrompt,
+        preparedWatchedSessions,
         promptContribution,
         nativeCommandGuidanceLines,
       });

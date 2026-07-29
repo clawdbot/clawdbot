@@ -31,7 +31,7 @@ export type PluginHookBeforePromptBuildResult = {
   appendContext?: string;
   /**
    * Narrows the tools submitted to the model for this turn.
-   * An empty array disables all tools; omitted leaves the existing tool policy unchanged.
+   * An empty array disables optional tools; omitted leaves the existing tool policy unchanged.
    */
   toolsAllow?: string[];
   /**

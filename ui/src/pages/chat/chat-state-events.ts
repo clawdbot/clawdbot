@@ -1,3 +1,7 @@
+import {
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+} from "@openclaw/gateway-client/browser";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
@@ -37,7 +41,7 @@ import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { handleBackgroundTasksEvent } from "./components/chat-background-tasks.ts";
-import { rememberLiveAuthoritativeUserMessage } from "./history-merge.ts";
+import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import {
   reconcileChatRunFromCurrentSessionRow,
   reconcileChatRunFromSessionRow,
@@ -45,10 +49,7 @@ import {
 } from "./run-lifecycle.ts";
 import { preserveQueuedUserTurn, retireSteeredChipsForTerminalRun } from "./steer-lifecycle.ts";
 import { isAckedSteeredChip } from "./steered-chip.ts";
-import {
-  isLiveTerminalForRun,
-  rememberAuthoritativeTerminal,
-} from "./terminal-message-identity.ts";
+import { rememberAuthoritativeTerminal } from "./terminal-message-identity.ts";
 import { handleAgentEvent, handleSessionOperationEvent } from "./tool-stream.ts";
 
 function sessionMessageMatchesChat(
@@ -56,36 +57,6 @@ function sessionMessageMatchesChat(
   event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
 ): boolean {
   return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
-}
-
-type LiveUserMessageIdentity = {
-  id: string | null;
-  idempotencyKey: string | null;
-  sequence: number | null;
-};
-
-function readLiveUserMessageIdentity(message: unknown): LiveUserMessageIdentity | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  const record = message as Record<string, unknown>;
-  if (record.role !== "user") {
-    return null;
-  }
-  const marker = record["__openclaw"];
-  const metadata =
-    marker && typeof marker === "object" && !Array.isArray(marker)
-      ? (marker as Record<string, unknown>)
-      : null;
-  const id = typeof metadata?.id === "string" && metadata.id.trim() ? metadata.id : null;
-  const idempotencyValue = metadata?.idempotencyKey ?? record.idempotencyKey;
-  const idempotencyKey =
-    typeof idempotencyValue === "string" && idempotencyValue.trim() ? idempotencyValue : null;
-  const sequence =
-    typeof metadata?.seq === "number" && Number.isSafeInteger(metadata.seq) && metadata.seq > 0
-      ? metadata.seq
-      : null;
-  return { id, idempotencyKey, sequence };
 }
 
 function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
@@ -99,27 +70,20 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
     messageSeq?: unknown;
   };
   const sourceMessage = event.message;
-  const sourceIdentity = readLiveUserMessageIdentity(sourceMessage);
-  if (!sourceIdentity) {
+  const incoming = readSessionMessageIdentity(sourceMessage, event);
+  if (incoming?.role !== "user") {
     return;
   }
-  const eventId =
-    typeof event.messageId === "string" && event.messageId.trim() ? event.messageId : null;
-  const clientRunId =
-    typeof event.clientRunId === "string" && event.clientRunId.trim() ? event.clientRunId : null;
-  const eventSequence =
-    typeof event.messageSeq === "number" &&
-    Number.isSafeInteger(event.messageSeq) &&
-    event.messageSeq > 0
-      ? event.messageSeq
-      : null;
-  const incoming: LiveUserMessageIdentity = {
-    ...sourceIdentity,
-    id: sourceIdentity.id ?? eventId,
-    idempotencyKey: sourceIdentity.idempotencyKey ?? clientRunId,
-    sequence: eventSequence ?? sourceIdentity.sequence,
-  };
-  if (!incoming || (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null)) {
+  // Partial import provenance cannot turn an envelope position into durable
+  // transcript identity; only the persisted row can prove its source order.
+  if (
+    incoming.isImported &&
+    !incoming.externalSource &&
+    readSessionMessageSequence(sourceMessage) === null
+  ) {
+    return;
+  }
+  if (!incoming.id && !incoming.idempotencyKey && incoming.sequence === null) {
     return;
   }
   const sourceRecord = sourceMessage as Record<string, unknown>;
@@ -137,46 +101,12 @@ function applyLiveUserMessage(state: ChatPageHost, payload: unknown): void {
       ...(incoming.sequence !== null ? { seq: incoming.sequence } : {}),
     },
   };
-  rememberLiveAuthoritativeUserMessage(message);
-  const incomingText = extractText(sourceMessage);
-  const existingIndex = state.chatMessages.findIndex((candidate) => {
-    const existing = readLiveUserMessageIdentity(candidate);
-    return Boolean(
-      existing &&
-      ((incoming.id && incoming.id === existing.id) ||
-        (incoming.sequence !== null && incoming.sequence === existing.sequence) ||
-        (incoming.idempotencyKey &&
-          existing.id === null &&
-          existing.sequence === null &&
-          existing.idempotencyKey &&
-          incomingText !== null &&
-          extractText(candidate) === incomingText &&
-          (incoming.idempotencyKey === existing.idempotencyKey ||
-            incoming.idempotencyKey === `${existing.idempotencyKey}:user` ||
-            `${incoming.idempotencyKey}:user` === existing.idempotencyKey))),
-    );
-  });
-  if (existingIndex < 0) {
-    const ownerRunId = clientRunId ?? incoming.idempotencyKey;
-    const terminalIndex = ownerRunId
-      ? state.chatMessages.findIndex((candidate) =>
-          isLiveTerminalForRun(
-            candidate,
-            ownerRunId.endsWith(":user") ? ownerRunId.slice(0, -":user".length) : ownerRunId,
-          ),
-        )
-      : -1;
-    // A persisted prompt can trail either a live stream or its already
-    // materialized terminal; both projections must retain transcript order.
-    state.chatMessages =
-      terminalIndex < 0
-        ? [...state.chatMessages, message]
-        : state.chatMessages.toSpliced(terminalIndex, 0, message);
-    return;
-  }
-  if (state.chatMessages[existingIndex] !== message) {
-    state.chatMessages = state.chatMessages.toSpliced(existingIndex, 1, message);
-  }
+  const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
+  reduceChatSessionProjection(
+    state,
+    { type: "messagePersisted", message, envelope: event },
+    { scope },
+  );
 }
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
@@ -313,6 +243,18 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
   const matchesChat = Boolean(
     event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
   );
+  const source =
+    payload && typeof payload === "object" && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : null;
+  const resetsSelectedSession =
+    matchesChat && (source?.reason === "reset" || source?.phase === "reset");
+  if (resetsSelectedSession) {
+    const scope = readChatSessionProjectionScope(state, { agentId: resolveChatAgentId(state) });
+    // Reset keeps the public session ID; the explicit reducer event is the
+    // only proof that its old live and pending transcript no longer exists.
+    reduceChatSessionProjection(state, { type: "sessionReset" }, { scope });
+  }
   if (matchesChat) {
     void loadChatBranches(state);
   }
@@ -320,6 +262,22 @@ function handleSessionsChangedEvent(state: ChatPageHost, payload: unknown) {
     state.selectedChatSessionArchived = event.archived;
   }
   const result = reconcileSessionEvent(state, payload);
+  if (resetsSelectedSession) {
+    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    return;
+  }
+  if (
+    matchesChat &&
+    source?.phase === "message" &&
+    source.message === undefined &&
+    source.messageId === undefined &&
+    source.messageSeq === undefined
+  ) {
+    // Legacy multi-message writes cannot prove individual message cursors.
+    // One scoped authoritative snapshot recovers them without ending a run.
+    void loadChatHistory(state).finally(() => state.requestUpdate?.());
+    return;
+  }
   if (
     result.applied &&
     event &&

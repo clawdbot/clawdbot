@@ -32,6 +32,16 @@ Workspace skills and web search are configured the same conversational way:
 `configure skills` and `configure web search` host those setup flows in the
 chat, and `open search wizard` hands credential entry to the masked terminal
 wizard.
+For a local Gateway, `configure gateway` guides port, bind, auth, and Tailscale
+settings but saves config without restarting; say `restart gateway` afterward,
+or use `open gateway wizard` for masked terminal credential entry and then run
+`openclaw gateway restart`. Remote Gateway mode remains an onboarding or
+`openclaw configure` choice rather than a hosted chat wizard.
+
+After onboarding has created the default agent workspace, `import memory` can
+copy detected local memory into it. This conversational import does not change
+config or import credentials or skills, needs no Gateway restart, and reports
+per-source partial or failed copies honestly.
 To change the model provider or its authentication, exit OpenClaw and run
 `openclaw onboard`; OpenClaw does not open guided or classic provider flows.
 

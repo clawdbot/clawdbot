@@ -1,10 +1,15 @@
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
+import {
+  DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT,
+  DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE,
+  DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import type { ConceptTagScriptCoverage } from "./concept-vocabulary.js";
 
-export const DEFAULT_PROMOTION_MIN_SCORE = 0.75;
-export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = 3;
-export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
+export const DEFAULT_PROMOTION_MIN_SCORE = DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE;
+export const DEFAULT_PROMOTION_MIN_RECALL_COUNT = DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT;
+export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES;
 export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
   "memory",
   ".dreams",
@@ -43,6 +48,7 @@ export type ShortTermRecallEntry = {
   recallDays: string[];
   conceptTags: string[];
   claimHash?: string;
+  projectKey?: string;
   promotedAt?: string;
   provenance?: MemoryEntryProvenance;
 };
@@ -101,6 +107,7 @@ export type PromotionCandidate = {
   maxScore: number;
   uniqueQueries: number;
   claimHash?: string;
+  projectKey?: string;
   promotedAt?: string;
   firstRecalledAt: string;
   lastRecalledAt: string;

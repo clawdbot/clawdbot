@@ -38,7 +38,6 @@ type CodeModeRunState = {
   output: unknown[];
   // Retain all output for cumulative limits, but never replay blocks already returned to the model.
   deliveredOutputCount: number;
-  createdAt: number;
   expiresAt: number;
   agentWaitRetainUntil?: number;
   runtime: ToolSearchRuntime;
@@ -107,6 +106,14 @@ export function disposeCodeModeRun(runId: string): void {
   scheduleActiveRunExpiry();
 }
 
+/** Cancel suspended bridge work before its Gateway-owned runtimes disappear. */
+export function disposeAllCodeModeRuns(): void {
+  activeRuns.forEach((state) => cancelPendingBridgeStates(state.pending));
+  activeRuns.clear();
+  resumingRunIds.clear();
+  scheduleActiveRunExpiry();
+}
+
 /** Advance the snapshot frontier before exposing output to a wait observer. */
 export function takeUndeliveredCodeModeRunOutput(state: CodeModeRunState): unknown[] {
   const output = state.output.slice(state.deliveredOutputCount);
@@ -151,16 +158,13 @@ export function waitForPendingBridgeSettlement(
   settlementMode: CodeModeSettlementMode,
 ): Promise<void> {
   const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  const outstanding = required.filter((entry) => !entry.settled);
   // Workers reject hostless pending guests; headless execution also validates
   // the frontier before reaching this shared settlement helper.
   if (
-    required.length === 0 ||
-    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled))
+    outstanding.length === 0 ||
+    (settlementMode.kind === "awaiting" && outstanding.length !== required.length)
   ) {
-    return Promise.resolve();
-  }
-  const outstanding = required.filter((entry) => !entry.settled);
-  if (outstanding.length === 0) {
     return Promise.resolve();
   }
   const settlement =
@@ -181,8 +185,14 @@ function enforceActiveRunLimit(): void {
   }
 }
 
-export function reserveActiveRunSlot(): () => void {
-  enforceActiveRunLimit();
+export function reserveActiveRunSlot(ownedRunId?: string): () => void {
+  if (ownedRunId === undefined) {
+    enforceActiveRunLimit();
+  } else if (!activeRuns.delete(ownedRunId)) {
+    throw new ToolInputError("code mode run is unavailable or expired.");
+  }
+  // Resume transfers an existing slot without exposing a free capacity window
+  // to concurrent exec calls or rejecting its own run at the global limit.
   activeRunReservations += 1;
   let released = false;
   return () => {
@@ -205,6 +215,7 @@ export function snapshotState(params: {
   namespaceRuntime: CodeModeNamespaceRuntime;
   output: unknown[];
   deliveredOutputCount?: number;
+  reservedActiveRunSlot?: boolean;
   replaySafe: boolean;
   settlementMode: CodeModeSettlementMode;
   signal?: AbortSignal;
@@ -261,8 +272,11 @@ function enforceSnapshotStateLimits(params: {
   snapshotBytes: Uint8Array;
   config: CodeModeConfig;
   output: unknown[];
+  reservedActiveRunSlot?: boolean;
 }) {
-  enforceActiveRunLimit();
+  if (!params.reservedActiveRunSlot) {
+    enforceActiveRunLimit();
+  }
   enforceSnapshotPayloadLimits(params);
 }
 
@@ -360,7 +374,6 @@ export function storeSnapshotState(params: {
     replaySafe: params.replaySafe,
     output: params.output,
     deliveredOutputCount: params.output.length,
-    createdAt: now,
     expiresAt,
     agentWaitRetainUntil,
     runtime: params.runtime,

@@ -109,6 +109,11 @@ import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-
 import type { QaProviderModeInput } from "./run-config.js";
 
 const DEFAULT_LIVE_FRONTIER_MODEL = defaultQaProviderModelForMode("live-frontier");
+const QA_PASSING_SUITE_SCENARIO = {
+  name: "channel chat baseline",
+  status: "pass" as const,
+  steps: [],
+};
 
 function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
@@ -162,7 +167,7 @@ function flowSuiteRuntimeResult(params: {
       reportPath: params.reportPath,
       summaryPath: params.summaryPath,
       report: "# QA Suite Report\n",
-      scenarios: params.scenarios ?? [],
+      scenarios: params.scenarios ?? [QA_PASSING_SUITE_SCENARIO],
       watchUrl: "http://127.0.0.1:43124",
     },
   };
@@ -183,7 +188,7 @@ function unifiedSuiteRuntimeResult(params: {
       evidencePath: params.evidencePath,
       summaryPath: params.summaryPath,
       report: "# QA Suite Report\n",
-      scenarios: params.scenarios ?? [],
+      scenarios: params.scenarios ?? [QA_PASSING_SUITE_SCENARIO],
     },
   };
 }
@@ -206,7 +211,41 @@ describe("qa cli runtime", () => {
     telegramArtifactsDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-telegram-runtime-"));
     telegramSummaryPath = path.join(telegramArtifactsDir, QA_EVIDENCE_FILENAME);
     await fs.writeFile(suiteReportPath, "# QA Suite Report\n", "utf8");
-    await fs.writeFile(suiteEvidencePath, JSON.stringify(makeQaEvidence()), "utf8");
+    await fs.writeFile(
+      suiteEvidencePath,
+      JSON.stringify(
+        makeQaEvidence([
+          {
+            test: {
+              kind: "qa-scenario",
+              id: "channel-chat-baseline",
+              title: "Channel chat baseline",
+              source: { path: "qa/scenarios/channels/channel-chat-baseline.yaml" },
+            },
+            coverage: [],
+            execution: {
+              runner: "host",
+              environment: {
+                ref: null,
+                os: process.platform,
+                nodeVersion: process.version,
+              },
+              provider: {
+                id: "openai",
+                live: false,
+                model: { name: "gpt-5.6-luna", ref: "mock-openai/gpt-5.6-luna" },
+                fixture: "mock-openai",
+              },
+              channel: { id: "qa-channel", live: false },
+              packageSource: { kind: "source-checkout" },
+              artifacts: [],
+            },
+            result: { status: "pass" },
+          },
+        ]),
+      ),
+      "utf8",
+    );
     await fs.writeFile(
       suiteSummaryPath,
       JSON.stringify({
@@ -214,8 +253,9 @@ describe("qa cli runtime", () => {
           total: 1,
           passed: 1,
           failed: 0,
+          skipped: 0,
         },
-        scenarios: [],
+        scenarios: [QA_PASSING_SUITE_SCENARIO],
       }),
       "utf8",
     );
@@ -223,11 +263,12 @@ describe("qa cli runtime", () => {
       telegramSummaryPath,
       JSON.stringify({
         counts: {
-          total: 0,
-          passed: 0,
+          total: 1,
+          passed: 1,
           failed: 0,
+          skipped: 0,
         },
-        scenarios: [],
+        scenarios: [QA_PASSING_SUITE_SCENARIO],
       }),
       "utf8",
     );
@@ -260,7 +301,7 @@ describe("qa cli runtime", () => {
       watchUrl: "http://127.0.0.1:43124",
       reportPath: suiteReportPath,
       summaryPath: suiteSummaryPath,
-      scenarios: [],
+      scenarios: [QA_PASSING_SUITE_SCENARIO],
     });
     runQaCharacterEval.mockResolvedValue({
       reportPath: "/tmp/character-report.md",
@@ -358,6 +399,103 @@ describe("qa cli runtime", () => {
     });
     expectWriteContains(stdoutWrite, `QA suite evidence: ${evidencePath}`);
     expectWriteContains(stdoutWrite, `QA suite summary: ${suiteSummaryPath}`);
+  });
+
+  it("rejects a direct suite containing only report-only optional tool skips", async () => {
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+        scenarios: [optionalScenario],
+      }),
+    );
+
+    await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toThrow(
+      "did not include any executed scenarios",
+    );
+  });
+
+  it("keeps a direct suite green for a real pass and a report-only optional tool skip", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps direct-suite zero-work validation disabled with --allow-failures", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+        scenarios: [optionalScenario],
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", allowFailures: true });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
   });
 
   it("rejects host-only resource options for Playwright scenarios", async () => {
@@ -531,6 +669,7 @@ describe("qa cli runtime", () => {
     const suiteArgs = mockFirstObjectArg(runQaSuite);
     expect(suiteArgs.scenarioIds).toContain("channel-chat-baseline");
     expect(suiteArgs.scenarioIds).toContain("thread-follow-up");
+    expect(suiteArgs.expandScenarioChannels).toBe(true);
     expect(suiteArgs.adapterFactories).toBe(
       listLiveTransportQaAdapterFactories.mock.results[0]?.value,
     );
@@ -586,7 +725,7 @@ describe("qa cli runtime", () => {
     expect(suiteArgs.scenarioIds).not.toContain("control-ui-qa-channel-image-roundtrip");
   });
 
-  it("rejects explicit profile selections with an incompatible scenario", async () => {
+  it("rejects explicit profile selections incompatible with the profile channel", async () => {
     await expect(
       runQaProfileCommand({
         repoRoot: "/tmp/openclaw-repo",
@@ -950,28 +1089,61 @@ describe("qa cli runtime", () => {
     expect(runQaSuite).not.toHaveBeenCalled();
   });
 
-  it("passes runtime-pair suite selection through to the host runner", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      providerMode: "mock-openai",
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "openclaw,codex",
-    });
+  it.each([
+    ["openclaw,codex", ["openclaw", "codex"]],
+    ["codex,openclaw", ["codex", "openclaw"]],
+    [" codex , pi ", ["codex", "openclaw"]],
+  ] as const)(
+    "passes the requested %s runtime order through to the host runner",
+    async (runtimePair, expectedRuntimePair) => {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair,
+      });
 
-    expect(runQaSuite).toHaveBeenCalledWith({
-      repoRoot: path.resolve("/tmp/openclaw-repo"),
-      outputDir: undefined,
-      transportId: "qa-channel",
-      channelDriver: undefined,
-      channelDriverSelection: undefined,
-      providerMode: "mock-openai",
-      primaryModel: undefined,
-      alternateModel: undefined,
-      fastMode: undefined,
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: ["openclaw", "codex"],
-    });
-  });
+      expect(runQaSuite).toHaveBeenCalledWith({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        outputDir: undefined,
+        transportId: "qa-channel",
+        channelDriver: undefined,
+        channelDriverSelection: undefined,
+        providerMode: "mock-openai",
+        primaryModel: undefined,
+        alternateModel: undefined,
+        fastMode: undefined,
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair: [...expectedRuntimePair],
+      });
+    },
+  );
+
+  it.each([
+    ["openclaw,openclaw", /different runtimes/i],
+    ["codex,codex", /different runtimes/i],
+    ["pi,openclaw", /different runtimes/i],
+    ["openclaw,,codex", /exactly two runtimes/i],
+    ["openclaw,codex,", /exactly two runtimes/i],
+    [",openclaw,codex", /exactly two runtimes/i],
+    ["openclaw", /exactly two runtimes/i],
+    ["openclaw,codex,openclaw", /exactly two runtimes/i],
+  ] as const)(
+    "rejects the invalid %s runtime pair before starting a harness",
+    async (runtimePair, expectedError) => {
+      await expect(
+        runQaSuiteCommand({
+          repoRoot: "/tmp/openclaw-repo",
+          providerMode: "mock-openai",
+          scenarioIds: ["approval-turn-tool-followthrough"],
+          runtimePair,
+        }),
+      ).rejects.toThrow(expectedError);
+
+      expect(runQaSuite).not.toHaveBeenCalled();
+      expect(runQaMultipass).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects unknown runtime-pair ids at the CLI boundary", async () => {
     await expect(
@@ -1374,6 +1546,107 @@ describe("qa cli runtime", () => {
     try {
       await runQaSuiteCommand({
         repoRoot: "/tmp/openclaw-repo",
+      });
+      expect(process.exitCode).toBe(1);
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("rejects a full host suite containing only report-only optional tool skips", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [
+          {
+            name: "Runtime tool fixture — image_generate",
+            status: "skip",
+            details: "image_generate mock provider report-only: tool unavailable",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
+
+    try {
+      await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toThrow(
+        "did not include any executed scenarios",
+      );
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps full host suite exit code clear for a real pass and an optional tool skip", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps explicitly selected optional tool skips blocking", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [
+          {
+            name: "Runtime tool fixture — image_generate",
+            status: "skip",
+            details: "image_generate mock provider report-only: tool unavailable",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      flowSuiteRuntimeResult({
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["runtime-tool-image-generate"],
       });
       expect(process.exitCode).toBe(1);
     } finally {
@@ -2107,6 +2380,15 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("preserves the canonical runtime order for JSONL replay", async () => {
+    await expect(
+      runQaJsonlReplayCommand({
+        repoRoot: process.cwd(),
+        runtimePair: "codex,openclaw",
+      }),
+    ).rejects.toThrow('--runtime-pair for jsonl-replay must be "openclaw,codex".');
+  });
+
   it("keeps JSONL replay mock-only until real runtime cell replay is wired", async () => {
     await expect(
       runQaJsonlReplayCommand({
@@ -2356,23 +2638,29 @@ describe("qa cli runtime", () => {
     expect(runQaMultipass).not.toHaveBeenCalled();
   });
 
-  it("passes runtime-pair suite selection through to the multipass runner", async () => {
-    await runQaSuiteCommand({
-      repoRoot: "/tmp/openclaw-repo",
-      runner: "multipass",
-      providerMode: "mock-openai",
-      scenarioIds: ["approval-turn-tool-followthrough"],
-      runtimePair: "codex,openclaw",
-      allowFailures: true,
-    });
+  it.each([
+    ["openclaw,codex", ["openclaw", "codex"]],
+    ["codex,openclaw", ["codex", "openclaw"]],
+  ] as const)(
+    "passes the requested %s runtime order through to the multipass runner",
+    async (runtimePair, expectedRuntimePair) => {
+      await runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        runner: "multipass",
+        providerMode: "mock-openai",
+        scenarioIds: ["approval-turn-tool-followthrough"],
+        runtimePair,
+        allowFailures: true,
+      });
 
-    expect(runQaMultipass).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot: path.resolve("/tmp/openclaw-repo"),
-        runtimePair: ["openclaw", "codex"],
-      }),
-    );
-  });
+      expect(runQaMultipass).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repoRoot: path.resolve("/tmp/openclaw-repo"),
+          runtimePair: [...expectedRuntimePair],
+        }),
+      );
+    },
+  );
 
   it("passes live suite selection through to the multipass runner", async () => {
     await runQaSuiteCommand({

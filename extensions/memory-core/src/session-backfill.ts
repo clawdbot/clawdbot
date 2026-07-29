@@ -31,17 +31,32 @@ import {
   type SessionIngestionMessage,
 } from "./dreaming-phases.js";
 import { previewGroundedRemMarkdown } from "./rem-evidence.js";
+import type {
+  SessionBackfillDay,
+  SessionBackfillExecution,
+  SessionBackfillResult,
+} from "./session-backfill-contract.js";
+import {
+  drainSessionBackfill,
+  markSessionBackfillRewindBaseline,
+  normalizeSessionBackfillSelection,
+  recordSessionBackfillRewindBatch,
+  resetSessionBackfillIngestionState,
+  rewindSessionBackfillIngestionState,
+} from "./session-backfill-lifecycle.js";
 import {
   readShortTermRecallEntries,
   recordGroundedShortTermCandidates,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 
-const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 const SESSION_BACKFILL_QUERY_PREFIX = "__dreaming_session_backfill__";
 const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
 const TOP_CANDIDATE_LIMIT = 5;
-const MEMORY_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
+
+export { normalizeSessionBackfillSelection } from "./session-backfill-lifecycle.js";
+export type { SessionBackfillResult } from "./session-backfill-contract.js";
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
@@ -78,6 +93,7 @@ type SessionBackfillCandidate = SessionIngestionMessage & {
   legacyHash?: string;
   lineNumber: number;
   scope: string;
+  stateKey: string;
 };
 
 type SessionBackfillScan = {
@@ -96,29 +112,7 @@ type SessionBackfillCollection = {
   scans: SessionBackfillScan[];
 };
 
-type SessionBackfillDay = {
-  day: string;
-  candidateCount: number;
-  topCandidates: string[];
-};
-
-type SessionBackfillResult = {
-  agentId: string;
-  workspaceDir: string;
-  applied: boolean;
-  rem: boolean;
-  days: SessionBackfillDay[];
-  candidateCount: number;
-  stagedEntries: number;
-  writtenDiaryEntries: number;
-  replacedDiaryEntries: number;
-  rollback?: {
-    removedDiaryEntries: number;
-    removedStagedEntries: number;
-  };
-};
-
-type RunSessionBackfillParams = {
+export type RunSessionBackfillParams = {
   agentId: string;
   workspaceDir: string;
   from?: string;
@@ -131,31 +125,6 @@ type RunSessionBackfillParams = {
   nowMs?: number;
   timezone?: string;
 };
-
-function normalizeMemoryDay(value: string | undefined, flag: string): string | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const day = value.trim();
-  if (!MEMORY_DAY_RE.test(day)) {
-    throw new Error(`${flag} must use YYYY-MM-DD.`);
-  }
-  const parsed = new Date(`${day}T00:00:00.000Z`);
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
-    throw new Error(`${flag} must be a valid calendar day.`);
-  }
-  return day;
-}
-
-function resolveLimitDays(value: number | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_SESSION_BACKFILL_LIMIT_DAYS;
-  }
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error("--limit-days must be a positive integer.");
-  }
-  return value;
-}
 
 function sourceFromCorpusEntry(entry: SessionTranscriptCorpusEntry): SessionBackfillSource | null {
   if (
@@ -363,6 +332,7 @@ async function collectSessionBackfillCandidates(params: {
         provenance,
         rendered,
         scope: source.scope,
+        stateKey: source.stateKey,
         snippet,
       } satisfies SessionBackfillCandidate;
       sourceCandidates.push(candidate);
@@ -551,9 +521,9 @@ async function applySessionBackfillDays(params: {
   return Math.max(0, after.length - before.length);
 }
 
-export async function runSessionBackfill(
+async function executeSessionBackfillCore(
   params: RunSessionBackfillParams,
-): Promise<SessionBackfillResult> {
+): Promise<SessionBackfillExecution> {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     throw new Error("Memory session-backfill requires a resolvable workspace directory.");
@@ -565,34 +535,41 @@ export async function runSessionBackfill(
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact
     // class with rem-backfill; the stable removal APIs intentionally clear both.
-    // Ingestion cursors and hashes remain: rollback must not re-ingest tracked messages.
     const [diary, staged] = await Promise.all([
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),
     ]);
-    return {
-      agentId: params.agentId,
+    const rewind = await rewindSessionBackfillIngestionState({
       workspaceDir,
-      applied: false,
-      rem: false,
-      days: [],
-      candidateCount: 0,
-      stagedEntries: 0,
-      writtenDiaryEntries: 0,
-      replacedDiaryEntries: 0,
-      rollback: {
-        removedDiaryEntries: diary.removed,
-        removedStagedEntries: staged.removed,
+      agentId: params.agentId,
+    });
+    if (!rewind.completeCoverage && (diary.removed > 0 || staged.removed > 0)) {
+      // Applies from before the rewind journal shipped have no owned offsets to restore.
+      // Without this agent-scoped reset, rollback deletes artifacts but re-apply finds nothing.
+      await resetSessionBackfillIngestionState({ workspaceDir, agentId: params.agentId });
+    }
+    await markSessionBackfillRewindBaseline({ workspaceDir, agentId: params.agentId });
+    return {
+      result: {
+        agentId: params.agentId,
+        workspaceDir,
+        applied: false,
+        rem: false,
+        days: [],
+        candidateCount: 0,
+        stagedEntries: 0,
+        writtenDiaryEntries: 0,
+        replacedDiaryEntries: 0,
+        rollback: {
+          removedDiaryEntries: diary.removed,
+          removedStagedEntries: staged.removed,
+        },
       },
+      continuation: { advanced: false, hasMore: false },
     };
   }
 
-  const from = normalizeMemoryDay(params.from, "--from");
-  const to = normalizeMemoryDay(params.to, "--to");
-  if (from !== undefined && to !== undefined && from > to) {
-    throw new Error("--from must not be after --to.");
-  }
-  const limitDays = resolveLimitDays(params.limitDays);
+  const { from, to, limitDays } = normalizeSessionBackfillSelection(params);
   const state = await readSessionIngestionState(workspaceDir);
   const sources = await listSessionBackfillSources({
     agentId: params.agentId,
@@ -612,6 +589,17 @@ export async function runSessionBackfill(
     .map((day) => ({ day, candidates: collected.byDay.get(day) ?? [] }));
   const days = selectedDays.map((entry) => summarizeDay(entry.day, entry.candidates));
   const candidateCount = days.reduce((sum, day) => sum + day.candidateCount, 0);
+  // Scans retain every unseen in-range candidate before batch caps, so comparing their full
+  // hash set with the selected batch makes continuation authoritative across day/file caps.
+  const selectedHashes = new Set(
+    selectedDays.flatMap((day) => day.candidates.map((candidate) => candidate.hash)),
+  );
+  const continuation = {
+    advanced: Boolean(params.apply) && candidateCount > 0,
+    hasMore: collected.scans.some((scan) =>
+      scan.candidates.some((candidate) => !selectedHashes.has(candidate.hash)),
+    ),
+  };
   let writtenDiaryEntries = 0;
   let replacedDiaryEntries = 0;
   let stagedEntries = 0;
@@ -635,6 +623,17 @@ export async function runSessionBackfill(
   }
 
   if (params.apply) {
+    await recordSessionBackfillRewindBatch({
+      workspaceDir,
+      candidates: selectedDays.flatMap((day) =>
+        day.candidates.map((candidate) => ({
+          contentIndex: candidate.contentIndex,
+          hash: candidate.hash,
+          scope: candidate.scope,
+          stateKey: candidate.stateKey,
+        })),
+      ),
+    });
     if (selectedDays.length > 0) {
       stagedEntries = await applySessionBackfillDays({
         workspaceDir,
@@ -667,14 +666,45 @@ export async function runSessionBackfill(
   }
 
   return {
-    agentId: params.agentId,
-    workspaceDir,
-    applied: Boolean(params.apply),
-    rem: Boolean(params.rem),
-    days,
-    candidateCount,
-    stagedEntries,
-    writtenDiaryEntries,
-    replacedDiaryEntries,
+    result: {
+      agentId: params.agentId,
+      workspaceDir,
+      applied: Boolean(params.apply),
+      rem: Boolean(params.rem),
+      days,
+      candidateCount,
+      stagedEntries,
+      writtenDiaryEntries,
+      replacedDiaryEntries,
+    },
+    continuation,
   };
+}
+
+export async function executeSessionBackfill(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillResult> {
+  return (await executeSessionBackfillCore(params)).result;
+}
+
+// The CLI owns drain-to-completion. Cursor-driven clients must keep using
+// executeSessionBackfillBatch so one request remains one bounded transaction.
+export async function runSessionBackfill(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillResult> {
+  if (!params.apply || params.rollback) {
+    return (await executeSessionBackfillCore(params)).result;
+  }
+
+  return await drainSessionBackfill({
+    executeBatch: () => executeSessionBackfillCore(params),
+    maxBatches: MAX_SESSION_BACKFILL_APPLY_BATCHES,
+    topCandidateLimit: TOP_CANDIDATE_LIMIT,
+  });
+}
+
+export async function executeSessionBackfillBatch(
+  params: RunSessionBackfillParams,
+): Promise<SessionBackfillExecution> {
+  return await executeSessionBackfillCore(params);
 }

@@ -101,6 +101,11 @@ async function withGoogleChatResponse<T>(params: {
     }
     return await handleResponse(response);
   } finally {
+    // Status-only responses leave an unread body. Start cancellation before
+    // release; awaiting it can deadlock when debug capture tees the stream.
+    if (!response.bodyUsed) {
+      void response.body?.cancel().catch(() => undefined);
+    }
     await release();
   }
 }

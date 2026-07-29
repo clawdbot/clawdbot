@@ -33,6 +33,40 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
     await server?.close();
   });
 
+  it("identifies a beta release in the visible Gateway update card", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-beta-channel");
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "beta",
+          currentVersion: "2026.7.1-2",
+          latestVersion: "2026.7.2-beta.5",
+        },
+      });
+
+      await page
+        .getByRole("button", {
+          name: /Update Gateway · v2026\.7\.2-beta\.5 \(beta\)/u,
+        })
+        .waitFor({ timeout: 10_000 });
+      await page.screenshot({ path: path.join(artifactDir, "beta-update-card.png") });
+      expect(await gateway.getRequests("update.run")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("shows coalesced restart feedback after the Update click", async () => {
     const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-coalesced");
     const context = await browser.newContext({
@@ -77,6 +111,74 @@ describeControlUiE2e("Control UI coalesced update E2E", () => {
       expect(await page.getByRole("button", { name: /Update Gateway/ }).isEnabled()).toBe(true);
       expect(pageErrors).toEqual([]);
       await page.screenshot({ path: path.join(artifactDir, "coalesced-restart-banner.png") });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("reports the final version after a managed update handoff reconnects", async () => {
+    const artifactDir = path.resolve(".artifacts/control-ui-e2e/update-managed-handoff");
+    const context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: { dir: artifactDir, size: { height: 720, width: 1280 } },
+      serviceWorkers: "block",
+      viewport: { height: 720, width: 1280 },
+    });
+    const page = await context.newPage();
+    const pageErrors: string[] = [];
+    page.on("pageerror", (error) => pageErrors.push(String(error)));
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "update.run": {
+          ok: true,
+          handoff: { status: "started" },
+          result: { reason: "managed-service-handoff-started", status: "skipped" },
+        },
+        "update.status": {
+          sequence: [
+            {
+              sentinel: {
+                kind: "update",
+                status: "skipped",
+                stats: { reason: "managed-service-handoff-started" },
+              },
+            },
+            {
+              sentinel: {
+                kind: "update",
+                status: "ok",
+                stats: { after: { version: "1.0.0" } },
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    try {
+      expect((await page.goto(`${server.baseUrl}chat`))?.status()).toBe(200);
+      await gateway.waitForRequest("chat.startup");
+      await gateway.emitGatewayEvent("update.available", {
+        updateAvailable: {
+          channel: "stable",
+          currentVersion: "1.0.0",
+          latestVersion: "2.0.0",
+        },
+      });
+
+      await page.getByRole("button", { name: /Update Gateway/ }).click();
+      await gateway.waitForRequest("update.run");
+      await gateway.closeLatest(1012, "managed update handoff");
+
+      await page
+        .getByText("Expected v2.0.0, running v1.0.0", { exact: false })
+        .waitFor({ timeout: 15_000 });
+      expect(await gateway.getRequests("update.run")).toHaveLength(1);
+      expect(await gateway.getRequests("update.status")).toHaveLength(2);
+      expect(pageErrors).toEqual([]);
+      await page.screenshot({
+        path: path.join(artifactDir, "managed-handoff-version-mismatch.png"),
+      });
     } finally {
       await context.close();
     }

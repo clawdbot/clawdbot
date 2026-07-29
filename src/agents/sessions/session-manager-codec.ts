@@ -14,6 +14,16 @@ import type {
   SessionHeader,
 } from "./session-manager-types.js";
 
+export function isSessionContextMetadataEntry(entry: SessionEntry): boolean {
+  return (
+    entry.type === "thinking_level_change" ||
+    entry.type === "model_change" ||
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info"
+  );
+}
+
 function migrateV1ToV2(
   entries: FileEntry[],
   entriesByOriginalIndex?: readonly (FileEntry | undefined)[],

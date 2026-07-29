@@ -1,11 +1,13 @@
 // QA Lab Slack live scenario catalog.
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { waitForSlackReaction } from "./slack-live.codex-approval.js";
 import {
   SLACK_QA_REACTION_VERIFY_TIMEOUT_MS,
   SLACK_QA_NATIVE_DATA_VERIFY_TIMEOUT_MS,
   SLACK_QA_LOG_TAIL_TIMEOUT_MS,
   type SlackQaScenarioDefinition,
+  type SlackQaScenarioContext,
 } from "./slack-live.contracts.js";
 import {
   isExpectedSlackNativeChartMessage,
@@ -45,6 +47,92 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
         expectReply: false,
         input: `reply with only this exact marker: ${token}`,
         matchText: token,
+      };
+    },
+  },
+  {
+    id: "slack-mpim-app-mention-dedupe",
+    title: "Slack MPIM app mention dispatches once",
+    timeoutMs: 90_000,
+    configOverrides: { groupDmEnabled: true },
+    buildRun: (sutUserId) => {
+      const token = `SLACK_QA_MPIM_${randomUUID().slice(0, 8).toUpperCase()}`;
+      let openedChannelId: string | undefined;
+      const closeOpenedChannel = async (context: Omit<SlackQaScenarioContext, "sentTs">) => {
+        if (!openedChannelId) {
+          return;
+        }
+        const channelId = openedChannelId;
+        for (let attempt = 1; attempt <= 2; attempt += 1) {
+          try {
+            await context.sutReadClient.conversations.close({ channel: channelId });
+            openedChannelId = undefined;
+            return;
+          } catch (error) {
+            if (attempt === 2) {
+              throw error;
+            }
+            // Retain ownership until Slack confirms closure; one bounded retry
+            // covers a transient API failure without hiding a leaked MPIM.
+            await sleep(500);
+          }
+        }
+      };
+      return {
+        expectReply: true,
+        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
+        matchText: token,
+        settleObservedMs: 60_000,
+        beforeRun: async (context) => {
+          const driverAuth = await context.driverClient.auth.test();
+          const driverUserId = driverAuth.user_id?.trim();
+          if (!driverUserId) {
+            throw new Error("Slack QA driver auth.test returned no user_id");
+          }
+          const members = await context.sutReadClient.conversations.members({
+            channel: context.channelId,
+            limit: 100,
+          });
+          const candidateUserIds = (members.members ?? []).filter(
+            (userId) => userId !== driverUserId && userId !== context.sutIdentity.userId,
+          );
+          for (const userId of candidateUserIds) {
+            const user = (await context.sutReadClient.users.info({ user: userId })).user;
+            if (!user || user.deleted || user.is_bot) {
+              continue;
+            }
+            const opened = await context.sutReadClient.conversations.open({
+              return_im: true,
+              users: `${driverUserId},${userId}`,
+            });
+            const channelId = opened.channel?.id?.trim();
+            if (!channelId) {
+              continue;
+            }
+            // Track ownership before the metadata call so outer cleanup can still
+            // close the MPIM when Slack rejects or times out during inspection.
+            openedChannelId = channelId;
+            const info = await context.sutReadClient.conversations.info({ channel: channelId });
+            if (info.channel?.is_mpim && channelId.startsWith("C")) {
+              return { details: "opened C-prefixed MPIM", inputChannelId: channelId };
+            }
+            await closeOpenedChannel(context);
+          }
+          throw new Error("Slack QA channel has no human member yielding a C-prefixed MPIM");
+        },
+        verifyObserved: ({ messages }) => {
+          const uniqueReplies = new Map(messages.map((message) => [message.ts, message]));
+          const matchingReplies = [...uniqueReplies.values()].filter((message) =>
+            message.text.includes(token),
+          );
+          if (uniqueReplies.size !== 1 || matchingReplies.length !== 1) {
+            throw new Error(
+              `expected one MPIM response with the marker, got ${uniqueReplies.size} response(s) and ${matchingReplies.length} marker match(es)`,
+            );
+          }
+          return "one MPIM reply observed after message/app_mention twin delivery";
+        },
+        cleanup: closeOpenedChannel,
       };
     },
   },
