@@ -10,7 +10,6 @@ import type { PreparedMemoryPromptSection } from "../../plugins/memory-state.js"
 import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
-import type { ResolvedTimeFormat } from "../date-time.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { AgentSession } from "../sessions/index.js";
@@ -86,8 +85,7 @@ export function buildEmbeddedSystemPrompt(params: {
   tools: AgentTool[];
   modelAliasLines?: string[];
   userTimezone: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate: string;
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
   bootstrapTruncationNotice?: string;
@@ -135,8 +133,7 @@ export function buildEmbeddedSystemPrompt(params: {
     capabilityToolNames: params.capabilityToolNames,
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
-    userTime: params.userTime,
-    userTimeFormat: params.userTimeFormat,
+    userDate: params.userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
     bootstrapTruncationNotice: params.bootstrapTruncationNotice,

@@ -28,6 +28,7 @@ vi.mock("./inbound.js", () => ({
 }));
 
 import { buzzOutboundAdapter, startBuzzGatewayAccount } from "./gateway.js";
+import { BUZZ_NORMAL_MESSAGE_KIND } from "./message-event.js";
 import { setBuzzRuntime } from "./runtime.js";
 import { resolveBuzzAccount } from "./types.js";
 
@@ -312,6 +313,7 @@ describe("Buzz gateway lifecycle", () => {
     await gatewayMocks.onMessage?.(
       {
         id: "event-1",
+        kind: BUZZ_NORMAL_MESSAGE_KIND,
         channelId: CHANNEL_ID,
         senderPubkey: "b".repeat(64),
         text: "hello",

@@ -84,7 +84,6 @@ import {
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
 import {
-  extractLastMatchingUserText,
   extractExactReplyDirective,
   extractExactMarkerDirective,
   extractWhatsAppLocationMarkerDirective,
@@ -156,6 +155,44 @@ import {
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
+const QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE =
+  /(?:partial|quiet) streaming qa check|final-only marker streaming qa check|block streaming qa check|tool progress(?: error)? qa check/i;
+const QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE =
+  /^Continue with (?:the current Matrix QA scenario|the QA scenario plan and report worked, failed, and blocked items)\.$/i;
+
+function isStreamingToolProgressContinuationText(text: string) {
+  const trimmed = text.trim();
+  return (
+    QA_STREAMING_TOOL_PROGRESS_CONTINUATION_RE.test(trimmed) ||
+    trimmed.startsWith(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)
+  );
+}
+
+function extractLatestScenarioFamilyPrompt(texts: string[]) {
+  let envelope = "";
+  for (const text of texts.toReversed()) {
+    if (QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.test(text)) {
+      envelope = text;
+      break;
+    }
+    if (!isStreamingToolProgressContinuationText(text)) {
+      return "";
+    }
+  }
+  if (!envelope) {
+    return "";
+  }
+  const pattern = new RegExp(
+    QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.source,
+    `${QA_STREAMING_TOOL_PROGRESS_FAMILY_PROMPT_RE.flags}g`,
+  );
+  let latestIndex = -1;
+  for (const match of envelope.matchAll(pattern)) {
+    latestIndex = match.index;
+  }
+  return latestIndex < 0 ? "" : envelope.slice(latestIndex);
+}
+
 async function buildResponsesPayload(
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
@@ -183,6 +220,12 @@ async function buildResponsesPayload(
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
   const allUserTexts = extractAllUserTexts(input);
   const allUserText = allUserTexts.join("\n");
+  const scenarioFamilyPrompt = extractLatestScenarioFamilyPrompt(allUserTexts) || prompt;
+  const scenarioFamilyReplyDirective =
+    extractExactReplyDirective(scenarioFamilyPrompt) ??
+    extractExactMarkerDirective(scenarioFamilyPrompt) ??
+    extractExactReplyDirective(scenarioToolOutput) ??
+    extractExactMarkerDirective(scenarioToolOutput);
   const userExactReplyDirective =
     promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
   const userExactMarkerDirective =
@@ -200,13 +243,8 @@ async function buildResponsesPayload(
   const whatsAppStickerMarker = shouldUseWhatsAppStickerMarker(prompt)
     ? extractWhatsAppStickerMarkerDirective(allInputText)
     : "";
-  const blockStreamingPrompt =
-    extractLastMatchingUserText(extractAllUserTexts(input), QA_BLOCK_STREAMING_PROMPT_RE) ||
-    prompt ||
-    allInputText;
-  const blockStreamingMarkers =
-    extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
-    extractBlockStreamingMarkerDirectives(allInputText);
+  const blockStreamingPrompt = scenarioFamilyPrompt || prompt || allInputText;
+  const blockStreamingMarkers = extractBlockStreamingMarkerDirectives(blockStreamingPrompt);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -229,7 +267,6 @@ async function buildResponsesPayload(
     hasDeclaredTool(body, "sessions_yield") ||
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText);
   const toolProgressTurn = extractLastMatchingUserTurn(input, /tool progress(?: error)? qa check/i);
-  const toolProgressPrompt = toolProgressTurn?.text ?? "";
   // Progress scenarios share full session transcripts. Scope completion to
   // the selected prompt so an older turn's tool output cannot finish this one.
   const toolProgressToolOutput = toolProgressTurn
@@ -238,11 +275,11 @@ async function buildResponsesPayload(
   const toolProgressToolJson = parseToolOutputJson(toolProgressToolOutput);
   const buildToolProgressReadEvents = () => {
     return buildToolCallEventsWithArgs("read", {
-      path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
+      path: readTargetFromPrompt(scenarioFamilyPrompt),
     });
   };
   const buildToolProgressExecEvents = () => {
-    const command = execCommandFromToolProgressPrompt(toolProgressPrompt || prompt || allInputText);
+    const command = execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
     return command ? buildToolCallEventsWithArgs("exec", { command }) : null;
   };
   if (QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE.test(allInputText)) {
@@ -621,32 +658,34 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  if (QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (
+    QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) &&
+    scenarioFamilyReplyDirective
+  ) {
     return buildAssistantEvents([
       {
         id: "msg_mock_final_only_marker_stream",
         phase: "final_answer",
         streamDeltas: splitMockStreamingText("QA streaming preview in progress"),
-        text: exactReplyDirective,
+        text: scenarioFamilyReplyDirective,
       },
     ]);
   }
-  if (QA_STREAMING_PROMPT_RE.test(allInputText) && exactReplyDirective) {
+  if (QA_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && scenarioFamilyReplyDirective) {
     return buildAssistantEvents([
       {
         id: "msg_mock_quiet_stream",
         phase: "final_answer",
-        streamDeltas: splitMockStreamingText(exactReplyDirective),
-        text: exactReplyDirective,
+        streamDeltas: splitMockStreamingText(scenarioFamilyReplyDirective),
+        text: scenarioFamilyReplyDirective,
       },
     ]);
   }
   const toolProgressReplyDirective =
-    extractExactReplyDirective(toolProgressPrompt) ??
-    extractExactMarkerDirective(toolProgressPrompt) ??
     extractExactReplyDirective(toolProgressToolOutput) ??
-    extractExactMarkerDirective(toolProgressToolOutput);
-  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(toolProgressPrompt)) {
+    extractExactMarkerDirective(toolProgressToolOutput) ??
+    scenarioFamilyReplyDirective;
+  if (QA_TOOL_PROGRESS_ERROR_PROMPT_RE.test(scenarioFamilyPrompt)) {
     if (!toolProgressToolOutput) {
       return buildToolProgressReadEvents();
     }
@@ -658,7 +697,7 @@ async function buildResponsesPayload(
       );
     }
   }
-  if (QA_TOOL_PROGRESS_PROMPT_RE.test(toolProgressPrompt)) {
+  if (QA_TOOL_PROGRESS_PROMPT_RE.test(scenarioFamilyPrompt)) {
     if (!toolProgressToolOutput) {
       return buildToolProgressExecEvents() ?? buildToolProgressReadEvents();
     }
@@ -666,7 +705,7 @@ async function buildResponsesPayload(
       return buildAssistantEvents(toolProgressReplyDirective);
     }
   }
-  if (QA_BLOCK_STREAMING_PROMPT_RE.test(allInputText) && blockStreamingMarkers) {
+  if (QA_BLOCK_STREAMING_PROMPT_RE.test(scenarioFamilyPrompt) && blockStreamingMarkers) {
     if (!toolOutput) {
       return buildAssistantThenToolCallEvents(
         {

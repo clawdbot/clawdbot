@@ -106,12 +106,24 @@ describeControlUiE2e("Control UI memory engine settings mocked Gateway E2E", () 
       await gateway.deferNext("config.set");
       await gateway.deferNext("plugins.setEnabled");
       await engineGroup.getByRole("radio", { name: "Off", exact: true }).click();
-      const pendingOffSave = await gateway.waitForRequest("config.set");
-      expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
-
+      // Click again immediately, before the 800 ms autosave debounce. The
+      // write barrier must flush Off first instead of letting the plugin RPC
+      // race a still-scheduled config.set.
       await engineGroup.getByRole("radio", { name: "OpenClaw Memory", exact: true }).click();
       expect(await gateway.getRequests("plugins.setEnabled")).toHaveLength(0);
 
+      const pendingOffSave = await gateway.waitForRequest("config.set");
+      expect(pendingOffSave.params).toMatchObject({ baseHash: "memory-hash-1" });
+      if (captureUiProofEnabled) {
+        await mkdir(uiProofArtifactDir, { recursive: true });
+        await page
+          .locator(".settings-page > .settings-section")
+          .first()
+          .screenshot({
+            animations: "disabled",
+            path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
+          });
+      }
       await gateway.resolveDeferred("config.set", { ok: true, hash: "mock-config-hash-1" });
       const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
       expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });

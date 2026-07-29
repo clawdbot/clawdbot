@@ -731,6 +731,20 @@ class OpenClawShell extends OpenClawLightDomElement {
     });
   }
 
+  private reconcileCommittedServerUiPrefs(
+    runtimeConfig: ApplicationContext["runtimeConfig"],
+    needsRefresh: boolean,
+  ) {
+    if (this.context?.runtimeConfig !== runtimeConfig) {
+      return;
+    }
+    if (needsRefresh) {
+      void runtimeConfig.refresh();
+      return;
+    }
+    this.reconcileServerUiPrefs(runtimeConfig);
+  }
+
   override connectedCallback() {
     super.connectedCallback();
     if (this.outboxStoreRuntime) {
@@ -764,15 +778,11 @@ class OpenClawShell extends OpenClawLightDomElement {
         return;
       }
       const prefs = changedServerUiPrefs(previous, next);
-      const snapshot = this.context?.gateway.snapshot;
-      if (prefs && snapshot?.client) {
-        pushServerUiPrefs(snapshot.client, prefs, {
-          afterCommit: () => {
-            const runtimeConfig = this.context?.runtimeConfig;
-            if (runtimeConfig) {
-              void runtimeConfig.refresh();
-            }
-          },
+      const runtimeConfig = this.context?.runtimeConfig;
+      if (prefs && runtimeConfig) {
+        pushServerUiPrefs(runtimeConfig, prefs, {
+          afterCommit: ({ needsRefresh }) =>
+            this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh),
         });
       }
     });
@@ -1740,13 +1750,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     }
     this.runtimeConfigClient = snapshot.client;
     this.runtimeConfigSource = runtimeConfig;
-    flushServerUiPrefs(snapshot.client, {
-      afterCommit: () => {
-        const currentRuntimeConfig = this.context?.runtimeConfig;
-        if (currentRuntimeConfig) {
-          void currentRuntimeConfig.refresh();
-        }
-      },
+    flushServerUiPrefs(runtimeConfig, {
+      afterCommit: ({ needsRefresh }) =>
+        this.reconcileCommittedServerUiPrefs(runtimeConfig, needsRefresh),
     });
     void runtimeConfig.ensureLoaded();
   }
