@@ -428,6 +428,9 @@ enum DeviceIdentitySQLiteStore {
                         source.identityURL,
                         beneath: source.stateDirURL)
                     if currentSource == nil, !self.pathMayExist(source.identityURL) {
+                        // Source vanished: put the validated claim back so the normal
+                        // claim-without-source path can still import it next iteration.
+                        restoreOrParkQuarantine()
                         continue
                     }
                     guard
@@ -439,6 +442,10 @@ enum DeviceIdentitySQLiteStore {
                         throw DeviceIdentityStore.storageError(
                             "Legacy device identity source and interrupted native claim both exist")
                     }
+                    // Rescue imports nothing: it only vacates a stale duplicate whose bytes stay
+                    // parked. A source rewritten after this point flows through the standard
+                    // atomic claim-then-import path, whose last-writer-wins semantics predate
+                    // this rescue; serializing the source here would add no guarantee it lacks.
                     continue
                 }
                 ownsNativeClaim = true
