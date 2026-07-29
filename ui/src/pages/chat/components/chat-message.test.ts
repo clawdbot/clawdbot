@@ -528,29 +528,30 @@ function setupArmedDeleteConfirm() {
   const outsideClickListener = expectLastCaptureClickListener(addListenerSpy.mock.calls);
   const outsideContextMenuListener = getLastCaptureContextMenuListener(addListenerSpy.mock.calls);
   const escapeListener = getLastCaptureKeydownListener(addKeyListenerSpy.mock.calls);
+  const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
   expect(typeof outsideContextMenuListener).toBe("function");
   expect(typeof escapeListener).toBe("function");
-  expect(fixture.container.querySelectorAll(".chat-delete-confirm")).toHaveLength(1);
 
   return {
     ...fixture,
     escapeListener,
     outsideClickListener,
     outsideContextMenuListener,
+    popover,
     removeKeyListenerSpy,
     removeListenerSpy,
   };
 }
 
 function expectDeleteConfirmDismissed(params: {
-  container: HTMLElement;
   escapeListener: unknown;
   outsideClickListener: unknown;
   outsideContextMenuListener: unknown;
+  popover: HTMLElement;
   removeKeyListenerSpy: ReturnType<typeof vi.spyOn>;
   removeListenerSpy: ReturnType<typeof vi.spyOn>;
 }) {
-  expect(params.container.querySelector(".chat-delete-confirm")).toBeNull();
+  expect(params.popover.isConnected).toBe(false);
   expect(
     countCaptureClickListenerRemovals(
       params.removeListenerSpy.mock.calls,
@@ -1010,9 +1011,7 @@ describe("grouped chat rendering", () => {
       expect(userDeleteButton).toBeInstanceOf(HTMLButtonElement);
       userDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const userConfirm = container.querySelector<HTMLElement>(
-        ".chat-group.user .chat-delete-confirm",
-      );
+      const userConfirm = document.querySelector<HTMLElement>(".chat-delete-confirm--left");
       expect(userConfirm).toBeInstanceOf(HTMLElement);
       expect([...userConfirm!.classList]).toEqual([
         "chat-delete-confirm",
@@ -1025,9 +1024,7 @@ describe("grouped chat rendering", () => {
       expect(assistantDeleteButton).toBeInstanceOf(HTMLButtonElement);
       assistantDeleteButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
-      const assistantConfirm = container.querySelector<HTMLElement>(
-        ".chat-group.assistant .chat-delete-confirm",
-      );
+      const assistantConfirm = document.querySelector<HTMLElement>(".chat-delete-confirm--right");
       expect(assistantConfirm).toBeInstanceOf(HTMLElement);
       expect([...assistantConfirm!.classList]).toEqual([
         "chat-delete-confirm",
@@ -1054,10 +1051,10 @@ describe("grouped chat rendering", () => {
     const rewindButtons = container.querySelectorAll<HTMLButtonElement>(".chat-group-rewind");
     expect(rewindButtons).toHaveLength(1);
     rewindButtons[0]!.click();
-    expect(container.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
+    expect(document.querySelector(".chat-delete-confirm__text")?.textContent).toBe(
       "Rewind to before this message?",
     );
-    container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
@@ -1116,7 +1113,8 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const element = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const element = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
+    expect(element.parentElement).toBe(document.body);
     if (placement) {
       expect(element.dataset.placement).toBe(placement);
     }
@@ -1130,7 +1128,7 @@ describe("grouped chat rendering", () => {
 
     openDeleteConfirm(fixture.deleteButton);
 
-    const popover = expectElement(fixture.container, ".chat-delete-confirm", HTMLElement);
+    const popover = expectElement(document.body, ".chat-delete-confirm", HTMLElement);
     const check = expectElement(popover, ".chat-delete-confirm__check", HTMLInputElement);
     const cancel = expectElement(popover, ".chat-delete-confirm__cancel", HTMLButtonElement);
     const confirm = expectElement(popover, ".chat-delete-confirm__yes", HTMLButtonElement);
@@ -1165,7 +1163,7 @@ describe("grouped chat rendering", () => {
   it("dismisses the confirmation with Escape before underlying keyboard handlers run", () => {
     const fixture = setupArmedDeleteConfirm();
     const cancel = expectElement(
-      fixture.container,
+      fixture.popover,
       ".chat-delete-confirm__cancel",
       HTMLButtonElement,
     );
@@ -1194,12 +1192,24 @@ describe("grouped chat rendering", () => {
     const fixture = setupArmedDeleteConfirm();
     const sibling = renderDeleteConfirmFixture();
     openDeleteConfirm(sibling.deleteButton);
+    const siblingPopover = [...document.querySelectorAll<HTMLElement>(".chat-delete-confirm")].find(
+      (popover) => popover !== fixture.popover,
+    );
 
     dismissConfirmedActionPopovers(fixture.container);
 
     expectDeleteConfirmDismissed(fixture);
-    expect(sibling.container.querySelector(".chat-delete-confirm")).not.toBeNull();
+    expect(siblingPopover?.isConnected).toBe(true);
     dismissConfirmedActionPopovers(sibling.container);
+  });
+
+  it("dismisses a portaled confirmation when its owner is detached", async () => {
+    const fixture = setupArmedDeleteConfirm();
+
+    fixture.container.remove();
+    await Promise.resolve();
+
+    expectDeleteConfirmDismissed(fixture);
   });
 
   it("does not attach an outside-click listener after owner cleanup before the next frame", () => {
@@ -1218,7 +1228,7 @@ describe("grouped chat rendering", () => {
     dismissConfirmedActionPopovers(fixture.container);
     flushAnimationFrames();
 
-    expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(
       countCaptureContextMenuListenerRemovals(removeListenerSpy.mock.calls, contextMenuListener),
@@ -1230,9 +1240,7 @@ describe("grouped chat rendering", () => {
 
   it("removes the delete confirm outside-click listener when Cancel dismisses it", () => {
     const fixture = setupArmedDeleteConfirm();
-    const cancel = fixture.container.querySelector<HTMLButtonElement>(
-      ".chat-delete-confirm__cancel",
-    );
+    const cancel = fixture.popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel");
 
     expect(cancel).toBeInstanceOf(HTMLButtonElement);
     cancel!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -1244,7 +1252,7 @@ describe("grouped chat rendering", () => {
 
   it("removes the delete confirm outside-click listener when Delete dismisses it", () => {
     const fixture = setupArmedDeleteConfirm();
-    const confirm = fixture.container.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
+    const confirm = fixture.popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes");
 
     expect(confirm).toBeInstanceOf(HTMLButtonElement);
     confirm!.focus();
@@ -1299,7 +1307,7 @@ describe("grouped chat rendering", () => {
     openDeleteConfirm(fixture.deleteButton);
     flushAnimationFrames();
 
-    expect(fixture.container.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
     expect(getLastCaptureClickListener(addListenerSpy.mock.calls)).toBeNull();
     expect(fixture.onDelete).not.toHaveBeenCalled();
   });
