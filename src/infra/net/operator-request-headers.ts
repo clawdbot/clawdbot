@@ -35,17 +35,13 @@ const FRAMING_HEADER_NAMES = new Set([
   "upgrade",
 ]);
 
-// An unexpanded placeholder means env substitution never ran for this value, so
-// sending it would leak the literal "${VAR}" to the upstream host.
-const UNEXPANDED_ENV_PLACEHOLDER_PATTERN = /\$\{[A-Z_][A-Z0-9_]*\}/u;
-
 /**
  * RFC 9110 field-value: HTAB, visible ASCII, and obs-text. Anything else either
  * throws when the value reaches `Headers`/undici (every code point above U+00FF
  * is outside ByteString) or enables header injection (CR/LF/NUL).
  */
 export function isSendableHeaderValue(value: unknown): value is string {
-  if (typeof value !== "string" || UNEXPANDED_ENV_PLACEHOLDER_PATTERN.test(value)) {
+  if (typeof value !== "string") {
     return false;
   }
   for (const char of value) {

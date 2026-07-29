@@ -27,11 +27,10 @@ describe("isSendableHeaderValue", () => {
     expect(isSendableHeaderValue(42)).toBe(false);
   });
 
-  it("rejects values still holding an unexpanded env placeholder", () => {
-    // Substitution never ran, so sending it would leak the literal to the host.
-    expect(isSendableHeaderValue("${WEB_FETCH_TARGET}")).toBe(false);
-    expect(isSendableHeaderValue("prefix-${TOKEN}-suffix")).toBe(false);
-    // Only uppercase placeholders are substituted, so this is a real value.
+  it("accepts literal environment placeholder text after config escaping", () => {
+    // Config's $${VAR} escape resolves to ${VAR} before request normalization.
+    expect(isSendableHeaderValue("${WEB_FETCH_TARGET}")).toBe(true);
+    expect(isSendableHeaderValue("prefix-${TOKEN}-suffix")).toBe(true);
     expect(isSendableHeaderValue("${lowercase}")).toBe(true);
   });
 });
@@ -66,6 +65,9 @@ describe("resolveOperatorRequestHeaders", () => {
       "X-Api-Key": "live",
       "x-goog-api-key": "google-live",
       "Ocp-Apim-Subscription-Key": "azure-live",
+      "Private-Token": "gitlab-live",
+      "X-Vault-Token": "vault-live",
+      "X-Amz-Security-Token": "aws-live",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
@@ -80,6 +82,9 @@ describe("resolveOperatorRequestHeaders", () => {
         "X-Api-Key",
         "x-goog-api-key",
         "Ocp-Apim-Subscription-Key",
+        "Private-Token",
+        "X-Vault-Token",
+        "X-Amz-Security-Token",
       ]),
     );
   });
@@ -97,14 +102,11 @@ describe("resolveOperatorRequestHeaders", () => {
     const { headers, ignored } = resolve({
       "X Invalid": "spaced name",
       "X-Unicode": "東",
-      "X-Placeholder": "prefix-${UNSET_TARGET}-suffix",
       "X-Blank": "   ",
       "X-Fine": "ok",
     });
     expect(Object.keys(headers ?? {})).toEqual(["X-Fine"]);
-    expect(ignored).toEqual(
-      expect.arrayContaining(["X Invalid", "X-Unicode", "X-Placeholder", "X-Blank"]),
-    );
+    expect(ignored).toEqual(expect.arrayContaining(["X Invalid", "X-Unicode", "X-Blank"]));
   });
 
   it("accepts credential-looking names but reports them as suspicious", () => {

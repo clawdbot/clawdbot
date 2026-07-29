@@ -1,6 +1,8 @@
 // tools.web.fetch.headers tests cover operator header delivery, reserved and
 // credential header refusal, unsendable-value rejection, and cache partitioning.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConfigEnvVars } from "../../config/env-substitution.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { LookupFn } from "../../infra/net/ssrf.js";
 import * as logger from "../../logger.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
@@ -128,6 +130,9 @@ describe("web_fetch configured request headers", () => {
       apikey: "live-key",
       "x-goog-api-key": "google-live-key",
       "Ocp-Apim-Subscription-Key": "azure-live-key",
+      "Private-Token": "gitlab-live-key",
+      "X-Vault-Token": "vault-live-key",
+      "X-Amz-Security-Token": "aws-live-key",
       "X-Routing-Target": "staging",
     });
 
@@ -143,6 +148,9 @@ describe("web_fetch configured request headers", () => {
     expect(names).not.toContain("apikey");
     expect(names).not.toContain("x-goog-api-key");
     expect(names).not.toContain("Ocp-Apim-Subscription-Key");
+    expect(names).not.toContain("Private-Token");
+    expect(names).not.toContain("X-Vault-Token");
+    expect(names).not.toContain("X-Amz-Security-Token");
   });
 
   it("refuses framing headers that undici rejects or ignores", async () => {
@@ -199,6 +207,33 @@ describe("web_fetch configured request headers", () => {
     expect(getRequestHeaders(fetchSpy)["X-Routing-Target"]).toBe("\u00a0staging\u00a0");
   });
 
+  it("preserves literal placeholder text produced by config escaping", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Template"));
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const config = resolveConfigEnvVars(
+      {
+        tools: {
+          web: {
+            fetch: {
+              cacheTtlMinutes: 0,
+              headers: { "X-Routing-Template": "$${TENANT}" },
+            },
+          },
+        },
+      },
+      {},
+    ) as OpenClawConfig;
+    const tool = createWebFetchTool({
+      lookupFn: lookupMock as unknown as LookupFn,
+      config,
+    });
+
+    await tool?.execute?.("call", { url: "https://example.com/template" });
+
+    expect(getRequestHeaders(fetchSpy)["X-Routing-Template"]).toBe("${TENANT}");
+  });
+
   it("keeps one entry when configured names differ only in case", async () => {
     // A record carrying both would be comma-appended into "staging, prod".
     const fetchSpy = vi.fn().mockResolvedValue(markdownResponse("# Collision"));
@@ -232,7 +267,6 @@ describe("web_fetch configured request headers", () => {
       // Above U+00FF, so Headers/undici would throw and break every fetch.
       "X-Unicode": "staging 東京",
       "X-Em-Dash": "staging—eu",
-      "X-Placeholder": "prefix-${UNSET_TARGET}-suffix",
       "  X-Trimmed  ": "trimmed",
     });
 
@@ -243,7 +277,6 @@ describe("web_fetch configured request headers", () => {
     const names = Object.keys(headers);
     expect(names).not.toContain("X Routing Target");
     expect(names).not.toContain("X-Injected");
-    expect(names).not.toContain("X-Placeholder");
     expect(names).not.toContain("X-Smuggled");
     expect(names).not.toContain("X-Unicode");
     expect(names).not.toContain("X-Em-Dash");

@@ -222,15 +222,16 @@ Behavior worth knowing:
     `Connection`, and `Upgrade`, which a request either rejects outright or ignores.
   - Names that are not valid HTTP tokens, such as `"X Routing Target"`.
 - Dropped values: bytes a request cannot carry (CR, LF, NUL, or any character above
-  `U+00FF`) and values still holding an unexpanded `${VAR}` placeholder.
+  `U+00FF`). Missing environment variables are reported by config loading; the global
+  `$${VAR}` escape remains available when the literal `${VAR}` text is intentional.
 - Two entries whose names differ only in case collapse to one, so a request never
   carries a comma-joined value the receiving gateway cannot parse.
 - Rejection happens before the cache key is computed, so the key always matches the
   bytes actually sent: changing a header that is really sent partitions the fetch
   cache, while adding one that gets dropped does not.
-- Custom headers are dropped if a redirect crosses origins, matching the guarded
-  fetch redirect policy for sensitive headers. A redirect off your origin
-  therefore completes without the routing header.
+- When a redirect crosses origins, the guarded-fetch safe allowlist is applied.
+  Routing headers outside that list are dropped; standard safe headers such as
+  `Cache-Control`, `Content-Type`, and `Range` are preserved.
 
 ## Trusted env proxy
 

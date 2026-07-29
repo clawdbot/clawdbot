@@ -16,6 +16,9 @@ const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "secret-key",
   "x-goog-api-key",
   "ocp-apim-subscription-key",
+  "private-token",
+  "x-vault-token",
+  "x-amz-security-token",
 ]);
 
 // Substring matching catches provider-specific auth headers without forcing every plugin to
