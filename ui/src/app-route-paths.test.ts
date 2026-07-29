@@ -15,10 +15,20 @@ import {
 } from "./app-route-paths.ts";
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
 import type { ApplicationContext } from "./app/context.ts";
-import { AGENT_PANEL_IDS } from "./lib/agents/panels.ts";
+import type { AgentsPanel } from "./lib/agents/panels.ts";
+
+const AGENT_PANEL_CASES = [
+  "overview",
+  "files",
+  "tools",
+  "skills",
+  "channels",
+  "cron",
+  "memory",
+] as const satisfies readonly AgentsPanel[];
 
 describe("Agent panel route paths", () => {
-  it.each(AGENT_PANEL_IDS)("round-trips the %s panel with an encoded agent id", (panel) => {
+  it.each(AGENT_PANEL_CASES)("round-trips the %s panel with an encoded agent id", (panel) => {
     const pathname = pathForAgentPanel("team.writer", panel);
     expect(pathname).toBe(`/settings/agents/team%2Ewriter/${panel}`);
     expect(agentRouteFromPath(pathname)).toEqual({
