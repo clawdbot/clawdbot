@@ -16,6 +16,7 @@ describe("xai onboard", () => {
     const cfg = applyXaiConfig({});
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
+    expect(XAI_DEFAULT_MODEL_REF).toBe("xai/grok-4.3");
     expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
   });
 

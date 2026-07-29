@@ -41,10 +41,11 @@ OAuth client.
     openclaw models auth login --provider xai --method oauth
     ```
 
-    Apply Grok as the default model separately:
+    With no existing primary model, OAuth setup defaults to Grok 4.5. It
+    preserves an existing primary; switch explicitly when needed:
 
     ```bash
-    openclaw models set xai/grok-4.3
+    openclaw models set xai/grok-4.5
     ```
 
     Rerun full onboarding only if you intentionally want to change Gateway,
@@ -53,7 +54,8 @@ OAuth client.
   </Step>
   <Step title="API-key path">
     API-key setup still works for xAI Console keys and for media surfaces
-    that need key-backed provider config:
+    that need key-backed provider config. It keeps Grok 4.3 as the
+    regional-safe setup default:
 
     ```bash
     openclaw models auth login --provider xai --method api-key
@@ -64,7 +66,7 @@ OAuth client.
   <Step title="Pick a model">
     ```json5
     {
-      agents: { defaults: { model: { primary: "xai/grok-4.3" } } },
+      agents: { defaults: { model: { primary: "xai/grok-4.5" } } },
     }
     ```
   </Step>
@@ -85,7 +87,8 @@ bundled xAI model provider reuses it as a fallback too.
   `openclaw models auth login --provider xai --method oauth`; it uses
   device-code verification, not a localhost callback.
 - If sign-in succeeds but Grok is not the default model, run
-  `openclaw models set xai/grok-4.3`.
+  `openclaw models set xai/grok-4.5`. OAuth login preserves an existing
+  primary model unless you explicitly change it.
 - Inspect saved xAI auth profiles:
 
   ```bash
@@ -117,8 +120,9 @@ see [legacy compatibility and moving aliases](#legacy-compatibility-and-moving-a
 
 <Tip>
 Use `grok-4.5` for general chat, coding, and agentic work where it is available.
-Grok 4.3 remains the regional-safe setup default; `grok-build-0.1` and both
-dated Grok 4.20 variants remain selectable.
+OAuth setup defaults to Grok 4.5. API-key setup keeps Grok 4.3 as the
+regional-safe default; `grok-build-0.1` and both dated Grok 4.20 variants
+remain selectable.
 </Tip>
 
 Catalog context and token-cost metadata follows xAI's live

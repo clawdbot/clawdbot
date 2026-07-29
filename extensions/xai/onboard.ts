@@ -11,19 +11,25 @@ import {
 } from "./model-definitions.js";
 
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
+// xAI's subscription OAuth surface follows Grok Build's current default.
+// Keep API-key setup on the regional-safe provider default above.
+export const XAI_OAUTH_DEFAULT_MODEL_REF = "xai/grok-4.5";
 
-const xaiPresetAppliers = createModelCatalogPresetAppliers<
-  ["openai-completions" | "openai-responses"]
->({
-  primaryModelRef: XAI_DEFAULT_MODEL_REF,
-  resolveParams: (_cfg: OpenClawConfig, api) => ({
-    providerId: "xai",
-    api,
-    baseUrl: XAI_BASE_URL,
-    catalogModels: buildXaiCatalogModels(),
-    aliases: [{ modelRef: XAI_DEFAULT_MODEL_REF, alias: "Grok" }],
-  }),
-});
+function createXaiPresetAppliers(primaryModelRef: string) {
+  return createModelCatalogPresetAppliers<["openai-completions" | "openai-responses"]>({
+    primaryModelRef,
+    resolveParams: (_cfg: OpenClawConfig, api) => ({
+      providerId: "xai",
+      api,
+      baseUrl: XAI_BASE_URL,
+      catalogModels: buildXaiCatalogModels(),
+      aliases: [{ modelRef: primaryModelRef, alias: "Grok" }],
+    }),
+  });
+}
+
+const xaiPresetAppliers = createXaiPresetAppliers(XAI_DEFAULT_MODEL_REF);
+const xaiOAuthPresetAppliers = createXaiPresetAppliers(XAI_OAUTH_DEFAULT_MODEL_REF);
 
 function pruneRetiredXaiBuiltinModels(cfg: OpenClawConfig): OpenClawConfig {
   const provider = cfg.models?.providers?.xai;
@@ -58,4 +64,8 @@ export function applyXaiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
   return xaiPresetAppliers.applyConfig(pruneRetiredXaiBuiltinModels(cfg), "openai-responses");
+}
+
+export function applyXaiOAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
+  return xaiOAuthPresetAppliers.applyConfig(pruneRetiredXaiBuiltinModels(cfg), "openai-responses");
 }
