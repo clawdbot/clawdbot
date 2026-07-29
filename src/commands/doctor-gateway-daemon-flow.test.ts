@@ -35,6 +35,7 @@ const findSystemGatewayServices = vi.hoisted(() =>
 );
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
 const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
@@ -42,6 +43,11 @@ vi.mock("../config/config.js", async () => {
     ...actual,
     resolveGatewayPort: vi.fn(() => 18789),
   };
+});
+
+vi.mock("../config/paths.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/paths.js")>("../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity };
 });
 
 vi.mock("../daemon/constants.js", () => ({
@@ -161,6 +167,7 @@ describe("maybeRepairGatewayDaemon", () => {
     service.readRuntime.mockResolvedValue({ status: "running" });
     service.readCommand.mockResolvedValue(null);
     service.restart.mockResolvedValue({ outcome: "completed" });
+    isDefaultInstallIdentity.mockReturnValue(true);
     readGatewayRestartHandoffSync.mockReturnValue(null);
     findSystemGatewayServices.mockResolvedValue([]);
     inspectPortUsage.mockResolvedValue({
@@ -285,6 +292,41 @@ describe("maybeRepairGatewayDaemon", () => {
 
   it("skips restart verification when a running service restart is only scheduled", async () => {
     await runScheduledGatewayRepairAndExpectVerificationSkipped("Restart gateway service now?");
+  });
+
+  it("skips every service-manager seam for a non-default install identity", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: "/tmp/openclaw-copied-state",
+        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-copied-state/openclaw.json",
+      },
+      async () => {
+        isDefaultInstallIdentity.mockReturnValue(false);
+        await runNonInteractiveRepair();
+      },
+    );
+
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(service.readRuntime).not.toHaveBeenCalled();
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
+    expect(findSystemGatewayServices).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledWith(
+      "service management skipped: non-default state dir or config path",
+      "Gateway",
+    );
+  });
+
+  it("still inspects the managed service for the default install identity", async () => {
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: undefined, OPENCLAW_CONFIG_PATH: undefined },
+      runNonInteractiveRepair,
+    );
+
+    expect(service.isLoaded).toHaveBeenCalledTimes(1);
+    expect(service.readRuntime).toHaveBeenCalledTimes(1);
   });
 
   it("reports recent restart handoffs during deep doctor", async () => {
