@@ -483,7 +483,7 @@ export const VoiceCallConfigSchema = z
     /** Skip webhook signature verification (development only, NOT for production) */
     skipSignatureVerification: z.boolean().default(false),
 
-    /** TTS override (deep-merges with core messages.tts) */
+    /** TTS override (deep-merges with core tts) */
     tts: TtsConfigSchema,
 
     /** Store path for call logs */

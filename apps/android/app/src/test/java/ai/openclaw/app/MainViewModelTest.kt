@@ -3,6 +3,7 @@ package ai.openclaw.app
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
+import ai.openclaw.app.ui.chat.ChatComposerStateStore
 import ai.openclaw.app.ui.chat.PendingAttachment
 import android.content.Context
 import android.content.Intent
@@ -179,19 +180,23 @@ class MainViewModelTest {
     val (viewModel, _) = createViewModel()
     val provisional = ChatComposerOwner("gateway", "main", "main", routingVerified = false)
     val resolved = ChatComposerOwner("gateway", "work", "agent:work:device")
-    val authorizationId = requireNotNull(viewModel.beginChatComposerMediaAcquisition(provisional))
+    val authorizationId = requireNotNull(viewModel.chatComposerState.beginMediaAcquisition(provisional))
 
     viewModel.resolveChatComposerOwnerAliases(to = resolved, mainSessionKey = resolved.sessionKey)
 
     assertEquals(
       0,
-      viewModel.addChatComposerAttachments(
+      viewModel.chatComposerState.addAuthorizedAttachments(
         owner = resolved,
         mediaAuthorizationId = authorizationId,
-        attachments = listOf(PendingAttachment("migrated", "photo.jpg", "image/jpeg", "YQ==")),
+        candidates = listOf(PendingAttachment("migrated", "photo.jpg", "image/jpeg", "YQ==")),
       ),
     )
-    assertEquals(1, viewModel.chatComposerAttachments.value[resolved]?.size)
+    assertEquals(
+      1,
+      viewModel.chatComposerState.attachments.value[resolved]
+        ?.size,
+    )
   }
 
   @Test
@@ -217,25 +222,13 @@ class MainViewModelTest {
 
   @Test
   fun assistantAutoSendSharesTheManualComposerAdmissionGate() {
-    val owner =
-      ai.openclaw.app.chat
-        .ChatComposerOwner("gateway", "main", "agent:main:device")
+    val owner = ChatComposerOwner("gateway", "main", "agent:main:device")
+    val state = ChatComposerStateStore()
 
-    assertTrue(chatComposerOwnerHasActiveSend(owner, setOf(owner), emptyMap()))
-    assertTrue(
-      chatComposerOwnerHasActiveSend(
-        owner,
-        emptySet(),
-        mapOf(
-          owner to
-            ChatComposerSendAdmission(
-              id = 1,
-              owner = owner,
-            ),
-        ),
-      ),
-    )
-    assertFalse(chatComposerOwnerHasActiveSend(owner, emptySet(), emptyMap()))
+    val sendId = requireNotNull(state.tryBeginTrackedSend(owner))
+    assertNull(state.tryBeginTrackedSend(owner))
+    state.finishTrackedSend(sendId)
+    assertNotNull(state.tryBeginTrackedSend(owner))
   }
 
   @Test
@@ -248,19 +241,19 @@ class MainViewModelTest {
       val retained =
         ai.openclaw.app.chat
           .ChatComposerOwner("gateway-b", "main", "main")
-      viewModel.chatComposerTextDrafts[removed] = "private a"
-      viewModel.chatComposerTextDrafts[retained] = "private b"
+      viewModel.chatComposerState.textDrafts[removed] = "private a"
+      viewModel.chatComposerState.textDrafts[retained] = "private b"
       val removedAttachment = PendingAttachment("a", "a.txt", "text/plain", "YQ==")
       val retainedAttachment = PendingAttachment("b", "b.txt", "text/plain", "Yg==")
-      viewModel.addChatComposerAttachments(removed, listOf(removedAttachment))
-      viewModel.addChatComposerAttachments(retained, listOf(retainedAttachment))
+      viewModel.chatComposerState.addAttachments(removed, listOf(removedAttachment))
+      viewModel.chatComposerState.addAttachments(retained, listOf(retainedAttachment))
 
       viewModel.clearChatComposerGateway("gateway-a")
 
-      assertEquals("", viewModel.chatComposerTextDrafts[removed])
-      assertEquals("private b", viewModel.chatComposerTextDrafts[retained])
-      assertEquals(null, viewModel.chatComposerAttachments.value[removed])
-      assertEquals(listOf(retainedAttachment), viewModel.chatComposerAttachments.value[retained])
+      assertEquals("", viewModel.chatComposerState.textDrafts[removed])
+      assertEquals("private b", viewModel.chatComposerState.textDrafts[retained])
+      assertEquals(null, viewModel.chatComposerState.attachments.value[removed])
+      assertEquals(listOf(retainedAttachment), viewModel.chatComposerState.attachments.value[retained])
     }
 
   @Test
@@ -268,17 +261,17 @@ class MainViewModelTest {
     runBlocking {
       val (viewModel, _) = createViewModel()
       val owner = ChatComposerOwner("gateway-a", "main", "main")
-      val authorizationId = requireNotNull(viewModel.beginChatComposerMediaAcquisition(owner))
+      val authorizationId = requireNotNull(viewModel.chatComposerState.beginMediaAcquisition(owner))
       var imageLoaderCalled = false
 
       viewModel.clearChatComposerGateway("gateway-a")
 
-      assertFalse(viewModel.isChatComposerMediaAcquisitionActive(authorizationId))
+      assertFalse(viewModel.chatComposerState.isMediaAcquisitionActive(authorizationId))
       assertNull(
-        viewModel.addChatComposerAttachments(
+        viewModel.chatComposerState.addAuthorizedAttachments(
           owner = owner,
           mediaAuthorizationId = authorizationId,
-          attachments = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
+          candidates = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
         ),
       )
       viewModel.importChatComposerAttachments(owner, authorizationId, mainSessionKey = "main", expectedCount = 1) {
@@ -286,7 +279,7 @@ class MainViewModelTest {
         listOf(PendingAttachment("late-image", "late.jpg", "image/jpeg", "YQ=="))
       }
       assertFalse(imageLoaderCalled)
-      assertNull(viewModel.chatComposerAttachments.value[owner])
+      assertNull(viewModel.chatComposerState.attachments.value[owner])
     }
 
   @Test
@@ -308,10 +301,10 @@ class MainViewModelTest {
       val otherAgent =
         ai.openclaw.app.chat
           .ChatComposerOwner("gateway-a", "work", "agent:main:device")
-      val mediaAuthorizationId = requireNotNull(viewModel.beginChatComposerMediaAcquisition(canonical))
+      val mediaAuthorizationId = requireNotNull(viewModel.chatComposerState.beginMediaAcquisition(canonical))
       listOf(alias, canonical, provisional, sibling, otherAgent).forEach { owner ->
-        viewModel.chatComposerTextDrafts[owner] = owner.toString()
-        viewModel.addChatComposerAttachments(
+        viewModel.chatComposerState.textDrafts[owner] = owner.toString()
+        viewModel.chatComposerState.addAttachments(
           owner,
           listOf(PendingAttachment(owner.toString(), "draft.txt", "text/plain", "YQ==")),
         )
@@ -324,22 +317,30 @@ class MainViewModelTest {
         mainSessionKey = "agent:main:device",
       )
 
-      assertEquals("", viewModel.chatComposerTextDrafts[alias])
-      assertEquals("", viewModel.chatComposerTextDrafts[canonical])
-      assertEquals("", viewModel.chatComposerTextDrafts[provisional])
-      assertEquals(sibling.toString(), viewModel.chatComposerTextDrafts[sibling])
-      assertEquals(otherAgent.toString(), viewModel.chatComposerTextDrafts[otherAgent])
-      assertEquals(null, viewModel.chatComposerAttachments.value[alias])
-      assertEquals(null, viewModel.chatComposerAttachments.value[canonical])
-      assertEquals(null, viewModel.chatComposerAttachments.value[provisional])
-      assertEquals(1, viewModel.chatComposerAttachments.value[sibling]?.size)
-      assertEquals(1, viewModel.chatComposerAttachments.value[otherAgent]?.size)
-      assertFalse(viewModel.isChatComposerMediaAcquisitionActive(mediaAuthorizationId))
+      assertEquals("", viewModel.chatComposerState.textDrafts[alias])
+      assertEquals("", viewModel.chatComposerState.textDrafts[canonical])
+      assertEquals("", viewModel.chatComposerState.textDrafts[provisional])
+      assertEquals(sibling.toString(), viewModel.chatComposerState.textDrafts[sibling])
+      assertEquals(otherAgent.toString(), viewModel.chatComposerState.textDrafts[otherAgent])
+      assertEquals(null, viewModel.chatComposerState.attachments.value[alias])
+      assertEquals(null, viewModel.chatComposerState.attachments.value[canonical])
+      assertEquals(null, viewModel.chatComposerState.attachments.value[provisional])
+      assertEquals(
+        1,
+        viewModel.chatComposerState.attachments.value[sibling]
+          ?.size,
+      )
+      assertEquals(
+        1,
+        viewModel.chatComposerState.attachments.value[otherAgent]
+          ?.size,
+      )
+      assertFalse(viewModel.chatComposerState.isMediaAcquisitionActive(mediaAuthorizationId))
       assertNull(
-        viewModel.addChatComposerAttachments(
+        viewModel.chatComposerState.addAuthorizedAttachments(
           owner = canonical,
           mediaAuthorizationId = mediaAuthorizationId,
-          attachments = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
+          candidates = listOf(PendingAttachment("late", "late.txt", "text/plain", "YQ==")),
         ),
       )
     }

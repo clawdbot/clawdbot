@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
 import { createQaTransportAdapter } from "../qa-transport-registry.js";
-import { listQaScenariosForExecutionProfile } from "../scenario-catalog.js";
 
 const { createDiscord, createMatrix, createSlack, createTelegram, createWhatsApp } = vi.hoisted(
   () => ({
@@ -55,30 +54,12 @@ const factories = [
 ] as const;
 
 describe("live transport adapter factories", () => {
-  it("selects Slack generic defaults from the YAML adapter profile", () => {
-    expect(
-      listQaScenariosForExecutionProfile("slack:adapter").map((scenario) => scenario.id),
-    ).toEqual([
-      "channel-chat-baseline",
-      "channel-canary",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "thread-follow-up",
-      "thread-isolation",
-    ]);
-  });
-
-  it("selects WhatsApp DM-safe defaults from the YAML adapter profile", () => {
-    expect(
-      listQaScenariosForExecutionProfile("whatsapp:adapter").map((scenario) => scenario.id),
-    ).toEqual([
-      "dm-chat-baseline",
-      "channel-canary",
-      "channel-dm-group-routing",
-      "channel-mention-gating",
-      "channel-top-level-reply-shape",
-      "whatsapp-help-command",
-    ]);
+  it("opts only the disposable Matrix adapter into same-channel parallelism", () => {
+    expect(matrixQaAdapterFactory.isolatesInstances).toBe(true);
+    expect(discordQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(slackQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(telegramQaAdapterFactory.isolatesInstances).toBeUndefined();
+    expect(whatsappQaAdapterFactory.isolatesInstances).toBeUndefined();
   });
 
   it.each([

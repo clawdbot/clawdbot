@@ -8,25 +8,6 @@ import {
 } from "./notification-correlation.js";
 import type { CodexServerNotification, CodexThreadItem, JsonObject } from "./protocol.js";
 
-const KNOWN_NOOP_NOTIFICATION_METHODS = new Set([
-  "thread/compacted",
-  "turn/started",
-  "turn/diff/updated",
-  "item/reasoning/summaryPartAdded",
-  "item/commandExecution/terminalInteraction",
-  "item/fileChange/outputDelta",
-  "item/fileChange/patchUpdated",
-  "item/mcpToolCall/progress",
-  "model/rerouted",
-  "model/verification",
-  "turn/moderationMetadata",
-  "model/safetyBuffering/updated",
-]);
-
-export function isKnownNoopCodexNotificationMethod(method: string): boolean {
-  return KNOWN_NOOP_NOTIFICATION_METHODS.has(method);
-}
-
 export function redactCodexEventKind(method: string): string {
   return redactSensitiveText(sanitizeTerminalText(method));
 }

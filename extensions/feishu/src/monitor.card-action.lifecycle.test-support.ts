@@ -26,7 +26,6 @@ const {
   createEventDispatcherMock,
   createFeishuReplyDispatcherMock,
   dispatchReplyFromConfigMock,
-  finalizeInboundContextMock,
   resolveAgentRouteMock,
   resolveBoundConversationMock,
   sendCardFeishuMock,
@@ -129,11 +128,11 @@ function latestReplyDispatcherParams() {
 }
 
 function latestFinalizedContext() {
-  const call = finalizeInboundContextMock.mock.calls.at(-1);
+  const call = dispatchReplyFromConfigMock.mock.calls.at(-1);
   if (!call) {
     throw new Error("expected finalized inbound context call");
   }
-  return call[0] as {
+  return call[0].ctx as {
     AccountId?: string;
     SessionKey?: string;
     MessageSid?: string;
@@ -170,11 +169,8 @@ describe("Feishu card-action lifecycle", () => {
       replyText: "card action reply once",
     });
 
-    withReplyDispatcherMock.mockImplementation(async ({ run }) => await run());
-
     installFeishuLifecycleReplyRuntime({
       resolveAgentRouteMock,
-      finalizeInboundContextMock,
       dispatchReplyFromConfigMock,
       withReplyDispatcherMock,
       storePath: "/tmp/feishu-card-action-sessions.json",
@@ -318,11 +314,13 @@ describe("Feishu card-action lifecycle", () => {
         replyToMessageId: "om_card_v2_nested",
       }),
     );
-    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        AccountId: "acct-card",
-        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
-        MessageSid: "card-action-tok-card-v2-nested-operator",
+        ctx: expect.objectContaining({
+          AccountId: "acct-card",
+          SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+          MessageSid: "card-action-tok-card-v2-nested-operator",
+        }),
       }),
     );
   });

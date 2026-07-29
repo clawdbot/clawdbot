@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 // Fixture npm registry server for plugin E2E scenarios.
 import crypto from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -30,6 +31,7 @@ const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGI
 // inside the install deadline and decoded bodies inside a fixed memory budget.
 const UPSTREAM_REQUEST_TIMEOUT_MS = 120_000;
 const UPSTREAM_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const UPSTREAM_TARBALL_MAX_BYTES = 512 * 1024 * 1024;
 
 if (!portFile || packageArgs.length === 0 || packageArgs.length % 3 !== 0) {
   console.error(
@@ -148,6 +150,11 @@ async function proxyUpstream(rawRequestUrl, response) {
       redirect: "manual",
       signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
     });
+    const requestUrl = new URL(rawRequestUrl || "/", "http://127.0.0.1");
+    if (requestUrl.pathname.includes("/-/")) {
+      await streamUpstreamTarball(upstreamResponse, response);
+      return true;
+    }
     const body = await readBoundedResponseBytes(
       upstreamResponse,
       "npm registry upstream",
@@ -165,10 +172,48 @@ async function proxyUpstream(rawRequestUrl, response) {
     response.writeHead(upstreamResponse.status, headers);
     response.end(body);
   } catch (error) {
+    if (response.headersSent) {
+      response.destroy(error instanceof Error ? error : new Error(String(error)));
+      return true;
+    }
     response.writeHead(502, { "content-type": "text/plain" });
     response.end(`upstream registry request failed: ${String(error)}`);
   }
   return true;
+}
+
+async function streamUpstreamTarball(upstreamResponse, response) {
+  const declaredLength = Number(upstreamResponse.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > UPSTREAM_TARBALL_MAX_BYTES) {
+    throw new Error(`npm registry upstream tarball exceeded ${UPSTREAM_TARBALL_MAX_BYTES} bytes`);
+  }
+  const headers = {};
+  for (const name of ["content-type", "location"]) {
+    const value = upstreamResponse.headers.get(name);
+    if (value) {
+      headers[name] = value;
+    }
+  }
+  response.writeHead(upstreamResponse.status, headers);
+  if (!upstreamResponse.body) {
+    response.end();
+    return;
+  }
+  let streamedBytes = 0;
+  for await (const chunk of upstreamResponse.body) {
+    const bytes = Buffer.from(chunk);
+    streamedBytes += bytes.length;
+    if (streamedBytes > UPSTREAM_TARBALL_MAX_BYTES) {
+      response.destroy(
+        new Error(`npm registry upstream tarball exceeded ${UPSTREAM_TARBALL_MAX_BYTES} bytes`),
+      );
+      return;
+    }
+    if (!response.write(bytes)) {
+      await once(response, "drain");
+    }
+  }
+  response.end();
 }
 
 async function handleRequest(request, response) {

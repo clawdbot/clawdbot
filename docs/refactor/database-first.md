@@ -153,10 +153,10 @@ without exceptions outside doctor/import/export/debug boundaries.
 - Doctor migration: `migrating`, intentionally. Doctor imports legacy JSON,
   JSONL, and retired sidecar stores into SQLite, records migration runs/sources,
   and removes successful sources.
-- Exec approvals: `file-runtime`. TypeScript and macOS still read and write the
-  active state directory's `exec-approvals.json`; the reserved
-  `exec_approvals_config` schema has no runtime owner yet. A future cutover must
-  add same-state doctor import and move both runtimes together.
+- Exec approvals: `sqlite-runtime`. TypeScript and macOS read and write the
+  `exec_approvals_config` singleton row in shared state. Doctor exclusively
+  imports the retired state-scoped JSON file, and runtime fails closed until
+  that one-time migration completes.
 - E2E scripts: `clean` for runtime coverage. Docker MCP seeding writes SQLite
   rows. The runtime-context Docker script creates legacy JSONL only inside the
   doctor migration seed and names the legacy session index path explicitly.
@@ -472,16 +472,13 @@ The branch already has a real shared SQLite base:
   sidecars. `openclaw doctor --fix` validates and claims legacy sources,
   imports them into SQLite with migration receipts, verifies the canonical
   rows, and only then removes the claimed files.
-- The shared schema reserves an `exec_approvals_config` singleton row, but the
-  runtime cutover remains pending. TypeScript and the macOS companion still use
-  the state-scoped JSON file and must move to SQLite together.
-- Device identity, device auth, and bootstrap runtime modules now keep their
-  SQLite snapshot readers/writers separate from doctor-only legacy JSON import
-  helpers. Device identity uses typed `device_identities` rows and device auth
-  tokens use typed `device_auth_tokens` rows. Device auth writes reconcile rows
-  by device/role instead of truncating the token table, and runtime no longer
-  routes single-token updates through the old whole-store adapter. The legacy
-  version-1 JSON payloads exist only as doctor import/export shapes.
+- Exec approvals use the shared `exec_approvals_config` singleton row in both
+  TypeScript and the macOS companion. The row's `raw_json` remains authoritative
+  for protocol CAS hashes; typed columns are write-time projections.
+- TypeScript device identity now uses typed `device_identities` rows, with
+  doctor-only legacy JSON import kept outside the runtime owner. Device auth is
+  still file-backed pending a coordinated schema and cross-runtime migration;
+  `device_auth_tokens` remains reserved for that follow-up.
 - GitHub Copilot token exchange cache uses the shared SQLite plugin-state table
   under `github-copilot/token-cache/default`. It is provider-owned cache state,
   so it intentionally does not add a host schema table.
@@ -490,20 +487,13 @@ The branch already has a real shared SQLite base:
   tracked SDK session, and OpenClaw keeps durable session/transcript state in
   SQLite instead of compatibility marker files.
 - The shared Swift runtime (`OpenClawKit`) uses the same
-  `state/openclaw.sqlite` rows for device identity and device auth. macOS app
-  helpers import the shared SQLite helpers instead of owning a second JSON or
-  SQLite path. A leftover legacy `identity/device.json` blocks identity creation
-  until doctor imports it into SQLite, matching the TypeScript and Android
-  startup gate.
-- Android device identity uses the same TypeScript-compatible key material
-  stored in typed `state/openclaw.sqlite#table/device_identities` rows. It never
-  reads or writes `openclaw/identity/device.json`; a leftover legacy file blocks
-  startup until doctor imports it into SQLite.
-- Android cached device auth tokens also use typed
-  `state/openclaw.sqlite#table/device_auth_tokens` rows and share the same
-  version-1 token semantics as TypeScript and Swift. Runtime no longer reads `SecurePrefs`
-  `gateway.deviceToken*` compatibility keys; those belong to migration/doctor
-  logic only.
+  `state/openclaw.sqlite#table/device_identities` shape and row keys for device
+  identity. Apple-container legacy files are imported by the Swift migration
+  owner because the TypeScript Doctor cannot access those containers. Swift
+  device auth remains file-backed for the coordinated auth follow-up.
+- Android device identity and cached device auth remain app-local stores. They
+  require a separate Android-owned migration; the host SQLite claims do not
+  describe current Android behavior.
 - Android notification recent-package history uses typed
   `android_notification_recent_packages` rows. Runtime no longer migrates or
   reads the old SharedPreferences CSV keys.
@@ -1075,9 +1065,9 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   of `crestodian/rescue-pending/*.json` or `openclaw/rescue-pending/*.json`.
   These short-lived security capabilities are never imported; doctor discards
   both retired directories so an upgrade cannot reactivate a stale write.
-- Phone Control temporary arm state now uses SQLite plugin state instead of
-  `plugins/phone-control/armed.json`. Doctor imports the legacy armed-state
-  file into the `phone-control/arm-state` namespace and removes the file.
+- The retired Phone Control lease state is no longer runtime state. Doctor
+  drops its SQLite plugin-state journal and archives the legacy
+  `plugins/phone-control/armed.json` source after canonical config cleanup.
 - Doctor no longer repairs JSONL transcripts in place or creates backup JSONL
   files. It imports the active branch into SQLite and removes the legacy source.
 - Session-memory hook transcript lookup uses `{agentId, sessionId}` scope-only
@@ -1148,9 +1138,8 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   the imported sources. Plugin target writebacks update matching `cron_jobs`
   rows instead of loading and replacing the whole cron store.
 - Gateway startup ignores legacy `notify: true` markers in the runtime
-  projection. Doctor translates them into explicit SQLite delivery when
-  `cron.webhook` is valid, removes inert markers when it is unset, and preserves
-  them with a warning when the configured webhook is invalid.
+  projection. Doctor reads the retired raw `cron.webhook` only while translating
+  those markers into explicit SQLite delivery, then removes the config key.
 - Outbound and session delivery queues now store queue status, entry kind,
   session key, channel, target, account id, retry count, last attempt/error,
   recovery state, and platform-send markers as typed columns in the shared
@@ -1248,7 +1237,17 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   logs go to unified logging, and durable Gateway diagnostics stay SQLite-backed.
 - The macOS port-guardian record list now uses typed shared SQLite
   `macos_port_guardian_records` rows instead of an Application Support JSON file
-  or opaque singleton blob.
+  or opaque singleton blob. All macOS app profiles use the same host-global native
+  database because they coordinate machine-local ports. Every ledger operation
+  blocks while an older JSON-writing app copy is running. Migration joins the old
+  ledger's stable file-lock protocol only to snapshot and later revalidate the
+  source. It resolves every legacy row from live command and process-start facts
+  without holding that lock, then rereads authoritative SQLite rows, applies the
+  plan, verifies every receipt, and removes the source. Removal retries replan
+  missing rows so retired stale receipts cannot resurrect. The lock stays
+  short-lived so it cannot strand an older writer after SSH has spawned. Cutover is
+  intentionally one-way: steady-state runtime never reads, projects, or writes JSON,
+  and rollback to JSON-only builds does not preserve newer SQLite receipts.
 - Gateway singleton locks now use typed shared SQLite `state_leases` rows under
   the `gateway_locks` scope instead of temp-dir lock files. Fly and OAuth
   troubleshooting docs now point at the SQLite lease/auth refresh lock instead
@@ -1342,10 +1341,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   per vault/run id instead of writing `.openclaw-wiki/import-runs/*.json`.
   Rollback snapshots remain explicit vault files until import-run snapshot
   archival is moved into blob storage.
-- Memory Wiki compiled digests now store SQLite plugin blob rows instead of
-  writing `.openclaw-wiki/cache/agent-digest.json` and
-  `.openclaw-wiki/cache/claims.jsonl`. The migration provider imports old cache
-  files and removes the cache directory when it becomes empty.
+- Memory Wiki compiled digests now store compressed SQLite plugin-blob rows
+  instead of writing `.openclaw-wiki/cache/agent-digest.json` and
+  `.openclaw-wiki/cache/claims.jsonl`. The cache is rebuildable, so doctor
+  deletes old cache files without importing them.
 - ClawHub skill install tracking now stores one SQLite plugin-state row per
   workspace/skill instead of writing or reading `.clawhub/lock.json` and
   `.clawhub/origin.json` sidecars at runtime. Runtime code uses tracked-install
@@ -1411,7 +1410,7 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   Runtime tests no longer create invalid or empty `runs.json` fixtures to prove
   registry behavior; they seed/read SQLite rows directly.
 - Backup stages the state directory before archiving, copies non-database files,
-  snapshots databases with `VACUUM INTO`, omits live WAL/SHM sidecars, records
+  snapshots databases with online backup plus offline `VACUUM`, omits live WAL/SHM sidecars, records
   snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest. `openclaw backup
 create` validates the written archive by default; `--no-verify` is the
@@ -1853,8 +1852,9 @@ runtime contract:
   `patchSessionEntry`, `deleteSessionEntry`, and `listSessionEntries`.
 - Whole-store rewrite helpers, file writers, queue tests, alias pruning, and
   legacy-key deletion parameters are gone from runtime.
-- Deprecated root-package compatibility exports still adapt canonical
-  `sessions.json` paths onto the SQLite row APIs.
+- Deprecated root-package compatibility exports delegate to the doctor-only
+  `sessions.json` importer through 2026-10-12; Plugin SDK compatibility reads
+  continue to project canonical SQLite rows.
 - `sessions.json` parsing remains only in doctor migration/import code and
   doctor tests.
 - Runtime lifecycle fallback reads SQLite transcript headers, not JSONL first
@@ -1891,7 +1891,7 @@ The migration imports old JSONL files once, records counts/hashes in
 Backups remain one archive file:
 
 - Checkpoint every global and agent database.
-- Snapshot each DB with SQLite backup semantics or `VACUUM INTO`.
+- Snapshot each DB with SQLite online backup followed by offline `VACUUM`.
 - Archive compact DB snapshots, config, external credentials, and requested
   workspace exports.
 - Omit raw live `*.sqlite-wal` and `*.sqlite-shm` files.
@@ -1932,9 +1932,10 @@ doctor input or support/export output:
 Backups should be one archive file, but database capture should be
 SQLite-native:
 
-1. Stop long-running write activity or enter a short backup barrier.
-2. For every global and agent database, run a checkpoint.
-3. Snapshot databases with `VACUUM INTO` into a temporary backup directory.
+1. Keep write transactions bounded so online backup can make forward progress.
+2. Verify every live global and agent database before capture.
+3. Capture each database with SQLite online backup into a temporary backup
+   directory, then close the live connection and `VACUUM` the private copy.
    Plugin schemas that require owner-defined SQLite capabilities fail closed
    until the owner provides a safe snapshot contract.
 4. Archive the database snapshots, config file, credentials directory, selected
@@ -2035,8 +2036,6 @@ payload.
 6. Delete file-lock-shaped session mutation.
    - Done for runtime lock creation and runtime lock APIs.
    - The standalone legacy `.jsonl.lock` doctor cleanup lane is removed.
-   - `session.writeLock` is doctor-migrated legacy config, not a typed runtime
-     setting.
    - State integrity no longer has a separate orphan transcript-file pruning
      path; doctor migration imports/removes legacy JSONL sources in one place.
    - Gateway singleton coordination uses typed SQLite `state_leases` rows under
@@ -2059,8 +2058,8 @@ payload.
      lifetime and cancellation behavior are boring.
 
 8. Backup integration.
-   - Teach backup to snapshot global, agent, and plugin databases with
-     `VACUUM INTO`. Done for discovered `*.sqlite` files under the state asset;
+   - Teach backup to snapshot global, agent, and plugin databases with online
+     backup followed by offline `VACUUM`. Done for discovered `*.sqlite` files under the state asset;
      plugin schemas requiring unavailable owner capabilities fail closed.
    - Add backup verification for canonical SQLite integrity and schema identity,
      plus generic file-shape validation for dedicated plugin snapshots. Done for
@@ -2225,7 +2224,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `openrouter-models.json`
 - `auth-profiles.json`
 - `auth-state.json`
-- `exec-approvals.json`
+- `exec-approvals.json` (retired; Doctor-only import into `exec_approvals_config`)
 - `openclaw-workspace-state.json`
 - `workspace-state.json`
 - `workspace-attestations/*.attested`
@@ -2241,7 +2240,7 @@ Add a repo check that fails new runtime writes to legacy state paths:
   gateway startup, transient pending/bootstrap rows are dropped)
 - `nodes/pending.json` / `nodes/paired.json` (retired 2026.7: folded into paired device records at gateway startup)
 - `identity/device.json`
-- `identity/device-auth.json`
+- `identity/device-auth.json` (retired; Doctor-only import into `device_auth_tokens`)
 - `push/web-push-subscriptions.json` (retired; Doctor-only import into `web_push_subscriptions`)
 - `push/vapid-keys.json` (retired; Doctor-only import into `web_push_vapid_keys`)
 - `push/apns-registrations.json` (retired; Doctor-only import into `apns_registrations`)

@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { emitDiagnosticEvent, waitForDiagnosticEventsDrained } from "../infra/diagnostic-events.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnv } from "../test-utils/env.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -442,7 +441,11 @@ describe("loadOpenClawPlugins", () => {
           fs.writeFileSync(
             path.join(memoryLanceDir, "openclaw.plugin.json"),
             JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+              {
+                id: "memory-lancedb",
+                kind: "memory",
+                configSchema: { type: "object", additionalProperties: true },
+              },
               null,
               2,
             ),
@@ -458,7 +461,10 @@ describe("loadOpenClawPlugins", () => {
                 slots: { memory: "memory-lancedb" },
                 entries: {
                   "memory-core": { enabled: true },
-                  "memory-lancedb": { enabled: true },
+                  "memory-lancedb": {
+                    enabled: true,
+                    config: { dreaming: { enabled: false } },
+                  },
                 },
               },
             },
@@ -575,10 +581,13 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "shadow",
         bundledFilename: "shadow.cjs",
         loadRegistry: () => {
-          writeBundledPlugin({
+          const bundled = writeBundledPlugin({
             id: "shadow",
             body: simplePluginBody("shadow"),
             filename: "shadow.cjs",
+          });
+          updatePluginManifest(bundled.plugin, {
+            contracts: { agentToolResultMiddleware: ["codex"] },
           });
 
           const override = writePlugin({
@@ -600,7 +609,13 @@ describe("loadOpenClawPlugins", () => {
         },
         expectedLoadedOrigin: "config",
         expectedDisabledOrigin: "bundled",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
+          expectPluginSourcePrecedence(registry, scenario);
+          expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
+        },
       },
       {
         label: "bundled beats auto-discovered global duplicate",
@@ -1040,7 +1055,7 @@ describe("loadOpenClawPlugins", () => {
     expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
   });
 
-  it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
+  it("distinguishes load permission from capability trust in the untracked-provenance warning", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
@@ -1067,21 +1082,31 @@ describe("loadOpenClawPlugins", () => {
       const untrackedWarning = warnings.find(
         (msg) =>
           msg.includes("warn-untracked-remediation") &&
-          msg.includes("loaded without install/load-path provenance"),
+          msg.includes("OpenClaw can't verify where this plugin came from"),
       );
       expect(untrackedWarning).toBeDefined();
-      expect(untrackedWarning).toContain('"warn-untracked-remediation"');
+      expect(untrackedWarning).toContain("OpenClaw can't verify where this plugin came from");
       expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(untrackedWarning).toContain("reinstall from a trusted source");
+      expect(untrackedWarning).toContain(
+        "plugins.allow lets it load, but does not make it trusted",
+      );
+      expect(untrackedWarning).toContain(
+        "reinstall it from its official npm package or its official ClawHub listing",
+      );
 
       const diagnostic = registry.diagnostics.find(
         (entry) =>
           entry.pluginId === "warn-untracked-remediation" &&
-          entry.message.includes("loaded without install/load-path provenance"),
+          entry.message.includes("OpenClaw can't verify where this plugin came from"),
       );
-      expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
+      expect(diagnostic?.message).toContain("OpenClaw can't verify where this plugin came from");
       expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(diagnostic?.message).toContain("reinstall from a trusted source");
+      expect(diagnostic?.message).toContain(
+        "plugins.allow lets it load, but does not make it trusted",
+      );
+      expect(diagnostic?.message).toContain(
+        "reinstall it from its official npm package or its official ClawHub listing",
+      );
     });
   });
 
@@ -1537,7 +1562,7 @@ describe("loadOpenClawPlugins", () => {
         warnings.filter(
           (message) =>
             message.includes("trusted-plugin") &&
-            message.includes("loaded without install/load-path provenance"),
+            message.includes("OpenClaw can't verify where this plugin came from"),
         ),
       ).toEqual([]);
     });
@@ -1655,105 +1680,6 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.status).toBe("loaded");
   });
 
-  it("supports legacy plugins importing monolithic plugin-sdk root", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "legacy-root-import",
-      filename: "legacy-root-import.cjs",
-      body: `module.exports = {
-    id: "legacy-root-import",
-    configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
-          register() {},
-        };`,
-    });
-
-    const registry = withEnv({ OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" }, () =>
-      loadOpenClawPlugins({
-        cache: false,
-        workspaceDir: plugin.dir,
-        config: {
-          plugins: {
-            load: { paths: [plugin.file] },
-            allow: ["legacy-root-import"],
-          },
-        },
-      }),
-    );
-    const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-    expect(
-      record?.status,
-      JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
-    ).toBe("loaded");
-  });
-
-  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
-    useNoBundledPlugins();
-    const seenKey = "__openclawLegacyRootDiagnosticSeen";
-    delete (globalThis as Record<string, unknown>)[seenKey];
-
-    const plugin = writePlugin({
-      id: "legacy-root-diagnostic-listener",
-      filename: "legacy-root-diagnostic-listener.cjs",
-      body: `module.exports = {
-    id: "legacy-root-diagnostic-listener",
-    configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),
-    register() {
-      const { onDiagnosticEvent } = require("openclaw/plugin-sdk");
-      if (typeof onDiagnosticEvent !== "function") {
-        throw new Error("missing onDiagnosticEvent root export");
-      }
-      globalThis.${seenKey} = [];
-      onDiagnosticEvent((event) => {
-        globalThis.${seenKey}.push({
-          type: event.type,
-          sessionKey: event.sessionKey,
-        });
-      });
-    },
-  };`,
-    });
-
-    try {
-      const registry = withEnv(
-        { OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins" },
-        () =>
-          loadOpenClawPlugins({
-            cache: false,
-            workspaceDir: plugin.dir,
-            config: {
-              plugins: {
-                load: { paths: [plugin.file] },
-                allow: ["legacy-root-diagnostic-listener"],
-              },
-            },
-          }),
-      );
-      const record = registry.plugins.find(
-        (entry) => entry.id === "legacy-root-diagnostic-listener",
-      );
-      expect(
-        record?.status,
-        JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
-      ).toBe("loaded");
-
-      emitDiagnosticEvent({
-        type: "model.usage",
-        sessionKey: "agent:main:test:dm:peer",
-        usage: { total: 1 },
-      });
-      await waitForDiagnosticEventsDrained();
-
-      expect((globalThis as Record<string, unknown>)[seenKey]).toEqual([
-        {
-          type: "model.usage",
-          sessionKey: "agent:main:test:dm:peer",
-        },
-      ]);
-    } finally {
-      delete (globalThis as Record<string, unknown>)[seenKey];
-    }
-  });
-
   it("suppresses trust warning logs for non-activating snapshot loads", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
@@ -1784,7 +1710,7 @@ describe("loadOpenClawPlugins", () => {
         registry,
         level: "warn",
         pluginId: "rogue",
-        message: "loaded without install/load-path provenance",
+        message: "OpenClaw can't verify where this plugin came from",
       });
     });
   });

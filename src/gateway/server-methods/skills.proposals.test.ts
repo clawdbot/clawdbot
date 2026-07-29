@@ -158,7 +158,7 @@ describe("skills proposal gateway handlers", () => {
     ).resolves.toContain("Use current weather");
   });
 
-  it("scopes list and inspect to the resolved agent workspace", async () => {
+  it("keeps list and inspect bound to the agent after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
     const first = await callHandler("skills.proposals.create", {
       name: "First Gateway Skill",
@@ -180,24 +180,26 @@ describe("skills proposal gateway handlers", () => {
 
     const secondList = await callHandler("skills.proposals.list", {});
     expect(secondList.ok).toBe(true);
-    expect((secondList.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
+    expect(
+      (secondList.response as { proposals: Array<{ id: string; workspaceMismatch?: true }> })
+        .proposals,
+    ).toEqual([
       expect.objectContaining({ id: secondCreated.record.id }),
+      expect.objectContaining({ id: firstCreated.record.id, workspaceMismatch: true }),
     ]);
 
-    const hiddenInspect = await callHandler("skills.proposals.inspect", {
+    const oldWorkspaceInspect = await callHandler("skills.proposals.inspect", {
       proposalId: firstCreated.record.id,
     });
-    expect(hiddenInspect.ok).toBe(false);
-    expect((hiddenInspect.error as { message?: string }).message).toContain(
-      `Skill proposal not found: ${firstCreated.record.id}`,
+    expect(oldWorkspaceInspect.ok).toBe(true);
+    expect((oldWorkspaceInspect.response as { record: { id: string } }).record.id).toBe(
+      firstCreated.record.id,
     );
 
     mocks.workspaceDir = firstWorkspaceDir;
     const firstList = await callHandler("skills.proposals.list", {});
     expect(firstList.ok).toBe(true);
-    expect((firstList.response as { proposals: Array<{ id: string }> }).proposals).toEqual([
-      expect.objectContaining({ id: firstCreated.record.id }),
-    ]);
+    expect((firstList.response as { proposals: Array<{ id: string }> }).proposals).toHaveLength(2);
   });
 
   it("rejects invalid params before touching workshop state", async () => {

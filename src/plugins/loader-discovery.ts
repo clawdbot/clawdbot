@@ -25,7 +25,7 @@ type ResolvedPluginLoadDiscovery = {
   discovery: PluginDiscoveryResult;
   manifestRegistry: PluginManifestRegistry;
   orderedCandidates: PluginCandidate[];
-  manifestByRoot: Map<string, PluginManifestRecord>;
+  manifestBySource: Map<string, PluginManifestRecord>;
   provenance: ReturnType<typeof buildProvenanceIndex>;
 };
 
@@ -40,9 +40,14 @@ export function resolvePluginLoadDiscovery(params: {
   suppliedManifestRegistry?: PluginManifestRegistry;
 }): ResolvedPluginLoadDiscovery {
   const { options, context } = params;
-  const discovery = params.suppliedManifestRegistry
+  // The load context has already verified workspace, environment, config, and
+  // plugin scope against the current lifecycle-owned metadata generation.
+  const suppliedManifestRegistry =
+    params.suppliedManifestRegistry ??
+    (options.discovery === undefined ? context.metadataSnapshot?.manifestRegistry : undefined);
+  const discovery = suppliedManifestRegistry
     ? {
-        candidates: createPluginCandidatesFromManifestRegistry(params.suppliedManifestRegistry),
+        candidates: createPluginCandidatesFromManifestRegistry(suppliedManifestRegistry),
         diagnostics: [] as PluginDiagnostic[],
       }
     : (options.discovery ??
@@ -53,7 +58,7 @@ export function resolvePluginLoadDiscovery(params: {
         installRecords: context.installRecords,
       }));
   const manifestRegistry =
-    params.suppliedManifestRegistry ??
+    suppliedManifestRegistry ??
     loadPluginManifestRegistry({
       config: context.cfg,
       workspaceDir: options.workspaceDir,
@@ -89,19 +94,19 @@ export function resolvePluginLoadDiscovery(params: {
     env: context.env,
     installRecords: context.installRecords,
   });
-  const manifestByRoot = new Map(
-    manifestRegistry.plugins.map((record) => [record.rootDir, record]),
+  const manifestBySource = new Map(
+    manifestRegistry.plugins.map((record) => [record.source, record]),
   );
   const orderedCandidates = [...discovery.candidates].toSorted((left, right) =>
     compareDuplicateCandidateOrder({
       left,
       right,
-      manifestByRoot,
+      manifestBySource,
       provenance,
       env: context.env,
     }),
   );
-  return { discovery, manifestRegistry, orderedCandidates, manifestByRoot, provenance };
+  return { discovery, manifestRegistry, orderedCandidates, manifestBySource, provenance };
 }
 
 function nonEmptyInstallRecords(

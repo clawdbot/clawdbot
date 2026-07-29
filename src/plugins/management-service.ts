@@ -1,26 +1,33 @@
 // Structured plugin catalog and lifecycle operations shared by Gateway-facing surfaces.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
-import { collectChangedPaths } from "../config/io.write-prepare.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { createAsyncLock } from "../infra/json-files.js";
+import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { installBundledPluginSource } from "./bundled-install.js";
+import type { BundledPluginSource } from "./bundled-sources.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "./clawhub-error-codes.js";
-import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
+import {
+  buildClawHubPluginInstallRecordFields,
+  type ClawHubPluginInstallRecordFields,
+} from "./clawhub-install-records.js";
 import { installPluginFromClawHub } from "./clawhub.js";
 import { enableExplicitlySelectedPluginInConfig } from "./enable.js";
+import { installPluginFromGitSpec } from "./git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "./install-paths.js";
 import {
   resolveInstallConfigMutationPreflights,
@@ -29,14 +36,19 @@ import {
   type ConfigSnapshotForInstallPersist,
 } from "./install-persistence.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
-import { installPluginFromNpmSpec } from "./install.js";
+import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import type { PluginInstallLogger } from "./install-types.js";
+import {
+  installPluginFromNpmPackArchive,
+  installPluginFromNpmSpec,
+  installPluginFromPath,
+} from "./install.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   removePluginInstallRecordFromRecords,
   withPluginInstallRecords,
   withoutPluginInstallRecords,
 } from "./installed-plugin-index-records.js";
-import { buildNpmResolutionInstallFields } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
@@ -54,16 +66,25 @@ import {
   type HostedOfficialExternalPluginCatalogLoadResult,
   type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
+import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import {
+  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import { resolveManifestProviderAuthChoices } from "./provider-auth-choices.js";
 import { listRecommendedToolInstalls } from "./recommended-tool-installs.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./registry-refresh.js";
 import { applySlotSelectionForPlugin } from "./slot-selection.js";
 import { setPluginEnabledInConfig } from "./toggle-config.js";
+import { collectClawPluginUninstallWarnings } from "./uninstall-claw-references.js";
 import {
   applyPluginUninstallDirectoryRemoval,
   formatUninstallActionLabels,
   planPluginUninstall,
+  pluginUninstallTargetExists,
+  prepareConfigForPendingPluginDirectoryRemoval,
 } from "./uninstall.js";
 
 type ManagedPluginCatalogEntry = {
@@ -78,6 +99,7 @@ type ManagedPluginCatalogEntry = {
   enabled: boolean;
   state: "enabled" | "disabled" | "not-installed" | "error";
   featured?: boolean;
+  featuredAt?: number;
   order?: number;
   hasIcon?: boolean;
   install?: { source: "clawhub"; packageName: string } | { source: "official"; pluginId: string };
@@ -100,6 +122,78 @@ type ManagedPluginInstallRequest =
       acknowledgeClawHubRisk?: boolean;
     }
   | { source: "official"; pluginId: string };
+
+export type ManagedPluginSourceInstallRequest =
+  | {
+      source: "local";
+      path: string;
+      recordSource: "archive" | "path";
+      mode: "install" | "update";
+      link?: boolean;
+      successMessage?: string;
+    }
+  | {
+      source: "npm-pack";
+      archivePath: string;
+      mode: "install" | "update";
+    }
+  | { source: "git"; spec: string; mode: "install" | "update" }
+  | {
+      source: "clawhub";
+      spec: string;
+      mode?: "install" | "update";
+      expectedPluginId?: string;
+      expectedIntegrity?: string;
+      acknowledgeClawHubRisk?: boolean;
+      onClawHubRisk?: NonNullable<Parameters<typeof installPluginFromClawHub>[0]["onClawHubRisk"]>;
+    }
+  | {
+      source: "bundled";
+      rawSpec: string;
+      bundledSource: BundledPluginSource;
+      warning?: string;
+    }
+  | {
+      source: "official";
+      spec: string;
+      pluginId: string;
+      expectedIntegrity?: string;
+      mode: "install" | "update";
+      pin?: boolean;
+    }
+  | {
+      source: "npm";
+      spec: string;
+      mode: "install" | "update";
+      pin?: boolean;
+      expectedPluginId?: string;
+      expectedIntegrity?: string;
+      trustedSourceLinkedOfficialInstall?: boolean;
+      allowBundledFallback?: boolean;
+    };
+
+type ManagedPluginSourceInstallResult =
+  | {
+      ok: true;
+      pluginId: string;
+      config: OpenClawConfig;
+      warnings?: string[];
+      targetDir?: string;
+      version?: string;
+      npmResolution?: NpmSpecResolution;
+      clawhub?: ClawHubPluginInstallRecordFields;
+    }
+  | { ok: false; error: string; code?: string; version?: string; warning?: string };
+
+type SourceInstallerResult =
+  | { ok: false; error: string; code?: string; version?: string; warning?: string }
+  | {
+      ok: true;
+      pluginId: string;
+      targetDir: string;
+      version?: string;
+      npmResolution?: NpmSpecResolution;
+    };
 
 export class ManagedPluginLifecycleError extends Error {
   readonly kind: "invalid-request" | "unavailable";
@@ -135,14 +229,14 @@ let officialCatalogCache:
   | { key: string; result: Promise<HostedOfficialExternalPluginCatalogLoadResult> }
   | undefined;
 
-function officialCatalogCacheKey(config: OpenClawConfig): string {
-  return JSON.stringify(config.marketplaces ?? null);
-}
+const OFFICIAL_CATALOG_CACHE_KEY = "built-in";
 
 /** Clear the process-stable hosted catalog snapshot after an explicit owner reload. */
 export function clearManagedPluginOfficialCatalogCache(): void {
   officialCatalogCache = undefined;
 }
+
+registerPluginMetadataProcessMemoLifecycleClear(clearManagedPluginOfficialCatalogCache);
 
 function resolveCatalogManifestIcon(manifest: unknown): string | undefined {
   if (!manifest || typeof manifest !== "object") {
@@ -274,12 +368,12 @@ function overlayBundledOfficialPluginCatalogMetadata(
   });
 }
 
-async function loadOfficialCatalog(config: OpenClawConfig): Promise<OfficialCatalogResult> {
-  const key = officialCatalogCacheKey(config);
+async function loadOfficialCatalog(): Promise<OfficialCatalogResult> {
+  const key = OFFICIAL_CATALOG_CACHE_KEY;
   if (officialCatalogCache?.key !== key) {
     officialCatalogCache = {
       key,
-      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(config),
+      result: loadConfiguredHostedOfficialExternalPluginCatalogEntries(),
     };
   }
   const result = await officialCatalogCache.result;
@@ -319,14 +413,15 @@ function normalizeCatalogMetadata(
       };
 }
 
+function normalizeFeaturedAt(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
 function resolveCatalogInstallAction(params: {
-  config: OpenClawConfig;
   entry: OfficialExternalPluginCatalogEntry;
   pluginId: string;
 }): ManagedPluginCatalogEntry["install"] {
-  const install = resolveOfficialExternalPluginInstall(params.entry, {
-    catalogConfig: params.config.marketplaces,
-  });
+  const install = resolveOfficialExternalPluginInstall(params.entry);
   const clawhub = install?.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
   if (clawhub && !clawhub.version) {
     return { source: "clawhub", packageName: clawhub.name };
@@ -389,6 +484,21 @@ function compareCatalogEntries(
   if (featured !== 0) {
     return featured;
   }
+  if (left.featured && right.featured) {
+    const leftFeaturedAt = left.featuredAt;
+    const rightFeaturedAt = right.featuredAt;
+    if (leftFeaturedAt !== undefined || rightFeaturedAt !== undefined) {
+      if (leftFeaturedAt === undefined) {
+        return 1;
+      }
+      if (rightFeaturedAt === undefined) {
+        return -1;
+      }
+      if (leftFeaturedAt !== rightFeaturedAt) {
+        return rightFeaturedAt - leftFeaturedAt;
+      }
+    }
+  }
   const order = (left.order ?? Number.MAX_SAFE_INTEGER) - (right.order ?? Number.MAX_SAFE_INTEGER);
   return order !== 0 ? order : left.name.localeCompare(right.name);
 }
@@ -420,7 +530,6 @@ function resolveOfficialCatalogIconUrl(
   return resolveCatalogEntryIcon(entry);
 }
 
-type PluginMetadataSnapshot = ReturnType<typeof loadPluginMetadataSnapshot>;
 type PluginIndexRecord = PluginMetadataSnapshot["index"]["plugins"][number];
 
 function resolveInstalledHostedOfficialEntry(params: {
@@ -537,8 +646,8 @@ export async function resolveManagedPluginIconUrl(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<string | undefined> {
   const env = params.env ?? process.env;
-  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
+  const metadata = resolvePluginMetadataSnapshot({ config: params.config, env });
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   return resolvePluginIconUrlFromCatalogFacts({
     metadata,
     officialEntries: officialCatalog.entries,
@@ -594,8 +703,8 @@ export async function listManagedPlugins(params: {
   officialCatalog?: OfficialCatalogResult;
 }): Promise<ManagedPluginCatalog> {
   const env = params.env ?? process.env;
-  const metadata = loadPluginMetadataSnapshot({ config: params.config, env });
-  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog(params.config));
+  const metadata = resolvePluginMetadataSnapshot({ config: params.config, env });
+  const officialCatalog = params.officialCatalog ?? (await loadOfficialCatalog());
   const bundledOfficialEntries = listOfficialExternalPluginCatalogEntries();
   const plugins = metadata.index.plugins.map((record): ManagedPluginCatalogEntry => {
     const manifest = metadata.byPluginId.get(record.pluginId);
@@ -639,6 +748,10 @@ export async function listManagedPlugins(params: {
       manifest?.description ?? manifest?.channelCatalogMeta?.blurb ?? manifest?.packageDescription;
     const hostedListingAuthoritative =
       hasHostedOfficialIdentity && officialCatalog.hostedFeaturedAuthoritative;
+    const featuredAt =
+      hostedListingAuthoritative && catalog?.featured === true
+        ? normalizeFeaturedAt(officialEntry?.featuredAt)
+        : undefined;
     const name =
       (hostedListingAuthoritative ? normalizeOptionalString(officialEntry?.title) : undefined) ??
       localName;
@@ -660,6 +773,7 @@ export async function listManagedPlugins(params: {
       enabled: record.enabled,
       state: error ? "error" : record.enabled ? "enabled" : "disabled",
       ...(catalog?.featured !== undefined ? { featured: catalog.featured } : {}),
+      ...(featuredAt !== undefined ? { featuredAt } : {}),
       ...(catalog?.order !== undefined ? { order: catalog.order } : {}),
       ...(resolvePluginIconUrlFromCatalogFacts({
         metadata,
@@ -701,9 +815,11 @@ export async function listManagedPlugins(params: {
       continue;
     }
     const kind = normalizeKinds(entry.kind);
-    const install = resolveCatalogInstallAction({ config: params.config, entry, pluginId });
+    const install = resolveCatalogInstallAction({ entry, pluginId });
     const description = normalizeOptionalString(entry.description);
     const version = normalizeOptionalString(entry.version);
+    const featuredAt =
+      catalog.featured === true ? normalizeFeaturedAt(entry.featuredAt) : undefined;
     plugins.push({
       id: pluginId,
       name: resolveOfficialExternalPluginLabel(entry),
@@ -715,6 +831,7 @@ export async function listManagedPlugins(params: {
       enabled: false,
       state: "not-installed",
       ...(catalog.featured !== undefined ? { featured: catalog.featured } : {}),
+      ...(featuredAt !== undefined ? { featuredAt } : {}),
       ...(catalog.order !== undefined ? { order: catalog.order } : {}),
       ...(resolveCatalogEntryIcon(entry) ? { hasIcon: true } : {}),
       ...(install ? { install } : {}),
@@ -733,8 +850,6 @@ export async function listManagedPlugins(params: {
     mutationAllowed: !resolveIsNixMode(env),
   };
 }
-
-const withManagedPluginMutationLock = createAsyncLock();
 
 function assertValidConfigSnapshot(
   prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
@@ -810,28 +925,22 @@ function resolveDeclaredOfficialPluginId(
 
 function resolveOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  config: OpenClawConfig,
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
   // Bundled identities remain the local trust anchor when a hosted feed omits
   // its ClawHub candidate; hosted install/version metadata is never copied back.
   return [...listOfficialExternalPluginCatalogEntries(), ...entries].find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry, {
-      catalogConfig: config.marketplaces,
-    });
+    const install = resolveOfficialExternalPluginInstall(entry);
     return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
   });
 }
 
 function resolveHostedOfficialEntryByClawHubPackage(
   entries: readonly OfficialExternalPluginCatalogEntry[],
-  config: OpenClawConfig,
   packageName: string,
 ): OfficialExternalPluginCatalogEntry | undefined {
   return entries.find((entry) => {
-    const install = resolveOfficialExternalPluginInstall(entry, {
-      catalogConfig: config.marketplaces,
-    });
+    const install = resolveOfficialExternalPluginInstall(entry);
     return parseClawHubPluginSpec(install?.clawhubSpec ?? "")?.name === packageName;
   });
 }
@@ -945,109 +1054,283 @@ function throwPersistenceFailureWithCleanupWarnings(error: unknown, warnings: st
   });
 }
 
-async function persistManagedPluginInstall(params: {
+async function persistManagedSourceInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
   pluginId: string;
   install: PluginInstallRecord;
   targetDir: string;
   extensionsDir: string;
+  invalidateRuntimeCache?: boolean;
+  runtime?: RuntimeEnv;
+  successMessage?: string;
+  cleanupOnPersistenceFailure?: boolean;
 }): Promise<OpenClawConfig> {
-  try {
-    return await persistPluginInstall({
+  const persist = () =>
+    persistPluginInstall({
       snapshot: params.snapshot,
       pluginId: params.pluginId,
       install: params.install,
-      invalidateRuntimeCache: false,
-      runtime: createSilentRuntime(),
+      invalidateRuntimeCache: params.cleanupOnPersistenceFailure
+        ? false
+        : params.invalidateRuntimeCache,
+      runtime: params.cleanupOnPersistenceFailure ? createSilentRuntime() : params.runtime,
+      ...(params.successMessage ? { successMessage: params.successMessage } : {}),
     });
+  if (!params.cleanupOnPersistenceFailure) {
+    return await persist();
+  }
+  try {
+    return await persist();
   } catch (error) {
-    const cleanupWarnings = await cleanupFailedManagedPluginInstall({
-      pluginId: params.pluginId,
-      install: params.install,
-      targetDir: params.targetDir,
-      extensionsDir: params.extensionsDir,
-    });
-    return throwPersistenceFailureWithCleanupWarnings(error, cleanupWarnings);
+    const warnings = await cleanupFailedManagedPluginInstall(params);
+    return throwPersistenceFailureWithCleanupWarnings(error, warnings);
   }
 }
 
-async function installFromClawHub(params: {
-  request: Extract<ManagedPluginInstallRequest, { source: "clawhub" }>;
+/** Execute one resolved plugin source through the shared install-and-persist pipeline. */
+export async function installManagedPluginSource(params: {
+  request: ManagedPluginSourceInstallRequest;
   snapshot: ConfigSnapshotForInstallPersist;
-  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-  env: NodeJS.ProcessEnv;
-  warnings: string[];
-  expectedIntegrity?: string;
-}): Promise<{ pluginId: string; config: OpenClawConfig }> {
-  const packageName = params.request.packageName.trim();
-  const official = resolveOfficialEntryByClawHubPackage(
-    params.officialEntries,
-    params.snapshot.config,
-    packageName,
+  env?: NodeJS.ProcessEnv;
+  logger?: PluginInstallLogger & { terminalLinks?: boolean };
+  safetyOverrides?: InstallSafetyOverrides;
+  runtime?: RuntimeEnv;
+  invalidateRuntimeCache?: boolean;
+  cleanupOnPersistenceFailure?: boolean;
+}): Promise<ManagedPluginSourceInstallResult> {
+  const { request } = params;
+  const extensionsDir = resolveDefaultPluginExtensionsDir(params.env ?? process.env);
+  if (request.source === "bundled") {
+    const result = await installBundledPluginSource({
+      snapshot: params.snapshot,
+      rawSpec: request.rawSpec,
+      bundledSource: request.bundledSource,
+      warning: request.warning,
+      invalidateRuntimeCache: params.invalidateRuntimeCache,
+      runtime: params.runtime,
+    });
+    return {
+      ok: true,
+      ...result,
+      config: params.snapshot.config,
+    };
+  }
+
+  const common = {
+    ...params.safetyOverrides,
+    config: params.snapshot.config,
+    extensionsDir,
+    logger: params.logger,
+  };
+  const complete = async <T extends SourceInstallerResult>(
+    installResult: Promise<T>,
+    completed: {
+      install: (result: Extract<T, { ok: true }>) => PluginInstallRecord;
+      expectedPluginId?: string;
+      targetDir?: string;
+      snapshot?: ConfigSnapshotForInstallPersist;
+      successMessage?: string;
+    },
+  ): Promise<ManagedPluginSourceInstallResult> => {
+    const result = await installResult;
+    if (!result.ok) {
+      return result;
+    }
+    const installed = result as Extract<T, { ok: true }> & {
+      pluginId: string;
+      targetDir: string;
+    };
+    if (completed.expectedPluginId && installed.pluginId !== completed.expectedPluginId) {
+      return {
+        ok: false as const,
+        error: `official catalog plugin id mismatch: expected ${completed.expectedPluginId}, got ${installed.pluginId}`,
+      };
+    }
+    const targetDir = completed.targetDir ?? installed.targetDir;
+    const config = await persistManagedSourceInstall({
+      ...params,
+      snapshot: completed.snapshot ?? params.snapshot,
+      pluginId: installed.pluginId,
+      install: completed.install(installed),
+      targetDir,
+      extensionsDir,
+      successMessage: completed.successMessage,
+    });
+    return { ...installed, config };
+  };
+
+  if (request.source === "local") {
+    const installPath = request.link ? request.path : undefined;
+    const linkedSnapshot = request.link
+      ? {
+          ...params.snapshot,
+          config: {
+            ...params.snapshot.config,
+            plugins: {
+              ...params.snapshot.config.plugins,
+              load: {
+                ...params.snapshot.config.plugins?.load,
+                paths: uniqueStrings([
+                  ...(params.snapshot.config.plugins?.load?.paths ?? []),
+                  request.path,
+                ]),
+              },
+            },
+          },
+        }
+      : params.snapshot;
+    return await complete(
+      installPluginFromPath({
+        ...common,
+        path: request.path,
+        mode: request.mode,
+        ...(request.link ? { dryRun: true, allowSourceTypeScriptEntries: true } : {}),
+      }),
+      {
+        snapshot: linkedSnapshot,
+        targetDir: installPath,
+        successMessage: request.successMessage,
+        install: (result) => ({
+          source: request.recordSource,
+          sourcePath: request.path,
+          installPath: installPath ?? result.targetDir,
+          version: result.version,
+        }),
+      },
+    );
+  }
+
+  if (request.source === "npm-pack") {
+    return await complete(
+      installPluginFromNpmPackArchive({
+        ...common,
+        archivePath: request.archivePath,
+        mode: request.mode,
+      }),
+      {
+        install: (result) => ({
+          source: "npm",
+          spec: result.npmResolution?.resolvedSpec ?? result.manifestName ?? result.pluginId,
+          sourcePath: request.archivePath,
+          installPath: result.targetDir,
+          ...(result.version ? { version: result.version } : {}),
+          ...buildNpmResolutionFields(result.npmResolution),
+          artifactKind: "npm-pack",
+          artifactFormat: "tgz",
+          ...(result.npmResolution?.integrity
+            ? { npmIntegrity: result.npmResolution.integrity }
+            : {}),
+          ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
+          ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
+        }),
+      },
+    );
+  }
+
+  if (request.source === "git") {
+    return await complete(
+      installPluginFromGitSpec({ ...common, spec: request.spec, mode: request.mode }),
+      {
+        install: (result) => ({
+          source: "git",
+          spec: request.spec,
+          installPath: result.targetDir,
+          version: result.version,
+          resolvedAt: result.git.resolvedAt,
+          gitUrl: result.git.url,
+          gitRef: result.git.ref,
+          gitCommit: result.git.commit,
+        }),
+      },
+    );
+  }
+
+  if (request.source === "clawhub") {
+    return await complete(
+      installPluginFromClawHub({
+        ...common,
+        spec: request.spec,
+        mode: request.mode,
+        ...(request.expectedPluginId ? { expectedPluginId: request.expectedPluginId } : {}),
+        ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
+        ...(request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
+        ...(request.onClawHubRisk ? { onClawHubRisk: request.onClawHubRisk } : {}),
+      }),
+      {
+        expectedPluginId: request.expectedPluginId,
+        install: (result) => ({
+          ...buildClawHubPluginInstallRecordFields(result.clawhub),
+          spec: request.spec,
+          installPath: result.targetDir,
+        }),
+      },
+    );
+  }
+
+  const expectedPluginId =
+    request.source === "official" ? request.pluginId : request.expectedPluginId;
+  return await complete(
+    installPluginFromNpmSpec({
+      ...common,
+      spec: request.spec,
+      mode: request.mode,
+      ...(request.source === "official" || request.trustedSourceLinkedOfficialInstall
+        ? { trustedSourceLinkedOfficialInstall: true }
+        : {}),
+      ...(expectedPluginId ? { expectedPluginId } : {}),
+      ...(request.expectedIntegrity ? { expectedIntegrity: request.expectedIntegrity } : {}),
+    }),
+    {
+      expectedPluginId,
+      install: (result) => ({
+        source: "npm",
+        spec: request.pin ? (result.npmResolution?.resolvedSpec ?? request.spec) : request.spec,
+        installPath: result.targetDir,
+        ...(result.version ? { version: result.version } : {}),
+        ...buildNpmResolutionFields(result.npmResolution),
+      }),
+    },
   );
+}
+
+function resolveManagedClawHubInstallRequest(params: {
+  request: Extract<ManagedPluginInstallRequest, { source: "clawhub" }>;
+  officialEntries: readonly OfficialExternalPluginCatalogEntry[];
+  expectedIntegrity?: string;
+}): Extract<ManagedPluginSourceInstallRequest, { source: "clawhub" }> {
+  const packageName = params.request.packageName.trim();
+  const official = resolveOfficialEntryByClawHubPackage(params.officialEntries, packageName);
   // Pin the runtime id only when the catalog entry declares one; the entry-id
-  // fallback is just the package name and would reject legitimate installs,
-  // while a declared id must stay enforced even if it equals the package name.
+  // fallback is just the package name and would reject legitimate installs.
   const expectedPluginId = official ? resolveDeclaredOfficialPluginId(official) : undefined;
   const hostedOfficial = resolveHostedOfficialEntryByClawHubPackage(
     params.officialEntries,
-    params.snapshot.config,
     packageName,
   );
   const hostedInstall = hostedOfficial
-    ? resolveOfficialExternalPluginInstall(hostedOfficial, {
-        catalogConfig: params.snapshot.config.marketplaces,
-      })
+    ? resolveOfficialExternalPluginInstall(hostedOfficial)
     : undefined;
   const hostedClawHub = parseClawHubPluginSpec(hostedInstall?.clawhubSpec ?? "");
   const requestMatchesHostedCandidate =
     !params.request.version || params.request.version === hostedClawHub?.version;
+  const version =
+    params.request.version ?? (requestMatchesHostedCandidate ? hostedClawHub?.version : undefined);
   const expectedIntegrity =
     params.expectedIntegrity ??
     (requestMatchesHostedCandidate ? hostedInstall?.expectedIntegrity : undefined);
-  const version =
-    params.request.version ?? (requestMatchesHostedCandidate ? hostedClawHub?.version : undefined);
-  const spec = buildClawHubSpec(packageName, version);
-  const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
-  const result = await installPluginFromClawHub({
-    spec,
-    config: params.snapshot.config,
-    extensionsDir,
-    logger: createInstallLogger(params.warnings),
+  return {
+    source: "clawhub",
+    spec: buildClawHubSpec(packageName, version),
     ...(expectedPluginId ? { expectedPluginId } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),
     ...(params.request.acknowledgeClawHubRisk ? { acknowledgeClawHubRisk: true } : {}),
-  });
-  if (!result.ok) {
-    return throwInstallFailure(result);
-  }
-  if (expectedPluginId && result.pluginId !== expectedPluginId) {
-    throw new ManagedPluginLifecycleError(
-      `official catalog plugin id mismatch: expected ${expectedPluginId}, got ${result.pluginId}`,
-    );
-  }
-  const install: PluginInstallRecord = {
-    ...buildClawHubPluginInstallRecordFields(result.clawhub),
-    spec,
-    installPath: result.targetDir,
   };
-  const config = await persistManagedPluginInstall({
-    snapshot: params.snapshot,
-    pluginId: result.pluginId,
-    install,
-    targetDir: result.targetDir,
-    extensionsDir,
-  });
-  return { pluginId: result.pluginId, config };
 }
 
-async function installFromOfficialCatalog(params: {
+function resolveManagedOfficialInstallRequest(params: {
   request: Extract<ManagedPluginInstallRequest, { source: "official" }>;
-  snapshot: ConfigSnapshotForInstallPersist;
   officialEntries: readonly OfficialExternalPluginCatalogEntry[];
-  env: NodeJS.ProcessEnv;
-  warnings: string[];
-}): Promise<{ pluginId: string; config: OpenClawConfig }> {
+}): ManagedPluginSourceInstallRequest {
   const entry = resolveOfficialEntryById(params.officialEntries, params.request.pluginId);
   if (!entry) {
     throw new ManagedPluginLifecycleError(
@@ -1055,9 +1338,7 @@ async function installFromOfficialCatalog(params: {
     );
   }
   const pluginId = resolveOfficialExternalPluginId(entry);
-  const install = resolveOfficialExternalPluginInstall(entry, {
-    catalogConfig: params.snapshot.config.marketplaces,
-  });
+  const install = resolveOfficialExternalPluginInstall(entry);
   if (!pluginId || !install) {
     throw new ManagedPluginLifecycleError(
       `official plugin catalog entry is not installable: ${params.request.pluginId}`,
@@ -1065,16 +1346,13 @@ async function installFromOfficialCatalog(params: {
   }
   const clawhub = install.clawhubSpec ? parseClawHubPluginSpec(install.clawhubSpec) : undefined;
   if (clawhub) {
-    return await installFromClawHub({
+    return resolveManagedClawHubInstallRequest({
       request: {
         source: "clawhub",
         packageName: clawhub.name,
         ...(clawhub.version ? { version: clawhub.version } : {}),
       },
-      snapshot: params.snapshot,
       officialEntries: params.officialEntries,
-      env: params.env,
-      warnings: params.warnings,
       ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
     });
   }
@@ -1083,39 +1361,13 @@ async function installFromOfficialCatalog(params: {
       `official plugin catalog entry has no supported install source: ${params.request.pluginId}`,
     );
   }
-  const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
-  const result = await installPluginFromNpmSpec({
+  return {
+    source: "official",
     spec: install.npmSpec,
-    config: params.snapshot.config,
-    extensionsDir,
-    expectedPluginId: pluginId,
-    ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
-    trustedSourceLinkedOfficialInstall: true,
-    logger: createInstallLogger(params.warnings),
-  });
-  if (!result.ok) {
-    return throwInstallFailure(result);
-  }
-  if (result.pluginId !== pluginId) {
-    throw new ManagedPluginLifecycleError(
-      `official catalog plugin id mismatch: expected ${pluginId}, got ${result.pluginId}`,
-    );
-  }
-  const installRecord: PluginInstallRecord = {
-    source: "npm",
-    spec: install.npmSpec,
-    installPath: result.targetDir,
-    ...(result.version ? { version: result.version } : {}),
-    ...buildNpmResolutionInstallFields(result.npmResolution),
-  };
-  const config = await persistManagedPluginInstall({
-    snapshot: params.snapshot,
     pluginId,
-    install: installRecord,
-    targetDir: result.targetDir,
-    extensionsDir,
-  });
-  return { pluginId, config };
+    mode: "install",
+    ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
+  };
 }
 
 /** Install a ClawHub or curated official plugin through the canonical install pipeline. */
@@ -1123,27 +1375,31 @@ export async function installManagedPlugin(params: {
   request: ManagedPluginInstallRequest;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ plugin: ManagedPluginCatalogEntry; warnings?: string[] }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
-    const officialCatalog = await loadOfficialCatalog(snapshot.config);
+    const officialCatalog = await loadOfficialCatalog();
     const warnings: string[] = [];
-    const installed =
+    const request =
       params.request.source === "clawhub"
-        ? await installFromClawHub({
+        ? resolveManagedClawHubInstallRequest({
             request: params.request,
-            snapshot,
             officialEntries: officialCatalog.entries,
-            env,
-            warnings,
           })
-        : await installFromOfficialCatalog({
+        : resolveManagedOfficialInstallRequest({
             request: params.request,
-            snapshot,
             officialEntries: officialCatalog.entries,
-            env,
-            warnings,
           });
+    const installed = await installManagedPluginSource({
+      request,
+      snapshot,
+      env,
+      logger: createInstallLogger(warnings),
+      cleanupOnPersistenceFailure: true,
+    });
+    if (!installed.ok) {
+      return throwInstallFailure(installed);
+    }
     const catalog = await listManagedPlugins({
       config: installed.config,
       env,
@@ -1172,8 +1428,8 @@ export async function setManagedPluginEnabled(params: {
   changedPaths: string[];
   warnings?: string[];
 }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const metadata = loadPluginMetadataSnapshot({ config: snapshot.config, env });
     const pluginId = metadata.normalizePluginId(params.pluginId.trim());
@@ -1238,8 +1494,8 @@ export async function uninstallManagedPlugin(params: {
   pluginId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginId: string; removed: string[]; warnings?: string[] }> {
-  return await withManagedPluginMutationLock(async () => {
-    const env = params.env ?? process.env;
+  const env = params.env ?? process.env;
+  return await withPluginLifecycleLease({ env }, async () => {
     const snapshot = await readPluginMutationSnapshot(env);
     const installRecords = await loadInstalledPluginIndexInstallRecords();
     // Mirror the CLI uninstall flow: plan against config carrying install records
@@ -1258,15 +1514,55 @@ export async function uninstallManagedPlugin(params: {
     // planPluginUninstall keeps its plugin-id fallback for channel config keys.
     const channelIds = manifest && manifest.channels.length > 0 ? manifest.channels : undefined;
     const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-    const plan = planPluginUninstall({
+    const initialPlan = planPluginUninstall({
       config: configWithRecords,
       pluginId,
       ...(channelIds ? { channelIds } : {}),
       deleteFiles: true,
       extensionsDir,
     });
-    if (!plan.ok) {
-      throw new ManagedPluginLifecycleError(plan.error);
+    if (!initialPlan.ok) {
+      throw new ManagedPluginLifecycleError(initialPlan.error);
+    }
+    let plan = initialPlan;
+    let finalSnapshot = snapshot;
+    let directoryResult = { directoryRemoved: false, warnings: [] as string[] };
+    if (plan.directoryRemoval) {
+      const disabledConfig = prepareConfigForPendingPluginDirectoryRemoval(
+        snapshot.config,
+        pluginId,
+      );
+      await replaceConfigFile({
+        nextConfig: disabledConfig,
+        baseHash: snapshot.baseHash,
+        writeOptions: {
+          ...snapshot.writeOptions,
+          afterWrite: { mode: "auto" },
+        },
+      });
+      directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+      if (pluginUninstallTargetExists(plan.directoryRemoval.target)) {
+        throw new ManagedPluginLifecycleError(
+          `Failed to remove plugin directory ${plan.directoryRemoval.target}; the plugin remains disabled and tracked so uninstall can be retried.`,
+          { kind: "unavailable" },
+        );
+      }
+      finalSnapshot = await readPluginMutationSnapshot(env);
+      const refreshedConfigWithRecords = withPluginInstallRecords(
+        finalSnapshot.config,
+        installRecords,
+      );
+      const refreshedPlan = planPluginUninstall({
+        config: refreshedConfigWithRecords,
+        pluginId,
+        ...(channelIds ? { channelIds } : {}),
+        deleteFiles: true,
+        extensionsDir,
+      });
+      if (!refreshedPlan.ok) {
+        throw new ManagedPluginLifecycleError(refreshedPlan.error);
+      }
+      plan = refreshedPlan;
     }
     const nextConfig = withoutPluginInstallRecords(plan.config);
     const nextInstallRecords = removePluginInstallRecordFromRecords(installRecords, pluginId);
@@ -1274,11 +1570,17 @@ export async function uninstallManagedPlugin(params: {
       previousInstallRecords: installRecords,
       nextInstallRecords,
       nextConfig,
-      baseHash: snapshot.baseHash,
-      writeOptions: snapshot.writeOptions,
+      baseHash: finalSnapshot.baseHash,
+      writeOptions: finalSnapshot.writeOptions,
     });
-    const directoryResult = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
-    const warnings = [...directoryResult.warnings];
+    const warnings = [
+      ...collectClawPluginUninstallWarnings({
+        pluginId,
+        installRecord: installRecords[pluginId],
+        env,
+      }),
+      ...directoryResult.warnings,
+    ];
     await refreshPluginRegistryAfterConfigMutation({
       config: nextConfig,
       reason: "source-changed",

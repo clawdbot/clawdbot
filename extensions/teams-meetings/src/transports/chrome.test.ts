@@ -85,6 +85,47 @@ afterEach(() => {
 });
 
 describe("Microsoft Teams meeting Chrome startup cleanup", () => {
+  it("keeps auto-join enabled when recovering an active meeting tab", async () => {
+    const state = { tabOpen: true };
+    const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) =>
+      browserResult(params, state),
+    );
+    const runtime = {
+      gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+      system: {
+        runCommandWithTimeout: vi.fn(async () => ({
+          code: 0,
+          stderr: "",
+          stdout: "BlackHole 2ch",
+        })),
+      },
+    } as unknown as PluginRuntime;
+
+    await expect(
+      launchTeamsMeetingInChrome({
+        config: resolveTeamsMeetingsConfig({
+          chrome: { launch: false, waitForInCallMs: 1 },
+        }),
+        fullConfig: {},
+        logger,
+        meetingSessionId: "session-1",
+        mode: "agent",
+        runtime,
+        trackedTargetId: "teams-tab",
+        url: URL,
+      }),
+    ).rejects.toThrow("realtime startup failed");
+
+    const evaluated = gatewayRequest.mock.calls.find(
+      ([, params]) =>
+        params.path === "/act" &&
+        !(params.body as { fn?: string } | undefined)?.fn?.includes("leaveAction"),
+    );
+    expect((evaluated?.[1].body as { fn?: string } | undefined)?.fn).toContain(
+      "const autoJoin = true",
+    );
+  });
+
   it("disposes local audio and leaves the browser when realtime startup fails", async () => {
     const state = { tabOpen: false };
     const gatewayRequest = vi.fn(async (_method: string, params: Record<string, unknown>) =>

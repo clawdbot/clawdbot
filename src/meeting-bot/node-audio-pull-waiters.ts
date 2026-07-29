@@ -1,5 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
-
 /** Internal pull-wait ownership used by the node-host long poll. */
 export class MeetingNodeAudioPullWaiters {
   readonly #waiters = new Set<() => void>();
@@ -14,12 +12,19 @@ export class MeetingNodeAudioPullWaiters {
       wake = resolve;
       this.#waiters.add(wake);
     });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    });
     try {
-      await Promise.race([sleep(timeoutMs), ready]);
+      await Promise.race([timeout, ready]);
     } finally {
       // A stalled bridge can be polled indefinitely. Timeout must release its
       // resolver instead of retaining one waiter per empty pull.
       this.#waiters.delete(wake);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
     }
   }
 

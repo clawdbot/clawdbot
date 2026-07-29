@@ -119,11 +119,17 @@ function createAudioCfg(params: {
       : {}),
     tools: {
       media: {
+        models: [
+          {
+            type: "provider",
+            provider: params.provider,
+            model: params.model,
+            capabilities: ["audio"],
+            ...params.entry,
+          },
+        ],
         audio: {
           enabled: true,
-          models: [
-            { type: "provider", provider: params.provider, model: params.model, ...params.entry },
-          ],
         },
       },
     },
@@ -134,9 +140,16 @@ function createVideoCfg(params: { provider: string; model: string }): OpenClawCo
   return {
     tools: {
       media: {
+        models: [
+          {
+            type: "provider",
+            provider: params.provider,
+            model: params.model,
+            capabilities: ["video"],
+          },
+        ],
         video: {
           enabled: true,
-          models: [{ type: "provider", provider: params.provider, model: params.model }],
         },
       },
     },

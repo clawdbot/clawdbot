@@ -18,6 +18,8 @@ type ForceFreePortResult = {
   escalatedToSigkill: boolean;
 };
 
+type BeforePortSignal = (context: { port: number; pid?: number; signal: NodeJS.Signals }) => void;
+
 type ExecFileError = NodeJS.ErrnoException & {
   status?: number | null;
   stderr?: string | Buffer;
@@ -85,24 +87,30 @@ function parseFuserPidList(output: string): number[] {
     return [];
   }
   const values = new Set<number>();
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) {
+  for (const token of output.split(/\s+/)) {
+    if (!token) {
       continue;
     }
-    const pidRegion = line.includes(":") ? line.slice(line.indexOf(":") + 1) : line;
-    const pidMatches = pidRegion.match(/\d+/g) ?? [];
-    for (const match of pidMatches) {
-      const pid = Number.parseInt(match, 10);
-      if (Number.isFinite(pid) && pid > 0) {
-        values.add(pid);
-      }
+    const pid = parseStrictPositiveInteger(token);
+    if (pid !== undefined) {
+      values.add(pid);
     }
   }
   return [...values];
 }
 
-function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortProcess[] {
+function killPortWithFuser(
+  port: number,
+  signal: "SIGTERM" | "SIGKILL",
+  beforeSignal?: BeforePortSignal,
+): PortProcess[] {
+  if (beforeSignal) {
+    const listeners = listPortListenersWithFuser(port);
+    // fuser's resource-targeted -k can select a different PID at exec time.
+    // A guard therefore freezes concrete victims before signaling directly.
+    killPids(port, listeners, signal, beforeSignal);
+    return listeners;
+  }
   const args = ["-k", `-${FUSER_SIGNALS[signal]}`, `${port}/tcp`];
   try {
     const stdout = execFileSync("fuser", args, {
@@ -132,6 +140,42 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
     }
     if (code === "EACCES" || code === "EPERM") {
       throw withErrnoCode("fuser permission denied while forcing gateway port", code, err);
+    }
+    throw err instanceof Error ? err : new Error(String(err));
+  }
+}
+
+function listPortListenersWithFuser(port: number): PortProcess[] {
+  try {
+    const stdout = execFileSync("fuser", [`${port}/tcp`], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: PORT_TOOL_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+    });
+    return parseFuserPidList(stdout).map((pid) => ({ pid }));
+  } catch (err: unknown) {
+    const execErr = err as ExecFileError;
+    const stdout = readExecOutput(execErr.stdout);
+    // fuser writes resource labels and diagnostics to stderr. Only its stdout
+    // PID stream is safe to turn into direct signal targets.
+    const parsed = parseFuserPidList(stdout);
+    if (execErr.status === 1) {
+      return parsed.map((pid) => ({ pid }));
+    }
+    if (execErr.code === "ENOENT") {
+      throw withErrnoCode(
+        "fuser not found; required for --force when lsof is unavailable",
+        "ENOENT",
+        err,
+      );
+    }
+    if (execErr.code === "EACCES" || execErr.code === "EPERM") {
+      throw withErrnoCode(
+        "fuser permission denied while inspecting gateway port",
+        execErr.code,
+        err,
+      );
     }
     throw err instanceof Error ? err : new Error(String(err));
   }
@@ -235,24 +279,24 @@ function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-export function forceFreePort(port: number): PortProcess[] {
+export function forceFreePort(
+  port: number,
+  opts: { beforeSignal?: BeforePortSignal } = {},
+): PortProcess[] {
   const listeners = listPortListeners(port);
-  for (const proc of listeners) {
-    try {
-      process.kill(proc.pid, "SIGTERM");
-    } catch (err) {
-      throw new Error(
-        `failed to kill pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""}: ${String(err)}`,
-        { cause: err },
-      );
-    }
-  }
+  killPids(port, listeners, "SIGTERM", opts.beforeSignal);
   return listeners;
 }
 
-function killPids(listeners: PortProcess[], signal: NodeJS.Signals) {
+function killPids(
+  port: number,
+  listeners: PortProcess[],
+  signal: NodeJS.Signals,
+  beforeSignal?: BeforePortSignal,
+) {
   for (const proc of listeners) {
     try {
+      beforeSignal?.({ port, pid: proc.pid, signal });
       process.kill(proc.pid, signal);
     } catch (err) {
       throw new Error(
@@ -272,6 +316,8 @@ export async function forceFreePortAndWait(
     intervalMs?: number;
     /** How long to wait after SIGTERM before escalating to SIGKILL. */
     sigtermTimeoutMs?: number;
+    /** Last-moment ownership guard invoked before each destructive signal. */
+    beforeSignal?: BeforePortSignal;
   } = {},
 ): Promise<ForceFreePortResult> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
@@ -285,7 +331,7 @@ export async function forceFreePortAndWait(
   let useFuserFallback = false;
 
   try {
-    killed = forceFreePort(port);
+    killed = forceFreePort(port, opts.beforeSignal ? { beforeSignal: opts.beforeSignal } : {});
   } catch (err) {
     if (!isRecoverableLsofError(err)) {
       throw err;
@@ -296,7 +342,7 @@ export async function forceFreePortAndWait(
       return { killed, waitedMs: 0, escalatedToSigkill: false };
     }
     useFuserFallback = true;
-    killed = killPortWithFuser(port, "SIGTERM");
+    killed = killPortWithFuser(port, "SIGTERM", opts.beforeSignal);
   }
 
   if (killed.length === 0) {
@@ -330,10 +376,10 @@ export async function forceFreePortAndWait(
   }
 
   if (useFuserFallback) {
-    killPortWithFuser(port, "SIGKILL");
+    killPortWithFuser(port, "SIGKILL", opts.beforeSignal);
   } else {
     const remaining = listPortListeners(port);
-    killPids(remaining, "SIGKILL");
+    killPids(port, remaining, "SIGKILL", opts.beforeSignal);
   }
 
   while (waitedMs < timeoutMs) {

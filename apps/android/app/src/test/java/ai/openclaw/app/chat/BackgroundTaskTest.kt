@@ -32,6 +32,21 @@ class BackgroundTaskTest {
   }
 
   @Test
+  fun parsesRunningBackgroundExecTask() {
+    val tasks =
+      parseBackgroundTasks(
+        json,
+        """{"tasks":[{"id":"task-exec","taskId":"task-exec","kind":"exec","status":"running","runtime":"cli","title":"CLI command","progressSummary":"Command running"}]}""",
+      )
+
+    assertEquals(1, tasks.size)
+    assertEquals("CLI command", tasks.single().displayTitle)
+    assertEquals("Command running", tasks.single().output)
+    assertTrue(tasks.single().isActive)
+    assertEquals(BackgroundTaskDisplayStatus.Running, tasks.single().displayStatus)
+  }
+
+  @Test
   fun listsActiveAndRecentTasksWithoutRequestingPrompts() =
     runTest {
       val calls = mutableListOf<Pair<String, String?>>()

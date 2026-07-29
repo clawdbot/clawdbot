@@ -25,7 +25,6 @@ const AUTOMATIC_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyIngressOpenGroupsDenied,
   CHECK_IDS.policyIngressGroupMentionRequired,
-  CHECK_IDS.policyDataHandlingRedactionDisabled,
   CHECK_IDS.policyDataHandlingTelemetryContentCapture,
 ]);
 
@@ -104,14 +103,6 @@ function applyAutomaticPatch(
       return setFindingConfigValues(cfg, findings, "groupPolicy", "allowlist");
     case CHECK_IDS.policyIngressGroupMentionRequired:
       return setFindingConfigValues(cfg, findings, "requireMention", true);
-    case CHECK_IDS.policyDataHandlingRedactionDisabled:
-      if (hasScopedPolicyRequirement(findings)) {
-        return skippedUnsafeScopedRepair(
-          cfg,
-          "Skipped scoped data-handling repair. The finding reports shared logging config, so changing it would affect more than the scoped policy target.",
-        );
-      }
-      return enableSensitiveLoggingRedaction(cfg);
     case CHECK_IDS.policyDataHandlingTelemetryContentCapture:
       if (hasScopedPolicyRequirement(findings)) {
         return skippedUnsafeScopedRepair(
@@ -186,7 +177,6 @@ function disableInsecureControlUi(
   const controlUi = ensureRecord(gateway, "controlUi");
   const changes: string[] = [];
   const fields = [
-    ["allowInsecureAuth", "oc://openclaw.config/gateway/controlUi/allowInsecureAuth"],
     [
       "dangerouslyDisableDeviceAuth",
       "oc://openclaw.config/gateway/controlUi/dangerouslyDisableDeviceAuth",
@@ -225,19 +215,6 @@ function disableRemoteGatewayMode(
   return changes.length > 0
     ? { config: next as OpenClawConfig, changes }
     : { config: cfg, changes };
-}
-
-function enableSensitiveLoggingRedaction(cfg: OpenClawConfig): RepairPatch {
-  const next = cloneConfig(cfg);
-  const logging = ensureRecord(next, "logging");
-  if (logging.redactSensitive !== "off") {
-    return { config: cfg, changes: [] };
-  }
-  logging.redactSensitive = "tools";
-  return {
-    config: next as OpenClawConfig,
-    changes: ["Set logging.redactSensitive=tools for policy conformance."],
-  };
 }
 
 function disableTelemetryContentCapture(cfg: OpenClawConfig): RepairPatch {

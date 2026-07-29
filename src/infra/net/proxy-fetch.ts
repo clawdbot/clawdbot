@@ -2,11 +2,13 @@
 // options and runtime FormData normalization.
 import { logWarn } from "../../logger.js";
 import { formatErrorMessage } from "../errors.js";
-import {
-  addActiveManagedProxyTlsOptions,
-  resolveManagedEnvHttpProxyAgentOptions,
-} from "./proxy/managed-proxy-undici.js";
+import { resolveManagedEnvHttpProxyAgentOptions } from "./proxy/managed-proxy-undici.js";
 import { fetchWithPreparedRuntimeDispatcher } from "./runtime-fetch.js";
+import {
+  buildHttp1EnvHttpProxyAgentOptions,
+  buildHttp1ProxyAgentOptions,
+} from "./undici-dispatcher-options.js";
+import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
 import { loadUndiciRuntimeDeps } from "./undici-runtime.js";
 
 /** Non-enumerable marker used to recover the explicit proxy URL from proxy fetch wrappers. */
@@ -25,7 +27,9 @@ export function makeProxyFetch(proxyUrl: string): typeof fetch {
   let agent: InstanceType<typeof ProxyAgent> | null = null;
   const resolveAgent = (): InstanceType<typeof ProxyAgent> => {
     if (!agent) {
-      agent = new ProxyAgent(addActiveManagedProxyTlsOptions({ uri: proxyUrl }));
+      agent = withUndiciErrorDiagnostics(
+        new ProxyAgent(buildHttp1ProxyAgentOptions({ uri: proxyUrl })),
+      );
     }
     return agent;
   };
@@ -69,7 +73,9 @@ export function resolveProxyFetchFromEnv(
   try {
     const runtimeDeps = loadUndiciRuntimeDeps();
     const { EnvHttpProxyAgent } = runtimeDeps;
-    const agent = new EnvHttpProxyAgent(proxyOptions);
+    const agent = withUndiciErrorDiagnostics(
+      new EnvHttpProxyAgent(buildHttp1EnvHttpProxyAgentOptions(proxyOptions)),
+    );
     return ((input: RequestInfo | URL, init?: RequestInit) =>
       fetchWithPreparedRuntimeDispatcher(runtimeDeps, input, {
         ...init,

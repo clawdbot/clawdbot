@@ -1,5 +1,3 @@
-// Agent Core type module defines shared TypeScript contracts.
-import type { Static, TSchema } from "typebox";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -11,7 +9,9 @@ import type {
   TextContent,
   Tool,
   ToolResultMessage,
-} from "../../llm-core/src/index.js";
+} from "@openclaw/llm-core";
+// Agent Core type module defines shared TypeScript contracts.
+import type { Static, TSchema } from "typebox";
 
 /**
  * Stream function used by the agent loop.

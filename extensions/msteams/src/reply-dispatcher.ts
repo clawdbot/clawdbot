@@ -1,4 +1,5 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import type { ChannelInboundTurnPlan } from "openclaw/plugin-sdk/channel-inbound";
 // Msteams plugin module implements reply dispatcher behavior.
 import {
   buildChannelProgressDraftLine,
@@ -9,7 +10,6 @@ import {
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createChannelMessageReplyPipeline,
@@ -293,11 +293,7 @@ export function createMSTeamsReplyDispatcher(params: {
     }
   };
 
-  const {
-    dispatcher,
-    replyOptions,
-    markDispatchIdle: baseMarkDispatchIdle,
-  } = createReplyDispatcherWithTyping({
+  const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
     ...replyPipeline,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
     onReplyStart: async () => {
@@ -314,6 +310,8 @@ export function createMSTeamsReplyDispatcher(params: {
       }
     },
     typingCallbacks,
+  };
+  const delivery: ChannelInboundTurnPlan["delivery"] = {
     deliver: async (payload) => {
       const preparedPayload = streamController.preparePayload(payload);
       if (!preparedPayload) {
@@ -342,9 +340,9 @@ export function createMSTeamsReplyDispatcher(params: {
         hint,
       });
     },
-  });
+  };
 
-  const markDispatchIdle = (): Promise<void> => {
+  const settleDelivery = (): Promise<void> => {
     return flushPendingMessages()
       .catch((err: unknown) => {
         const errMsg = formatUnknownError(err);
@@ -366,9 +364,6 @@ export function createMSTeamsReplyDispatcher(params: {
           queueReplyPayload(fallbackPayload);
           await flushPendingMessages();
         }
-      })
-      .finally(() => {
-        baseMarkDispatchIdle();
       });
   };
 
@@ -534,9 +529,12 @@ export function createMSTeamsReplyDispatcher(params: {
     : {};
 
   return {
-    dispatcher,
+    dispatcherOptions: {
+      ...dispatcherOptions,
+      onSettled: settleDelivery,
+    },
+    delivery,
     replyOptions: {
-      ...replyOptions,
       ...(streamController.hasStream()
         ? {
             onPartialReply: (payload: { text?: string }) =>
@@ -557,6 +555,5 @@ export function createMSTeamsReplyDispatcher(params: {
       disableBlockStreaming: blockStreamingResolved == null ? undefined : !blockStreamingResolved,
       onModelSelected,
     },
-    markDispatchIdle,
   };
 }

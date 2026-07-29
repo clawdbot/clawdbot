@@ -11,6 +11,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliMaxTurnsError,
+  findCliTimeoutError,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -18,6 +19,7 @@ import {
   resolveFailoverStatus,
   resolveModelFallbackError,
 } from "./failover-error.js";
+import { AgentHarnessSessionSupersededError } from "./harness/errors.js";
 import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
@@ -73,6 +75,23 @@ describe("failover-error", () => {
     );
 
     expect(findCliMaxTurnsError(aggregate)).toBe(maxTurns);
+  });
+
+  it("finds structured CLI timeout context through aggregate wrappers", () => {
+    const timeout = new FailoverError("CLI exceeded timeout", {
+      reason: "timeout",
+      code: "cli_overall_timeout",
+      cliTimeout: {
+        mode: "overall",
+        timeoutSeconds: 600,
+        observedActivity: true,
+        activeToolCount: 0,
+        backgroundTaskCount: 1,
+      },
+    });
+    const aggregate = new AggregateError([{ cause: timeout }], "CLI turn failed");
+
+    expect(findCliTimeoutError(aggregate)).toBe(timeout);
   });
 
   it("infers failover reason from HTTP status", () => {
@@ -214,6 +233,33 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("classifies certificate failures separately from timeouts", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        code: "ERR_TLS_CERT_ALTNAME_INVALID",
+        message: "Hostname/IP does not match certificate's altnames",
+      }),
+    ).toBe("tls_certificate");
+    expect(
+      resolveFailoverReasonFromError(
+        new TypeError("fetch failed", {
+          cause: {
+            code: "CERT_HAS_EXPIRED",
+            message: "certificate has expired",
+          },
+        }),
+      ),
+    ).toBe("tls_certificate");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        code: "CERT_HAS_EXPIRED",
+        message: "certificate field rejected",
+      }),
+    ).toBe("format");
+    expect(resolveFailoverStatus("tls_certificate")).toBe(502);
   });
 
   it("stops on cyclic cause chains", () => {
@@ -947,20 +993,26 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ code: "OVERLOADED_ERROR" })).toBe("overloaded");
   });
 
-  it("infers timeout from abort/error stop-reason messages", () => {
+  it("infers timeout from abort/network stop-reason messages", () => {
     expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: abort" })).toBe(
       "timeout",
     );
-    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
-      "timeout",
-    );
     expect(resolveFailoverReasonFromError({ message: "stop reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ message: "reason: abort" })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({ message: "Unhandled stop reason: network_error" }),
     ).toBe("timeout");
+  });
+
+  it("infers server_error from bare error finish/stop reasons (#109218)", () => {
+    expect(resolveFailoverReasonFromError({ message: "Unhandled stop reason: error" })).toBe(
+      "server_error",
+    );
+    expect(resolveFailoverReasonFromError({ message: "stop reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "reason: error" })).toBe("server_error");
+    expect(resolveFailoverReasonFromError({ message: "Provider finish_reason: error" })).toBe(
+      "server_error",
+    );
   });
 
   it("infers timeout from connection/network error messages", () => {
@@ -1354,6 +1406,14 @@ describe("failover-error", () => {
 
     it("returns true for direct embedded attempt session takeover errors", () => {
       expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+    });
+
+    it("returns true for harness session generation ownership loss", () => {
+      expect(
+        isNonProviderRuntimeCoordinationError(
+          new AgentHarnessSessionSupersededError("session generation superseded"),
+        ),
+      ).toBe(true);
     });
 
     it("returns true when the coordination error is nested via cause", () => {

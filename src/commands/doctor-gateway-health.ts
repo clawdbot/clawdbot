@@ -16,6 +16,7 @@ import type {
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { redactSecretDegradationReason } from "../secrets/runtime-degraded-state.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
@@ -91,10 +92,22 @@ export async function checkGatewayHealth(params: {
         status.degradedSecretOwners
           .map(
             (owner) =>
-              `- ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${owner.reason}`,
+              `- ${owner.degradationState ?? "cold"} ${owner.ownerKind}:${owner.ownerId} (${owner.paths.join(", ")}): ${redactSecretDegradationReason(owner.reason)}` +
+              "\n  Retry: openclaw secrets reload",
           )
           .join("\n"),
-        "Secret owners unavailable",
+        "Secret runtime degradation",
+      );
+    }
+    if (status.degradedPlugins && status.degradedPlugins.length > 0) {
+      note(
+        status.degradedPlugins
+          .map(
+            (plugin) =>
+              `- ${plugin.pluginId} (${plugin.diagnostic.reason}): ${plugin.diagnostic.detail}`,
+          )
+          .join("\n"),
+        "Plugins configured unavailable",
       );
     }
     try {

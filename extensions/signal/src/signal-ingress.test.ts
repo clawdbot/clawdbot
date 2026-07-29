@@ -2,34 +2,27 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
-import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SignalSseEvent } from "./client-adapter.js";
-import { setSignalRuntime } from "./runtime.js";
-import {
-  clearSignalRuntimeForTest,
-  signalIngressTesting,
-  type SignalIngressPayload,
-} from "./runtime.test-support.js";
 import { startSignalIngressMonitor } from "./signal-ingress.js";
 
-const createSignalIngressDrain = (
-  ...args: Parameters<typeof signalIngressTesting.createSignalIngressDrain>
-) => signalIngressTesting.createSignalIngressDrain(...args);
-const enqueueSignalIngressEvent = (
-  ...args: Parameters<typeof signalIngressTesting.enqueueSignalIngressEvent>
-) => signalIngressTesting.enqueueSignalIngressEvent(...args);
-const resolveSignalIngressEventId = (
-  ...args: Parameters<typeof signalIngressTesting.resolveSignalIngressEventId>
-) => signalIngressTesting.resolveSignalIngressEventId(...args);
-const resolveSignalIngressLaneKey = (
-  ...args: Parameters<typeof signalIngressTesting.resolveSignalIngressLaneKey>
-) => signalIngressTesting.resolveSignalIngressLaneKey(...args);
+type SignalIngressQueue = NonNullable<Parameters<typeof startSignalIngressMonitor>[0]["queue"]>;
+type SignalIngressPayload = Parameters<SignalIngressQueue["enqueue"]>[1];
+type SignalIngressDispatch = Parameters<typeof startSignalIngressMonitor>[0]["dispatch"];
+
+async function startMonitor(queue: SignalIngressQueue, dispatch: SignalIngressDispatch) {
+  const monitor = await startSignalIngressMonitor({
+    accountId: "default",
+    queue,
+    dispatch,
+    runtime: { error: vi.fn(), log: vi.fn() },
+  });
+  return { monitor, waitForIdle: monitor.waitForIdle };
+}
 
 function signalEvent(params?: {
   senderNumber?: string;
@@ -57,7 +50,7 @@ function signalEvent(params?: {
 }
 
 async function withQueue<T>(
-  fn: (queue: ChannelIngressQueue<SignalIngressPayload>, stateDir: string) => Promise<T>,
+  fn: (queue: SignalIngressQueue, stateDir: string) => Promise<T>,
 ): Promise<T> {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-signal-ingress-"));
   const stateDir = await fs.realpath(created);
@@ -75,7 +68,6 @@ async function withQueue<T>(
 }
 
 afterEach(() => {
-  clearSignalRuntimeForTest();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
 });
@@ -87,16 +79,13 @@ describe("Signal durable ingress", () => {
       const failingQueue = {
         ...queue,
         enqueue: vi.fn().mockRejectedValue(appendError),
-      } satisfies ChannelIngressQueue<SignalIngressPayload>;
-      setSignalRuntime({
-        state: { openChannelIngressQueue: () => failingQueue },
-      } as unknown as PluginRuntime);
+      } satisfies SignalIngressQueue;
       const dispatch = vi.fn();
       const monitor = await startSignalIngressMonitor({
         accountId: "default",
+        queue: failingQueue,
         dispatch,
         runtime: { error: vi.fn(), log: vi.fn() },
-        runTrackedTask: vi.fn(),
       });
       try {
         await expect(monitor.receive(signalEvent())).rejects.toBe(appendError);
@@ -110,69 +99,72 @@ describe("Signal durable ingress", () => {
   it("recovers an uncompleted append with a fresh drain and dispatches exactly once", async () => {
     await withQueue(async (queue) => {
       const event = signalEvent();
-      await enqueueSignalIngressEvent({ queue, event });
+      const interruptedDispatch = vi.fn((_event, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      const interrupted = await startMonitor(queue, interruptedDispatch);
+      await interrupted.monitor.receive(event);
+      await interrupted.waitForIdle();
+      expect(await queue.listClaims()).toHaveLength(1);
+      await interrupted.monitor.stop();
 
-      const dispatch = vi.fn().mockResolvedValue(undefined);
-      const recoveredDrain = createSignalIngressDrain({ queue, dispatch });
-      await recoveredDrain.drainOnce();
-      await recoveredDrain.waitForIdle();
-      recoveredDrain.dispose();
-
-      const restartedDrain = createSignalIngressDrain({ queue, dispatch });
-      await restartedDrain.drainOnce();
-      await restartedDrain.waitForIdle();
-      restartedDrain.dispose();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(dispatch).toHaveBeenCalledWith(event, expect.any(Object));
+      const recoveredDispatch = vi.fn().mockResolvedValue(undefined);
+      const recovered = await startMonitor(queue, recoveredDispatch);
+      try {
+        await recovered.waitForIdle();
+        expect(recoveredDispatch).toHaveBeenCalledTimes(1);
+        expect(recoveredDispatch).toHaveBeenCalledWith(event, expect.any(Object));
+      } finally {
+        await recovered.monitor.stop();
+      }
     });
   });
 
   it("keeps a completion tombstone so a duplicate cannot dispatch twice", async () => {
     await withQueue(async (queue) => {
       const event = signalEvent();
-      const first = await enqueueSignalIngressEvent({ queue, event });
-      expect(first.kind).toBe("accepted");
-
       const dispatch = vi.fn().mockResolvedValue(undefined);
-      const drain = createSignalIngressDrain({ queue, dispatch });
-      await drain.drainOnce();
-      await drain.waitForIdle();
-
-      const duplicate = await enqueueSignalIngressEvent({ queue, event });
-      expect(duplicate.kind).toBe("completed");
-      await drain.drainOnce();
-      await drain.waitForIdle();
-      drain.dispose();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(event);
+        await started.waitForIdle();
+        await started.monitor.receive(event);
+        await started.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await started.monitor.stop();
+      }
     });
   });
 
   it("completes only when deferred dispatch adoption becomes durable", async () => {
     await withQueue(async (queue) => {
       const event = signalEvent();
-      await enqueueSignalIngressEvent({ queue, event });
       let adopt: (() => void | Promise<void>) | undefined;
-      const drain = createSignalIngressDrain({
-        queue,
-        dispatch: (_event, lifecycle) => {
-          adopt = lifecycle.onAdopted;
-          lifecycle.onDeferred();
-          return { kind: "deferred" };
-        },
+      const dispatch = vi.fn((_event, lifecycle) => {
+        adopt = lifecycle.onAdopted;
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
       });
-
-      await drain.drainOnce();
-      await vi.waitFor(async () => {
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(event);
+        await started.waitForIdle();
         expect(await queue.listClaims()).toHaveLength(1);
-      });
-      expect((await enqueueSignalIngressEvent({ queue, event })).kind).toBe("claimed");
 
-      await adopt?.();
-      await drain.waitForIdle();
-      expect((await enqueueSignalIngressEvent({ queue, event })).kind).toBe("completed");
-      drain.dispose();
+        await started.monitor.receive(event);
+        await started.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+
+        expect(adopt).toBeDefined();
+        await adopt?.();
+        await started.monitor.receive(event);
+        await started.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await started.monitor.stop();
+      }
     });
   });
 
@@ -188,16 +180,16 @@ describe("Signal durable ingress", () => {
         { receivedAt: 1, laneKey: "direct:number:+15550001111" },
       );
       const dispatch = vi.fn();
-      const drain = createSignalIngressDrain({ queue, dispatch });
-
-      await drain.drainOnce();
-      await drain.waitForIdle();
-
-      expect((await queue.enqueue("malformed-event", {} as SignalIngressPayload)).kind).toBe(
-        "failed",
-      );
-      expect(dispatch).not.toHaveBeenCalled();
-      drain.dispose();
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.waitForIdle();
+        expect((await queue.enqueue("malformed-event", {} as SignalIngressPayload)).kind).toBe(
+          "failed",
+        );
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await started.monitor.stop();
+      }
     });
   });
 
@@ -215,21 +207,17 @@ describe("Signal durable ingress", () => {
         timestamp: 1_700_000_000_099,
         message: "redelivered message",
       });
-      expect(resolveSignalIngressEventId(original)).toBe(resolveSignalIngressEventId(redelivery));
-
-      await enqueueSignalIngressEvent({ queue, event: original });
       const dispatch = vi.fn().mockResolvedValue(undefined);
-      const drain = createSignalIngressDrain({ queue, dispatch });
-      await drain.drainOnce();
-      await drain.waitForIdle();
-
-      const duplicate = await enqueueSignalIngressEvent({ queue, event: redelivery });
-      expect(duplicate.kind).toBe("completed");
-      await drain.drainOnce();
-      await drain.waitForIdle();
-      drain.dispose();
-
-      expect(dispatch).toHaveBeenCalledTimes(1);
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(original);
+        await started.waitForIdle();
+        await started.monitor.receive(redelivery);
+        await started.waitForIdle();
+        expect(dispatch).toHaveBeenCalledTimes(1);
+      } finally {
+        await started.monitor.stop();
+      }
     });
   });
 
@@ -237,17 +225,31 @@ describe("Signal durable ingress", () => {
     await withQueue(async (queue) => {
       const direct = signalEvent({ senderUuid: "123e4567-e89b-12d3-a456-426614174000" });
       const group = signalEvent({ groupId: "group-123" });
+      const dispatch = vi.fn((_event, lifecycle) => {
+        lifecycle.onDeferred();
+        return { kind: "deferred" } as const;
+      });
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive(direct);
+        await started.monitor.receive(group);
+        await started.waitForIdle();
 
-      expect(resolveSignalIngressLaneKey(direct)).toBe(
-        "direct:uuid:123e4567-e89b-12d3-a456-426614174000",
-      );
-      expect(resolveSignalIngressLaneKey(group)).toBe("group:group-123");
-
-      await enqueueSignalIngressEvent({ queue, event: group });
-      const pending = await queue.listPending({ limit: "all" });
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.payload.event).toEqual(group);
-      expect(pending[0]?.laneKey).toBe("group:group-123");
+        expect(await queue.listClaims()).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              laneKey: "direct:uuid:123e4567-e89b-12d3-a456-426614174000",
+              payload: expect.objectContaining({ event: direct }),
+            }),
+            expect.objectContaining({
+              laneKey: "group:group-123",
+              payload: expect.objectContaining({ event: group }),
+            }),
+          ]),
+        );
+      } finally {
+        await started.monitor.stop();
+      }
     });
   });
 
@@ -257,12 +259,17 @@ describe("Signal durable ingress", () => {
     ["typing", { envelope: { sourceNumber: "+15550001111", timestamp: 3, typingMessage: {} } }],
   ])("does not journal %s envelopes", async (_label, payload) => {
     await withQueue(async (queue) => {
-      const result = await enqueueSignalIngressEvent({
-        queue,
-        event: { event: "receive", data: JSON.stringify(payload) },
-      });
-      expect(result.kind).toBe("ignored");
-      await expect(queue.listPending({ limit: "all" })).resolves.toHaveLength(0);
+      const dispatch = vi.fn();
+      const started = await startMonitor(queue, dispatch);
+      try {
+        await started.monitor.receive({ event: "receive", data: JSON.stringify(payload) });
+        await started.waitForIdle();
+        await expect(queue.listPending({ limit: "all" })).resolves.toHaveLength(0);
+        await expect(queue.listClaims()).resolves.toHaveLength(0);
+        expect(dispatch).not.toHaveBeenCalled();
+      } finally {
+        await started.monitor.stop();
+      }
     });
   });
 });

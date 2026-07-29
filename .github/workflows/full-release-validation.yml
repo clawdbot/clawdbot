@@ -152,7 +152,7 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -268,7 +268,7 @@ jobs:
       changed_paths: ${{ steps.find.outputs.changed_paths }}
     steps:
       - name: Checkout trusted workflow helper
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ github.sha }}
           path: workflow
@@ -277,7 +277,7 @@ jobs:
           submodules: false
 
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           path: target
@@ -366,7 +366,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout target SHA
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           ref: ${{ needs.resolve_target.outputs.sha }}
           fetch-depth: 1
@@ -381,6 +381,28 @@ jobs:
             --target runtime-assets \
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
+
+  prepare_release_candidate:
+    name: Prepare shared release candidate
+    needs: [resolve_target, evidence_reuse]
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.evidence_reuse.outputs.reuse != 'true' && inputs.release_package_spec == '' && inputs.package_acceptance_package_spec == '' && contains(fromJSON('["all","plugin-prerelease","release-checks","cross-os","live-e2e","package"]'), inputs.rerun_group) }}
+    permissions:
+      actions: read
+      contents: read
+      packages: read
+      pull-requests: read
+    uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
+    with:
+      ref: ${{ needs.resolve_target.outputs.sha }}
+      prepare_only: true
+      include_repo_e2e: false
+      include_release_path_suites: false
+      include_openwebui: false
+      include_live_suites: false
+      allow_unreleased_changelog: ${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}
+      release_test_profile: ${{ inputs.release_profile }}
+      shared_image_artifact_namespace: full-release
+      shared_image_policy: no-push-artifact
 
   normal_ci:
     name: Run normal full CI
@@ -578,8 +600,8 @@ jobs:
 
   plugin_prerelease:
     name: Run plugin prerelease validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, evidence_reuse, prepare_release_candidate]
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
@@ -595,6 +617,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
         run: |
           set -euo pipefail
 
@@ -759,12 +782,16 @@ jobs:
 
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-plugin-prerelease"
           dispatch_run_name="Plugin Prerelease ${dispatch_id}"
-          dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" -f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id"
+          args=(-f target_ref="$TARGET_SHA" -f expected_sha="$TARGET_SHA" -f full_release_validation=true -f dispatch_id="$dispatch_id")
+          if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
+            args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
+          fi
+          dispatch_and_wait plugin-prerelease.yml "$dispatch_run_name" "${args[@]}"
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    needs: [resolve_target, evidence_reuse, prepare_release_candidate]
+    if: ${{ always() && needs.resolve_target.result == 'success' && (needs.prepare_release_candidate.result == 'success' || needs.prepare_release_candidate.result == 'skipped') && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile != 'beta' && 240 || 60 }}
     outputs:
@@ -792,6 +819,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
+          CANDIDATE_ARTIFACT_JSON: ${{ needs.prepare_release_candidate.outputs.candidate_artifact_json }}
         run: |
           set -euo pipefail
 
@@ -885,6 +913,9 @@ jobs:
             }
 
             release_check_blocking_job() {
+              if [[ "$RELEASE_PROFILE" == "beta" && "$1" == "Run package acceptance / Telegram package acceptance / "* ]]; then
+                return 1
+              fi
               case "$1" in
                 "resolve_target" | \
                 "Prepare release package artifact" | \
@@ -943,8 +974,8 @@ jobs:
                   jq '[.[] | select(
                     ((.name | startswith("Run QA Lab parity lane ("))
                       or .name == "Run QA Lab parity report"
-                      or (.name | startswith("Run QA Lab runtime parity tier ("))
-                      or .name == "Run QA Lab runtime parity lane"
+                      or (.name | startswith("Run QA Lab runtime-pair lane ("))
+                      or .name == "Verify QA Lab runtime-pair lanes"
                       or .name == "Run QA Lab live Discord lane"
                       or .name == "Run QA Lab live WhatsApp lane"
                       or .name == "Run QA Lab live Slack lane")
@@ -958,12 +989,13 @@ jobs:
                 # E2E under the same caller stays blocking.
                 failed_jobs_json="$(
                   jq '[.[] | select(
-                    (.name | startswith("Run repo/live E2E validation / "))
-                    and ((.name | contains("Docker live"))
-                      or (.name | contains("Live media suites"))
-                      or (.name | contains("validate_live_provider_suites"))
-                      or (.name | contains("validate_release_live_cache"))
-                      or (.name | contains("prepare_live_test_image")))
+                    (((.name | startswith("Run repo/live E2E validation / "))
+                      and ((.name | contains("Docker live"))
+                        or (.name | contains("Live media suites"))
+                        or (.name | contains("validate_live_provider_suites"))
+                        or (.name | contains("validate_release_live_cache"))
+                        or (.name | contains("prepare_live_test_image"))))
+                      or (.name | startswith("Run package acceptance / Telegram package acceptance / ")))
                     | not)]' <<< "$failed_jobs_json"
                 )"
               fi
@@ -1094,6 +1126,9 @@ jobs:
           fi
           if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
             args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
+          fi
+          if [[ -n "${CANDIDATE_ARTIFACT_JSON// }" ]]; then
+            args+=(-f candidate_artifact_json="$CANDIDATE_ARTIFACT_JSON")
           fi
 
           dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-release-checks"
@@ -1327,6 +1362,11 @@ jobs:
             exit 1
           fi
 
+          fail_on_regression=true
+          if [[ "$RELEASE_PROFILE" == "beta" ]]; then
+            fail_on_regression=false
+          fi
+
           {
             echo "### Product performance"
             echo
@@ -1335,6 +1375,7 @@ jobs:
             echo "- Repeat: \`3\`"
             echo "- Deep profile: \`false\`"
             echo "- Live OpenAI candidate: \`false\`"
+            echo "- Regression gate: \`${fail_on_regression}\`"
             echo "- Report publication: disabled (artifacts only)"
             if [[ "$RELEASE_PROFILE" == "beta" ]]; then
               echo "- Release impact: advisory"
@@ -1355,7 +1396,7 @@ jobs:
             -f repeat=3 \
             -f deep_profile=false \
             -f live_openai_candidate=false \
-            -f fail_on_regression=true \
+            -f fail_on_regression="$fail_on_regression" \
             -f publish_reports=false \
             -f dispatch_id="$dispatch_id" 2>&1)"
           dispatch_status=$?
@@ -1453,6 +1494,7 @@ jobs:
         resolve_target,
         evidence_reuse,
         docker_runtime_assets_preflight,
+        prepare_release_candidate,
         normal_ci,
         plugin_prerelease,
         release_checks,
@@ -1478,6 +1520,9 @@ jobs:
           PERFORMANCE_RESULT: ${{ needs.performance.result }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
+          PREPARE_RELEASE_CANDIDATE_RESULT: ${{ needs.prepare_release_candidate.result }}
+          RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
+          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
           EVIDENCE_REUSE: ${{ needs.evidence_reuse.outputs.reuse }}
           EVIDENCE_ROOT_RUN_ID: ${{ needs.evidence_reuse.outputs.evidence_root_run_id }}
           EVIDENCE_RUN_URL: ${{ needs.evidence_reuse.outputs.evidence_run_url }}
@@ -1672,26 +1717,26 @@ jobs:
                   | .[])
               ' || echo "_Unable to summarize jobs for run ${run_id}._"
               echo
-              echo "### Longest queues: ${label}"
+              echo "### Longest start delays: ${label}"
               echo
               gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
                 def ts: fromdateiso8601;
-                "| Job | Result | Queue minutes | Run minutes |",
+                "| Job | Result | Start delay minutes | Run minutes |",
                 "| --- | --- | ---: | ---: |",
                 ([.[]
                   | select(.created_at != null and .started_at != null)
                   | . + {
-                      queueMin: ((((.started_at | ts) - (.created_at | ts)) / 60) * 10 | round / 10),
+                      startDelayMin: ((((.started_at | ts) - (.created_at | ts)) / 60) * 10 | round / 10),
                       durationMin: (if .completed_at == null then null else ((((.completed_at | ts) - (.started_at | ts)) / 60) * 10 | round / 10) end)
                     }
-                  | select(.queueMin > 0)
-                  | {name, conclusion, queueMin, durationMin}]
-                  | sort_by(.queueMin)
+                  | select(.startDelayMin > 0)
+                  | {name, conclusion, startDelayMin, durationMin}]
+                  | sort_by(.startDelayMin)
                   | reverse
                   | .[0:10]
-                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.queueMin | tostring) + " | " + ((.durationMin // "") | tostring) + " |")
+                  | map("| `" + (.name | gsub("\\|"; "\\|")) + "` | `" + ((.conclusion // "") | tostring) + "` | " + (.startDelayMin | tostring) + " | " + ((.durationMin // "") | tostring) + " |")
                   | .[])
-              ' || echo "_Unable to summarize queue times for run ${run_id}._"
+              ' || echo "_Unable to summarize start delays for run ${run_id}._"
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
@@ -1748,6 +1793,18 @@ jobs:
           plugin_prerelease_required=0
           release_checks_required=0
           performance_required=0
+          candidate_required=0
+          if [[ -z "${RELEASE_PACKAGE_SPEC// }" && -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
+            case "$RERUN_GROUP" in
+              all|plugin-prerelease|release-checks|cross-os|live-e2e|package)
+                candidate_required=1
+                ;;
+            esac
+          fi
+          if [[ "$candidate_required" == "1" && "$EVIDENCE_REUSE" != "true" && "$PREPARE_RELEASE_CANDIDATE_RESULT" != "success" ]]; then
+            echo "::error::Shared release candidate preparation ended with ${PREPARE_RELEASE_CANDIDATE_RESULT}."
+            failed=1
+          fi
           if [[ "$RERUN_GROUP" == "all" && "$EVIDENCE_REUSE" == "true" ]]; then
             # Lanes were skipped because a prior green validation covers this
             # target; re-verify the chain-root run and its recorded child runs

@@ -106,6 +106,7 @@ describe("device bootstrap profile", () => {
       scopes: [
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
@@ -117,7 +118,13 @@ describe("device bootstrap profile", () => {
   test("existing setup profile preserves the bounded operator handoff", () => {
     expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+      scopes: [
+        "operator.approvals",
+        "operator.questions",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ],
     });
   });
 
@@ -155,6 +162,7 @@ describe("device bootstrap profile", () => {
   test("bootstrap handoff operator allowlist stays bounded", () => {
     expect([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]).toEqual([
       "operator.approvals",
+      "operator.questions",
       "operator.read",
       "operator.talk.secrets",
       "operator.write",

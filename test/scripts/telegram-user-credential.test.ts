@@ -20,6 +20,17 @@ import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.m
 const tempDirs: string[] = [];
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 
+// Upper bound for polling a spawned process to reach a state. Polls return as
+// soon as the state holds, so a wide budget costs nothing on success and only
+// bounds genuine hangs. Cold Node start measured 59-85ms directly and
+// 483-1224ms through the tsx runner on a loaded machine, so tighter budgets
+// reported slow spawns as behavior failures.
+const PROCESS_WAIT_TIMEOUT_MS = 30_000;
+// runCommand timeout for cases whose child must install signal handlers before
+// the timeout fires. This one is paid in wall-clock, so it stays modest while
+// keeping an order-of-magnitude margin over measured child startup.
+const TIMEOUT_TRIGGER_MS = 1_500;
+
 function expectedTaskkillPath(): string {
   return resolveWindowsTaskkillPath();
 }
@@ -308,6 +319,7 @@ describe("telegram user credential IO", () => {
     async () => {
       const dir = makeTempDir("openclaw-telegram-credential-timeout-");
       const terminatedPath = path.join(dir, "terminated.txt");
+      const readyPath = path.join(dir, "ready.txt");
       const scriptPath = path.join(dir, "ignore-term.cjs");
       writeFileSync(
         scriptPath,
@@ -319,22 +331,31 @@ process.on("SIGTERM", () => {
     process.exit(0);
   }, 75);
 });
+fs.writeFileSync(process.argv[3], "ready");
 setInterval(() => {}, 1000);
 `,
         "utf8",
       );
 
-      const runPromise = runCommand(process.execPath, [scriptPath, terminatedPath], undefined, {
-        timeoutKillGraceMs: 1_000,
-        timeoutMs: 100,
-      });
+      const runPromise = runCommand(
+        process.execPath,
+        [scriptPath, terminatedPath, readyPath],
+        undefined,
+        {
+          timeoutKillGraceMs: 1_000,
+          timeoutMs: TIMEOUT_TRIGGER_MS,
+        },
+      );
       const runError = runPromise.catch((error: unknown) => error);
 
       try {
+        // The delayed-exit contract only holds once the child owns SIGTERM, so
+        // prove startup finished before the timeout rather than racing it.
+        await waitForFile(readyPath, PROCESS_WAIT_TIMEOUT_MS);
         const error = (await runError) as Error & { code?: string };
         expect(error).toBeInstanceOf(Error);
         expect(error.code).toBe("ETIMEDOUT");
-        expect(error.message).toContain("timed out after 100ms");
+        expect(error.message).toContain(`timed out after ${TIMEOUT_TRIGGER_MS}ms`);
         expect(existsSync(terminatedPath)).toBe(true);
       } finally {
         await runPromise.catch(() => {});
@@ -374,19 +395,24 @@ setInterval(() => {}, 1000);
         const startedAt = Date.now();
         const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
           timeoutKillGraceMs: 250,
-          timeoutMs: 300,
+          timeoutMs: TIMEOUT_TRIGGER_MS,
         });
         const runError = runPromise.catch((error: unknown) => error);
-        await waitForFile(readyPath, 2_000);
+        await waitForFile(readyPath, PROCESS_WAIT_TIMEOUT_MS);
+        // The descendant can reach readiness before its parent records the pid,
+        // so wait for that write too instead of inferring it from readiness.
+        await waitForFile(childPidPath, PROCESS_WAIT_TIMEOUT_MS);
         childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
         await expect(runError).resolves.toMatchObject({
           code: "ETIMEDOUT",
-          message: expect.stringContaining("timed out after 300ms"),
+          message: expect.stringContaining(`timed out after ${TIMEOUT_TRIGGER_MS}ms`),
         });
 
         expect(readFileSync(cleanupPath, "utf8")).toBe("clean");
-        expect(Date.now() - startedAt).toBeLessThan(800);
+        // Clean descendant exits must settle shortly after the timeout instead
+        // of waiting out the full kill grace.
+        expect(Date.now() - startedAt).toBeLessThan(TIMEOUT_TRIGGER_MS + 500);
       } finally {
         if (childPid !== undefined && isProcessAlive(childPid)) {
           process.kill(childPid, "SIGKILL");
@@ -412,17 +438,18 @@ setInterval(() => {}, 1000);
 
       const runPromise = runCommand(process.execPath, ["-e", parentScript], dir, {
         timeoutKillGraceMs: 25,
-        timeoutMs: 500,
+        timeoutMs: TIMEOUT_TRIGGER_MS,
       });
       const runError = runPromise.catch((error: unknown) => error);
-      await waitForFile(childPidPath, 2_000);
+      // The parent must reach its spawn before the timeout kills the group.
+      await waitForFile(childPidPath, PROCESS_WAIT_TIMEOUT_MS);
       childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
 
       await expect(runError).resolves.toMatchObject({
         code: "ETIMEDOUT",
-        message: expect.stringContaining("timed out after 500ms"),
+        message: expect.stringContaining(`timed out after ${TIMEOUT_TRIGGER_MS}ms`),
       });
-      await waitForDead(childPid, 2_000);
+      await waitForDead(childPid, PROCESS_WAIT_TIMEOUT_MS);
     } finally {
       if (childPid !== undefined && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -532,15 +559,15 @@ setInterval(() => {}, 1000);
       });
       let childPid: number | undefined;
       try {
-        await waitForFile(readyPath, 2_000);
+        await waitForFile(readyPath, PROCESS_WAIT_TIMEOUT_MS);
         childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
         const startedAt = Date.now();
         runner.kill("SIGTERM");
-        const exit = await waitForExit(runner, 2_000);
+        const exit = await waitForExit(runner, PROCESS_WAIT_TIMEOUT_MS);
 
         expect(exit).toEqual({ code: 143, signal: null });
         expect(Date.now() - startedAt).toBeLessThan(1_500);
-        await waitForDead(childPid, 2_000);
+        await waitForDead(childPid, PROCESS_WAIT_TIMEOUT_MS);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
           runner.kill("SIGKILL");
@@ -595,14 +622,14 @@ setInterval(() => {}, 1000);
       });
       let grandchildPid: number | undefined;
       try {
-        await waitForFile(readyPath, 2_000);
-        await waitForFile(grandchildPidPath, 2_000);
+        await waitForFile(readyPath, PROCESS_WAIT_TIMEOUT_MS);
+        await waitForFile(grandchildPidPath, PROCESS_WAIT_TIMEOUT_MS);
         grandchildPid = Number.parseInt(readFileSync(grandchildPidPath, "utf8"), 10);
         runner.kill("SIGTERM");
-        const exit = await waitForExit(runner, 2_000);
+        const exit = await waitForExit(runner, PROCESS_WAIT_TIMEOUT_MS);
 
         expect(exit).toEqual({ code: 143, signal: null });
-        await waitForDead(grandchildPid, 2_000);
+        await waitForDead(grandchildPid, PROCESS_WAIT_TIMEOUT_MS);
       } finally {
         if (runner.exitCode === null && runner.signalCode === null) {
           runner.kill("SIGKILL");

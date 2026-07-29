@@ -4,6 +4,7 @@
 import os from "node:os";
 
 const MAX_LOCAL_FULL_SUITE_PARALLELISM = 10;
+const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 
@@ -27,9 +28,13 @@ function isSystemThrottleDisabled(env) {
   return normalized === "1" || normalized === "true";
 }
 
+function isTruthyEnvValue(value) {
+  return TRUTHY_ENV_VALUES.has(value?.trim().toLowerCase() ?? "");
+}
+
 /** @internal Shared repository-script contract. */
 export function isCiLikeEnv(env = process.env) {
-  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+  return isTruthyEnvValue(env.CI) || isTruthyEnvValue(env.GITHUB_ACTIONS);
 }
 
 /** @internal Shared repository-script contract. */

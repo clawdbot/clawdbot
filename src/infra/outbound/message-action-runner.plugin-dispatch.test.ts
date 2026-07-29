@@ -105,6 +105,7 @@ const mocks = vi.hoisted(() => ({
   prepareOutboundMirrorRoute: vi.fn(),
   beginTerminalSourceReplyDelivery: vi.fn(),
   cancelTerminalSourceReplyDelivery: vi.fn(),
+  isDeliveredCurrentSourceReply: vi.fn(() => false),
   reconcileTerminalSourceReplyDelivery: vi.fn(),
 }));
 
@@ -130,6 +131,7 @@ vi.mock("./message.gateway.runtime.js", () => ({
 vi.mock("./source-reply-mirror.js", () => ({
   beginTerminalSourceReplyDelivery: mocks.beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery: mocks.cancelTerminalSourceReplyDelivery,
+  isDeliveredCurrentSourceReply: mocks.isDeliveredCurrentSourceReply,
   reconcileTerminalSourceReplyDelivery: mocks.reconcileTerminalSourceReplyDelivery,
 }));
 
@@ -167,6 +169,12 @@ vi.mock("./message-action-threading.js", async () => {
     prepareOutboundMirrorRoute: mocks.prepareOutboundMirrorRoute,
   };
 });
+
+function setTestPlugin(plugin: unknown, pluginId: string, origin?: "bundled") {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId, source: "test", ...(origin ? { origin } : {}), plugin }]),
+  );
+}
 
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
@@ -384,15 +392,7 @@ describe("runMessageAction plugin dispatch", () => {
     };
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "actionhub",
-            source: "test",
-            plugin: actionHubPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(actionHubPlugin, "actionhub");
       handleAction.mockClear();
     });
 
@@ -465,16 +465,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     it("infers the trusted current target for resource-referenced edits", async () => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "actionhub",
-            source: "test",
-            origin: "bundled",
-            plugin: actionHubPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(actionHubPlugin, "actionhub", "bundled");
       await runMessageAction({
         cfg: {
           channels: {
@@ -748,6 +739,221 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("preserves a trusted canonical sibling for a typed external current target", async () => {
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          target: "channel:current",
+          messageId: "om_123",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+          currentChatType: "channel",
+        },
+        dryRun: false,
+      });
+
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          to: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
+    });
+
+    it("canonicalizes an external exact-current alias before legacy target resolution", async () => {
+      const looksLikeId = vi.fn((raw: string) => !/^room:/i.test(raw));
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "actionhub",
+            source: "test",
+            origin: "config",
+            plugin: {
+              ...actionHubPlugin,
+              messaging: {
+                targetPrefixes: ["actionhub"],
+                normalizeTarget: (raw: string) =>
+                  raw.replace(/^room:/i, "actionhub:").replace(/^actionhub:/i, "actionhub:"),
+                targetResolver: {
+                  looksLikeId,
+                },
+              },
+            },
+          },
+        ]),
+      );
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            actionhub: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "pin",
+        params: {
+          channel: "actionhub",
+          target: "room:current",
+          messageId: "om_123",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "actionhub:current",
+          currentChannelProvider: "actionhub",
+          currentChatType: "group",
+        },
+        dryRun: false,
+      });
+
+      expect(looksLikeId).toHaveBeenCalledWith("actionhub:current", "actionhub:current");
+      const call = readFirstPluginCall(handleAction);
+      expectRecordFields(
+        readRecordField(call, "params", "normalized plugin params"),
+        {
+          target: "actionhub:current",
+          to: "actionhub:current",
+        },
+        "normalized plugin params",
+      );
+    });
+
+    it.each([false, true])(
+      "rejects an external exact-current alias with the wrong account before target resolution (dryRun=%s)",
+      async (dryRun) => {
+        const looksLikeId = vi.fn(() => true);
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "actionhub",
+              source: "test",
+              origin: "config",
+              plugin: {
+                ...actionHubPlugin,
+                messaging: {
+                  ...actionHubPlugin.messaging,
+                  targetResolver: {
+                    looksLikeId,
+                  },
+                },
+              },
+            },
+          ]),
+        );
+
+        await expect(
+          runMessageAction({
+            cfg: {
+              channels: {
+                actionhub: {
+                  enabled: true,
+                },
+              },
+            } as OpenClawConfig,
+            action: "pin",
+            params: {
+              channel: "actionhub",
+              target: "room:current",
+              messageId: "om_123",
+            },
+            defaultAccountId: "other",
+            requesterAccountId: "default",
+            conversationReadOrigin: "delegated",
+            toolContext: {
+              currentChannelId: "actionhub:current",
+              currentChannelProvider: "actionhub",
+              currentChatType: "group",
+            },
+            dryRun,
+          }),
+        ).rejects.toThrow("requires the exact current conversation and account");
+        expect(looksLikeId).not.toHaveBeenCalled();
+        expect(handleAction).not.toHaveBeenCalled();
+      },
+    );
+
+    it("rejects directory-only external aliases before resolver or plugin code", async () => {
+      const looksLikeId = vi.fn(() => false);
+      const resolveTarget = vi.fn(async () => ({
+        to: "actionhub:current",
+        kind: "group" as const,
+      }));
+      const listGroups = vi.fn(async () => [
+        { kind: "group" as const, id: "actionhub:current", name: "current-room" },
+      ]);
+      const listGroupsLive = vi.fn(async () => [
+        { kind: "group" as const, id: "actionhub:current", name: "current-room" },
+      ]);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "actionhub",
+            source: "test",
+            origin: "config",
+            plugin: {
+              ...actionHubPlugin,
+              messaging: {
+                ...actionHubPlugin.messaging,
+                targetResolver: { looksLikeId, resolveTarget },
+              },
+              directory: { listGroups, listGroupsLive },
+            },
+          },
+        ]),
+      );
+
+      await expect(
+        runMessageAction({
+          cfg: {
+            channels: {
+              actionhub: {
+                enabled: true,
+              },
+            },
+          } as OpenClawConfig,
+          action: "pin",
+          params: {
+            channel: "actionhub",
+            target: "current-room",
+            messageId: "om_123",
+          },
+          defaultAccountId: "default",
+          requesterAccountId: "default",
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelId: "actionhub:current",
+            currentChannelProvider: "actionhub",
+            currentChatType: "group",
+          },
+          dryRun: false,
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+
+      expect(looksLikeId).not.toHaveBeenCalled();
+      expect(resolveTarget).not.toHaveBeenCalled();
+      expect(listGroups).not.toHaveBeenCalled();
+      expect(listGroupsLive).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
     it("preserves no-context owner Discord admin actions through the shared runner", async () => {
       const handleDiscordAction = vi.fn(async (ctx: ChannelMessageActionContext) => {
         const currentProvider = ctx.toolContext?.currentChannelProvider?.trim().toLowerCase();
@@ -791,16 +997,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       } as OpenClawConfig;
 
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            source: "test",
-            origin: "bundled",
-            plugin: discordPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(discordPlugin, "discord", "bundled");
 
       await runMessageAction({
         cfg,
@@ -873,23 +1070,21 @@ describe("runMessageAction plugin dispatch", () => {
           local: true,
         }),
       );
+      const looksLikeId = vi.fn(() => true);
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",
         label: "Gateway Chat",
         blurb: "Gateway Chat reaction test plugin.",
         actions: ["react"],
         capabilities: { chatTypes: ["direct"], reactions: true },
+        messaging: {
+          targetResolver: {
+            looksLikeId,
+          },
+        },
         handleAction: handleActionEntry,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         added: "✅",
@@ -954,6 +1149,7 @@ describe("runMessageAction plugin dispatch", () => {
       expect(gatewayParams).not.toHaveProperty("requesterAccountId");
       expect(gatewayParams).not.toHaveProperty("requesterSenderId");
       expect(gatewayParams).not.toHaveProperty("toolContext");
+      expect(looksLikeId).not.toHaveBeenCalled();
       expect(handleActionEntry).not.toHaveBeenCalled();
       expectRecordFields(
         result,
@@ -975,6 +1171,134 @@ describe("runMessageAction plugin dispatch", () => {
       );
     });
 
+    it("rejects unauthorized gateway-mode dry runs without resolving a target", async () => {
+      const looksLikeId = vi.fn(() => true);
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat dry-run authorization test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        messaging: {
+          targetResolver: {
+            looksLikeId,
+          },
+        },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            origin: "config",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+
+      await expect(
+        runMessageAction({
+          cfg: {
+            channels: {
+              gatewaychat: {
+                enabled: true,
+              },
+            },
+          } as OpenClawConfig,
+          action: "react",
+          params: {
+            channel: "gatewaychat",
+            target: "room:current",
+            messageId: "message-1",
+            emoji: "eyes",
+          },
+          defaultAccountId: "other",
+          requesterAccountId: "default",
+          conversationReadOrigin: "delegated",
+          toolContext: {
+            currentChannelId: "gatewaychat:current",
+            currentChannelProvider: "gatewaychat",
+            currentChatType: "group",
+          },
+          gateway: {
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+          dryRun: true,
+        }),
+      ).rejects.toThrow("requires the exact current conversation and account");
+      expect(looksLikeId).not.toHaveBeenCalled();
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+    });
+
+    it("resolves authorized gateway-mode dry-run targets locally", async () => {
+      const looksLikeId = vi.fn(() => true);
+      const handleDryRunAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat dry-run target test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        messaging: {
+          targetResolver: {
+            looksLikeId,
+          },
+        },
+        handleAction: handleDryRunAction,
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            origin: "config",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          target: "room:current",
+          messageId: "message-1",
+          emoji: "eyes",
+        },
+        defaultAccountId: "default",
+        requesterAccountId: "default",
+        conversationReadOrigin: "delegated",
+        toolContext: {
+          currentChannelId: "gatewaychat:current",
+          currentChannelProvider: "gatewaychat",
+          currentChatType: "group",
+        },
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        dryRun: true,
+      });
+
+      expect(result).toMatchObject({
+        kind: "action",
+        handledBy: "dry-run",
+        dryRun: true,
+      });
+      expect(looksLikeId).toHaveBeenCalledOnce();
+      expect(handleDryRunAction).not.toHaveBeenCalled();
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+    });
+
     it("keeps blank backend requester provenance least-privileged", async () => {
       const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
@@ -985,15 +1309,7 @@ describe("runMessageAction plugin dispatch", () => {
         capabilities: { chatTypes: ["direct"], reactions: true },
         handleAction: handleActionEntry,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         added: "✅",
@@ -1050,15 +1366,7 @@ describe("runMessageAction plugin dispatch", () => {
         capabilities: { chatTypes: ["direct"], reactions: true },
         handleAction: handleActionEntry,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         added: "✅",
@@ -1134,15 +1442,7 @@ describe("runMessageAction plugin dispatch", () => {
         capabilities: { chatTypes: ["direct"], reactions: true },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         added: "ok",
@@ -1201,15 +1501,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: handleActionResult,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         messageId: "gw-send-1",
@@ -1304,9 +1596,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.executeSendAction.mockResolvedValueOnce({
         handledBy: "core",
         payload: { ok: true, messageId: "core-send-1" },
@@ -1366,15 +1656,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const receipt = {
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1387,6 +1669,7 @@ describe("runMessageAction plugin dispatch", () => {
       const deliveredPayload = { ok: true, messageId: "gw-send-1" };
       mocks.callGatewayLeastPrivilege.mockResolvedValue(deliveredPayload);
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => undefined);
+      const policySessionKey = "agent:main:gatewaychat:policy:user-123";
 
       await runMessageAction({
         cfg: {
@@ -1412,7 +1695,8 @@ describe("runMessageAction plugin dispatch", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         sourceReplyFinal: true,
         sourceReplyToolCallId: "message-call-1",
-        sessionKey: receipt.sessionKey,
+        sessionKey: policySessionKey,
+        sourceReplySessionKey: receipt.sessionKey,
         sessionId: receipt.sessionId,
         agentId: "main",
         gateway: {
@@ -1463,9 +1747,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.beginTerminalSourceReplyDelivery.mockResolvedValue(undefined);
       mocks.reconcileTerminalSourceReplyDelivery.mockResolvedValue("not-applicable");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
@@ -1502,9 +1784,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const receipt = {
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1548,9 +1828,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const receipt = {
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1594,9 +1872,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.beginTerminalSourceReplyDelivery.mockResolvedValue({
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1638,9 +1914,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const receipt = {
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1693,9 +1967,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const receipt = {
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1746,9 +2018,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const rejection = new Error("terminal source reply requires an active turn capability");
       const resolveAgentRuntimeIdentityToken = vi.fn(async () => {
         throw rejection;
@@ -1783,9 +2053,7 @@ describe("runMessageAction plugin dispatch", () => {
         messaging: { targetResolver: { looksLikeId: () => true } },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "gatewaychat", source: "test", plugin: gatewayPlugin }]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const receipt = {
         sessionId: "session-1",
         sessionKey: "agent:main:gatewaychat:direct:user-123",
@@ -1830,15 +2098,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: handleActionResult,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const timeout = Object.assign(new Error("gateway timeout after 30000ms"), {
         name: "GatewayTransportError",
         kind: "timeout",
@@ -1948,15 +2208,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: handleActionResult,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       const controller = new AbortController();
       const timeout = Object.assign(new Error("gateway timeout after 30000ms"), {
         name: "GatewayTransportError",
@@ -2011,15 +2263,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: vi.fn(async () => jsonResult({ ok: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         messageId: "gw-broadcast-1",
@@ -2077,15 +2321,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: vi.fn(async () => jsonResult({ ok: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockRejectedValue(
         Object.assign(new Error("second payload failed"), { sentBeforeError: true }),
       );
@@ -2139,15 +2375,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: vi.fn(async () => jsonResult({ ok: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         messageId: "gw-send-buffer",
@@ -2215,15 +2443,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         outbound: { deliveryMode: "gateway" },
       };
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaydeliver",
-            source: "test",
-            plugin: gatewayDeliveryPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayDeliveryPlugin, "gatewaydeliver");
       mocks.executeSendAction.mockResolvedValueOnce({
         handledBy: "core",
         payload: { ok: true },
@@ -2284,15 +2504,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "gatewaychat",
-            source: "test",
-            plugin: gatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(gatewayPlugin, "gatewaychat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         messageId: "gw-send-tts",
@@ -2310,10 +2522,8 @@ describe("runMessageAction plugin dispatch", () => {
               enabled: true,
             },
           },
-          messages: {
-            tts: {
-              auto: "tagged",
-            },
+          tts: {
+            auto: "tagged",
           },
         } as OpenClawConfig,
         action: "send",
@@ -2365,15 +2575,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: handleActionValue,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "localchat",
-            source: "test",
-            plugin: localPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(localPlugin, "localchat");
       mocks.maybeApplyTtsToPayload.mockResolvedValueOnce({
         mediaUrl: "file:///tmp/openclaw-voice.ogg",
         audioAsVoice: true,
@@ -2387,10 +2589,8 @@ describe("runMessageAction plugin dispatch", () => {
               enabled: true,
             },
           },
-          messages: {
-            tts: {
-              auto: "tagged",
-            },
+          tts: {
+            auto: "tagged",
           },
         } as OpenClawConfig,
         action: "send",
@@ -2446,15 +2646,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       };
 
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "policydest",
-            source: "test",
-            plugin: policyPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(policyPlugin, "policydest");
 
       await runMessageAction({
         cfg: {
@@ -2522,15 +2714,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       };
 
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "policydest",
-            source: "test",
-            plugin: policyPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(policyPlugin, "policydest");
 
       await runMessageAction({
         cfg: {
@@ -2585,7 +2769,10 @@ describe("runMessageAction plugin dispatch", () => {
           blurb: "Policy destination account test plugin.",
         },
         capabilities: { chatTypes: ["direct", "channel"], media: true },
-        config: createAlwaysConfiguredPluginConfig(),
+        config: {
+          ...createAlwaysConfiguredPluginConfig(),
+          listAccountIds: () => ["destination"],
+        },
         messaging: {
           targetResolver: {
             looksLikeId: () => true,
@@ -2598,15 +2785,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       };
 
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "policydest",
-            source: "test",
-            plugin: policyPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(policyPlugin, "policydest");
 
       await runMessageAction({
         cfg: {
@@ -2680,7 +2859,10 @@ describe("runMessageAction plugin dispatch", () => {
           blurb: "Policy chat account fallback test plugin.",
         },
         capabilities: { chatTypes: ["direct", "channel"], media: true },
-        config: createAlwaysConfiguredPluginConfig(),
+        config: {
+          ...createAlwaysConfiguredPluginConfig(),
+          listAccountIds: () => ["source"],
+        },
         messaging: {
           targetResolver: {
             looksLikeId: () => true,
@@ -2693,15 +2875,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
       };
 
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "policychat",
-            source: "test",
-            plugin: policyPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(policyPlugin, "policychat");
 
       await runMessageAction({
         cfg: {
@@ -2779,15 +2953,7 @@ describe("runMessageAction plugin dispatch", () => {
     it.each(["local", "gateway"] as const)(
       "applies auto threadId before %s plugin dispatch",
       async (executionMode) => {
-        setActivePluginRegistry(
-          createTestRegistry([
-            {
-              pluginId: "forumchat",
-              source: "test",
-              plugin: createThreadedPlugin(executionMode),
-            },
-          ]),
-        );
+        setTestPlugin(createThreadedPlugin(executionMode), "forumchat");
         mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
 
         await runMessageAction({
@@ -2833,7 +2999,10 @@ describe("runMessageAction plugin dispatch", () => {
     const handleAction = vi.fn(
       async ({ cfg, params }: { cfg: OpenClawConfig; params: Record<string, unknown> }) => {
         const message = typeof params.message === "string" ? params.message : "";
-        const responsePrefix = cfg.messages?.responsePrefix;
+        const responsePrefix = Object.values(cfg.channels ?? {}).find(
+          (entry): entry is { responsePrefix?: string } =>
+            typeof entry === "object" && entry !== null && "responsePrefix" in entry,
+        )?.responsePrefix;
         const rawMessage =
           responsePrefix && message.startsWith(`${responsePrefix} `)
             ? message.slice(responsePrefix.length + 1)
@@ -2873,15 +3042,7 @@ describe("runMessageAction plugin dispatch", () => {
     };
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "cardchat",
-            source: "test",
-            plugin: cardPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(cardPlugin, "cardchat");
       handleAction.mockClear();
     });
 
@@ -2936,6 +3097,51 @@ describe("runMessageAction plugin dispatch", () => {
       expectRecordFields(gatewayActionParams, { presentation }, "gateway action params");
     });
 
+    it("omits a blank shared-schema location from gateway-routed sends", async () => {
+      const cfg = {
+        channels: {
+          cardchat: {
+            enabled: true,
+          },
+        },
+        messages: { responsePrefix: "[Nexus]" },
+      } as OpenClawConfig;
+      mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({
+        ok: true,
+        messageId: "card-location",
+      });
+
+      const result = await runMessageAction({
+        cfg,
+        action: "send",
+        params: {
+          channel: "cardchat",
+          target: "channel:test-card",
+          message: "hello",
+          location: "",
+        },
+        gateway: {
+          clientName: "cli",
+          mode: "cli",
+        },
+        dryRun: false,
+      });
+
+      expect(result.kind).toBe("send");
+      expect(result.handledBy).toBe("plugin");
+      expect(handleAction).not.toHaveBeenCalled();
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayActionParams = readRecordField(
+        readRecordField(gatewayCall, "params", "gateway call params"),
+        "params",
+        "gateway action params",
+      );
+      expect(gatewayActionParams).not.toHaveProperty("location");
+    });
+
     it("keeps gateway-routed chart presentations on the gateway", async () => {
       const presentation = {
         blocks: [
@@ -2949,20 +3155,15 @@ describe("runMessageAction plugin dispatch", () => {
         ],
       };
       mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({ ok: true, messageId: "card-2" });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "cardchat",
-            source: "test",
-            plugin: {
-              ...cardPlugin,
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
-              },
-            },
+      setTestPlugin(
+        {
+          ...cardPlugin,
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
           },
-        ]),
+        },
+        "cardchat",
       );
 
       const result = await runMessageAction({
@@ -3033,24 +3234,19 @@ describe("runMessageAction plugin dispatch", () => {
           to: "channel:test-card",
         },
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "cardchat",
-            source: "test",
-            plugin: {
-              ...cardPlugin,
-              actions: {
-                ...cardPlugin.actions,
-                resolveExecutionMode: () => "local",
-              },
-              outbound: {
-                deliveryMode: "direct",
-                sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
-              },
-            },
+      setTestPlugin(
+        {
+          ...cardPlugin,
+          actions: {
+            ...cardPlugin.actions,
+            resolveExecutionMode: () => "local",
           },
-        ]),
+          outbound: {
+            deliveryMode: "direct",
+            sendText: async () => ({ channel: "cardchat", messageId: "msg-test" }),
+          },
+        },
+        "cardchat",
       );
 
       const result = await runMessageAction({
@@ -3104,9 +3300,9 @@ describe("runMessageAction plugin dispatch", () => {
           channels: {
             cardchat: {
               enabled: true,
+              responsePrefix: "[Nexus]",
             },
           },
-          messages: { responsePrefix: "[Nexus]" },
         } as OpenClawConfig,
         action: "send",
         params: {
@@ -3155,15 +3351,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "pollchat",
-            source: "test",
-            plugin: pollChatPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(pollChatPlugin, "pollchat");
       handleAction.mockClear();
     });
 
@@ -3248,15 +3436,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         handleAction: handleActionLocal,
       });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "pollchat",
-            source: "test",
-            plugin: pollGatewayPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(pollGatewayPlugin, "pollchat");
       mocks.callGatewayLeastPrivilege.mockResolvedValue({
         ok: true,
         pollId: "gw-poll-1",
@@ -3353,15 +3533,7 @@ describe("runMessageAction plugin dispatch", () => {
     });
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "guildchat",
-            source: "test",
-            plugin: guildPollPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(guildPollPlugin, "guildchat");
       handleAction.mockClear();
     });
 
@@ -3443,15 +3615,7 @@ describe("runMessageAction plugin dispatch", () => {
     };
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "componentchat",
-            source: "test",
-            plugin: componentsPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(componentsPlugin, "componentchat");
       handleAction.mockClear();
     });
 
@@ -3509,6 +3673,9 @@ describe("runMessageAction plugin dispatch", () => {
 
   describe("accountId defaults", () => {
     const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+    const listGroupsLive = vi.fn(async () => [
+      { id: "channel:resolved", name: "resolved", kind: "group" as const },
+    ]);
     const accountPlugin: ChannelPlugin = {
       id: "accountchat",
       meta: {
@@ -3520,9 +3687,10 @@ describe("runMessageAction plugin dispatch", () => {
       },
       capabilities: { chatTypes: ["direct"] },
       config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({}),
+        listAccountIds: () => ["default", "ops", "disabled"],
+        resolveAccount: (_cfg, accountId) => ({ enabled: accountId !== "disabled" }),
       },
+      directory: { listGroupsLive },
       actions: {
         describeMessageTool: () => ({ actions: ["send"] }),
         handleAction,
@@ -3530,16 +3698,9 @@ describe("runMessageAction plugin dispatch", () => {
     };
 
     beforeEach(() => {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "accountchat",
-            source: "test",
-            plugin: accountPlugin,
-          },
-        ]),
-      );
+      setTestPlugin(accountPlugin, "accountchat");
       handleAction.mockClear();
+      listGroupsLive.mockClear();
     });
 
     afterEach(() => {
@@ -3623,6 +3784,135 @@ describe("runMessageAction plugin dispatch", () => {
       }
       expect(ctx.accountId).toBe(expectedAccountId);
       expect(ctx.params.accountId).toBe(expectedAccountId);
+    });
+
+    it("allows an explicitly selected configured account", async () => {
+      await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "accountchat",
+          target: "channel:123",
+          accountId: "Ops",
+          message: "hi",
+        },
+      });
+
+      expect(handleAction).toHaveBeenCalledOnce();
+      expect(readFirstPluginCall(handleAction).accountId).toBe("ops");
+    });
+
+    it.each([
+      { name: "malformed", accountId: "!!!", error: "Invalid account ID" },
+      { name: "unknown", accountId: "missing", error: "Unknown account" },
+      { name: "disabled", accountId: "disabled", error: "disabled" },
+    ])("rejects an explicitly selected $name account before plugin code", async (testCase) => {
+      await expect(
+        runMessageAction({
+          cfg: {} as OpenClawConfig,
+          action: "send",
+          params: {
+            channel: "accountchat",
+            target: "channel:123",
+            accountId: testCase.accountId,
+            message: "hi",
+          },
+        }),
+      ).rejects.toThrow(testCase.error);
+
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
+    it("rejects an unknown broadcast account before live target resolution", async () => {
+      const result = await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          channel: "accountchat",
+          targets: ["resolved"],
+          accountId: "missing",
+          message: "hi",
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        payload: {
+          results: [{ ok: false, error: expect.stringContaining("Unknown account") }],
+        },
+      });
+      expect(listGroupsLive).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
+    it("preserves planned per-channel broadcast rejection without resolving a target", async () => {
+      const result = await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "broadcast",
+        params: {
+          targets: ["resolved"],
+          accountId: "missing",
+          message: "hi",
+        },
+        broadcastAccountPlan: {
+          accountId: "missing",
+          candidateChannels: ["accountchat"],
+          secretChannels: [],
+        },
+      });
+
+      expect(result).toMatchObject({
+        kind: "broadcast",
+        payload: {
+          results: [
+            {
+              channel: "accountchat",
+              ok: false,
+              error: expect.stringContaining("Unknown account"),
+            },
+          ],
+        },
+      });
+      expect(listGroupsLive).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
+    it("rejects an empty broadcast account plan instead of reporting empty success", async () => {
+      await expect(
+        runMessageAction({
+          cfg: {} as OpenClawConfig,
+          action: "broadcast",
+          params: {
+            targets: ["resolved"],
+            accountId: "missing",
+            message: "hi",
+          },
+          broadcastAccountPlan: {
+            accountId: "missing",
+            candidateChannels: [],
+            secretChannels: [],
+          },
+        }),
+      ).rejects.toThrow("Broadcast requires at least one configured channel");
+
+      expect(listGroupsLive).not.toHaveBeenCalled();
+      expect(handleAction).not.toHaveBeenCalled();
+    });
+
+    it("preserves an unlisted host-derived binding account", async () => {
+      await runMessageAction({
+        cfg: {} as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "accountchat",
+          target: "channel:123",
+          message: "hi",
+        },
+        defaultAccountId: "binding-alias",
+      });
+
+      expect(handleAction).toHaveBeenCalledOnce();
+      expect(readFirstPluginCall(handleAction).accountId).toBe("binding-alias");
     });
   });
 });

@@ -29,11 +29,7 @@ function authorizeGroupCommand(senderId: string) {
         allowFrom: ["trusted-user"],
       },
     },
-    cfg: {
-      commands: {
-        useAccessGroups: true,
-      },
-    },
+    cfg: {},
     senderId,
     senderName: senderId,
     channelId: "chan-1",
@@ -126,11 +122,7 @@ describe("mattermost monitor authz", () => {
           dmPolicy: "open",
         },
       },
-      cfg: {
-        commands: {
-          useAccessGroups: true,
-        },
-      },
+      cfg: {},
       senderId: "alice",
       senderName: "Alice",
       channelId: "dm-1",
@@ -237,9 +229,6 @@ describe("mattermost monitor authz", () => {
         },
       },
       cfg: {
-        commands: {
-          useAccessGroups: true,
-        },
         accessGroups: {
           oncall: {
             type: "message.senders",

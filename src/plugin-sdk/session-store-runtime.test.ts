@@ -10,7 +10,7 @@ import {
   replaceSessionEntry as replaceInternalSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
-import type { SessionEntry as ConfigSessionEntry } from "./config-types.js";
+import type { SessionEntry as ConfigSessionEntry } from "../config/sessions/types.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,
@@ -60,6 +60,21 @@ describe("session-store-runtime compatibility surface", () => {
       storePath,
       entry,
     });
+  }
+
+  function expectRecoveryCleared(params: {
+    sessionId: string;
+    sessionKey: string;
+    storePath: string;
+  }): void {
+    const entry = loadInternalSessionEntry({
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    });
+    expect(entry).toMatchObject({ sessionId: params.sessionId });
+    expect(entry?.abortedLastRun).not.toBe(true);
+    expect(entry?.restartRecoveryRuns).toBeUndefined();
+    expect(entry).not.toHaveProperty("mainRestartRecovery");
   }
 
   it("keeps the public session read shape while using accessor-backed exports", async () => {
@@ -726,32 +741,12 @@ describe("session-store-runtime compatibility surface", () => {
       storePath: upsertStorePath,
     });
 
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).toMatchObject({
-      abortedLastRun: false,
-      sessionId: "patch-after",
-    });
-    expect(
-      loadInternalSessionEntry({ sessionKey: patchKey, storePath })?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).not.toHaveProperty(
-      "mainRestartRecovery",
-    );
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath }),
-    ).toMatchObject({
+    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectRecoveryCleared({
       sessionId: "upsert-after",
+      sessionKey: upsertKey,
+      storePath: upsertStorePath,
     });
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath })
-        ?.abortedLastRun,
-    ).not.toBe(true);
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath })
-        ?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(
-      loadInternalSessionEntry({ sessionKey: upsertKey, storePath: upsertStorePath }),
-    ).not.toHaveProperty("mainRestartRecovery");
   });
 
   it("clears core recovery state when public patches change session identity", async () => {
@@ -807,29 +802,12 @@ describe("session-store-runtime compatibility surface", () => {
       update: () => ({ sessionId: "update-after", updatedAt: 20 }),
     });
 
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).toMatchObject({
-      abortedLastRun: false,
-      sessionId: "patch-after",
-    });
-    expect(
-      loadInternalSessionEntry({ sessionKey: patchKey, storePath })?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(loadInternalSessionEntry({ sessionKey: patchKey, storePath })).not.toHaveProperty(
-      "mainRestartRecovery",
-    );
-    expect(
-      loadInternalSessionEntry({ sessionKey: updateKey, storePath: updateStorePath }),
-    ).toMatchObject({
-      abortedLastRun: false,
+    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectRecoveryCleared({
       sessionId: "update-after",
+      sessionKey: updateKey,
+      storePath: updateStorePath,
     });
-    expect(
-      loadInternalSessionEntry({ sessionKey: updateKey, storePath: updateStorePath })
-        ?.restartRecoveryRuns,
-    ).toBeUndefined();
-    expect(
-      loadInternalSessionEntry({ sessionKey: updateKey, storePath: updateStorePath }),
-    ).not.toHaveProperty("mainRestartRecovery");
   });
 
   it("preserves resolved maintenance settings through entry patches", async () => {
@@ -956,6 +934,53 @@ describe("session-store-runtime compatibility surface", () => {
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(true);
     await expect(deleteSessionEntry({ sessionKey, storePath })).resolves.toBe(false);
     expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
+  it("guards entry deletion against a concurrent session update", async () => {
+    const sessionKey = "agent:main:delete-guarded";
+    const updatedAt = Date.now();
+    await seedSessionEntry(sessionKey, { sessionId: "session-delete-guarded", updatedAt });
+
+    await expect(
+      deleteSessionEntry({
+        expectedSessionId: "older-session",
+        expectedUpdatedAt: updatedAt - 1,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBe(false);
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "session-delete-guarded",
+      updatedAt,
+    });
+
+    await expect(
+      deleteSessionEntry({
+        expectedSessionId: "session-delete-guarded",
+        expectedUpdatedAt: updatedAt,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("guards entry deletion when the earlier snapshot had no session id", async () => {
+    const sessionKey = "agent:main:delete-guarded-absent-id";
+    const updatedAt = Date.now();
+    await seedSessionEntry(sessionKey, { sessionId: "replacement-session", updatedAt });
+
+    await expect(
+      deleteSessionEntry({
+        expectedSessionId: null,
+        expectedUpdatedAt: updatedAt,
+        sessionKey,
+        storePath,
+      }),
+    ).resolves.toBe(false);
+    expect(getSessionEntry({ sessionKey, storePath })).toMatchObject({
+      sessionId: "replacement-session",
+      updatedAt,
+    });
   });
 
   it("resolves agent-scoped custom SQLite stores for backups", () => {

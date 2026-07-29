@@ -1,5 +1,6 @@
 // Source reply mirroring records successful same-conversation message-tool
 // sends back into the owning session transcript.
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -8,6 +9,7 @@ import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { resolveChannelThreadAddressing } from "../../channels/thread-addressing.js";
 import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
@@ -18,7 +20,7 @@ import {
   type RestartRecoveryTerminalDeliveryScope,
 } from "../../config/sessions/restart-recovery-receipt.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
@@ -27,6 +29,8 @@ type SourceReplyTranscriptMirrorParams = {
   channel: string;
   actionParams: Record<string, unknown>;
   cfg: OpenClawConfig;
+  accountId?: string | null;
+  currentAccountId?: string | null;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
@@ -35,6 +39,7 @@ type SourceReplyTranscriptMirrorParams = {
   sourceReplyFinal?: boolean;
   toolCallId?: string;
   deliveredPayload?: unknown;
+  replyToIsExplicit?: boolean;
 };
 
 type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams & {
@@ -48,12 +53,6 @@ type SourceReplyThreadPlacement = "match" | "mismatch" | "unknown";
 // Mirror only enough delivered payload detail to preserve transcript context.
 function readStringArray(value: unknown): string[] | undefined {
   return normalizeOptionalTrimmedStringList(value);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readFirstString(
@@ -93,6 +92,7 @@ function resolveDeliveredThreadPlacement(
 
 function resolveSourceReplyThreadPlacement(
   params: SourceReplyTranscriptMirrorParams,
+  threadAddressing: ReturnType<typeof resolveChannelThreadAddressing>,
 ): SourceReplyThreadPlacement {
   const currentThreadId = normalizeOptionalString(params.toolContext?.currentThreadTs);
   const deliveredPlacement = resolveDeliveredThreadPlacement(params, currentThreadId);
@@ -101,6 +101,14 @@ function resolveSourceReplyThreadPlacement(
   }
   if (params.actionParams.topLevel === true) {
     return currentThreadId ? "mismatch" : "match";
+  }
+  if (
+    threadAddressing === "message" &&
+    params.replyToIsExplicit === true &&
+    !currentThreadId &&
+    normalizeOptionalString(params.actionParams.replyTo)
+  ) {
+    return "mismatch";
   }
   for (const key of ["threadId", "messageThreadId"] as const) {
     if (!Object.hasOwn(params.actionParams, key)) {
@@ -133,20 +141,44 @@ function resolveThreadedSourceTarget(
   );
 }
 
-function hasExplicitDeliveryFailure(payload: unknown): boolean {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
+  if (!payload || typeof payload !== "object" || depth > 4) {
     return false;
   }
+  if (Array.isArray(payload)) {
+    return payload.some((value) => hasExplicitDeliveryFailure(value, depth + 1));
+  }
   const record = payload as Record<string, unknown>;
-  if (record.ok === false) {
+  if (record.ok === false || record.delivered === false || record.dryRun === true) {
+    return true;
+  }
+  const messageId = normalizeOptionalLowercaseString(record.messageId);
+  if (messageId === "skipped" || messageId === "suppressed") {
     return true;
   }
   const status = normalizeOptionalLowercaseString(record.status);
-  if (status === "failed" || status === "error") {
+  if (
+    status === "failed" ||
+    status === "error" ||
+    status === "skipped" ||
+    status === "suppressed" ||
+    status === "dry_run"
+  ) {
     return true;
   }
   const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
-  return deliveryStatus === "failed" || deliveryStatus === "error";
+  if (
+    deliveryStatus === "failed" ||
+    deliveryStatus === "error" ||
+    deliveryStatus === "skipped" ||
+    deliveryStatus === "suppressed" ||
+    deliveryStatus === "dry_run"
+  ) {
+    return true;
+  }
+  return ["details", "payload", "result", "results", "sendResult", "toolResult"].some((key) =>
+    hasExplicitDeliveryFailure(record[key], depth + 1),
+  );
 }
 
 function resolveCurrentSourceTurnId(
@@ -258,6 +290,10 @@ function resolveTranscriptMirrorIdempotencyKey(params: {
 
 function isCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
+  threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  ),
 ): params is MirrorableSourceReplyTranscriptParams {
   if (params.action !== "send") {
     return false;
@@ -268,6 +304,16 @@ function isCurrentSourceConversation(
   const toolContext = params.toolContext;
   if (!toolContext) {
     return false;
+  }
+  const accountId = normalizeOptionalString(params.accountId);
+  if (accountId) {
+    const currentAccountId = normalizeOptionalString(params.currentAccountId);
+    if (
+      !currentAccountId ||
+      normalizeAccountId(accountId) !== normalizeAccountId(currentAccountId)
+    ) {
+      return false;
+    }
   }
   const currentChannel = normalizeOptionalLowercaseString(toolContext.currentChannelProvider);
   if (!currentChannel || currentChannel !== normalizeOptionalLowercaseString(params.channel)) {
@@ -284,7 +330,6 @@ function isCurrentSourceConversation(
   if (!requestedTarget) {
     return false;
   }
-  const threadPlacement = resolveSourceReplyThreadPlacement(params);
   if (threadPlacement === "mismatch") {
     return false;
   }
@@ -313,8 +358,17 @@ function isCurrentSourceConversation(
 function isExactCurrentSourceConversation(
   params: SourceReplyTranscriptMirrorParams,
 ): params is MirrorableSourceReplyTranscriptParams {
+  const threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  );
+  return threadPlacement === "match" && isCurrentSourceConversation(params, threadPlacement);
+}
+
+/** Confirms that a successful send reached the exact trusted source conversation. */
+export function isDeliveredCurrentSourceReply(params: SourceReplyTranscriptMirrorParams): boolean {
   return (
-    resolveSourceReplyThreadPlacement(params) === "match" && isCurrentSourceConversation(params)
+    !hasExplicitDeliveryFailure(params.deliveredPayload) && isExactCurrentSourceConversation(params)
   );
 }
 
@@ -325,10 +379,14 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
     return false;
   }
-  if (!isCurrentSourceConversation(params)) {
+  const threadPlacement = resolveSourceReplyThreadPlacement(
+    params,
+    resolveChannelThreadAddressing(params.channel),
+  );
+  if (!isCurrentSourceConversation(params, threadPlacement)) {
     return false;
   }
-  if (params.sourceReplyFinal === true && !isExactCurrentSourceConversation(params)) {
+  if (params.sourceReplyFinal === true && threadPlacement !== "match") {
     return false;
   }
 

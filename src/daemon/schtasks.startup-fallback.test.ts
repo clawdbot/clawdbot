@@ -1923,6 +1923,42 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("audits Startup fallback termination when relaunch fails", async () => {
+    useListenerBackedFallbackOwnership();
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+      ]);
+      await writeGatewayScript(env);
+      await writeStartupFallbackEntry(env);
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [
+          {
+            pid: 5151,
+            command: "node.exe",
+            commandLine: 'node "C:\\openclaw\\dist\\index.js" gateway --port 18789',
+          },
+        ],
+        hints: [],
+      });
+      spawn.mockImplementationOnce(() => {
+        throw new Error("spawn failed");
+      });
+      const onMutation = vi.fn();
+
+      await expect(
+        restartScheduledTask({ env, stdout: new PassThrough(), onMutation }),
+      ).rejects.toThrow("spawn failed");
+
+      expectGatewayTermination(5151);
+      expect(onMutation).toHaveBeenCalledWith({ mode: "startup-entry-stop" });
+      expect(onMutation).not.toHaveBeenCalledWith({ mode: "startup-entry-restart" });
+    });
+  });
+
   it("refuses to restart a Startup fallback with an unverified busy port owner", async () => {
     useListenerBackedFallbackOwnership();
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {

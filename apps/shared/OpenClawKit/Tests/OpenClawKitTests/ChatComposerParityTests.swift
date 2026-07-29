@@ -175,6 +175,24 @@ struct ChatComposerStateTests {
         #expect(vm.input.isEmpty)
     }
 
+    @Test func `attachment staging blocks UI and programmatic sends`() async throws {
+        let transport = ComposerParityTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        vm.healthOK = true
+        vm.input = "send with selected image"
+        vm.beginAttachmentStaging()
+
+        #expect(!vm.canSend)
+        vm.send()
+        await Task.yield()
+        #expect(transport.sentMessages.isEmpty)
+
+        vm.endAttachmentStaging()
+        #expect(vm.canSend)
+        vm.send()
+        try await waitUntil("post-staging send accepted") { transport.sentMessages.count == 1 }
+    }
+
     @Test func `slash send ignores and preserves reply target`() async throws {
         let transport = ComposerParityTransport()
         let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)

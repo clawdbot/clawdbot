@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
 import type { HookEntry } from "../hooks/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
   normalizeAgentToolResultMiddlewareRuntimeIds,
@@ -30,7 +31,6 @@ import {
   isDeprecatedPluginHookName,
   isPluginHookName,
   isPromptInjectionHookName,
-  stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
   OpenClawPluginApi,
@@ -79,20 +79,6 @@ function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string |
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
   return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
 }
-
-const constrainLegacyPromptInjectionHook = (
-  handler: PluginHookHandlerMap["before_agent_start"],
-): PluginHookHandlerMap["before_agent_start"] => {
-  return (event, ctx) => {
-    const result = handler(event, ctx);
-    if (result && typeof result === "object" && "then" in result) {
-      return Promise.resolve(result).then((resolved) =>
-        stripPromptMutationFieldsFromLegacyHookResult(resolved),
-      );
-    }
-    return stripPromptMutationFieldsFromLegacyHookResult(result);
-  };
-};
 
 export function createToolHookRegistrars(state: PluginRegistryState) {
   const {
@@ -170,6 +156,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
+    policy?: PluginTypedHookPolicy,
   ) => {
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
@@ -219,9 +206,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
       try {
-        return await handler(event, ctx);
+        // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
+        return await withTimeout(
+          Promise.resolve(handler(event, ctx)),
+          timeoutMs ?? 0,
+          `agent tool result middleware for ${record.id}`,
+        );
       } catch (error) {
         registryParams.logger.warn(
           `[plugins] agent tool result middleware failed for ${record.id}`,
@@ -429,26 +422,15 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         });
       }
     }
-    let effectiveHandler = handler;
+    const effectiveHandler = handler;
     if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
-      if (effectiveHookName !== "before_agent_start") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        return;
-      }
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       });
-      effectiveHandler = constrainLegacyPromptInjectionHook(
-        handler as PluginHookHandlerMap["before_agent_start"],
-      ) as PluginHookHandlerMap[K];
+      return;
     }
     if (isConversationHookName(effectiveHookName)) {
       const explicitConversationAccess = policy?.allowConversationAccess;

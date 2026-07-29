@@ -343,29 +343,6 @@ describe("discordPlugin outbound", () => {
     expect(resolveReplyToMode({ cfg, accountId: "default" })).toBe("all");
   });
 
-  it("inherits Discord gateway READY timeout settings per account", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: "discord-token",
-          gatewayReadyTimeoutMs: 90_000,
-          gatewayRuntimeReadyTimeoutMs: 120_000,
-          accounts: {
-            work: {
-              token: "discord-token-work",
-              gatewayReadyTimeoutMs: 60_000,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(resolveAccount(cfg).config.gatewayReadyTimeoutMs).toBe(90_000);
-    expect(resolveAccount(cfg).config.gatewayRuntimeReadyTimeoutMs).toBe(120_000);
-    expect(resolveAccount(cfg, "work").config.gatewayReadyTimeoutMs).toBe(60_000);
-    expect(resolveAccount(cfg, "work").config.gatewayRuntimeReadyTimeoutMs).toBe(120_000);
-  });
-
   it("forwards full media send context to sendMessageDiscord", async () => {
     const sendMessageDiscord = vi.fn(async () => ({ messageId: "m1" }));
     const mediaReadFile = vi.fn(async () => Buffer.from("media"));

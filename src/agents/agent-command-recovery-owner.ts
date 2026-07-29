@@ -38,31 +38,13 @@ type AcquiredRecoveryOwner = {
 };
 
 function cloneRecoveryOwnerEntry(entry: InternalSessionEntry): InternalSessionEntry {
-  const state = entry.mainRestartRecovery;
   return {
     ...entry,
     ...(entry.restartRecoveryRuns
       ? { restartRecoveryRuns: entry.restartRecoveryRuns.map((run) => ({ ...run })) }
       : {}),
-    ...(state
-      ? {
-          mainRestartRecovery: {
-            ...state,
-            ...(state.reservation ? { reservation: { ...state.reservation } } : {}),
-            ...(state.foregroundClaims
-              ? {
-                  foregroundClaims: {
-                    ...state.foregroundClaims,
-                    tokens: [...state.foregroundClaims.tokens],
-                    ...(state.foregroundClaims.runIdsByClaimId
-                      ? { runIdsByClaimId: { ...state.foregroundClaims.runIdsByClaimId } }
-                      : {}),
-                  },
-                }
-              : {}),
-            ...(state.tombstone ? { tombstone: { ...state.tombstone } } : {}),
-          },
-        }
+    ...(entry.mainRestartRecovery
+      ? { mainRestartRecovery: structuredClone(entry.mainRestartRecovery) }
       : {}),
   };
 }

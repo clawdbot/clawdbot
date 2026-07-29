@@ -228,7 +228,7 @@ describe("openclaw launcher", () => {
     }
   });
 
-  it("rejects Bun even when its Node compatibility version is new enough", async () => {
+  it("rejects Bun without node:sqlite even when its Node compatibility version is new enough", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
@@ -241,6 +241,11 @@ describe("openclaw launcher", () => {
       [
         "Object.defineProperty(process.versions, 'bun', { value: '1.3.14' });",
         "Object.defineProperty(process.versions, 'node', { value: '24.3.0' });",
+        // Old Bun has no node:sqlite; the launcher feature-probes instead of
+        // trusting the runtime label, so the mock must hide Node's builtin.
+        "const realGetBuiltinModule = process.getBuiltinModule.bind(process);",
+        "process.getBuiltinModule = (id) =>",
+        "  id === 'node:sqlite' || id === 'sqlite' ? undefined : realGetBuiltinModule(id);",
       ].join("\n"),
       "utf8",
     );
@@ -258,8 +263,38 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain(
-      "the Bun runtime is unsupported because OpenClaw requires node:sqlite",
+      "this Bun runtime is unsupported because it does not provide node:sqlite",
     );
+  });
+
+  it("runs the CLI under Bun when the runtime provides node:sqlite", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      'process.stdout.write("bun-runtime-entry\\n");\n',
+      "utf8",
+    );
+    const mockRuntime = path.join(fixtureRoot, "mock-bun-sqlite-runtime.mjs");
+    await fs.writeFile(
+      mockRuntime,
+      // Simulates Bun >=1.4 (Rust rewrite): bun-branded runtime with node:sqlite
+      // available; Node's own getBuiltinModule answers the launcher probe.
+      "Object.defineProperty(process.versions, 'bun', { value: '1.4.0' });",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("bun-runtime-entry");
   });
 
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {
@@ -418,30 +453,41 @@ describe("openclaw launcher", () => {
   });
 
   it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1" && hasBunRuntime())(
-    "rejects the real Bun runtime before loading the CLI",
+    "gates the real Bun runtime on node:sqlite availability",
     async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
       await fs.writeFile(
         path.join(fixtureRoot, "dist", "entry.js"),
-        "process.stdout.write('unexpected bun entry\\n');\n",
+        "process.stdout.write('bun entry ran\\n');\n",
         "utf8",
       );
 
-      const result = spawnSync(
-        process.env.BUN_BIN ?? "bun",
-        [path.join(fixtureRoot, "openclaw.mjs")],
-        {
-          cwd: fixtureRoot,
-          env: launcherEnv(),
-          encoding: "utf8",
-        },
+      const bunBin = process.env.BUN_BIN ?? "bun";
+      // Bun >=1.4 (Rust rewrite) ships node:sqlite and may run the CLI; older
+      // Buns must be rejected before the entry loads.
+      const probe = spawnSync(
+        bunBin,
+        ["-e", "process.exit(process.getBuiltinModule?.('node:sqlite') ? 0 : 1)"],
+        { encoding: "utf8" },
       );
+      const bunHasNodeSqlite = probe.status === 0;
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(
-        "the Bun runtime is unsupported because OpenClaw requires node:sqlite",
-      );
+      const result = spawnSync(bunBin, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      });
+
+      if (bunHasNodeSqlite) {
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain("bun entry ran");
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stdout).toBe("");
+        expect(result.stderr).toContain(
+          "this Bun runtime is unsupported because it does not provide node:sqlite",
+        );
+      }
     },
   );
 
@@ -863,6 +909,55 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32").each([
+    { signal: "SIGINT" as const, exitCode: 130 },
+    { signal: "SIGTERM" as const, exitCode: 143 },
+  ])("exits $exitCode when the respawn child terminates from $signal", async (testCase) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await addGitMarker(fixtureRoot);
+    const childInfoPath = path.join(fixtureRoot, "child-info.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      [
+        'import { writeFileSync } from "node:fs";',
+        `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+        'process.title = "openclaw-launcher-default-signal-test-child";',
+        "setInterval(() => {}, 1000);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+      }),
+      stdio: "ignore",
+    });
+    let respawnChildPid: number | undefined;
+
+    try {
+      const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
+      respawnChildPid = childInfo.pid;
+
+      launcher.kill(testCase.signal);
+
+      await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+        code: testCase.exitCode,
+        signal: null,
+      });
+      expect(isProcessAlive(respawnChildPid)).toBe(false);
+    } finally {
+      if (isProcessAlive(respawnChildPid)) {
+        process.kill(respawnChildPid!, "SIGKILL");
+      }
+      if (isProcessAlive(launcher.pid)) {
+        process.kill(launcher.pid!, "SIGKILL");
+      }
+    }
+  });
+
   it.runIf(process.platform !== "win32")(
     "exits after SIGTERM when the respawn child ignores the forwarded signal",
     async () => {
@@ -873,9 +968,9 @@ describe("openclaw launcher", () => {
         path.join(fixtureRoot, "dist", "entry.js"),
         [
           'import { writeFileSync } from "node:fs";',
-          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
           'process.title = "openclaw-launcher-sigterm-ignore-test-child";',
           'process.on("SIGTERM", () => {});',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
           "setInterval(() => {}, 1000);",
           "",
         ].join("\n"),
@@ -952,6 +1047,34 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("cache:enabled;respawn:0");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "does not respawn native hook relays for packaged compile-cache scoping",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        'process.stdout.write(process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED ?? "0");\n',
+        "utf8",
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), "hooks", "relay"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv({
+            NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+          }),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe("0");
+    },
+  );
 
   it("scopes packaged launcher compile cache inside configured cache roots", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);

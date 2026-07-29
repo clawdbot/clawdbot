@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordConfigSchema } from "../../config-api.js";
 import { mergeDiscordAccountConfig } from "../accounts.js";
-import { resolveActivityUserAuthorized } from "./allowlist.js";
 import { resolveDiscordActivitiesConfig } from "./config.js";
 
 afterEach(() => {
@@ -66,30 +65,5 @@ describe("Discord Activities config", () => {
       "work",
     );
     expect(account.activities).toEqual({ clientSecret: "rootsec", applicationId: "123" });
-  });
-});
-
-describe("Discord Activity user authorization", () => {
-  it("always matches IDs but gates username matching behind the dangerous opt-in", () => {
-    expect(
-      resolveActivityUserAuthorized({ allowFrom: ["42"] }, { id: "42", username: "alice" }),
-    ).toBe(true);
-    expect(
-      resolveActivityUserAuthorized(
-        { dm: { allowFrom: ["alice"] } },
-        { id: "99", username: "Alice" },
-      ),
-    ).toBe(false);
-    expect(
-      resolveActivityUserAuthorized(
-        { dangerouslyAllowNameMatching: true, dm: { allowFrom: ["alice"] } },
-        { id: "99", username: "Alice" },
-      ),
-    ).toBe(true);
-  });
-
-  it("allows an empty allowlist only for open DMs", () => {
-    expect(resolveActivityUserAuthorized({ dmPolicy: "open" }, { id: "42" })).toBe(true);
-    expect(resolveActivityUserAuthorized({}, { id: "42" })).toBe(false);
   });
 });

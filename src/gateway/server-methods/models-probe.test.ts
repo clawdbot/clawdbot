@@ -6,7 +6,18 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
+  listAgentIds: vi.fn(() => ["main", "writer"]),
+  resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
+  resolveDefaultAgentId: vi.fn(() => "main"),
+  resolveAgentWorkspaceDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/workspace-${agentId}`),
   runAuthProbes: vi.fn(),
+}));
+
+vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentIds: mocks.listAgentIds,
+  resolveAgentDir: mocks.resolveAgentDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
 }));
 
 vi.mock("../../commands/models/list.probe.js", async () => {
@@ -51,6 +62,18 @@ function createOptions(params: Record<string, unknown>, cfg: OpenClawConfig = {}
 
 describe("models.probe", () => {
   beforeEach(() => {
+    mocks.listAgentIds.mockClear();
+    mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+    mocks.resolveAgentDir.mockClear();
+    mocks.resolveAgentDir.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`,
+    );
+    mocks.resolveDefaultAgentId.mockClear();
+    mocks.resolveDefaultAgentId.mockReturnValue("main");
+    mocks.resolveAgentWorkspaceDir.mockClear();
+    mocks.resolveAgentWorkspaceDir.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
     mocks.runAuthProbes.mockReset();
     mocks.runAuthProbes.mockResolvedValue(summary([]));
   });
@@ -82,6 +105,9 @@ describe("models.probe", () => {
     await handler(options);
     expect(mocks.runAuthProbes).toHaveBeenCalledWith({
       cfg,
+      agentId: "main",
+      agentDir: "/tmp/agent-main",
+      workspaceDir: "/tmp/workspace-main",
       providers: ["openai"],
       modelCandidates: ["openai/gpt-5.6", "openai/gpt-5.5", "openai/gpt-5.6-luna"],
       options: {
@@ -91,6 +117,57 @@ describe("models.probe", () => {
         concurrency: 2,
         maxTokens: 8,
       },
+    });
+  });
+
+  it.each([
+    { name: "omitted", params: {} },
+    { name: "empty", params: { agentId: "" } },
+  ])("probes the default agent when agentId is $name", async ({ params }) => {
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const { options } = createOptions({ provider: "openai", ...params }, cfg);
+
+    await handler(options);
+
+    expect(mocks.runAuthProbes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/agent-main",
+        workspaceDir: "/tmp/workspace-main",
+      }),
+    );
+  });
+
+  it("probes an explicit configured agent", async () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main", default: true }, { id: "writer" }] },
+    };
+    const { options } = createOptions({ provider: "openai", agentId: "Writer" }, cfg);
+
+    await handler(options);
+
+    expect(mocks.runAuthProbes).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "writer",
+        agentDir: "/tmp/agent-writer",
+        workspaceDir: "/tmp/workspace-writer",
+      }),
+    );
+  });
+
+  it.each(["retired", "   "])("rejects explicit unknown agentId %j", async (agentId) => {
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    mocks.listAgentIds.mockReturnValue(["main"]);
+    const { options, respond } = createOptions({ provider: "openai", agentId }, cfg);
+
+    await handler(options);
+
+    expect(mocks.resolveAgentDir).not.toHaveBeenCalled();
+    expect(mocks.runAuthProbes).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: "INVALID_REQUEST",
+      message: `unknown agent id "${agentId}"`,
+      details: { code: "UNKNOWN_AGENT_ID", agentId },
     });
   });
 

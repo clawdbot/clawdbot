@@ -242,7 +242,7 @@ describe("Gateway queued session rotation", () => {
             },
           },
         },
-        messages: { queue: { mode: "followup", debounceMs: 0 } },
+        messages: { queue: { mode: "followup" } },
       } satisfies OpenClawConfig;
       const instance = await createOpenClawTestInstance({
         name: "queued-session-rotation",

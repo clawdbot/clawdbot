@@ -19,6 +19,7 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../../tasks/task-runtime.test-helpers.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { dispatchAgentRunFromGateway } from "./agent-run-dispatch.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
@@ -430,7 +431,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves aborted async gateway agent runs as timed out", async () => {
+  it("preserves aborted async gateway agent runs as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-aborted-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -454,7 +455,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "timed_out",
+          status: "cancelled",
           terminalSummary: "aborted",
         });
         expectRecordFields(context.dedupe.get("agent:task-registry-agent-run-aborted")?.payload, {
@@ -466,7 +467,271 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("classifies aborted async gateway agent rejections as timed out", async () => {
+  it("projects a nonterminal tool-use result past the explicit deadline as timed out", async () => {
+    const abortController = new AbortController();
+    const timeoutReason = new Error("chat run timed out");
+    timeoutReason.name = "TimeoutError";
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      abortController.abort(timeoutReason);
+      return {
+        payloads: [{ text: "Exec failed", isError: true }],
+        meta: {
+          durationMs: 602_530,
+          aborted: false,
+          replayInvalid: true,
+          livenessState: "working",
+          stopReason: "toolUse",
+          completion: { stopReason: "toolUse", finishReason: "toolUse" },
+        },
+      };
+    });
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "review the repository",
+        sessionKey: "agent:main:main",
+        timeout: "600",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-tool-use-deadline",
+      dedupeKeys: ["agent:agent-run-tool-use-deadline"],
+      abortController,
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: expect.objectContaining({
+          status: "timeout",
+          stopReason: "timeout",
+        }),
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "agent-run-tool-use-deadline",
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "timeout",
+        }),
+        undefined,
+        { runId: "agent-run-tool-use-deadline" },
+      );
+    });
+  });
+
+  it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
+      meta: {
+        durationMs: 30_454,
+        aborted: false,
+        replayInvalid: true,
+        livenessState: "working",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "Request timed out before a response was generated.",
+        },
+      },
+    });
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "run a command that exceeds the provider deadline",
+        sessionKey: "agent:main:main",
+        timeout: "10",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-provider-timeout-result",
+      dedupeKeys: ["agent:agent-run-provider-timeout-result"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: expect.objectContaining({
+          status: "timeout",
+          reason: "hard_timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        }),
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "agent-run-provider-timeout-result",
+          status: "timeout",
+          summary: "aborted",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        }),
+        undefined,
+        { runId: "agent-run-provider-timeout-result" },
+      );
+    });
+  });
+
+  it("projects a resolved agent error as a failed gateway response", async () => {
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "Provider rejected the request.", isError: true }],
+      meta: {
+        error: "provider rejected the request",
+        stopReason: "error",
+      },
+    });
+    const context = makeContext();
+    const respond = vi.fn();
+    const onSettled = vi.fn(() => true);
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "run the agent",
+        sessionKey: "agent:main:main",
+        timeout: "600",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-resolved-error",
+      dedupeKeys: ["agent:agent-run-resolved-error"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: expect.objectContaining({
+          status: "error",
+          reason: "failed",
+          stopReason: "error",
+        }),
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: "agent-run-resolved-error",
+          status: "error",
+          summary: "failed",
+          stopReason: "error",
+        }),
+        undefined,
+        { runId: "agent-run-resolved-error" },
+      );
+    });
+  });
+
+  it.each([
+    {
+      label: "tool use past the nominal deadline without an abort signal",
+      durationMs: 602_530,
+      stopReason: "toolUse",
+      timeout: "600",
+      abortReason: undefined,
+    },
+    {
+      label: "tool use before the deadline",
+      durationMs: 599_999,
+      stopReason: "toolUse",
+      timeout: "600",
+      abortReason: undefined,
+    },
+    {
+      label: "tool use with the deadline disabled",
+      durationMs: 602_530,
+      stopReason: "toolUse",
+      timeout: "0",
+      abortReason: undefined,
+    },
+    {
+      label: "final assistant reply after deadline cleanup",
+      durationMs: 602_530,
+      stopReason: "stop",
+      timeout: "600",
+      abortReason: "timeout" as const,
+    },
+    {
+      label: "nonterminal tool use after RPC abort cleanup",
+      durationMs: 100,
+      stopReason: "toolUse",
+      timeout: "600",
+      abortReason: "rpc" as const,
+    },
+    {
+      label: "nonterminal tool use after restart abort cleanup",
+      durationMs: 100,
+      stopReason: "toolUse",
+      timeout: "600",
+      abortReason: "restart" as const,
+    },
+  ])("keeps $label successful", async ({ durationMs, stopReason, timeout, abortReason }) => {
+    const abortController = new AbortController();
+    mocks.agentCommand.mockImplementationOnce(async () => {
+      if (abortReason === "timeout") {
+        const timeoutReason = new Error("chat run timed out");
+        timeoutReason.name = "TimeoutError";
+        abortController.abort(timeoutReason);
+      } else if (abortReason === "rpc") {
+        abortController.abort();
+      } else if (abortReason === "restart") {
+        abortController.abort(createAgentRunRestartAbortError());
+      }
+      return {
+        payloads: [{ text: "done" }],
+        meta: { durationMs, aborted: false, stopReason },
+      };
+    });
+    const context = makeContext();
+    const respond = vi.fn();
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "review the repository",
+        sessionKey: "agent:main:main",
+        timeout,
+        allowModelOverride: false,
+      },
+      runId: `agent-run-deadline-control-${stopReason}-${durationMs}`,
+      dedupeKeys: [`agent:deadline-control-${stopReason}-${durationMs}`],
+      abortController,
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ status: "ok", summary: "completed" }),
+        undefined,
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("classifies RPC-aborted async gateway agent rejections as cancelled", async () => {
     await withTempDir({ prefix: "openclaw-gateway-agent-task-abort-error-" }, async (root) => {
       useTestStateDir(root);
       resetTaskRegistryForTests();
@@ -493,7 +758,7 @@ describe("gateway agent handler", () => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-abort-error"), {
           runtime: "cli",
           childSessionKey: "agent:main:main",
-          status: "timed_out",
+          status: "cancelled",
           error: "AbortError: This operation was aborted",
         });
         expectRecordFields(
@@ -505,6 +770,9 @@ describe("gateway agent handler", () => {
             stopReason: "rpc",
           },
         );
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
+        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -536,11 +804,15 @@ describe("gateway agent handler", () => {
       );
 
       await waitForAssertion(() => {
+        expectRecordFields(findTaskByRunId(runId), {
+          status: "cancelled",
+        });
         expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
           runId,
           status: "timeout",
           summary: "aborted",
           stopReason: "restart",
+          timeoutPhase: "gateway_draining",
         });
       });
     });
@@ -585,6 +857,9 @@ describe("gateway agent handler", () => {
             stopReason: "timeout",
           },
         );
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-timeout-error")?.payload,
+        ).not.toHaveProperty("timeoutPhase");
       });
     });
   });
@@ -678,6 +953,145 @@ describe("gateway agent handler", () => {
           false,
         );
       });
+    });
+  });
+
+  it.each([
+    {
+      label: "completed stop",
+      meta: { stopReason: "stop", providerStarted: true },
+      outcome: { reason: "completed", status: "ok", stopReason: "stop", providerStarted: true },
+      payload: { status: "ok", summary: "completed" },
+    },
+    {
+      label: "completed stop with unknown timeout metadata",
+      meta: {
+        stopReason: "stop",
+        providerStarted: true,
+        timeoutPhase: "unrecognized_timeout_phase",
+      },
+      outcome: { reason: "completed", status: "ok", stopReason: "stop", providerStarted: true },
+      payload: { status: "ok", summary: "completed" },
+    },
+    {
+      label: "external cancellation",
+      meta: {
+        aborted: true,
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+      outcome: {
+        reason: "cancelled",
+        status: "error",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+      payload: {
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "rpc",
+        timeoutPhase: "queue",
+        providerStarted: false,
+      },
+    },
+    {
+      label: "provider timeout",
+      meta: {
+        aborted: true,
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      outcome: {
+        reason: "hard_timeout",
+        status: "timeout",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      payload: {
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    },
+  ])("settles $label from the canonical outcome without changing Gateway status", async (test) => {
+    mocks.agentCommand.mockResolvedValueOnce({
+      payloads: [],
+      meta: { durationMs: 1, ...test.meta },
+    });
+    const context = makeContext();
+    const onSettled = vi.fn(() => true);
+    const respond = vi.fn();
+    const runId = `agent-run-terminal-${test.label.replaceAll(" ", "-")}`;
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "characterize terminal ownership",
+        sessionKey: "agent:main:main",
+        allowModelOverride: false,
+      },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: test.outcome,
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId, ...test.payload }),
+        undefined,
+        { runId },
+      );
+    });
+  });
+
+  it("settles ordinary async gateway agent rejections as failed", async () => {
+    const providerError = new Error("provider request failed");
+    mocks.agentCommand.mockRejectedValueOnce(providerError);
+    const context = makeContext();
+    const onSettled = vi.fn(() => true);
+    const respond = vi.fn();
+
+    dispatchAgentRunFromGateway({
+      ingressOpts: {
+        message: "background cli task",
+        sessionKey: "agent:main:main",
+        allowModelOverride: false,
+      },
+      runId: "agent-run-provider-error-settlement",
+      dedupeKeys: ["agent:agent-run-provider-error-settlement"],
+      abortController: new AbortController(),
+      cleanupAbortController: vi.fn(),
+      respond,
+      context,
+      taskTrackingMode: "none",
+      onSettled,
+    });
+
+    await waitForAssertion(() => {
+      expect(onSettled).toHaveBeenCalledWith({
+        terminalOutcome: {
+          reason: "failed",
+          status: "error",
+          error: "Error: provider request failed",
+        },
+        onRecovered: expect.any(Function),
+      });
+      expect(respond).toHaveBeenCalled();
     });
   });
 

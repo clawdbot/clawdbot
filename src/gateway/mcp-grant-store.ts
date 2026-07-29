@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -14,6 +15,9 @@ export type McpLoopbackRequestContext = {
   agentId?: string;
   sessionId?: string;
   runId?: string;
+  /** Server-selected roots for mediated coding tools in this CLI run. */
+  workspaceDir?: string;
+  cwd?: string;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
@@ -35,6 +39,7 @@ export type McpLoopbackRequestContext = {
    * hard enforcement. Unset keeps the full session-scoped surface.
    */
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean;
   /** Capability minted only for Gateway-launched CLI backends. */
   nodeExecAllowed?: boolean;

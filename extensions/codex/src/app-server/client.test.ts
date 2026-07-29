@@ -1,5 +1,6 @@
 // Codex tests cover client plugin behavior.
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { inc as incrementSemver } from "semver";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerClient,
@@ -8,9 +9,9 @@ import {
 } from "./client.js";
 import { resetSharedCodexAppServerClientForTests } from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+import { MAX_CODEX_APP_SERVER_VERSION, MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
-const MIN_CODEX_APP_SERVER_VERSION = "0.143.0";
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 660_000;
 
 describe("CodexAppServerClient", () => {
   const clients: CodexAppServerClient[] = [];
@@ -188,6 +189,46 @@ describe("CodexAppServerClient", () => {
     await expect(request).rejects.toHaveProperty("message", "Method not found");
   });
 
+  it("retries transient app-server overload errors", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const request = harness.client.request("model/list", {});
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.writes).toHaveLength(2);
+    const second = JSON.parse(harness.writes[1] ?? "{}") as { id?: number };
+    harness.send({ id: second.id, result: { models: [] } });
+
+    await expect(request).resolves.toEqual({ models: [] });
+  });
+
+  it("aborts while waiting to retry an overloaded request", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const controller = new AbortController();
+
+    const request = harness.client.request("model/list", {}, { signal: controller.signal });
+    const first = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+    harness.send({
+      id: first.id,
+      error: { code: -32_001, message: "Server overloaded; retry later." },
+    });
+    controller.abort();
+
+    await expect(request).rejects.toThrow("model/list aborted");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(harness.writes).toHaveLength(1);
+  });
+
   it("surfaces relogin details from Codex app-server RPC errors", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);
@@ -289,7 +330,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.124.9`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.124.9`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -302,7 +343,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0-alpha.2`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.143.0-alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -315,31 +356,52 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected 0.143.0+alpha.2`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required, but detected 0.143.0+alpha.2`,
     );
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("accepts newer Codex app-server prereleases", async () => {
+  it("blocks Codex app-server prereleases outside generated stable schemas", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
       result: { userAgent: "openclaw/0.144.0-alpha.1 (macOS; test)" },
     });
 
-    await expect(initializing).resolves.toBeUndefined();
-    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    await expect(initializing).rejects.toThrow(
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+    );
+    expect(harness.writes).toHaveLength(1);
   });
 
-  it("accepts newer Codex app-server builds", async () => {
+  it("blocks Codex app-server custom builds outside generated stable schemas", async () => {
     const { harness, initializing, outbound } = startInitialize();
     harness.send({
       id: outbound.id,
       result: { userAgent: "openclaw/0.144.0+custom (macOS; test)" },
     });
 
-    await expect(initializing).resolves.toBeUndefined();
-    expect(JSON.parse(harness.writes[1] ?? "{}")).toEqual({ method: "initialized" });
+    await expect(initializing).rejects.toThrow(
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+    );
+    expect(harness.writes).toHaveLength(1);
+  });
+
+  it("blocks stable Codex app-server versions newer than generated schemas", async () => {
+    const newerVersion = incrementSemver(MAX_CODEX_APP_SERVER_VERSION, "patch");
+    if (!newerVersion) {
+      throw new Error(`invalid maximum Codex app-server version: ${MAX_CODEX_APP_SERVER_VERSION}`);
+    }
+    const { harness, initializing, outbound } = startInitialize();
+    harness.send({
+      id: outbound.id,
+      result: { userAgent: `openclaw/${newerVersion} (macOS; test)` },
+    });
+
+    await expect(initializing).rejects.toThrow(
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
+    );
+    expect(harness.writes).toHaveLength(1);
   });
 
   it("blocks app-server initialize responses without a version", async () => {
@@ -347,7 +409,7 @@ describe("CodexAppServerClient", () => {
     harness.send({ id: outbound.id, result: {} });
 
     await expect(initializing).rejects.toThrow(
-      `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required`,
+      `A stable Codex app-server from ${MIN_CODEX_APP_SERVER_VERSION} through ${MAX_CODEX_APP_SERVER_VERSION} is required`,
     );
     expect(harness.writes).toHaveLength(1);
   });
@@ -528,8 +590,10 @@ describe("CodexAppServerClient", () => {
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const harness = createClientHarness();
     clients.push(harness.client);
-    harness.client.addRequestHandler((request) => {
+    let requestSignal: AbortSignal | undefined;
+    harness.client.addRequestHandler((request, signal) => {
       if (request.method === "item/tool/call") {
+        requestSignal = signal;
         return new Promise<never>(() => {});
       }
       return undefined;
@@ -551,6 +615,7 @@ describe("CodexAppServerClient", () => {
         ],
       },
     });
+    expect(requestSignal?.aborted).toBe(true);
     expect(warn).toHaveBeenCalledWith("codex app-server server request timed out", {
       id: "srv-timeout",
       method: "item/tool/call",

@@ -1,6 +1,17 @@
 import Foundation
 import Observation
+import OpenClawKit
 import SwiftUI
+
+enum SystemAgentDraft: String, Decodable {
+    case hatch
+
+    var composerValue: String {
+        switch self {
+        case .hatch: String(localized: "Wake up, my friend!")
+        }
+    }
+}
 
 @MainActor
 @Observable
@@ -50,15 +61,24 @@ final class SystemAgentOnboardingChatModel {
         let id = UUID()
         let role: Role
         let text: String
+        let question: SystemAgentChatQuestion?
+
+        init(role: Role, text: String, question: SystemAgentChatQuestion? = nil) {
+            self.role = role
+            self.text = text
+            self.question = question
+        }
     }
 
     private(set) var messages: [Message] = []
     private(set) var isSending = false
     private(set) var errorMessage: String?
     private(set) var expectsSensitiveReply = false
+    private(set) var dismissedQuestionMessageIDs: Set<UUID> = []
+    private(set) var retiredQuestionMessageIDs: Set<UUID> = []
     var input = ""
     /// Set when OpenClaw hands off to the normal agent ("talk to agent").
-    var onAgentHandoff: (() -> Void)?
+    var onAgentHandoff: ((SystemAgentDraft?) -> Void)?
     /// Called after every assistant reply (setup may have applied config).
     var onReplyReceived: (() -> Void)?
 
@@ -89,6 +109,8 @@ final class SystemAgentOnboardingChatModel {
         let reply: String
         let action: String
         let sensitive: Bool?
+        let agentDraft: SystemAgentDraft?
+        let question: AnyCodable?
     }
 
     func startIfNeeded() async {
@@ -107,21 +129,40 @@ final class SystemAgentOnboardingChatModel {
     @discardableResult
     func send() -> Task<Void, Never>? {
         let text = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let generation = self.requestGeneration,
-              !text.isEmpty,
-              !self.isSending,
-              self.errorMessage == nil
+        return self.send(message: text)
+    }
+
+    @discardableResult
+    func answerQuestion(messageID: UUID, optionLabel: String) -> Task<Void, Never>? {
+        guard let message = self.messages.first(where: { $0.id == messageID }),
+              let question = message.question,
+              let option = question.options.first(where: { $0.label == optionLabel }),
+              self.canAnswerQuestion(message)
         else { return nil }
-        self.input = ""
-        self.messages.append(Message(
-            role: .user,
-            text: self.expectsSensitiveReply ? "<redacted secret>" : text))
-        let task = Task { [weak self] in
-            guard let self else { return }
-            await self.requestReply(message: text, generation: generation)
-        }
-        self.requestTask = task
+        // The typed Gateway contract separates the visible label from its canonical reply.
+        // Keep the transcript human-readable while returning the machine-facing value.
+        return self.send(message: option.reply ?? option.label, displayText: option.label)
+    }
+
+    @discardableResult
+    func skipQuestion(messageID: UUID) -> Task<Void, Never>? {
+        guard let message = self.messages.first(where: { $0.id == messageID }),
+              self.canAnswerQuestion(message),
+              let task = self.send(message: "Skip for now", displayText: "Skip for now")
+        else { return nil }
+        self.dismissedQuestionMessageIDs.insert(messageID)
         return task
+    }
+
+    func isQuestionVisible(_ message: Message) -> Bool {
+        message.question != nil && !self.dismissedQuestionMessageIDs.contains(message.id)
+    }
+
+    func canAnswerQuestion(_ message: Message) -> Bool {
+        self.isQuestionVisible(message) &&
+            !self.retiredQuestionMessageIDs.contains(message.id) &&
+            !self.isSending &&
+            self.errorMessage == nil
     }
 
     @discardableResult
@@ -134,6 +175,8 @@ final class SystemAgentOnboardingChatModel {
         self.route = nil
         self.started = true
         self.messages.removeAll()
+        self.dismissedQuestionMessageIDs.removeAll()
+        self.retiredQuestionMessageIDs.removeAll()
         self.input = ""
         self.expectsSensitiveReply = false
         let task = Task { [weak self] in
@@ -173,6 +216,31 @@ final class SystemAgentOnboardingChatModel {
         return route
     }
 
+    private func send(message: String, displayText: String? = nil) -> Task<Void, Never>? {
+        guard let generation = self.requestGeneration,
+              !message.isEmpty,
+              !self.isSending,
+              self.errorMessage == nil
+        else { return nil }
+        self.retireQuestions()
+        self.input = ""
+        self.messages.append(Message(
+            role: .user,
+            text: displayText ?? (self.expectsSensitiveReply ? "<redacted secret>" : message)))
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.requestReply(message: message, generation: generation)
+        }
+        self.requestTask = task
+        return task
+    }
+
+    private func retireQuestions() {
+        for message in self.messages where message.question != nil {
+            self.retiredQuestionMessageIDs.insert(message.id)
+        }
+    }
+
     private func requestReply(message: String?, generation: UInt64) async {
         guard self.isCurrentRequest(generation) else { return }
         self.isSending = true
@@ -204,10 +272,13 @@ final class SystemAgentOnboardingChatModel {
             let result = try JSONDecoder().decode(ChatResult.self, from: data)
             guard self.isCurrentRequest(generation) else { return }
             self.expectsSensitiveReply = result.sensitive == true
-            self.messages.append(Message(role: .assistant, text: result.reply))
+            self.messages.append(Message(
+                role: .assistant,
+                text: result.reply,
+                question: SystemAgentChatQuestion.parse(result.question?.dictionaryValue)))
             self.onReplyReceived?()
             if result.action == "open-agent" {
-                self.onAgentHandoff?()
+                self.onAgentHandoff?(result.agentDraft)
             }
         } catch {
             guard self.requestGeneration == generation else { return }
@@ -232,8 +303,26 @@ struct SystemAgentOnboardingChatView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         ForEach(self.model.messages) { message in
-                            SystemAgentChatBubble(message: message)
-                                .id(message.id)
+                            VStack(alignment: .leading, spacing: 8) {
+                                SystemAgentChatBubble(message: message)
+                                if let question = message.question,
+                                   self.model.isQuestionVisible(message)
+                                {
+                                    SystemAgentChatQuestionCard(
+                                        question: question,
+                                        isEnabled: self.model.canAnswerQuestion(message),
+                                        onSelect: { option in
+                                            self.model.answerQuestion(
+                                                messageID: message.id,
+                                                optionLabel: option.label)
+                                        },
+                                        onSkip: {
+                                            self.model.skipQuestion(messageID: message.id)
+                                        })
+                                        .padding(.trailing, 40)
+                                }
+                            }
+                            .id(message.id)
                         }
                         if self.model.isSending {
                             HStack(spacing: 8) {
@@ -298,6 +387,82 @@ struct SystemAgentOnboardingChatView: View {
             }
             .padding([.horizontal, .bottom], 10)
         }
+    }
+}
+
+private struct SystemAgentChatQuestionCard: View {
+    let question: SystemAgentChatQuestion
+    let isEnabled: Bool
+    let onSelect: (SystemAgentChatQuestion.Option) -> Void
+    let onSkip: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(self.question.header.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+            Text(self.question.question)
+                .font(.callout.weight(.semibold))
+            ForEach(self.question.options, id: \.label) { option in
+                self.optionButton(option)
+            }
+            Button("Skip for now", action: self.onSkip)
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .disabled(!self.isEnabled)
+        }
+        .padding(12)
+        .frame(maxWidth: 460, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(NSColor.controlBackgroundColor)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.secondary.opacity(0.2)))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(self.question.question)
+    }
+
+    private func optionButton(_ option: SystemAgentChatQuestion.Option) -> some View {
+        Button {
+            self.onSelect(option)
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.label)
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
+                    if let description = option.description {
+                        Text(description)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 8)
+                if option.recommended {
+                    Text("Recommended")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(option.recommended
+                        ? Color.accentColor.opacity(0.12)
+                        : Color(NSColor.windowBackgroundColor)))
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(option.recommended
+                        ? Color.accentColor.opacity(0.55)
+                        : Color.secondary.opacity(0.16)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!self.isEnabled)
     }
 }
 

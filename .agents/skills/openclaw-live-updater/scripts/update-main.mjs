@@ -38,6 +38,7 @@ const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
 const GATEWAY_READINESS_ATTEMPTS = 3;
 const GATEWAY_READINESS_RETRY_DELAY_MS = 5_000;
+const GATEWAY_CLI_TIMEOUT_MS = 30_000;
 const GATEWAY_STOP_PROOF_ATTEMPTS = 100;
 const GATEWAY_STOP_PROOF_RETRY_DELAY_MS = 100;
 const GATEWAY_SUSPEND_TIMEOUT_MS = 10_000;
@@ -1013,7 +1014,7 @@ export function parseLaunchctlArguments(output) {
     : [];
 }
 
-function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
+export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
   const observedDeployment = deployment ?? readManagedGatewayLaunchAgent(checkout);
   const sourceEntrypoint = path.join(checkout, "dist/index.js");
   let managedDeployment = observedDeployment;
@@ -1105,7 +1106,9 @@ function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
       cwd: workingDirectory ?? path.dirname(path.dirname(entrypoint)),
       encoding: "utf8",
       env,
+      killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", options.stderr ?? "inherit"],
+      timeout: options.timeoutMs ?? GATEWAY_CLI_TIMEOUT_MS,
     });
   } finally {
     rmSync(overlayPath, { force: true });

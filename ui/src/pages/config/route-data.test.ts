@@ -10,6 +10,8 @@ describe("config route data", () => {
       }),
     ).toEqual({
       section: "browser",
+      advanced: false,
+      tab: null,
       targetBlockId: "config-section-browser/profiles",
     });
   });
@@ -18,6 +20,26 @@ describe("config route data", () => {
     expect(configTargetIdFromHash("#%")).toBeNull();
     expect(configRouteData({ search: "", hash: "#%" })).toEqual({
       section: null,
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    });
+  });
+
+  it("preserves advanced search navigation intent", () => {
+    expect(configRouteData({ search: "?section=gateway&advanced=1", hash: "" })).toEqual({
+      section: "gateway",
+      advanced: true,
+      tab: null,
+      targetBlockId: null,
+    });
+  });
+
+  it("carries the hub tab a settings-search destination asks for", () => {
+    expect(configRouteData({ search: "?section=memory&tab=search", hash: "" })).toEqual({
+      section: "memory",
+      advanced: false,
+      tab: "search",
       targetBlockId: null,
     });
   });

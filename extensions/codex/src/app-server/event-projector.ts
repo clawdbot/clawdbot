@@ -7,16 +7,14 @@ import {
   runAgentHarnessBeforeCompactionHook,
   type BeforeToolCallFailureDisposition,
   type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptResult,
   type HeartbeatToolResponse,
   type MessagingToolSend,
   type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { attemptTerminal, type AttemptFailureSource } from "./attempt-terminal.js";
+import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
-import {
-  CodexProjectionDiagnostics,
-  isKnownNoopCodexNotificationMethod,
-} from "./event-projector-diagnostics.js";
+import { CodexProjectionDiagnostics } from "./event-projector-diagnostics.js";
 import { CodexEventProjection } from "./event-projector-events.js";
 import {
   itemName,
@@ -27,11 +25,13 @@ import {
 import { CodexGeneratedMediaProjection } from "./event-projector-media.js";
 import { CodexNativeToolLifecycleProjector } from "./event-projector-native-tool-lifecycle.js";
 import { CodexReasoningProjection } from "./event-projector-reasoning.js";
+import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import {
-  normalizeCodexResponseTokenUsage,
+  CodexResponseCompletionProjection,
   normalizeCodexThreadTokenUsage,
+  projectCodexThreadUsageUpdate,
 } from "./event-projector-usage.js";
 import {
   readCodexErrorNotificationMessage,
@@ -56,12 +56,11 @@ import {
 } from "./protocol.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import type { CodexTrajectoryRecorder } from "./trajectory.js";
-import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 import { createCodexUsageLimitPromptError } from "./usage-limit-error.js";
-import { promptSnapshot } from "./user-prompt-message.js";
 
-export { CodexNativeToolLifecycleProjector };
 export { shouldEmitTranscriptToolProgress } from "./event-projector-tool-progress.js";
+
+type ApprovalFailure = Exclude<BeforeToolCallFailureDisposition, "blocked">;
 
 type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
@@ -79,6 +78,7 @@ type CodexAppServerToolTelemetry = {
 type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  prepareNativeMcpAppResultDetails?: (item: CodexThreadItem) => Promise<unknown>;
   readRecentRateLimits?: () => JsonValue | undefined;
   runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
@@ -102,12 +102,13 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
-  private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  private promptErrorSource: AttemptFailureSource | null = null;
   private synthesizedMissingToolResultError: string | null = null;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeCodexThreadTokenUsage>;
-  private responseUsage: ReturnType<typeof normalizeCodexResponseTokenUsage>;
+  private readonly responseCompletions = new CodexResponseCompletionProjection();
   private completedCompactionCount = 0;
+  private lastTranscriptTimestamp = 0;
 
   constructor(
     private readonly params: EmbeddedRunAttemptParams,
@@ -131,8 +132,10 @@ export class CodexAppServerEventProjector {
       threadId,
       turnId,
       this.toolProgressProjection,
+      () => this.nextTranscriptTimestamp(),
       {
         nativePostToolUseRelayEnabled: options.nativePostToolUseRelayEnabled,
+        prepareNativeMcpAppResultDetails: options.prepareNativeMcpAppResultDetails,
         trajectoryRecorder: options.trajectoryRecorder,
       },
     );
@@ -148,10 +151,18 @@ export class CodexAppServerEventProjector {
       params,
       (event) => this.emitAgentEvent(event),
       (text) => this.toolProgressProjection.matchesEcho(text),
+      () => this.nextTranscriptTimestamp(),
     );
     this.reasoningProjection = new CodexReasoningProjection(params, (event) =>
       this.emitAgentEvent(event),
     );
+  }
+
+  private nextTranscriptTimestamp(): number {
+    // Commentary and tool mirrors share this clock so equal wall-clock values
+    // still preserve the app-server receipt order in the durable transcript.
+    this.lastTranscriptTimestamp = Math.max(Date.now(), this.lastTranscriptTimestamp + 1);
+    return this.lastTranscriptTimestamp;
   }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
@@ -204,10 +215,7 @@ export class CodexAppServerEventProjector {
     }
   }
 
-  recordNativeToolApprovalFailure(
-    toolCallId: string,
-    disposition: Exclude<BeforeToolCallFailureDisposition, "blocked">,
-  ): void {
+  recordNativeToolApprovalFailure(toolCallId: string, disposition: ApprovalFailure): void {
     this.nativeToolLifecycleProjector.recordApprovalFailureDisposition(toolCallId, disposition);
   }
 
@@ -269,29 +277,45 @@ export class CodexAppServerEventProjector {
         this.eventProjection.handleHook(notification.method, params);
         break;
       case "thread/tokenUsage/updated":
-        this.handleTokenUsage(params);
+        projectCodexThreadUsageUpdate(
+          params,
+          this.tokenUsage,
+          (usage) => (this.tokenUsage = usage),
+          (data) => this.emitAgentEvent({ stream: "codex_app_server.usage", data }),
+        );
         break;
       case "turn/completed":
         await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
-        this.handleRawResponseCompleted(params);
+        this.responseCompletions.record(params);
         break;
       case "rawResponseItem/completed":
         await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
-        this.responseUsage = undefined;
+        this.responseCompletions.clear();
         if (params.willRetry === true) {
           break;
         }
         this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
         this.promptErrorSource = "prompt";
         break;
+      case "thread/compacted":
+      case "turn/started":
+      case "turn/diff/updated":
+      case "item/reasoning/summaryPartAdded":
+      case "item/commandExecution/terminalInteraction":
+      case "item/fileChange/outputDelta":
+      case "item/fileChange/patchUpdated":
+      case "item/mcpToolCall/progress":
+      case "model/rerouted":
+      case "model/verification":
+      case "turn/moderationMetadata":
+      case "model/safetyBuffering/updated":
+        break;
       default:
-        if (!isKnownNoopCodexNotificationMethod(notification.method)) {
-          this.diagnostics.warnUnknownEvent(notification, params);
-        }
+        this.diagnostics.warnUnknownEvent(notification, params);
         break;
     }
   }
@@ -304,12 +328,14 @@ export class CodexAppServerEventProjector {
     // tool lacking a terminal item so audit consumers never retain an open action.
     this.nativeToolLifecycleProjector.finalizeActive();
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
+    const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
     const reasoningText = this.reasoningProjection.reasoningText();
     const planText = this.reasoningProjection.planText();
     // A terminal timeout must not publish exact usage, but the timeout watcher
     // can still recover a completed assistant. Keep the snapshot masked until
     // recovery clears the abort instead of destroying it in markTimedOut().
-    const projectedUsage = this.aborted ? this.tokenUsage : (this.responseUsage ?? this.tokenUsage);
+    const completedUsage = this.responseCompletions.usage ?? this.tokenUsage;
+    const projectedUsage = this.aborted ? this.tokenUsage : completedUsage;
     const hasAssistantItemText = this.assistantProjection.hasAssistantItemTextForSynthesis();
     const legacyFailClosed =
       !this.completedTurn || this.completedTurn.status !== "completed" || hasAssistantItemText;
@@ -349,30 +375,20 @@ export class CodexAppServerEventProjector {
     //     is preserved → on-disk key still matches → also a no-op.
     //   - Two distinct turns where the user repeats verbatim content →
     //     distinct turnIds → distinct identities → both kept.
-    const turnId = this.turnId;
-    const messagesSnapshot = promptSnapshot(this.params, turnId, this.options.upstreamUserText);
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
-    if (reasoningText) {
-      messagesSnapshot.push(
-        attachCodexMirrorIdentity(
-          this.assistantProjection.createAssistantMirrorMessage("Codex reasoning", reasoningText),
-          `${turnId}:reasoning`,
-        ),
-      );
-    }
-    if (planText) {
-      messagesSnapshot.push(
-        attachCodexMirrorIdentity(
-          this.assistantProjection.createAssistantMirrorMessage("Codex plan", planText),
-          `${turnId}:plan`,
-        ),
-      );
-    }
-    messagesSnapshot.push(...this.toolTranscriptProjection.transcriptMessages);
-    if (lastAssistant) {
-      messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
-    }
+    const messagesSnapshot = buildCodexMessagesSnapshot({
+      runParams: this.params,
+      turnId: this.turnId,
+      upstreamUserText: this.options.upstreamUserText,
+      reasoningText,
+      planText,
+      commentaryMessages,
+      toolMessages: this.toolTranscriptProjection.transcriptMessages,
+      lastAssistant,
+      createAssistantMirrorMessage: (title, text) =>
+        this.assistantProjection.createAssistantMirrorMessage(title, text),
+    });
     const turnFailed = this.completedTurn?.status === "failed";
     const promptError =
       this.promptError ??
@@ -392,18 +408,18 @@ export class CodexAppServerEventProjector {
       this.generatedMediaProjection.hasGeneratedMedia() ||
       this.toolProgressProjection.hasPotentialSideEffects;
     return {
-      aborted: this.aborted,
-      externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
-      timedOutDuringCompaction: false,
-      timedOutDuringToolExecution: false,
-      promptError,
-      promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
+      terminal: attemptTerminal.normalize({
+        aborted: this.aborted,
+        promptError,
+        promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
+      }),
       sessionIdUsed: this.params.sessionId,
       ...(agentHarnessResultClassification ? { agentHarnessResultClassification } : {}),
       bootstrapPromptWarningSignaturesSeen: this.params.bootstrapPromptWarningSignaturesSeen,
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
+      ...(this.responseCompletions.modelIterations > 0
+        ? { modelIterations: this.responseCompletions.modelIterations }
+        : {}),
       messagesSnapshot,
       assistantTexts,
       toolMetas,
@@ -421,10 +437,14 @@ export class CodexAppServerEventProjector {
       messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
       toolMediaUrls: this.generatedMediaProjection.buildToolMediaUrls(toolTelemetry),
+      hostOwnedToolMediaUrls: this.generatedMediaProjection.buildHostOwnedMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
       attemptUsage: projectedUsage,
+      ...(this.completedCompactionCount > 0
+        ? { compactionCount: this.completedCompactionCount }
+        : {}),
       replayMetadata: {
         hadPotentialSideEffects,
         replaySafe: !hadPotentialSideEffects,
@@ -433,9 +453,6 @@ export class CodexAppServerEventProjector {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
         completedCount: this.completedItemIds.size,
         activeCount: this.activeItemIds.size,
-        ...(this.completedCompactionCount > 0
-          ? { compactionCount: this.completedCompactionCount }
-          : {}),
       },
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt:
@@ -456,6 +473,7 @@ export class CodexAppServerEventProjector {
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
+    details?: unknown;
   }): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
     this.toolTranscriptProjection.recordDynamicToolResult(params);
@@ -469,7 +487,7 @@ export class CodexAppServerEventProjector {
 
   markAborted(): void {
     this.aborted = true;
-    this.responseUsage = undefined;
+    this.responseCompletions.clear();
   }
 
   isCompacting(): boolean {
@@ -571,32 +589,13 @@ export class CodexAppServerEventProjector {
     this.eventProjection.emitStandardItemEvent({ phase: "end", item });
     await this.eventProjection.emitNormalizedToolItemEvent({ phase: "result", item });
     this.toolTranscriptProjection.recordNativeToolCall(item);
-    this.toolTranscriptProjection.recordNativeToolResult(item);
+    await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
     this.toolProgressProjection.emitToolResultSummary(item);
     this.toolProgressProjection.emitToolResultOutput(item);
     this.emitAgentEvent({
       stream: "codex_app_server.item",
       data: { phase: "completed", itemId, type: item?.type },
     });
-  }
-
-  private handleTokenUsage(params: JsonObject): void {
-    const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
-    const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-    if (!last) {
-      return;
-    }
-    const usage = normalizeCodexThreadTokenUsage(last);
-    if (usage) {
-      this.tokenUsage = usage;
-    }
-  }
-
-  private handleRawResponseCompleted(params: JsonObject): void {
-    const usage = isJsonObject(params.usage) ? params.usage : undefined;
-    // Every provider completion replaces the prior response snapshot. A final
-    // response with missing or malformed usage must leave freshness unknown.
-    this.responseUsage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
   }
 
   private async handleTurnCompleted(params: JsonObject): Promise<void> {
@@ -606,7 +605,7 @@ export class CodexAppServerEventProjector {
     }
     this.completedTurn = turn;
     if (turn.status !== "completed") {
-      this.responseUsage = undefined;
+      this.responseCompletions.clear();
     }
     if (turn.status === "failed") {
       const usageLimitMessage = formatCodexUsageLimitErrorMessage({
@@ -644,7 +643,7 @@ export class CodexAppServerEventProjector {
       this.toolProgressProjection.rememberCommandAggregateOutputEcho(item);
       await this.emitSnapshotOnlyNativeToolProgress(item);
       this.toolTranscriptProjection.recordNativeToolCall(item);
-      this.toolTranscriptProjection.recordNativeToolResult(item);
+      await this.toolTranscriptProjection.recordNativeToolResultWithDetails(item);
       this.toolTranscriptProjection.emitAfterToolCallObservation(item);
       this.toolProgressProjection.emitToolResultSummary(item);
       this.toolProgressProjection.emitToolResultOutput(item);
@@ -684,6 +683,7 @@ export class CodexAppServerEventProjector {
     if (!item) {
       return;
     }
+    this.toolTranscriptProjection.recordRawNativeToolItem(item);
     // Project protocol state before media persistence yields. Notifications may overlap,
     // so delayed image I/O must not consume assistant-echo state from a newer item.
     this.assistantProjection.handleRawResponseItemCompleted(item, this.activeItemIds);

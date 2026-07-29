@@ -34,7 +34,7 @@ import {
   getLineSourceInfo,
   type LineInboundContext,
 } from "./bot-message-context.js";
-import { downloadLineMedia } from "./download.js";
+import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { pushMessageLine, replyMessageLine } from "./send.js";
@@ -414,6 +414,13 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
           contentType: media.contentType,
         });
       } catch (err) {
+        if (isRetryableLineInboundMediaError(err)) {
+          // Preparation-phase failure before turn adoption: reject so the durable
+          // ingress drain retries the whole event once LINE finishes preparing the
+          // media, instead of degrading it to an unavailable-attachment notice that
+          // permanently loses media with no text fallback.
+          throw err;
+        }
         mediaUnavailable = true;
         const errMsg = String(err);
         if (errMsg.includes("exceeds") && errMsg.includes("limit")) {

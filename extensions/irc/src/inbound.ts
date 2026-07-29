@@ -9,7 +9,10 @@ import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
@@ -30,6 +33,7 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
+import type { IrcIngressDispatchResult, IrcIngressLifecycle } from "./irc-ingress.js";
 import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
@@ -198,10 +202,12 @@ export async function handleIrcInbound(params: {
   config: CoreConfig;
   runtime: RuntimeEnv;
   connectedNick?: string;
+  turnAdoptionLifecycle?: IrcIngressLifecycle;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-}): Promise<void> {
-  const { message, account, config, runtime, connectedNick, statusSink } = params;
+}): Promise<IrcIngressDispatchResult | void> {
+  const { message, account, config, runtime, connectedNick, statusSink, turnAdoptionLifecycle } =
+    params;
   const core = getIrcRuntime();
   const pairing = createChannelPairingController({
     core,
@@ -211,7 +217,13 @@ export async function handleIrcInbound(params: {
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
-    return;
+    return { kind: "completed" };
+  }
+  if (turnAdoptionLifecycle?.abortSignal.aborted) {
+    return {
+      kind: "failed-retryable",
+      error: turnAdoptionLifecycle.abortSignal.reason,
+    };
   }
 
   statusSink?.({ lastInboundAt: message.timestamp });
@@ -335,11 +347,11 @@ export async function handleIrcInbound(params: {
       },
     });
     runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
-    return;
+    return { kind: "completed" };
   }
   if (access.ingress.admission === "skip") {
     runtime.log?.(`irc: drop channel ${message.target} (missing-mention)`);
-    return;
+    return { kind: "completed" };
   }
   if (access.ingress.admission !== "dispatch") {
     if (
@@ -353,7 +365,7 @@ export async function handleIrcInbound(params: {
         reason: "control command (unauthorized)",
         target: senderDisplay,
       });
-      return;
+      return { kind: "completed" };
     }
     if (message.isGroup) {
       if (access.routeAccess.reason === "channel_not_allowlisted") {
@@ -366,7 +378,14 @@ export async function handleIrcInbound(params: {
     } else {
       runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
     }
-    return;
+    return { kind: "completed" };
+  }
+
+  if (turnAdoptionLifecycle?.abortSignal.aborted) {
+    return {
+      kind: "failed-retryable",
+      error: turnAdoptionLifecycle.abortSignal.reason,
+    };
   }
 
   const channelTarget =
@@ -409,6 +428,7 @@ export async function handleIrcInbound(params: {
     },
     route: {
       agentId: route.agentId,
+      dmScope: route.dmScope,
       accountId: route.accountId,
       routeSessionKey: route.sessionKey,
     },
@@ -426,6 +446,27 @@ export async function handleIrcInbound(params: {
       GroupSystemPrompt: message.isGroup ? groupSystemPrompt : undefined,
     },
   });
+
+  const ingressState: {
+    handoff: "none" | "adopted" | "deferred" | "abandoned";
+  } = { handoff: "none" };
+  const trackedIngressLifecycle = turnAdoptionLifecycle
+    ? {
+        ...turnAdoptionLifecycle,
+        onAdopted: async () => {
+          ingressState.handoff = "adopted";
+          await turnAdoptionLifecycle.onAdopted();
+        },
+        onDeferred: () => {
+          ingressState.handoff = "deferred";
+          turnAdoptionLifecycle.onDeferred();
+        },
+        onAbandoned: async () => {
+          ingressState.handoff = "abandoned";
+          await turnAdoptionLifecycle.onAbandoned();
+        },
+      }
+    : undefined;
 
   await core.channel.inbound.dispatch({
     cfg: config as OpenClawConfig,
@@ -450,6 +491,9 @@ export async function handleIrcInbound(params: {
     },
     replyPipeline: {},
     replyOptions: {
+      ...(trackedIngressLifecycle
+        ? bindIngressLifecycleToReplyOptions(trackedIngressLifecycle)
+        : {}),
       skillFilter: groupMatch.groupConfig?.skills,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
@@ -460,4 +504,20 @@ export async function handleIrcInbound(params: {
       },
     },
   });
+
+  if (turnAdoptionLifecycle?.abortSignal.aborted && ingressState.handoff === "none") {
+    return {
+      kind: "failed-retryable",
+      error: turnAdoptionLifecycle.abortSignal.reason,
+    };
+  }
+  if (turnAdoptionLifecycle && ingressState.handoff === "none") {
+    // Terminal core no-dispatch/gate: settle the claim instead of leaving it
+    // watchdog-held. Reply-lane adoption remains the normal completion path.
+    await turnAdoptionLifecycle.onAdopted();
+    ingressState.handoff = "adopted";
+  }
+  return ingressState.handoff === "deferred" || ingressState.handoff === "abandoned"
+    ? { kind: "deferred" }
+    : { kind: "completed" };
 }

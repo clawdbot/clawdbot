@@ -83,6 +83,7 @@ export async function listPairedNode(params: {
   node: CatalogNode;
   query: CodexSessionCatalogParams;
   adoptedSessions: ReadonlyMap<string, AdoptedSessionEntry>;
+  onHost?: (host: CodexSessionCatalogHost) => void;
 }): Promise<CodexSessionCatalogHost> {
   const hostId = `node:${params.node.nodeId}`;
   const common = {
@@ -93,16 +94,18 @@ export async function listPairedNode(params: {
     canContinueCodex: canContinueCodexOnNode(params.node),
   };
   if (params.node.connected !== true) {
-    return {
+    const host = {
       ...common,
       connected: false,
       sessions: [],
       error: { code: "NODE_OFFLINE", message: "Paired node is offline" },
     };
+    params.onHost?.(host);
+    return host;
   }
-  try {
-    const raw = await withTimeout(
-      params.runtime.nodes.invoke({
+  const eventualHost = Promise.resolve()
+    .then(async () => {
+      const raw = await params.runtime.nodes.invoke({
         nodeId: params.node.nodeId,
         command: CODEX_APP_SERVER_THREADS_LIST_COMMAND,
         params: {
@@ -112,23 +115,38 @@ export async function listPairedNode(params: {
         },
         timeoutMs: NODE_INVOKE_TIMEOUT_MS,
         scopes: ["operator.write"],
-      }),
+      });
+      const page = filterCatalogPageByTitle(
+        parseCatalogPage(unwrapNodeInvokePayload(raw)),
+        params.query.search,
+      );
+      return {
+        ...common,
+        connected: true,
+        ...page,
+        sessions: page.sessions.map((session) => {
+          const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
+          return adopted ? Object.assign({}, session, { sessionKey: adopted.key }) : session;
+        }),
+      };
+    })
+    .catch((error: unknown) => ({
+      ...common,
+      connected: true,
+      sessions: [],
+      error: catalogError("NODE_INVOKE_FAILED", error),
+    }));
+  if (params.onHost) {
+    // Keep the 8s aggregate response while allowing cold app-server discovery
+    // to replace that fail-soft page as soon as the node invoke really settles.
+    void eventualHost.then(params.onHost).catch(() => undefined);
+  }
+  try {
+    return await withTimeout(
+      eventualHost,
       NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
       "paired node Codex session catalog timed out",
     );
-    const page = filterCatalogPageByTitle(
-      parseCatalogPage(unwrapNodeInvokePayload(raw)),
-      params.query.search,
-    );
-    return {
-      ...common,
-      connected: true,
-      ...page,
-      sessions: page.sessions.map((session) => {
-        const adopted = params.adoptedSessions.get(adoptedSourceKey(hostId, session.threadId));
-        return adopted ? Object.assign({}, session, { openClawSessionKey: adopted.key }) : session;
-      }),
-    };
   } catch (error) {
     return {
       ...common,

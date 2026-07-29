@@ -10,6 +10,7 @@ on:
       - "extensions/**"
       - "package.json"
       - "scripts/lib/npm-publish-plan.mjs"
+      - "scripts/lib/release-version.mjs"
       - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/lib/actions-artifact-archive.mjs"
@@ -77,7 +78,7 @@ jobs:
       all_matrix: ${{ steps.plan.outputs.all_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -131,14 +132,14 @@ jobs:
             release_year="${BASH_REMATCH[1]}"
             release_month="${BASH_REMATCH[2]}"
             extended_stable_branch="extended-stable/${release_year}.${release_month}.33"
-            git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${extended_stable_branch}:refs/remotes/origin/${extended_stable_branch}"
             if [[ "${WORKFLOW_REF}" == "refs/heads/${extended_stable_branch}" ]] && [[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]; then
               exit 0
             fi
             echo "Extended-stable plugin npm publishes must run from ${extended_stable_branch} at its exact branch tip." >&2
             exit 1
           fi
-          git fetch --no-tags origin \
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
           if [[ "${PREFLIGHT_ONLY}" == "true" ]] && ! git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main; then
@@ -159,7 +160,7 @@ jobs:
           fi
           if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             alpha_branch="${WORKFLOW_REF#refs/heads/}"
-            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
             if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
               exit 0
             fi
@@ -282,7 +283,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
 
@@ -321,7 +322,7 @@ jobs:
         plugin: ${{ fromJson(github.event_name == 'workflow_dispatch' && inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -585,7 +586,7 @@ jobs:
         plugin: ${{ fromJson(inputs.preflight_only && needs.preview_plugins_npm.outputs.all_matrix || needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted npm preflight tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
@@ -619,7 +620,7 @@ jobs:
           RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "${SOURCE_SHA}"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           git show "${SOURCE_SHA}:${PACKAGE_DIR}/package.json" > "${source_package_json}"
 
@@ -1007,14 +1008,14 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.matrix) }}
     steps:
       - name: Checkout trusted publication tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ github.workflow_sha }}
           fetch-depth: 1
 
       - name: Setup trusted Node
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -1099,7 +1100,7 @@ jobs:
               echo "npm token bootstrap requires trusted main tooling or a protected SHA-pinned release-publish tag." >&2
               exit 1
             }
-            git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
             git merge-base --is-ancestor "$WORKFLOW_SHA" origin/main || {
               echo "npm token bootstrap workflow revision is not reachable from current main." >&2
               exit 1
@@ -1137,7 +1138,7 @@ jobs:
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" \
             -o "$artifact_zip"
 
-          git fetch --no-tags --depth=1 origin "$TARGET_SHA"
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin "$TARGET_SHA"
           source_package_json="${RUNNER_TEMP}/${EXTENSION_ID}-source-package.json"
           git show "${TARGET_SHA}:${PACKAGE_DIR}/package.json" > "$source_package_json"
           source_package_json_sha256="$(sha256sum "$source_package_json" | awk '{print $1}')"
@@ -1200,7 +1201,7 @@ jobs:
 
       - name: Checkout OIDC publication target
         if: steps.publication_evidence.outputs.publish_route == 'npm-oidc'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}
@@ -1321,12 +1322,14 @@ jobs:
           } > "$npmrc"
           chmod 0600 "$npmrc"
           unset NODE_AUTH_TOKEN NPM_TOKEN NODE_OPTIONS
+          # A timeout can race a committed publish. On rerun, the preceding check
+          # accepts only this tarball's exact integrity and shasum before skipping.
           HOME="$publish_home" \
             NPM_CONFIG_GLOBALCONFIG=/dev/null \
             NPM_CONFIG_IGNORE_SCRIPTS=true \
             NPM_CONFIG_REGISTRY=https://registry.npmjs.org/ \
             NPM_CONFIG_USERCONFIG="$npmrc" \
-            npm publish "$TARBALL_PATH" \
+            timeout --signal=TERM --kill-after=10s 300s npm publish "$TARBALL_PATH" \
               --access public \
               --ignore-scripts \
               --provenance \
@@ -1375,7 +1378,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_npm.outputs.all_matrix) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
           ref: ${{ needs.preview_plugins_npm.outputs.ref_revision }}

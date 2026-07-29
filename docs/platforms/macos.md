@@ -13,6 +13,11 @@ Mac-hosted node tools such as `system.run`.
 
 Use **Quick Chat** for a Spotlight-style main-session composer without opening a full window. Press Option-Space (⌥Space) by default, choose it from the menu bar menu, or record another shortcut in **Settings → General**.
 
+The full native chat accepts image attachments through its picker, paste, and
+drag and drop. Assistant-generated images render inline through short-lived
+Gateway artifact URLs and open in a larger preview; iOS and macOS share the same
+bounded image model and renderer.
+
 Only need the CLI and Gateway? Start with [Getting started](/start/getting-started).
 
 ## Download
@@ -109,6 +114,9 @@ See [Gateway on macOS](/platforms/mac/bundled-gateway) for manual recovery.
 - App-context execution for approved shell commands, preserving the app's macOS
   permission attribution while the CLI runtime owns shared node policy.
 - Remote-mode SSH tunnels or direct Gateway connections.
+
+In the embedded Control UI, **Settings → Notifications** shows the app's native
+notification permission instead of browser push because the app delivers notifications natively.
 
 The app does **not** replace the Gateway or general CLI docs. Gateway
 configuration, providers, plugins, channels, tools, and security live in their

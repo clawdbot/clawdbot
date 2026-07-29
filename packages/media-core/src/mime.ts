@@ -28,6 +28,7 @@ const EXT_BY_MIME: Record<string, string> = {
   "audio/opus": ".opus",
   "audio/webm": ".webm",
   "audio/x-m4a": ".m4a",
+  "audio/m4a": ".m4a",
   "audio/mp4": ".m4a",
   "audio/x-caf": ".caf",
   "video/x-msvideo": ".avi",
@@ -88,6 +89,8 @@ const MIME_BY_EXT: Record<string, string> = {
 
 const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/mp4": "video/mp4",
+  "audio/x-m4a": "video/mp4",
+  "audio/m4a": "video/mp4",
   "audio/webm": "video/webm",
 };
 
@@ -243,9 +246,9 @@ export async function detectMime(opts: {
     : (sniffed ?? extMime);
   // file-type defaults these containers to video without parsing their tracks.
   // Preserve a concrete audio hint only for those documented ambiguous results.
-  const audioContainerHint = mimeHints.find(
-    (mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred,
-  );
+  const audioContainerHint =
+    mimeHints.find((mime) => AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[mime] === inferred) ??
+    (extMime && AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME[extMime] === inferred ? extMime : undefined);
   if (audioContainerHint) {
     return audioContainerHint;
   }

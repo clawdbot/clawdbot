@@ -85,7 +85,12 @@ private actor TestTranscriptCache: OpenClawChatTranscriptCache {
         self.storedSessionsCallCount += 1
     }
 
-    func storeTranscript(sessionKey: String, messages: [OpenClawChatMessage]) async {
+    func storeCanonicalTranscript(
+        sessionKey: String,
+        agentID _: String?,
+        messages: [OpenClawChatMessage],
+        canonicalMessageIdempotencyKeys _: Set<String>) async
+    {
         self.transcripts[sessionKey] = messages
         self.storedTranscriptSessionKeys.append(sessionKey)
         self.storedTranscripts.append(messages)
@@ -327,6 +332,88 @@ struct ChatViewModelTranscriptCacheTests {
         release.yield(())
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(await MainActor.run { vm.sessions.isEmpty })
+    }
+
+    @Test func `prior agent cache cannot repaint global digest after owner switch`() async throws {
+        var releaseSessions: AsyncStream<Void>.Continuation!
+        let sessionsGate = AsyncStream<Void> { releaseSessions = $0 }
+        let release = try #require(releaseSessions)
+        var loadStarted: AsyncStream<Void>.Continuation!
+        let started = AsyncStream<Void> { loadStarted = $0 }
+        let startedSignal = try #require(loadStarted)
+        var startedIterator = started.makeAsyncIterator()
+        var global = cachedSessionEntry(key: "global", updatedAt: 1000)
+        global.observerDigest = OpenClawChatSessionObserverDigest(
+            agentId: "main",
+            runId: "run-main",
+            revision: 3,
+            updatedAt: 1000,
+            headline: "Main owner",
+            health: "on-track")
+        let cache = TestTranscriptCache(
+            sessions: [global],
+            loadSessionsHook: {
+                startedSignal.yield(())
+                var iterator = sessionsGate.makeAsyncIterator()
+                _ = await iterator.next()
+            })
+        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
+            OpenClawChatHistoryPayload(
+                sessionKey: sessionKey,
+                sessionId: "unused-live-session",
+                messages: [],
+                thinkingLevel: "off")
+        }
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "agent:main:work",
+                transport: transport,
+                activeAgentId: "main",
+                transcriptCache: cache)
+        }
+        let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
+        await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
+        _ = await startedIterator.next()
+
+        await MainActor.run { vm.syncActiveAgentId("work") }
+        release.yield(())
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await MainActor.run { vm.sessions.isEmpty })
+    }
+
+    @Test func `ownerless shared cache cannot claim the selected global owner`() async throws {
+        var global = cachedSessionEntry(key: "global", updatedAt: 1000)
+        global.observerDigest = OpenClawChatSessionObserverDigest(
+            runId: "run-legacy",
+            revision: 3,
+            updatedAt: 1000,
+            headline: "Ambiguous legacy owner",
+            health: "on-track")
+        let cache = TestTranscriptCache(sessions: [global])
+        let transport = GatedHistoryChatTransport(gated: false) { sessionKey, _ in
+            OpenClawChatHistoryPayload(
+                sessionKey: sessionKey,
+                sessionId: "unused-live-session",
+                messages: [],
+                thinkingLevel: "off")
+        }
+        let vm = await MainActor.run {
+            OpenClawChatViewModel(
+                sessionKey: "agent:work:main",
+                transport: transport,
+                activeAgentId: "work",
+                transcriptCache: cache)
+        }
+        let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
+
+        await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
+        try await waitUntil("shared cache row painted without ambiguous digest") {
+            await MainActor.run { vm.sessions.count == 1 }
+        }
+
+        #expect(await MainActor.run { vm.sessions[0].key == "global" })
+        #expect(await MainActor.run { vm.sessions[0].observerDigest == nil })
     }
 
     @Test func `empty live history wins over cached transcript`() async throws {

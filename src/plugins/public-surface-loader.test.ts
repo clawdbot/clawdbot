@@ -41,6 +41,8 @@ afterEach(() => {
 
 describe("bundled plugin public surface loader", () => {
   it("keeps auto-resolved bundled roots on built public artifacts", async () => {
+    // The non-isolated plugin shard may have already imported the native loader.
+    vi.resetModules();
     const tempRoot = createTempDir();
     const bundledPluginsDir = path.join(tempRoot, "dist", "extensions");
     const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");

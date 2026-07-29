@@ -14,7 +14,7 @@ import {
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { ActiveWebListener, WebListenerCloseReason } from "./inbound/types.js";
 import { computeBackoff, sleepWithAbort, type ReconnectPolicy } from "./reconnect.js";
-import { getWhatsAppRuntime } from "./runtime.js";
+import { getWhatsAppChannelRuntime } from "./runtime.js";
 import {
   createWaSocket,
   formatError,
@@ -514,26 +514,21 @@ export class WhatsAppConnectionController {
       ...params.socketTiming,
     };
     this.socketRef = { current: null };
-    this.abortPromise =
-      params.abortSignal &&
-      new Promise<"aborted">((resolve) => {
-        params.abortSignal?.addEventListener("abort", () => resolve("aborted"), { once: true });
-      });
-
-    if (params.abortSignal?.aborted) {
-      this.stopDisconnectRetries();
-      this.ownerAcquireAbortController.abort(params.abortSignal.reason);
-      this.setupAbortController.abort(params.abortSignal.reason);
-    } else {
-      params.abortSignal?.addEventListener(
-        "abort",
-        () => {
+    const abortSignal = params.abortSignal;
+    if (abortSignal) {
+      this.abortPromise = new Promise<"aborted">((resolve) => {
+        const stop = () => {
+          resolve("aborted");
           this.stopDisconnectRetries();
-          this.ownerAcquireAbortController.abort(params.abortSignal?.reason);
-          this.setupAbortController.abort(params.abortSignal?.reason);
-        },
-        { once: true },
-      );
+          this.ownerAcquireAbortController.abort(abortSignal.reason);
+          this.setupAbortController.abort(abortSignal.reason);
+        };
+        if (abortSignal.aborted) {
+          stop();
+        } else {
+          abortSignal.addEventListener("abort", stop, { once: true });
+        }
+      });
     }
   }
 
@@ -697,7 +692,7 @@ export class WhatsAppConnectionController {
       // Publish only after the listener is ready. Lease tokens make disposal of this
       // controller's previous registration unable to remove a newer replacement.
       this.runtimeContextLease = registerChannelRuntimeContext({
-        channelRuntime: getWhatsAppRuntime().channel,
+        channelRuntime: getWhatsAppChannelRuntime(),
         channelId: "whatsapp",
         accountId: this.accountId,
         capability: WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
@@ -1016,7 +1011,7 @@ export class WhatsAppConnectionController {
           // Keep a pending marker separate from the ready controller capability. This
           // blocks a second socket without replacing a still-working controller on reload.
           this.pendingOwnerContextLease = registerChannelRuntimeContext({
-            channelRuntime: getWhatsAppRuntime().channel,
+            channelRuntime: getWhatsAppChannelRuntime(),
             channelId: "whatsapp",
             accountId: this.accountId,
             capability: WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,

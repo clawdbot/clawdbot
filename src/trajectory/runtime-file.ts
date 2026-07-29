@@ -2,7 +2,9 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readRegularFile } from "../infra/regular-file.js";
 import {
+  TRAJECTORY_POINTER_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   safeTrajectorySessionFileName,
@@ -28,11 +30,12 @@ async function readRuntimePointerFile(
   sessionId: string,
 ): Promise<string | undefined> {
   const pointerPath = resolveTrajectoryPointerFilePath(sessionFile);
-  if (!(await isRegularNonSymlinkFile(pointerPath))) {
-    return undefined;
-  }
   try {
-    const parsed = JSON.parse(await fsp.readFile(pointerPath, "utf8")) as unknown;
+    const { buffer } = await readRegularFile({
+      filePath: pointerPath,
+      maxBytes: TRAJECTORY_POINTER_FILE_MAX_BYTES,
+    });
+    const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
     if (!isRecord(parsed)) {
       return undefined;
     }

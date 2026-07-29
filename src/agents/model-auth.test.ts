@@ -1,4 +1,5 @@
 // Verifies provider auth resolution, synthetic auth, and auth header behavior.
+import { fileURLToPath } from "node:url";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelProviderConfig } from "../config/config.js";
@@ -17,19 +18,42 @@ import {
 } from "./provider-request-config.js";
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginRegistrySnapshotWithMetadata: () => ({
-    source: "derived",
-    snapshot: { plugins: [] },
-    diagnostics: [],
-  }),
+  loadPluginRegistrySnapshotWithMetadata: () => {
+    const rootDir = fileURLToPath(new URL("../../extensions/ollama/", import.meta.url));
+    return {
+      source: "derived",
+      snapshot: {
+        plugins: [
+          {
+            pluginId: "ollama",
+            manifestPath: fileURLToPath(
+              new URL("../../extensions/ollama/openclaw.plugin.json", import.meta.url),
+            ),
+            manifestHash: "ollama-model-auth-fixture",
+            rootDir,
+            origin: "bundled",
+            enabled: true,
+            startup: {
+              sidecar: false,
+              memory: false,
+              deferConfiguredChannelFullLoadUntilAfterListen: false,
+              agentHarnesses: [],
+            },
+            compat: [],
+          },
+        ],
+      },
+      diagnostics: [],
+    };
+  },
   loadPluginManifestRegistryForPluginRegistry: () => ({
     diagnostics: [],
     plugins: [
       {
         origin: "bundled",
         nonSecretAuthMarkers: ["gcp-vertex-credentials", "ollama-local"],
-        providerAuthEnvVars: {
-          ollama: ["OLLAMA_API_KEY"],
+        setup: {
+          providers: [{ id: "ollama", envVars: ["OLLAMA_API_KEY"] }],
         },
       },
     ],
@@ -1758,10 +1782,15 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
   it("recognizes local baseUrl variants for synthetic auth config", () => {
     const localBaseUrls = [
       "http://127.0.0.1:8080/v1",
+      "http://127.0.0.2:8080/v1",
+      "http://127.255.255.254:8080/v1",
+      "http://10.0.0.1:11434/v1",
+      "http://172.16.0.1:11434/v1",
       "http://192.168.0.222:11434/v1",
       "http://localhost:11434/v1",
       "http://[::1]:8080/v1",
       "http://0.0.0.0:11434/v1",
+      "http://[::ffff:7f00:1]:8080/v1",
       "http://[::ffff:127.0.0.1]:8080/v1",
     ];
 
@@ -1780,6 +1809,21 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
         baseUrl,
       ).toBe(true);
     }
+  });
+
+  it("does not recognize addresses outside the IPv4 loopback range as local", () => {
+    expect(
+      hasSyntheticLocalProviderAuthConfig({
+        provider: "custom-remote",
+        cfg: {
+          models: {
+            providers: {
+              "custom-remote": createCustomProviderConfig("http://128.0.0.1:8080/v1"),
+            },
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("synthesizes a local auth marker for custom providers with a local baseUrl and no apiKey", async () => {
