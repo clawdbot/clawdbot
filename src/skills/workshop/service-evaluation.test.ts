@@ -31,6 +31,7 @@ import {
   proposeUpdateSkill,
   reviseSkillProposal,
 } from "./service.js";
+import { prepareSkillProposalSupportFiles } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -301,7 +302,9 @@ describe("Skill Workshop proposal evaluation", () => {
     const buildBundles = () =>
       buildSkillProposalEvaluationBundles({
         proposal,
-        supportFiles: [{ path: "references/input.txt", content: "candidate\n" }],
+        supportFiles: prepareSkillProposalSupportFiles([
+          { path: "references/input.txt", content: "candidate\n" },
+        ]),
       });
     if (requestedFileExists) {
       await expect(buildBundles()).rejects.toThrow("Target support file already exists");
@@ -396,7 +399,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
     ).toBeUndefined();
   });
 
@@ -438,7 +441,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
     ).toBeUndefined();
   });
 
@@ -475,7 +478,7 @@ describe("Skill Workshop proposal evaluation", () => {
 
     await expect(evaluating).rejects.toThrow("changed while evaluation was running");
     expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
     ).toBeUndefined();
   });
 
@@ -655,7 +658,7 @@ describe("Skill Workshop proposal evaluation", () => {
       }),
     ).rejects.toThrow("evaluation exceeds 524288 bytes");
     expect(
-      (await inspectSkillProposal(proposal.record.id, { workspaceDir })).record.evaluation,
+      (await inspectSkillProposal(proposal.record.id, { workspaceDir }))!.record.evaluation,
     ).toBeUndefined();
     expect(
       listSkillProposalEvents({ workspaceDir, proposalId: proposal.record.id }).events.map(

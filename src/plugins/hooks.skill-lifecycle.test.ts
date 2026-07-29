@@ -166,7 +166,8 @@ describe("skill lifecycle hooks", () => {
   });
 
   it("passes a frozen candidate snapshot to every evaluator", async () => {
-    const first = vi.fn((event: PluginHookSkillProposalEvaluateEvent) => {
+    const first = vi.fn((...args: unknown[]) => {
+      const event = args[0] as PluginHookSkillProposalEvaluateEvent;
       expect(event).not.toBe(evaluationEvent);
       expect(Object.isFrozen(event)).toBe(true);
       expect(Object.isFrozen(event.candidate)).toBe(true);
@@ -176,7 +177,8 @@ describe("skill lifecycle hooks", () => {
       }).toThrow();
       return { summary: "first" };
     });
-    const second = vi.fn((event: PluginHookSkillProposalEvaluateEvent) => {
+    const second = vi.fn((...args: unknown[]) => {
+      const event = args[0] as PluginHookSkillProposalEvaluateEvent;
       expect(event.candidate.skillMd.content).toBe(evaluationEvent.candidate.skillMd.content);
       return { summary: "second" };
     });
@@ -208,7 +210,10 @@ describe("skill lifecycle hooks", () => {
         pluginId: "hangs",
         priority: 50,
         timeoutMs: 1,
-        handler: () => new Promise(() => undefined),
+        handler: () =>
+          new Promise<void>(() => {
+            // Intentionally never resolves so the hook timeout owns the outcome.
+          }),
       },
     ]);
 

@@ -37,7 +37,6 @@ import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
   assertExpectedRevisionHash,
   evaluateSkillProposal,
-  listSkillProposalEvents,
   SkillProposalCreateTargetConflictError,
 } from "./service-evaluation.js";
 import { readRequiredProposal } from "./service-query.js";

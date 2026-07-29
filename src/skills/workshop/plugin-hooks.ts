@@ -20,7 +20,7 @@ export function normalizeSkillProposalCorrelationId(value: string | undefined): 
   if (!normalized) {
     return undefined;
   }
-  if ([...normalized].length > MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH) {
+  if (Array.from(normalized).length > MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH) {
     throw new Error(
       `Skill proposal correlation id exceeds ${MAX_SKILL_PROPOSAL_CORRELATION_ID_LENGTH} characters.`,
     );

@@ -184,7 +184,7 @@ function resolveTargetSkillRelativePath(
     (file) => file.path.toLowerCase() === portablePath.toLowerCase(),
   );
   if (caseMatches.length === 1) {
-    return caseMatches[0].path;
+    return caseMatches[0]!.path;
   }
   if (caseMatches.length > 1) {
     throw new Error(`Skill evaluation target filename is ambiguous: ${portablePath}.`);

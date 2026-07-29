@@ -90,7 +90,7 @@ export function parseSkillProposalEvaluation(raw: unknown): SkillProposalEvaluat
     (value.correlationId === undefined ||
       (typeof value.correlationId === "string" &&
         value.correlationId.length > 0 &&
-        [...value.correlationId].length <= 256)) &&
+        Array.from(value.correlationId).length <= 256)) &&
     (value.targetTreeSha256 === undefined ||
       (typeof value.targetTreeSha256 === "string" &&
         /^[a-f0-9]{64}$/i.test(value.targetTreeSha256))) &&

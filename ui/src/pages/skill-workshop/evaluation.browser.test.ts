@@ -144,7 +144,9 @@ describe("Skill Workshop evaluation results (browser)", () => {
 
       try {
         render(renderSkillWorkshop(props), container);
-        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => resolve());
+        });
 
         const evaluateButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
           (button) => button.textContent?.includes("Evaluate"),
