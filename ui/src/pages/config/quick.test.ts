@@ -51,6 +51,11 @@ describe("renderQuickSettings", () => {
     expect(container.querySelector(".config-host")).toBeNull();
     expect(container.querySelectorAll(".settings-group")).toHaveLength(1);
     expect(container.querySelector(".settings-group .settings-group")).toBeNull();
+    const intro = container.querySelector(".settings-page__intro");
+    expect(intro?.textContent).toContain("Settings sync to your Gateway configuration file.");
+    expect(intro?.querySelector<HTMLAnchorElement>("a")?.href).toBe(
+      "https://docs.openclaw.ai/gateway/configuration",
+    );
   });
 
   it("changes the Control UI language from General settings", () => {

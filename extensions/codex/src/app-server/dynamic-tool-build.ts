@@ -36,6 +36,7 @@ import {
   type CodexNativeExecutionPolicy,
 } from "./native-execution-policy.js";
 import type { CodexSandboxPolicy, CodexTurnEnvironmentParams } from "./protocol.js";
+import { mapCodexAppServerRemoteWorkspacePath } from "./remote-workspace-path.js";
 import type { CodexSandboxExecEnvironment } from "./sandbox-exec-server.js";
 import {
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
@@ -632,41 +633,6 @@ export function resolveCodexAppServerExecutionCwd(params: {
     localWorkspaceRoot: params.localWorkspaceRoot,
     remoteWorkspaceRoot: params.remoteWorkspaceRoot,
   });
-}
-/** Projects a local OpenClaw workspace cwd into the remote Codex app-server workspace root. */
-function mapCodexAppServerRemoteWorkspacePath(params: {
-  value: string;
-  localWorkspaceRoot: string;
-  remoteWorkspaceRoot?: string;
-}): string {
-  if (!params.remoteWorkspaceRoot) {
-    return params.value;
-  }
-  const localRoot = normalizeRemoteWorkspaceMatchPath(params.localWorkspaceRoot);
-  const remoteRoot = normalizeRemoteWorkspaceMatchPath(params.remoteWorkspaceRoot);
-  const normalizedValue = normalizeRemoteWorkspaceMatchPath(params.value);
-  if (!localRoot || !remoteRoot) {
-    throw new Error("Codex remoteWorkspaceRoot requires non-empty workspace roots.");
-  }
-  if (normalizedValue === localRoot) {
-    return remoteRoot;
-  }
-  const prefix = `${localRoot}/`;
-  if (!normalizedValue.startsWith(prefix)) {
-    throw new Error(
-      `Codex remoteWorkspaceRoot is configured but cwd ${params.value} is outside OpenClaw workspace root ${params.localWorkspaceRoot}; refusing to send a gateway-local cwd to the remote Codex app-server.`,
-    );
-  }
-  return joinRemoteWorkspacePath(remoteRoot, normalizedValue.slice(prefix.length));
-}
-function normalizeRemoteWorkspaceMatchPath(value: string): string {
-  return trimTrailingPathSeparator(value.replace(/\\/gu, "/"));
-}
-function trimTrailingPathSeparator(value: string): string {
-  return value.length > 1 ? value.replace(/[\\/]+$/u, "") : value;
-}
-function joinRemoteWorkspacePath(remoteRoot: string, suffix: string): string {
-  return remoteRoot === "/" ? `/${suffix}` : `${remoteRoot}/${suffix}`;
 }
 /** Converts OpenClaw sandbox networking into Codex's external-sandbox policy shape. */
 export function resolveCodexExternalSandboxPolicyForOpenClawSandbox(
