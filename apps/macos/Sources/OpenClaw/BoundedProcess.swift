@@ -22,11 +22,13 @@ enum BoundedProcess {
 
     private final class ProcessExitSignal: @unchecked Sendable {
         private let lock = NSLock()
+        private let processIdentifier: pid_t
         private let source: DispatchSourceProcess?
         private var continuation: CheckedContinuation<Void, Never>?
         private var finished = false
 
         init(processIdentifier: pid_t) {
+            self.processIdentifier = processIdentifier
             if Self.hasExited(processIdentifier) {
                 self.source = nil
                 self.finished = true
@@ -64,6 +66,24 @@ enum BoundedProcess {
             } onCancel: {
                 self.finish()
             }
+        }
+
+        func pollUntilExit() async {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(50))
+                } catch {
+                    return
+                }
+                if Self.hasExited(self.processIdentifier) {
+                    self.finish()
+                    return
+                }
+            }
+        }
+
+        func hasExited() -> Bool {
+            Self.hasExited(self.processIdentifier)
         }
 
         private func finish() {
@@ -127,6 +147,12 @@ enum BoundedProcess {
                     await exitSignal.wait()
                     return .exited
                 }
+                // Keep normal exits event-driven, but recover promptly if
+                // kqueue misses NOTE_EXIT under heavy concurrent spawning.
+                group.addTask {
+                    await exitSignal.pollUntilExit()
+                    return .exited
+                }
                 group.addTask {
                     do {
                         try await Task.sleep(for: .seconds(timeout))
@@ -147,6 +173,10 @@ enum BoundedProcess {
                 try? execution.send(signal: .kill, toProcessGroup: true)
                 return false
             case .timedOut:
+                if exitSignal.hasExited() {
+                    try? execution.send(signal: .kill, toProcessGroup: true)
+                    return false
+                }
                 try? execution.send(signal: .terminate, toProcessGroup: true)
                 try? await Task.sleep(for: .milliseconds(100))
                 try? execution.send(signal: .kill, toProcessGroup: true)
