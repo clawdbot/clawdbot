@@ -474,6 +474,14 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
     controlPlaneWrite: true,
   },
   { name: "memory.search", scope: "operator.read", since: "2026.7" },
+  // Additive Skill Workshop methods append so older advertised indices stay stable.
+  { name: "skills.proposals.events.list", scope: "operator.read", since: "2026.7" },
+  {
+    name: "skills.proposals.evaluate",
+    scope: "operator.admin",
+    since: "2026.7",
+    controlPlaneWrite: true,
+  },
 ] as const;
 
 const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(

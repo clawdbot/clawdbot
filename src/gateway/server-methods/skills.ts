@@ -11,6 +11,8 @@ import {
   validateSkillsInstallParams,
   validateSkillsProposalActionParams,
   validateSkillsProposalCreateParams,
+  validateSkillsProposalEvaluateParams,
+  validateSkillsProposalEventsListParams,
   validateSkillsProposalInspectParams,
   validateSkillsProposalRequestRevisionParams,
   validateSkillsProposalReviseParams,
@@ -53,7 +55,9 @@ import {
 } from "../../skills/workshop/curator.js";
 import {
   applySkillProposal,
+  evaluateSkillProposal,
   inspectSkillProposal,
+  listSkillProposalEvents,
   listSkillProposals,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -130,7 +134,10 @@ function collectClawHubTrustWarnings(results: Array<{ warning?: string }>): stri
     .filter((warning): warning is string => Boolean(warning));
 }
 
-function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspectSkillProposal>>) {
+function buildRevisionAgentInstruction(
+  proposal: Awaited<ReturnType<typeof inspectSkillProposal>>,
+  expectedDraftHash: string,
+) {
   if (!proposal) {
     return "";
   }
@@ -138,6 +145,7 @@ function buildRevisionAgentInstruction(proposal: Awaited<ReturnType<typeof inspe
     `Revise Skill Workshop proposal \`${proposal.record.id}\` (${proposal.record.target.skillKey}).`,
     "",
     "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
+    `Pass \`expected_draft_hash=${expectedDraftHash}\` to reject stale draft revisions.`,
     "Do not apply, approve, reject, quarantine, or install the proposal.",
     "",
     "Requested changes:",
@@ -151,6 +159,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     idempotencyKey: string;
     instructions: string;
     proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
+    expectedDraftHash: string;
     sessionId?: string;
     sessionKey: string;
     targetAgentId?: string;
@@ -167,7 +176,10 @@ async function forwardSkillWorkshopRevisionToChatSend(
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     message: params.instructions,
     deliver: false,
-    systemProvenanceReceipt: buildRevisionAgentInstruction(params.proposal),
+    systemProvenanceReceipt: buildRevisionAgentInstruction(
+      params.proposal,
+      params.expectedDraftHash,
+    ),
     suppressCommandInterpretation: true,
     idempotencyKey: params.idempotencyKey,
   };
@@ -373,6 +385,23 @@ export const skillsHandlers: GatewayRequestHandlers = {
         listSkillProposals({ agentId: resolved.agentId, workspaceDir: resolved.workspaceDir }),
     });
   },
+  "skills.proposals.events.list": async ({ params, respond, context }) => {
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.proposals.events.list",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsProposalEventsListParams,
+      run: async (parsedParams, resolved) =>
+        listSkillProposalEvents({
+          workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
+          proposalId: parsedParams.proposalId,
+          afterSequence: parsedParams.afterSequence,
+          limit: parsedParams.limit,
+        }),
+    });
+  },
   "skills.proposals.inspect": async ({ params, respond, context }) => {
     await runSkillsProposalWorkspaceHandler({
       method: "skills.proposals.inspect",
@@ -398,6 +427,24 @@ export const skillsHandlers: GatewayRequestHandlers = {
         }
         return proposal;
       },
+    });
+  },
+  "skills.proposals.evaluate": async ({ params, respond, context }) => {
+    await runSkillsProposalWorkspaceHandler({
+      method: "skills.proposals.evaluate",
+      rawParams: params,
+      respond,
+      context,
+      validate: validateSkillsProposalEvaluateParams,
+      run: (parsedParams, resolved) =>
+        evaluateSkillProposal({
+          workspaceDir: resolved.workspaceDir,
+          agentId: resolved.agentId,
+          proposalId: parsedParams.proposalId,
+          expectedDraftHash: parsedParams.expectedDraftHash,
+          correlationId: parsedParams.correlationId,
+          trigger: "manual",
+        }),
     });
   },
   "skills.proposals.create": async ({ params, respond, context }) => {
@@ -457,6 +504,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentId: resolved.agentId,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
+          expectedDraftHash: parsedParams.expectedDraftHash,
+          correlationId: parsedParams.correlationId,
           content: parsedParams.content,
           supportFiles: parsedParams.supportFiles,
           description: parsedParams.description,
@@ -500,8 +549,23 @@ export const skillsHandlers: GatewayRequestHandlers = {
           );
           return SKILL_PROPOSAL_RESPONSE_HANDLED;
         }
+        if (
+          parsedParams.expectedDraftHash &&
+          parsedParams.expectedDraftHash !== proposal.record.draftHash
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Skill proposal draft changed: ${parsedParams.proposalId}`,
+            ),
+          );
+          return SKILL_PROPOSAL_RESPONSE_HANDLED;
+        }
         await forwardSkillWorkshopRevisionToChatSend(opts, {
           agentId: resolved.agentId,
+          expectedDraftHash: parsedParams.expectedDraftHash ?? proposal.record.draftHash,
           idempotencyKey: parsedParams.idempotencyKey,
           instructions: parsedParams.instructions,
           proposal,
@@ -528,6 +592,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentId: resolved.agentId,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,
+          expectedDraftHash: parsedParams.expectedDraftHash,
+          correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
         }),
     });
@@ -544,6 +610,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
+          expectedDraftHash: parsedParams.expectedDraftHash,
+          correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
         }),
     });
@@ -560,6 +628,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
           workspaceDir: resolved.workspaceDir,
           agentId: resolved.agentId,
           proposalId: parsedParams.proposalId,
+          expectedDraftHash: parsedParams.expectedDraftHash,
+          correlationId: parsedParams.correlationId,
           reason: parsedParams.reason,
         }),
     });
