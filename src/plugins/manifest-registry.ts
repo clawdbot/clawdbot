@@ -43,7 +43,9 @@ import {
   type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
+  type PluginManifestDashboard,
   type PluginManifestMediaUnderstandingProviderMetadata,
+  type PluginManifestMcpServer,
   type PluginManifestModelCatalog,
   type PluginManifestModelIdNormalization,
   type PluginManifestModelPricing,
@@ -248,6 +250,8 @@ export type PluginManifestRecord = {
   packageInstall?: PluginPackageInstall;
   trustedOfficialInstall?: boolean;
   qaRunners?: PluginManifestQaRunner[];
+  dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
   skills: string[];
   settingsFiles?: string[];
   hooks: string[];
@@ -598,6 +602,8 @@ function buildRecord(params: {
     packageInstall: params.candidate.packageManifest?.install,
     trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
     qaRunners: params.manifest.qaRunners,
+    dashboard: params.manifest.dashboard,
+    mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
     hooks: [],
@@ -1125,7 +1131,7 @@ export function loadPluginManifestRegistry(
           level: "warn",
           pluginId: manifest.id,
           source: packageManifestSource,
-          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load`,
+          message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
         });
         continue;
       }

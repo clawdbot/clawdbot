@@ -147,6 +147,7 @@ export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSna
                 ...widget,
                 sizeW: Math.min(12, Math.max(1, Math.trunc(op.sizeW))),
                 sizeH: Math.min(20, Math.max(1, Math.trunc(op.sizeH))),
+                heightMode: op.heightMode ?? "fixed",
               }
             : widget,
         ),

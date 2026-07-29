@@ -147,19 +147,23 @@ describe("registerOnboardCommand", () => {
     expect(setupWizardOptions(2).installDaemon).toBe(false);
   });
 
-  it("parses numeric gateway port and drops invalid values", async () => {
+  it("parses a valid numeric gateway port", async () => {
     await runCli(["onboard", "--gateway-port", "18789"]);
-    expect(setupWizardOptions(0).gatewayPort).toBe(18789);
-
-    await runCli(["onboard", "--gateway-port", "nope"]);
-    expect(setupWizardOptions(1).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "18789x"]);
-    expect(setupWizardOptions(2).gatewayPort).toBeUndefined();
-
-    await runCli(["onboard", "--gateway-port", "99999"]);
-    expect(setupWizardOptions(3).gatewayPort).toBeUndefined();
+    expect(setupWizardOptions().gatewayPort).toBe(18789);
   });
+
+  it.each(["not-a-port", "70000"])(
+    "rejects invalid --gateway-port %s before onboarding dispatch",
+    async (gatewayPort) => {
+      await runCli(["onboard", "--gateway-port", gatewayPort]);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        "Error: --gateway-port must be an integer between 1 and 65535.",
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("forwards --reset-scope to setup wizard options", async () => {
     await runCli(["onboard", "--reset", "--reset-scope", "full"]);

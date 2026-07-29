@@ -43,6 +43,7 @@ import { hashTextSha256 } from "./hash.js";
 import {
   migrateLegacySandboxRegistryFiles,
   readBrowserRegistry,
+  readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
   removeBrowserRegistryEntry,
@@ -338,6 +339,48 @@ describe("registry race safety", () => {
     expect(entry?.containerName).toBe("container-x");
     expect(entry?.sessionKey).toBe("sess:x");
     await expect(readRegistryEntry("missing-container")).resolves.toBeNull();
+  });
+
+  it("reads registered runtime IDs for one backend and scope newest first", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-older",
+        backendId: "openshell",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 10,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-newer",
+        backendId: "openshell",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 20,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "docker-same-scope",
+        backendId: "docker",
+        sessionKey: "agent:main",
+        lastUsedAtMs: 30,
+      }),
+    );
+    await updateRegistry(
+      containerEntry({
+        containerName: "openshell-other-scope",
+        backendId: "openshell",
+        sessionKey: "agent:other",
+        lastUsedAtMs: 40,
+      }),
+    );
+
+    await expect(
+      readRegisteredSandboxRuntimeIds({
+        backendId: "openshell",
+        scopeKey: "agent:main",
+      }),
+    ).resolves.toEqual(["openshell-newer", "openshell-older"]);
   });
 
   it("keeps both container updates under concurrent writes", async () => {

@@ -105,6 +105,7 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+          install-trufflehog: "true"
       - name: Prepare Testbox shell
         shell: bash
         run: |

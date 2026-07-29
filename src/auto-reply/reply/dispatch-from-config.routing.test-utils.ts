@@ -1,6 +1,7 @@
 // Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
@@ -38,14 +39,9 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
     sessionStoreMocks.currentEntry = {
-      deliveryContext: {
-        channel: "telegram",
-        to: "telegram:999",
-        accountId: "acc-1",
-      },
-      lastChannel: "telegram",
-      lastTo: "telegram:999",
-      lastAccountId: "acc-1",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "telegram:999", accountId: "acc-1" },
+      }),
     };
     const cfg = {
       session: {

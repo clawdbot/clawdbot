@@ -79,7 +79,6 @@ function createWriter(options: TelegramRuntimeOptions) {
       id: "telegram-bot-token",
       title: "Telegram bot token runtime startup",
       sourcePath: "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",
-      primaryCoverageIds: ["telegram.startup-getme"],
       docsRefs: ["docs/channels/telegram.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/telegram-bot-token-runtime.ts",

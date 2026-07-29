@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -154,7 +155,9 @@ async function waitForPortFile(portFile: string): Promise<number> {
         return port;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 5);
+    });
   }
   throw new Error(`timed out waiting for ${portFile}`);
 }
@@ -301,6 +304,135 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  it.each(
+    (["capture", "logged"] as const).flatMap((mode) =>
+      [0, 23, 124].flatMap((status) =>
+        [false, true].map((traceEnabled) => ({ mode, status, traceEnabled })),
+      ),
+    ),
+  )(
+    "bounds $mode diagnostics with exit $status and lifecycle tracing $traceEnabled",
+    (testCase) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-sweep-diagnostics-"));
+      const outputFile = path.join(root, "plugins-git-inspect.json");
+      const capturedOutput = `DO_NOT_DUMP_CAPTURED_PLUGIN_OUTPUT\n${"x".repeat(32 * 1024)}\nCAPTURED_PLUGIN_OUTPUT_TAIL`;
+      const fixtureApiKey = ["sk", "proj", "plugin", "fixture", "secret"].join("-");
+      const punctuationApiKey = ["sess", "plugin", "punctuation", "secret"].join("-");
+      const startOfLineApiKey = ["rk", "plugin", "start", "secret"].join("-");
+      const boundarySecretSuffix = "PLUGIN_BOUNDARY_SECRET_SUFFIX_MUST_NOT_LEAK";
+      const boundaryApiKey = ["sk", "proj", "z".repeat(256), boundarySecretSuffix].join("-");
+      const capturedError = `DO_NOT_DUMP_PLUGIN_STDERR_PREFIX\n${"y".repeat(32 * 1024)}\n${startOfLineApiKey}\nPLUGIN_STDERR_TAIL_MARKER task-runner risk-score disk-space Authorization: Bearer plugin-fixture-bearer OPENAI_API_KEY=${fixtureApiKey} [${punctuationApiKey}]\n${boundaryApiKey}`;
+      const command =
+        testCase.mode === "capture"
+          ? 'run_plugins_openclaw_capture "$OUTPUT_FILE" plugins inspect demo-plugin --runtime --json'
+          : 'run_plugins_openclaw_logged install-git plugins install "git:file:///tmp/fixture@revision" --force';
+
+      try {
+        const unredactedTail = Buffer.from(`${capturedError}\n`, "utf8")
+          .subarray(-192)
+          .toString("utf8");
+        expect(unredactedTail).toContain(boundarySecretSuffix);
+        expect(unredactedTail).not.toContain(["sk", "proj"].join("-"));
+
+        const result = runPluginsSweepShell(
+          `
+set -euo pipefail
+export OPENCLAW_PLUGINS_SWEEP_SOURCE_ONLY=1
+export OPENCLAW_PLUGINS_TMP_DIR="$SCRATCH_ROOT"
+export OPENCLAW_PLUGINS_CLI_TIMEOUT=1s
+export OPENCLAW_ENTRY=fixture-entry
+source scripts/e2e/lib/plugins/sweep.sh
+umask 000
+openclaw_e2e_maybe_timeout() {
+  local raw_stderr_file
+  local raw_stderr_mode
+  for raw_stderr_file in "$SCRATCH_ROOT"/openclaw-plugin-stderr.*; do
+    [[ -f "$raw_stderr_file" ]] || return 86
+    if raw_stderr_mode="$(stat -f '%Lp' "$raw_stderr_file" 2>/dev/null)"; then
+      :
+    elif raw_stderr_mode="$(stat -c '%a' "$raw_stderr_file" 2>/dev/null)"; then
+      :
+    else
+      return 87
+    fi
+    [[ "$raw_stderr_mode" == "600" ]] || return 88
+  done
+  printf '%s\\n' "$CAPTURED_OUTPUT"
+  printf '%s\\n' "$CAPTURED_STDERR" >&2
+  if [[ "\${OPENCLAW_PLUGIN_LIFECYCLE_TRACE:-}" == "1" ]]; then
+    printf '%s\\n' '[plugins:lifecycle] shim' >&2
+  fi
+  return "$CAPTURE_STATUS"
+}
+${command}
+`,
+          {
+            CAPTURED_OUTPUT: capturedOutput,
+            CAPTURED_STDERR: capturedError,
+            CAPTURE_STATUS: String(testCase.status),
+            OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES: "192",
+            OPENCLAW_PLUGIN_LIFECYCLE_TRACE: testCase.traceEnabled ? "1" : "0",
+            OUTPUT_FILE: outputFile,
+            SCRATCH_ROOT: root,
+          },
+        );
+
+        expect(result.status).toBe(testCase.status);
+        expect(result.stdout).toBe("");
+        if (testCase.mode === "capture") {
+          expect(readFileSync(outputFile, "utf8")).toBe(`${capturedOutput}\n`);
+        }
+        expect(result.stderr.length).toBeLessThan(1_024);
+        expect(result.stderr).not.toContain("DO_NOT_DUMP_CAPTURED_PLUGIN_OUTPUT");
+        expect(result.stderr).not.toContain("CAPTURED_PLUGIN_OUTPUT_TAIL");
+        expect(result.stderr).not.toContain("DO_NOT_DUMP_PLUGIN_STDERR_PREFIX");
+        expect(result.stderr).not.toContain("plugin-fixture-bearer");
+        expect(result.stderr).not.toContain(fixtureApiKey);
+        expect(result.stderr).not.toContain(punctuationApiKey);
+        expect(result.stderr).not.toContain(startOfLineApiKey);
+        expect(result.stderr).not.toContain(boundarySecretSuffix);
+        expect(result.stderr).not.toContain(boundaryApiKey);
+        expect(
+          readdirSync(root).filter(
+            (name) => name.startsWith("openclaw-plugin-") || name.endsWith(".stderr.log"),
+          ),
+        ).toEqual([]);
+
+        const printsDiagnostics =
+          testCase.mode === "capture" || testCase.status !== 0 || testCase.traceEnabled;
+        if (printsDiagnostics) {
+          expect(result.stderr).toContain("truncated: showing last 192");
+          expect(result.stderr).toContain("PLUGIN_STDERR_TAIL_MARKER");
+          expect(result.stderr).toContain("task-runner");
+          expect(result.stderr).toContain("risk-score");
+          expect(result.stderr).toContain("disk-space");
+          expect(result.stderr).toContain("Authorization: Bearer [REDACTED]");
+          expect(result.stderr).toContain("OPENAI_API_KEY=[REDACTED]");
+          expect(result.stderr).toContain("[[REDACTED]]");
+          expect(result.stderr).toContain("[REDACTED]");
+        } else {
+          expect(result.stderr).toBe("");
+        }
+        if (testCase.traceEnabled) {
+          expect(result.stderr).toContain("[plugins:lifecycle]");
+        } else {
+          expect(result.stderr).not.toContain("[plugins:lifecycle]");
+        }
+        if (testCase.status !== 0) {
+          const label = testCase.mode === "capture" ? "plugins-git-inspect.json" : "install-git";
+          const noun = testCase.mode === "capture" ? "capture" : "command";
+          const detail =
+            testCase.status === 124
+              ? `timed out after 1s: ${label}`
+              : `failed with status ${testCase.status}: ${label}`;
+          expect(result.stderr).toContain(`Plugin sweep ${noun} ${detail}`);
+        }
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("scans plugin assertion logs without echoing whole files on failure", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-log-"));
@@ -723,6 +855,68 @@ test -d "$OPENCLAW_PLUGINS_TMP_DIR"
       expect(response.statusCode).toBe(200);
       expect(response.body).toBe(upstreamBody);
       expect(response.contentLength).toBe(String(Buffer.byteLength(upstreamBody)));
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise((resolve) => {
+          child.once("close", resolve);
+        });
+      }
+      await new Promise<void>((resolve) => {
+        upstream.close(() => resolve());
+      });
+    }
+  });
+
+  it("streams proxied npm tarballs without buffering a content length", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-tarball-proxy-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "demo-plugin.tgz");
+    const upstreamBody = "x".repeat(1024 * 1024);
+    writeFileSync(tarballPath, "fixture package archive", "utf8");
+
+    const upstream = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/octet-stream" });
+      response.write(upstreamBody.slice(0, upstreamBody.length / 2));
+      response.end(upstreamBody.slice(upstreamBody.length / 2));
+    });
+    await new Promise<void>((resolve) => {
+      upstream.listen(0, "127.0.0.1", resolve);
+    });
+    const upstreamAddress = upstream.address();
+    if (!upstreamAddress || typeof upstreamAddress === "string") {
+      throw new Error("expected upstream registry address");
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/demo-plugin-npm",
+        "1.0.0",
+        tarballPath,
+      ],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      const port = await waitForPortFile(portFile);
+      const response = await requestFixtureRegistry(
+        port,
+        "/@openai/codex/-/codex-0.145.0-linux-arm64.tgz",
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.contentLength).toBeUndefined();
+      expect(response.body).toBe(upstreamBody);
     } finally {
       if (child.exitCode === null) {
         child.kill();

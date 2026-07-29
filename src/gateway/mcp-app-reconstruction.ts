@@ -1,4 +1,5 @@
 import { type CallToolResult, ContentBlockSchema } from "@modelcontextprotocol/sdk/types.js";
+import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { BoardMcpAppDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { getOrCreateSessionMcpRuntime } from "../agents/agent-bundle-mcp-runtime.js";
 import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
@@ -11,7 +12,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { visitSessionMessagesAsync } from "./session-transcript-readers.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryReadOnly } from "./session-utils.js";
 
 const MCP_APP_RESTORE_IN_FLIGHT_KEY = Symbol.for("openclaw.mcpAppRestoreInFlight");
 
@@ -42,12 +43,6 @@ type TranscriptResult = Omit<ReconstructionData, "toolInput"> & { modelToolName:
 type TranscriptResultRead =
   | { kind: "restorable"; value: TranscriptResult }
   | { kind: "unavailable" };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
 
 function readString(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key];
@@ -249,12 +244,12 @@ async function reconstructMcpAppView(params: {
   sessionKey: string;
   lookup: TranscriptLookup;
   allowedAppToolNames: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;
   viewId?: string;
 }): Promise<ReconstructionResult | undefined> {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const loaded = loadSessionEntry(params.sessionKey, { agentId });
+  const loaded = loadSessionEntryReadOnly(params.sessionKey, { agentId });
   const sessionId = loaded.entry?.sessionId;
   if (!sessionId) {
     return undefined;
@@ -296,7 +291,9 @@ async function reconstructMcpAppView(params: {
     toolResult: data.toolResult,
     ...(params.viewId ? { viewId: params.viewId } : {}),
     allowedAppToolNames: params.allowedAppToolNames,
-    ...(params.authorizeAppToolCall ? { authorizeAppToolCall: params.authorizeAppToolCall } : {}),
+    ...(params.authorizeAppInteraction
+      ? { authorizeAppInteraction: params.authorizeAppInteraction }
+      : {}),
     ...(params.readOnly ? { readOnly: true as const } : {}),
   });
   const view = fetched ? getMcpAppViewLease(fetched.viewId, runtime) : undefined;
@@ -326,7 +323,7 @@ export async function mintMcpAppViewFromTranscript(params: {
   sessionKey: string;
   descriptor: BoardMcpAppDescriptor;
   allowedAppToolNames: ReadonlySet<string>;
-  authorizeAppToolCall?: () => boolean | Promise<boolean>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly: boolean;
 }): Promise<ReconstructionResult | undefined> {
   return await reconstructMcpAppView({
@@ -334,7 +331,9 @@ export async function mintMcpAppViewFromTranscript(params: {
     sessionKey: params.sessionKey,
     lookup: { descriptor: params.descriptor },
     allowedAppToolNames: params.allowedAppToolNames,
-    ...(params.authorizeAppToolCall ? { authorizeAppToolCall: params.authorizeAppToolCall } : {}),
+    ...(params.authorizeAppInteraction
+      ? { authorizeAppInteraction: params.authorizeAppInteraction }
+      : {}),
     readOnly: params.readOnly,
   });
 }

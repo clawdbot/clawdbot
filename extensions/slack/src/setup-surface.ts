@@ -1,13 +1,16 @@
 // Slack plugin module implements setup surface behavior.
-import { adaptScopedAccountAccessor } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveBasicAllowFromEntries } from "openclaw/plugin-sdk/allow-from";
 import {
   noteChannelLookupFailure,
   noteChannelLookupSummary,
+  patchChannelConfigForAccount,
   resolveEntriesWithOptionalToken,
+  resolveSetupAccountId,
   createSetupTranslator,
   type OpenClawConfig,
   parseMentionOrPrefixedId,
-  promptLegacyChannelAllowFromForAccount,
+  promptResolvedAllowFrom,
+  splitSetupEntries,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import type {
@@ -31,7 +34,7 @@ function resolveSlackSetupAuth(
   account: InspectedSlackAccount,
   credentialValues: SlackSetupCredentialValues,
 ): string | undefined {
-  if (account.config.identity === "user") {
+  if (account.config.postAs === "user") {
     return credentialValues.userToken || account.userToken;
   }
   return credentialValues.botToken || account.botToken;
@@ -41,25 +44,11 @@ async function resolveSlackAllowFromEntries(params: {
   token?: string;
   entries: string[];
 }): Promise<ChannelSetupWizardAllowFromEntry[]> {
-  return await resolveEntriesWithOptionalToken({
+  return await resolveBasicAllowFromEntries({
     token: params.token,
     entries: params.entries,
-    buildWithoutToken: (input) => ({
-      input,
-      resolved: false,
-      id: null,
-    }),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveSlackUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveSlackUserAllowlist({ token, entries }),
   });
 }
 
@@ -77,27 +66,31 @@ async function promptSlackAllowFrom(params: {
       normalizeId: (id) => id.toUpperCase(),
     });
 
-  return await promptLegacyChannelAllowFromForAccount<InspectedSlackAccount>({
-    cfg: params.cfg,
-    channel,
-    prompter: params.prompter,
+  const accountId = resolveSetupAccountId({
     accountId: params.accountId,
     defaultAccountId: resolveDefaultSlackAccountId(params.cfg),
-    resolveAccount: adaptScopedAccountAccessor(inspectSlackAccount),
-    resolveExisting: (account, cfg) =>
-      resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
-    resolveToken: (account) => account.userToken ?? account.botToken ?? "",
-    noteTitle: t("wizard.slack.allowlistTitle"),
-    noteLines: [
+  });
+  const account = inspectSlackAccount({ cfg: params.cfg, accountId });
+  const noteTitle = t("wizard.slack.allowlistTitle");
+  await params.prompter.note(
+    [
       t("wizard.slack.allowlistIntro"),
       t("wizard.slack.examples"),
       "- U12345678",
       "- @alice",
       t("wizard.slack.multipleEntries"),
       t("wizard.channels.docs", { link: formatDocsLink("/slack", "slack") }),
-    ],
+    ].join("\n"),
+    noteTitle,
+  );
+  const allowFrom = await promptResolvedAllowFrom({
+    prompter: params.prompter,
+    existing: resolveSlackAccountAllowFrom({ cfg: params.cfg, accountId }) ?? [],
+    token: account.userToken ?? account.botToken ?? "",
     message: t("wizard.slack.allowFromPrompt"),
     placeholder: "@alice, U12345678",
+    label: noteTitle,
+    parseInputs: splitSetupEntries,
     parseId,
     invalidWithoutTokenNote: t("wizard.slack.allowFromInvalidWithoutToken"),
     resolveEntries: async ({ token, entries }) =>
@@ -111,6 +104,18 @@ async function promptSlackAllowFrom(params: {
         resolved: entry.resolved,
         id: entry.id ?? null,
       })),
+  });
+  return patchChannelConfigForAccount({
+    cfg: params.cfg,
+    channel,
+    accountId: account.accountId,
+    patch: {
+      allowFrom,
+      dm: {
+        ...account.config.dm,
+        enabled: typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+      },
+    },
   });
 }
 

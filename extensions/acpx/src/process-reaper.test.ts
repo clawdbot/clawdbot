@@ -93,7 +93,7 @@ describe("process reaper", () => {
     expect(result).toEqual({
       inspectedPids: [],
       terminatedPids: [],
-      skippedReason: "unverified-root",
+      skippedReason: "process-list-unavailable",
     });
     expect(killSpy).not.toHaveBeenCalled();
   });
@@ -214,7 +214,7 @@ describe("process reaper", () => {
     expect(result).toEqual({
       inspectedPids: [],
       terminatedPids: [],
-      skippedReason: "unverified-root",
+      skippedReason: "process-list-unavailable",
     });
     expect(killed).toStrictEqual([]);
   });

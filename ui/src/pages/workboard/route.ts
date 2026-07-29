@@ -1,13 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { boardFilterFromSearch } from "./board-filter.ts";
+import { resolveWorkboardRouteLocation, type WorkboardRouteData } from "./route-location.ts";
 
-export type WorkboardRouteData = {
-  boardFilter: string;
-  search: string;
-};
+export type { WorkboardRouteData } from "./route-location.ts";
 
 async function loadWorkboardRoute(
   context: ApplicationContext,
@@ -20,15 +18,14 @@ async function loadWorkboardRoute(
     sessions.result || sessions.loading ? Promise.resolve() : context.sessions.refresh(),
   ]);
   return {
-    boardFilter: boardFilterFromSearch(location.search),
-    search: location.search,
+    ...resolveWorkboardRouteLocation(location, context.basePath),
   };
 }
 
 export const page = definePage({
-  id: "workboard",
-  path: "/workboard",
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => location.search,
+  ...routePageSpec("workboard"),
+  loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
+    `${location.pathname}\u0000${location.search}`,
   loader: (context: ApplicationContext, { location }) => loadWorkboardRoute(context, location),
   component: () =>
     import("./workboard-page.ts").then(() => ({

@@ -4,6 +4,16 @@ import SwiftUI
 import UIKit
 
 struct RootTabs: View {
+    struct SessionObserverTaskIdentity: Equatable {
+        let sidebarRefreshID: String
+        let isSceneActive: Bool
+        let isSidebarVisible: Bool
+
+        var isObserverVisible: Bool {
+            self.isSceneActive && self.isSidebarVisible
+        }
+    }
+
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
     @Environment(GatewayConnectionController.self) private var gatewayController
@@ -20,20 +30,22 @@ struct RootTabs: View {
     @AppStorage("onboarding.quickSetupDismissed") private var quickSetupDismissed: Bool = false
     @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
-    @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
-    @State private var activeSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
+    @State private var selectedSettingsRoute: SettingsRoute? =
+        Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
+    @State private var activeSettingsRoute: SettingsRoute? =
+        Self.initialSettingsRoute ?? Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
     @State private var sidebarModel = RootSidebarModel()
     // Embedded Settings rows push onto the sidebar stack; clear it before
     // changing sidebar roots so stale settings detail screens cannot survive.
     @State private var sidebarNavigationPath: [SettingsRoute] = []
+    @State private var isSidebarDetailRootVisible: Bool = true
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
     @State private var didResolveSidebarLayout: Bool = false
-    @State private var sidebarContentDragOffset: CGFloat = 0
     @State private var voiceWakeToastText: String?
-    @State private var toastDismissTask: Task<Void, Never>?
+    @State private var toastDismissGate = DelayedActionGate()
     @State private var presentedSheet: PresentedSheet?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var gatewayToastDragOffset: CGFloat = 0
@@ -57,7 +69,14 @@ struct RootTabs: View {
         initialDestination(arguments: ProcessInfo.processInfo.arguments)
     }
 
+    private static var initialSettingsRoute: SettingsRoute? {
+        requestedInitialSettingsRoute(arguments: ProcessInfo.processInfo.arguments)
+    }
+
     static func initialDestination(arguments: [String]) -> SidebarDestination {
+        if self.requestedInitialSettingsRoute(arguments: arguments) != nil {
+            return .settings
+        }
         if let requested = self.requestedInitialSidebarDestination(arguments: arguments) {
             return requested
         }
@@ -70,6 +89,18 @@ struct RootTabs: View {
         case "agent", "agents": .agents
         case "settings": .settings
         default: .chat
+        }
+    }
+
+    static func requestedInitialSettingsRoute(arguments: [String]) -> SettingsRoute? {
+        guard let flagIndex = arguments.firstIndex(of: "--openclaw-settings-route") else {
+            return nil
+        }
+        let valueIndex = arguments.index(after: flagIndex)
+        guard arguments.indices.contains(valueIndex) else { return nil }
+        return switch arguments[valueIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "openclaw", "system-agent": .systemAgent
+        default: nil
         }
     }
 
@@ -114,6 +145,25 @@ struct RootTabs: View {
                 self.rootOverlays(
                     self.sidebarSplitContent
                         .tint(OpenClawBrand.accent))))
+            .overlay(alignment: .topLeading) {
+                self.uiTestReadinessMarker
+            }
+    }
+
+    @ViewBuilder
+    private var uiTestReadinessMarker: some View {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-ui-test-readiness") {
+            Color.clear
+                .frame(width: 1, height: 1)
+                .allowsHitTesting(false)
+                .accessibilityElement(children: .ignore)
+                .accessibilityIdentifier("RootTabs.Ready")
+                .accessibilityLabel(Text(verbatim: "OpenClaw test readiness"))
+                .accessibilityValue(
+                    "\(self.scenePhase == .active ? "ready" : "inactive"):\(self.selectedSidebarDestination.rawValue)")
+        }
+        #endif
     }
 
     private var sidebarSplitContent: some View {
@@ -129,7 +179,6 @@ struct RootTabs: View {
                     self.sidebarNavigationSplitContent(sidebarWidth: sidebarWidth)
                 }
             }
-            .animation(self.sidebarAnimation, value: self.isSidebarVisible)
             .onAppear {
                 self.updateSidebarLayout(containerSize: proxy.size, force: false)
             }
@@ -147,7 +196,23 @@ struct RootTabs: View {
                     await self.sidebarModel.refresh(appModel: self.appModel)
                 }
             }
+            .task(id: "\(self.sidebarRefreshID):events") {
+                guard self.scenePhase == .active else { return }
+                await self.sidebarModel.observeSessionEvents(appModel: self.appModel)
+            }
+            .task(id: self.sessionObserverTaskIdentity) {
+                await self.sidebarModel.setSessionObserverVisibility(
+                    appModel: self.appModel,
+                    visible: self.sessionObserverTaskIdentity.isObserverVisible)
+            }
         }
+    }
+
+    private var sessionObserverTaskIdentity: SessionObserverTaskIdentity {
+        SessionObserverTaskIdentity(
+            sidebarRefreshID: self.sidebarRefreshID,
+            isSceneActive: self.scenePhase == .active,
+            isSidebarVisible: self.isSidebarVisible)
     }
 
     private var sidebarRefreshID: String {
@@ -174,115 +239,41 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .background(OpenClawProBackground())
+        .animation(self.sidebarAnimation, value: self.isSidebarVisible)
     }
 
     private func sidebarDrawerContent(
         sidebarWidth: CGFloat,
         safeAreaInsets: EdgeInsets) -> some View
     {
-        ZStack(alignment: .leading) {
-            // Occluded layers stay out of the accessibility tree: closed = content
-            // only, open = sidebar only (the card is not interactive while open).
-            self.sidebarDrawerLayer(sidebarWidth: sidebarWidth, safeAreaInsets: safeAreaInsets)
-                .opacity(self.reduceMotion && !self.isSidebarVisible ? 0 : 1)
-                .accessibilityHidden(!self.isSidebarVisible)
-
-            // Keep the full-height surface outside NavigationStack so it can
-            // cover the sidebar in safe areas without changing content insets.
-            self.sidebarDrawerContentSurface(sidebarWidth: sidebarWidth)
-                .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
-                .accessibilityHidden(true)
-
-            self.sidebarDrawerContentCard(sidebarWidth: sidebarWidth)
-                .opacity(self.reduceMotion && self.isSidebarVisible ? 0 : 1)
-                .accessibilityHidden(self.isSidebarVisible)
-                .zIndex(1)
-        }
-    }
-
-    private func sidebarDrawerLayer(
-        sidebarWidth: CGFloat,
-        safeAreaInsets: EdgeInsets) -> some View
-    {
-        self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets)
-            .frame(width: sidebarWidth, alignment: .topLeading)
-            .frame(maxHeight: .infinity, alignment: .topLeading)
-            .background(OpenClawSidebarPalette.background)
-            .ignoresSafeArea(.container, edges: .vertical)
-    }
-
-    private func sidebarDrawerContentSurface(sidebarWidth: CGFloat) -> some View {
-        let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
-        return RoundedRectangle(
-            cornerRadius: OpenClawProMetric.drawerRadius * progress,
-            style: .continuous)
-            .fill(Color(uiColor: .systemGroupedBackground))
-            .overlay(
-                RoundedRectangle(
-                    cornerRadius: OpenClawProMetric.drawerRadius * progress,
-                    style: .continuous)
-                    .strokeBorder(OpenClawSidebarPalette.hairline.opacity(Double(progress)), lineWidth: 1))
-            .shadow(
-                color: .black.opacity(0.28 * progress),
-                radius: 20 * progress,
-                x: -4 * progress,
-                y: 0)
-            .ignoresSafeArea(.container, edges: .vertical)
-            .offset(x: Self.sidebarContentOffset(
-                sidebarWidth: sidebarWidth,
-                isVisible: self.isSidebarVisible,
-                dragOffset: self.sidebarContentDragOffset,
-                reduceMotion: self.reduceMotion))
-    }
-
-    private func sidebarDrawerContentCard(sidebarWidth: CGFloat) -> some View {
-        let progress = self.sidebarContentRevealProgress(sidebarWidth: sidebarWidth)
-        return ZStack {
-            self.sidebarDetailNavigationShell
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .allowsHitTesting(!self.isSidebarVisible)
-
-            // Tap-to-close stays available under Reduce Motion (the drags are
-            // gated); otherwise the header X would be the only exit.
-            if self.isSidebarVisible {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        self.hideSidebar()
-                    }
-            }
-
-            // Edge-open is chat-root only: pushed screens own the system
-            // back-swipe on this edge, and other destinations push internally.
-            if !self.isSidebarVisible, !self.reduceMotion,
-               self.selectedSidebarDestination == .chat, self.sidebarNavigationPath.isEmpty
-            {
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: 24)
-                        .contentShape(Rectangle())
-                        .gesture(self.sidebarEdgeOpenGesture(sidebarWidth: sidebarWidth))
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-        .contentShape(Rectangle())
-        .gesture(
-            self.sidebarContentDismissGesture(sidebarWidth: sidebarWidth),
-            isEnabled: self.isSidebarVisible && !self.reduceMotion)
-        .clipShape(RoundedRectangle(
-            cornerRadius: OpenClawProMetric.drawerRadius * progress,
-            style: .continuous))
-        .offset(x: Self.sidebarContentOffset(
+        RootSidebarDrawer(
             sidebarWidth: sidebarWidth,
-            isVisible: self.isSidebarVisible,
-            dragOffset: self.sidebarContentDragOffset,
-            reduceMotion: self.reduceMotion))
+            isPresented: self.isSidebarVisible,
+            canOpenFromEdge: self.isSidebarDetailRootVisible && self.sidebarNavigationPath.isEmpty,
+            reduceMotion: self.reduceMotion,
+            animation: self.sidebarAnimation,
+            onShow: self.showSidebar,
+            onHide: self.hideSidebar,
+            sidebar: self.sidebarColumn(drawerSafeAreaInsets: safeAreaInsets),
+            detail: self.sidebarDetailNavigationShell)
     }
 
     private var sidebarDetailShell: some View {
-        self.sidebarDetail
-            .id(self.sidebarDetailShellID)
+        let shellID = self.sidebarDetailShellID
+        return self.sidebarDetail
+            .id(shellID)
+            // RootTabs disables destination-owned stacks at its call sites. A
+            // destination-style NavigationLink therefore replaces this shared
+            // root, so visibility guards its native back-swipe without relying
+            // on the typed Settings path.
+            .onAppear {
+                guard self.sidebarDetailShellID == shellID else { return }
+                self.isSidebarDetailRootVisible = true
+            }
+            .onDisappear {
+                guard self.sidebarDetailShellID == shellID else { return }
+                self.isSidebarDetailRootVisible = false
+            }
     }
 
     /// RootSidebar owns its dark surface; this wrapper only restores vertical
@@ -293,8 +284,8 @@ struct RootTabs: View {
             model: self.sidebarModel,
             selectedDestination: self.selectedSidebarDestination,
             isDrawerLayout: self.isSidebarDrawerLayout,
+            isDismissButtonEnabled: self.isSidebarVisible,
             selectDestination: self.selectSidebarDestination,
-            selectSettingsRoute: self.selectSettingsRoute,
             hideSidebar: self.hideSidebar)
             .padding(.top, drawerSafeAreaInsets.map { $0.top + 8 } ?? 0)
             .padding(.bottom, drawerSafeAreaInsets.map { $0.bottom + 8 } ?? 0)
@@ -444,7 +435,6 @@ struct RootTabs: View {
             self.handleSidebarSettingsNavigationPathChange(navigationPath)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .clipped()
     }
 
     private var sidebarDetailShellID: String {
@@ -500,51 +490,6 @@ struct RootTabs: View {
         self.reduceMotion ? .opacity : .move(edge: .leading).combined(with: .opacity)
     }
 
-    private func sidebarContentRevealProgress(sidebarWidth: CGFloat) -> CGFloat {
-        guard sidebarWidth > 0 else { return 0 }
-        return Self.sidebarContentOffset(
-            sidebarWidth: sidebarWidth,
-            isVisible: self.isSidebarVisible,
-            dragOffset: self.sidebarContentDragOffset,
-            reduceMotion: self.reduceMotion) / sidebarWidth
-    }
-
-    private func sidebarContentDismissGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                self.sidebarContentDragOffset = max(-sidebarWidth, min(0, value.translation.width))
-            }
-            .onEnded { value in
-                let shouldDismiss = value.translation.width < -80 ||
-                    value.predictedEndTranslation.width < -160
-                withAnimation(self.sidebarAnimation) {
-                    self.sidebarContentDragOffset = 0
-                    if shouldDismiss {
-                        self.sidebarVisibilityUserOverridden = true
-                        self.setSidebarVisible(false)
-                    }
-                }
-            }
-    }
-
-    private func sidebarEdgeOpenGesture(sidebarWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                self.sidebarContentDragOffset = max(0, min(sidebarWidth, value.translation.width))
-            }
-            .onEnded { value in
-                let shouldOpen = value.translation.width > 80 ||
-                    value.predictedEndTranslation.width > 160
-                withAnimation(self.sidebarAnimation) {
-                    self.sidebarContentDragOffset = 0
-                    if shouldOpen {
-                        self.sidebarVisibilityUserOverridden = true
-                        self.setSidebarVisible(true)
-                    }
-                }
-            }
-    }
-
     private func shouldUseSidebarDrawer(containerSize: CGSize) -> Bool {
         Self.sidebarLayoutMode(containerSize: containerSize) == .drawer
     }
@@ -575,9 +520,9 @@ struct RootTabs: View {
             }
 
             .overlay {
-                if self.appModel.cameraFlashNonce != 0 {
-                    RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
-                }
+                // Keep the observer mounted so the first 0 -> 1 capture transition
+                // flashes without treating a later remount as a new capture.
+                RootCameraFlashOverlay(nonce: self.appModel.cameraFlashNonce)
             }
             .overlay {
                 if self.appModel.screen.isCanvasPresented {
@@ -679,17 +624,13 @@ struct RootTabs: View {
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard !trimmed.isEmpty else { return }
 
-                self.toastDismissTask?.cancel()
                 withAnimation(self.reduceMotion ? .none : .spring(response: 0.25, dampingFraction: 0.85)) {
                     self.voiceWakeToastText = trimmed
                 }
 
-                self.toastDismissTask = Task {
-                    try? await Task.sleep(nanoseconds: 2_300_000_000)
-                    await MainActor.run {
-                        withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
-                            self.voiceWakeToastText = nil
-                        }
+                self.toastDismissGate.schedule(after: .milliseconds(2300)) {
+                    withAnimation(self.reduceMotion ? .none : .easeOut(duration: 0.25)) {
+                        self.voiceWakeToastText = nil
                     }
                 }
             }
@@ -709,7 +650,10 @@ struct RootTabs: View {
             .onChange(of: self.scenePhase) { _, newValue in
                 self.updateIdleTimer()
                 self.updateHomeCanvasState()
-                guard newValue == .active else { return }
+                guard newValue == .active else {
+                    self.clearVoiceWakeToast()
+                    return
+                }
                 self.maybeRequestLocalNetworkAccess(reason: "scene_active")
                 Task {
                     await self.appModel.refreshGatewayOverviewIfConnected()
@@ -720,9 +664,13 @@ struct RootTabs: View {
             }
             .onDisappear {
                 UIApplication.shared.isIdleTimerDisabled = false
-                self.toastDismissTask?.cancel()
-                self.toastDismissTask = nil
+                self.clearVoiceWakeToast()
             }
+    }
+
+    private func clearVoiceWakeToast() {
+        self.voiceWakeToastText = nil
+        self.toastDismissGate.cancel()
     }
 
     private func rootGatewayProblemLifecycle(_ content: some View) -> some View {
@@ -1079,7 +1027,6 @@ extension RootTabs {
     }
 
     private func setSidebarVisible(_ isVisible: Bool) {
-        self.sidebarContentDragOffset = 0
         self.isSidebarVisible = isVisible
     }
 
@@ -1238,10 +1185,12 @@ extension RootTabs {
 }
 
 private struct RootCameraFlashOverlay: View {
+    @Environment(\.scenePhase) private var scenePhase
+
     var nonce: Int
 
     @State private var opacity: CGFloat = 0
-    @State private var task: Task<Void, Never>?
+    @State private var dismissGate = DelayedActionGate()
 
     var body: some View {
         Color.white
@@ -1249,21 +1198,33 @@ private struct RootCameraFlashOverlay: View {
             .ignoresSafeArea()
             .allowsHitTesting(false)
             .onChange(of: self.nonce) { _, _ in
-                self.task?.cancel()
-                self.task = Task { @MainActor in
-                    withAnimation(.easeOut(duration: 0.08)) {
-                        self.opacity = 0.85
-                    }
-                    try? await Task.sleep(nanoseconds: 110_000_000)
-                    withAnimation(.easeOut(duration: 0.32)) {
-                        self.opacity = 0
-                    }
+                guard self.scenePhase == .active else {
+                    self.clearFlash()
+                    return
                 }
+                self.showFlash()
             }
-            .onDisappear {
-                self.task?.cancel()
-                self.task = nil
+            .onChange(of: self.scenePhase) { _, newValue in
+                guard newValue != .active else { return }
+                self.clearFlash()
             }
+            .onDisappear { self.clearFlash() }
+    }
+
+    private func showFlash() {
+        withAnimation(.easeOut(duration: 0.08)) {
+            self.opacity = 0.85
+        }
+        self.dismissGate.schedule(after: .milliseconds(110)) {
+            withAnimation(.easeOut(duration: 0.32)) {
+                self.opacity = 0
+            }
+        }
+    }
+
+    private func clearFlash() {
+        self.opacity = 0
+        self.dismissGate.cancel()
     }
 }
 

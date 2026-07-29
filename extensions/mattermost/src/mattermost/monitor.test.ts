@@ -226,7 +226,6 @@ describe("shouldUpdateMattermostDraftToolProgress", () => {
         },
       },
       accountId: "default",
-      allowUnresolvedSecretRef: true,
     });
     return shouldUpdateMattermostDraftToolProgress(account);
   }
@@ -273,7 +272,6 @@ describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
         },
       },
       accountId: "default",
-      allowUnresolvedSecretRef: true,
     });
     return shouldSuppressMattermostDefaultToolProgressMessages(account);
   }
@@ -348,6 +346,40 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(deliverFinal).not.toHaveBeenCalled();
     expect(recordThreadParticipation).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a finalized preview when a later tool warning is delivered", async () => {
+    const draftStream = createDraftStreamMock();
+    const deliverFinal = vi.fn(async () => {});
+    const previewState = { finalizedViaPreviewPost: false };
+    const params = {
+      kind: "direct" as const,
+      client: createMattermostClientMock(),
+      draftStream,
+      resolvePreviewFinalText: (text?: string) => text?.trim(),
+      previewState,
+      logVerboseMessage: vi.fn(),
+      deliverPayload: deliverFinal,
+    };
+
+    await deliverMattermostReplyWithDraftPreview({
+      ...params,
+      payload: { text: "Successful assistant final" } as never,
+      info: { kind: "final" },
+    });
+    await deliverMattermostReplyWithDraftPreview({
+      ...params,
+      payload: { text: "Tool error warning", isError: true } as never,
+      info: { kind: "final" },
+    });
+
+    expect(previewState.finalizedViaPreviewPost).toBe(true);
+    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+      text: "Tool error warning",
+      isError: true,
+    });
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("deletes the preview after a successful normal final send", async () => {

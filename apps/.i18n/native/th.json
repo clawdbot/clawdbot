@@ -4,6 +4,16 @@
   "glossaryHash": "47cf80de6cebb6ba1ac7a0bfd60e96de12a8611785bae9ca4f82c14912db9bd1",
   "entries": [
     {
+      "id": "native.android.8a2fec00ed1d71b5",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "ฉันสามารถตรวจสอบสถานะ Gateway ซ่อมการกำหนดค่า เปลี่ยนโมเดล หรือเชื่อมต่อช่องทางได้"
+    },
+    {
+      "id": "native.android.53ec61863e575d82",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "ฉันจะแยกการสนทนานี้ออกจากแชทเอเจนต์ทั่วไป"
+    },
+    {
       "id": "native.android.85cc8de945e3929c",
       "source": "OpenClaw translations · $languageTag",
       "translated": "การแปล OpenClaw · $languageTag"
@@ -77,6 +87,21 @@
       "id": "native.android.2cd9aa29e06cf1cc",
       "source": "Command",
       "translated": "คำสั่ง"
+    },
+    {
+      "id": "native.android.83c33792ce758e6b",
+      "source": "Timeout ${it}s",
+      "translated": "หมดเวลา ${it} วินาที"
+    },
+    {
+      "id": "native.android.bb754576303ae39a",
+      "source": "$it tools",
+      "translated": "เครื่องมือ $it รายการ"
+    },
+    {
+      "id": "native.android.43528ba5a11e44fd",
+      "source": "Script",
+      "translated": "สคริปต์"
     },
     {
       "id": "native.android.09e08fc62e2902fc",
@@ -1209,6 +1234,26 @@
       "translated": "OpenClaw ทำงานอยู่"
     },
     {
+      "id": "native.android.2aa3ad1a12683954",
+      "source": "Skip for now",
+      "translated": "ข้ามไปก่อน"
+    },
+    {
+      "id": "native.android.9fa262fa4e057a3b",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.android.e1a8681198e91766",
+      "source": "OpenClaw request failed.",
+      "translated": "คำขอ OpenClaw ล้มเหลว"
+    },
+    {
+      "id": "native.android.a71a93ec69cee4d9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "การเชื่อมต่อ Gateway เปลี่ยนแปลง รีสตาร์ท OpenClaw เพื่อเชื่อมต่อใหม่"
+    },
+    {
       "id": "native.android.356609f717b92350",
       "source": "$preview…",
       "translated": "$preview…"
@@ -1564,6 +1609,11 @@
       "translated": "${days} วัน"
     },
     {
+      "id": "native.android.936714892af1b0f9",
+      "source": ":${uri.port}",
+      "translated": ":${uri.port}"
+    },
+    {
       "id": "native.android.c4a902430c22030c",
       "source": "Delete",
       "translated": "ลบ"
@@ -1839,6 +1889,16 @@
       "translated": "gateway สามารถเปลี่ยนเส้นทางนี้ได้ แต่ไม่สามารถล้างเส้นทางที่มีอยู่ได้"
     },
     {
+      "id": "native.android.d9c4873f21d6d410",
+      "source": "Script",
+      "translated": "สคริปต์"
+    },
+    {
+      "id": "native.android.79ac1e41ef639f65",
+      "source": "Script payloads are preserved unchanged. Use the CLI to edit this script.",
+      "translated": "เพย์โหลดของสคริปต์จะถูกเก็บไว้โดยไม่มีการเปลี่ยนแปลง ใช้ CLI เพื่อแก้ไขสคริปต์นี้"
+    },
+    {
       "id": "native.android.b0de849068a82211",
       "source": "Recent Runs",
       "translated": "การรันล่าสุด"
@@ -1897,6 +1957,11 @@
       "id": "native.android.09bb59bcf0c7e009",
       "source": "Command",
       "translated": "คำสั่ง"
+    },
+    {
+      "id": "native.android.2e2395bd65d3a411",
+      "source": "Script · read-only",
+      "translated": "สคริปต์ · อ่านอย่างเดียว"
     },
     {
       "id": "native.android.54465889774765e9",
@@ -3677,6 +3742,26 @@
       "id": "native.android.4832c0d0e9774283",
       "source": "${tokens / 1_000}k",
       "translated": "${tokens / 1_000}k"
+    },
+    {
+      "id": "native.android.ae8ffaf0304344ff",
+      "source": "Back",
+      "translated": "ย้อนกลับ"
+    },
+    {
+      "id": "native.android.09fa98489fd0881b",
+      "source": "Dashboard",
+      "translated": "แดชบอร์ด"
+    },
+    {
+      "id": "native.android.285be3399daf82ee",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "แดชบอร์ดต้องเชื่อมต่อกับ Gateway"
+    },
+    {
+      "id": "native.android.a1881da010cb4b9f",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "เชื่อมต่อกับ Gateway ของคุณเพื่อเปิดแดชบอร์ดของเซสชันนี้"
     },
     {
       "id": "native.android.a5845742daecb4ba",
@@ -5504,6 +5589,11 @@
       "translated": "คำสั่ง"
     },
     {
+      "id": "native.android.8aed9c94ef7f917f",
+      "source": "Script",
+      "translated": "สคริปต์"
+    },
+    {
       "id": "native.android.f36439e78187c554",
       "source": "Payload Text",
       "translated": "ข้อความ Payload"
@@ -5572,6 +5662,11 @@
       "id": "native.android.bafe2765892cc6fa",
       "source": "Home",
       "translated": "หน้าแรก"
+    },
+    {
+      "id": "native.android.d5b302e1a7695a7a",
+      "source": "Dashboard",
+      "translated": "แดชบอร์ด"
     },
     {
       "id": "native.android.30d8b822fa68d6c4",
@@ -5814,11 +5909,6 @@
       "translated": "กำลังตรวจสอบ · งานที่กำหนดเวลาไว้ $cronJobCount รายการ"
     },
     {
-      "id": "native.android.4f369a09c8731092",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.android.b5ee8fce135f41e6",
       "source": "Connect before chat, voice, and live status.",
       "translated": "เชื่อมต่อก่อนใช้แชต เสียง และสถานะแบบเรียลไทม์"
@@ -5882,6 +5972,16 @@
       "id": "native.android.7b1f86aeacad732c",
       "source": "Load from gateway",
       "translated": "โหลดจาก Gateway"
+    },
+    {
+      "id": "native.android.4f369a09c8731092",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.4878165188c0310c",
+      "source": "Setup, status, and repair",
+      "translated": "การตั้งค่า สถานะ และการซ่อม"
     },
     {
       "id": "native.android.c6997ee4400492f6",
@@ -6839,6 +6939,106 @@
       "translated": "ทักษะ"
     },
     {
+      "id": "native.android.9ee4764599e5979c",
+      "source": "Back",
+      "translated": "กลับ"
+    },
+    {
+      "id": "native.android.4b2c29c94377f235",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7a7da7d8f8613d33",
+      "source": "Gateway Required",
+      "translated": "ต้องมี Gateway"
+    },
+    {
+      "id": "native.android.aebc338b09b0a24d",
+      "source": "Full Access Required",
+      "translated": "ต้องมีสิทธิ์เข้าถึงเต็มรูปแบบ"
+    },
+    {
+      "id": "native.android.69e0b2ce76a5ff7a",
+      "source": "Checking Gateway",
+      "translated": "กำลังตรวจสอบ Gateway"
+    },
+    {
+      "id": "native.android.93c293872c6deb49",
+      "source": "Gateway Update Required",
+      "translated": "ต้องอัปเดต Gateway"
+    },
+    {
+      "id": "native.android.06e5bfbad4b42e3b",
+      "source": "Connect this phone to a Gateway before opening OpenClaw.",
+      "translated": "เชื่อมต่อโทรศัพท์เครื่องนี้กับ Gateway ก่อนเปิด OpenClaw"
+    },
+    {
+      "id": "native.android.44cca3625b125c19",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "เชื่อมต่อใหม่ด้วยสิทธิ์เข้าถึง operator.admin เพื่อตรวจสอบและเปลี่ยนการตั้งค่า Gateway"
+    },
+    {
+      "id": "native.android.6089cc78ebd95573",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "กำลังตรวจสอบว่า Gateway นี้รองรับผู้ช่วยตั้งค่า OpenClaw หรือไม่"
+    },
+    {
+      "id": "native.android.3c3a35369bc2f1f9",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "อัปเดต Gateway นี้เพื่อใช้ผู้ช่วยตั้งค่า OpenClaw"
+    },
+    {
+      "id": "native.android.41b7b9cd883e3e81",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw กำลังทำงาน…"
+    },
+    {
+      "id": "native.android.072481856dd25c89",
+      "source": "Restart",
+      "translated": "รีสตาร์ท"
+    },
+    {
+      "id": "native.android.25fcaa5f2ef2546e",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw พร้อมดำเนินการต่อในแชทปกติของคุณแล้ว"
+    },
+    {
+      "id": "native.android.88377fbc76395226",
+      "source": "Open Chat",
+      "translated": "เปิดแชท"
+    },
+    {
+      "id": "native.android.7d0cd72ff8d9c80c",
+      "source": "$label · $recommendation",
+      "translated": "$label · $recommendation"
+    },
+    {
+      "id": "native.android.3ca44882cf461305",
+      "source": "Recommended",
+      "translated": "แนะนำ"
+    },
+    {
+      "id": "native.android.56968d3bbeb687f9",
+      "source": "Skip for now",
+      "translated": "ข้ามไปก่อน"
+    },
+    {
+      "id": "native.android.6b255d7620170498",
+      "source": "Enter secret…",
+      "translated": "ป้อนรหัสลับ…"
+    },
+    {
+      "id": "native.android.4753194a1f8c6c6b",
+      "source": "Reply to OpenClaw…",
+      "translated": "ตอบกลับ OpenClaw…"
+    },
+    {
+      "id": "native.android.07d2609a561a43b0",
+      "source": "Send",
+      "translated": "ส่ง"
+    },
+    {
       "id": "native.android.efc938b5cc23e079",
       "source": "Back",
       "translated": "ย้อนกลับ"
@@ -7474,6 +7674,16 @@
       "translated": "ตอบกลับ"
     },
     {
+      "id": "native.android.6c07db7bdc4b43a4",
+      "source": "Rewind to here",
+      "translated": "ย้อนกลับมาที่นี่"
+    },
+    {
+      "id": "native.android.c824bdc38278a218",
+      "source": "Fork from here",
+      "translated": "แยกสาขาจากที่นี่"
+    },
+    {
       "id": "native.android.319b4a29df279bb3",
       "source": "Select text",
       "translated": "เลือกข้อความ"
@@ -7529,9 +7739,14 @@
       "translated": "ไม่มีตัวอย่างให้ใช้งาน"
     },
     {
-      "id": "native.android.a50e44d8f380f9ad",
-      "source": "Thinking...",
-      "translated": "กำลังคิด..."
+      "id": "native.android.66aef4de5e07438f",
+      "source": "Working",
+      "translated": "กำลังทำงาน"
+    },
+    {
+      "id": "native.android.6e7be1773c946de3",
+      "source": "· $phrase",
+      "translated": "· $phrase"
     },
     {
       "id": "native.android.ff4a092a02bd5d17",
@@ -7569,14 +7784,19 @@
       "translated": "ส่งแล้ว — กำลังยืนยันการส่งถึง…"
     },
     {
-      "id": "native.android.15d71d54c0ce946b",
-      "source": "Failed",
-      "translated": "ล้มเหลว"
+      "id": "native.android.ac5949efe3cfe48c",
+      "source": "Session branch changed; review and retry this message.",
+      "translated": "สาขาของเซสชันเปลี่ยนแปลง โปรดตรวจสอบและลองส่งข้อความนี้อีกครั้ง"
     },
     {
       "id": "native.android.6f734a7527ae9c5a",
       "source": "Failed — $it",
       "translated": "ล้มเหลว — $it"
+    },
+    {
+      "id": "native.android.15d71d54c0ce946b",
+      "source": "Failed",
+      "translated": "ล้มเหลว"
     },
     {
       "id": "native.android.552a4d6f5110e6a3",
@@ -7739,6 +7959,11 @@
       "translated": "รีเฟรชแชท"
     },
     {
+      "id": "native.android.6966ae8bbad7347d",
+      "source": "Dashboard",
+      "translated": "แดชบอร์ด"
+    },
+    {
       "id": "native.android.b57a1b542cff8f55",
       "source": "Background tasks",
       "translated": "งานเบื้องหลัง"
@@ -7874,6 +8099,16 @@
       "translated": "กำลังพูด…"
     },
     {
+      "id": "native.android.bd78ce1e86e900b3",
+      "source": "Close",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.android.b686b1bc61494ee2",
+      "source": "View all",
+      "translated": "ดูทั้งหมด"
+    },
+    {
       "id": "native.android.781f84dfaf7da9d6",
       "source": "Tools running",
       "translated": "เครื่องมือกำลังทำงาน"
@@ -7887,16 +8122,6 @@
       "id": "native.android.0fd6b75cadc0ce75",
       "source": "+${toolCalls.size - 4} more",
       "translated": "+${toolCalls.size - 4} เพิ่มเติม"
-    },
-    {
-      "id": "native.android.7e0aea1dca378135",
-      "source": "Thinking",
-      "translated": "กำลังคิด"
-    },
-    {
-      "id": "native.android.98a0d4d5bba788c4",
-      "source": "OpenClaw is preparing a response.",
-      "translated": "OpenClaw กำลังเตรียมคำตอบ"
     },
     {
       "id": "native.android.22d747642a3887cd",
@@ -7922,6 +8147,31 @@
       "id": "native.android.76d574acfac94fee",
       "source": "Stop",
       "translated": "หยุด"
+    },
+    {
+      "id": "native.android.be42506226307680",
+      "source": "Switch branch",
+      "translated": "สลับสาขา"
+    },
+    {
+      "id": "native.android.39ea147abba2af8a",
+      "source": "Untitled branch",
+      "translated": "สาขาที่ไม่มีชื่อ"
+    },
+    {
+      "id": "native.android.4e2cbf557e2e3cd6",
+      "source": "Current branch",
+      "translated": "สาขาปัจจุบัน"
+    },
+    {
+      "id": "native.android.d79a4188788ccf49",
+      "source": "Messages: $count",
+      "translated": "ข้อความ: $count"
+    },
+    {
+      "id": "native.android.76e548dffafc9de9",
+      "source": "$count · $updated",
+      "translated": "$count · $updated"
     },
     {
       "id": "native.android.2cb3ec7379426dfe",
@@ -8092,6 +8342,171 @@
       "id": "native.android.3200f8564c25a1fa",
       "source": "Max",
       "translated": "สูงสุด"
+    },
+    {
+      "id": "native.android.0ad9a3b0df19e18c",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.android.21915533b17bafea",
+      "source": "$running Running · $done Done · $failed Failed",
+      "translated": "$running กำลังทำงาน · $done เสร็จสิ้น · $failed ล้มเหลว"
+    },
+    {
+      "id": "native.android.41ba16bea6545210",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.android.38327b46c006c14c",
+      "source": "1 more worker",
+      "translated": "worker อีก 1 รายการ"
+    },
+    {
+      "id": "native.android.d7afc539a21261eb",
+      "source": "$count more workers",
+      "translated": "worker อีก $count รายการ"
+    },
+    {
+      "id": "native.android.c2dc3a65302976c0",
+      "source": "1 token",
+      "translated": "1 โทเค็น"
+    },
+    {
+      "id": "native.android.e7059e3a756908c4",
+      "source": "$count tokens",
+      "translated": "$count โทเค็น"
+    },
+    {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "เสร็จใน $duration"
+    },
+    {
+      "id": "native.android.d2797e7488fe5021",
+      "source": "${decimal(count / 1_000_000.0)}M",
+      "translated": "${decimal(count / 1_000_000.0)}ล้าน"
+    },
+    {
+      "id": "native.android.4206e3e68c56767a",
+      "source": "${thousands}k",
+      "translated": "${thousands}พัน"
+    },
+    {
+      "id": "native.android.5e758e9851ded127",
+      "source": "${days}d",
+      "translated": "${days}วัน"
+    },
+    {
+      "id": "native.android.4fe67b5100cb91b1",
+      "source": "${hours}h",
+      "translated": "${hours}ชม."
+    },
+    {
+      "id": "native.android.92a53292eaf7c63e",
+      "source": "${minutes}m",
+      "translated": "${minutes}นาที"
+    },
+    {
+      "id": "native.android.6d5683b5537bdbaf",
+      "source": "${seconds}s",
+      "translated": "${seconds}วินาที"
+    },
+    {
+      "id": "native.android.e2f387a31240c8a3",
+      "source": "Shelling",
+      "translated": "กำลังสร้างเปลือก"
+    },
+    {
+      "id": "native.android.70a6de7c24baffb7",
+      "source": "Scuttling",
+      "translated": "กำลังไต่"
+    },
+    {
+      "id": "native.android.0ed1354a65faa07e",
+      "source": "Clawing",
+      "translated": "กำลังตะปบ"
+    },
+    {
+      "id": "native.android.42d24b16fc658ed3",
+      "source": "Pinching",
+      "translated": "กำลังหนีบ"
+    },
+    {
+      "id": "native.android.69d5b3ca23a7bec3",
+      "source": "Molting",
+      "translated": "กำลังลอกคราบ"
+    },
+    {
+      "id": "native.android.80bfb2d6720f8dc5",
+      "source": "Bubbling",
+      "translated": "กำลังผุดฟอง"
+    },
+    {
+      "id": "native.android.e984f80d309c2d01",
+      "source": "Tiding",
+      "translated": "กำลังขึ้นลงตามน้ำ"
+    },
+    {
+      "id": "native.android.60bb819ee08cbbc1",
+      "source": "Reefing",
+      "translated": "กำลังสร้างแนวปะการัง"
+    },
+    {
+      "id": "native.android.7f465ae2654f0c25",
+      "source": "Cracking",
+      "translated": "กำลังแตกร้าว"
+    },
+    {
+      "id": "native.android.cfc143346cf262c8",
+      "source": "Sifting",
+      "translated": "กำลังร่อน"
+    },
+    {
+      "id": "native.android.72b67956ab234898",
+      "source": "Brining",
+      "translated": "กำลังแช่น้ำเกลือ"
+    },
+    {
+      "id": "native.android.3ecce1d21d8ab752",
+      "source": "Nautiling",
+      "translated": "กำลังล่องแบบนอติลุส"
+    },
+    {
+      "id": "native.android.305ed08fbb829753",
+      "source": "Krilling",
+      "translated": "กำลังว่ายแบบเคย"
+    },
+    {
+      "id": "native.android.c39933b1ec86d7a9",
+      "source": "Barnacling",
+      "translated": "เก็บเพรียง"
+    },
+    {
+      "id": "native.android.32a8072679db94bb",
+      "source": "Lobstering",
+      "translated": "จับกุ้งมังกร"
+    },
+    {
+      "id": "native.android.de205a44a6d159fb",
+      "source": "Tidepooling",
+      "translated": "สำรวจแอ่งน้ำทะเล"
+    },
+    {
+      "id": "native.android.8d97a105339c7a20",
+      "source": "Pearling",
+      "translated": "เก็บไข่มุก"
+    },
+    {
+      "id": "native.android.7bdb054d45ca1b23",
+      "source": "Snapping",
+      "translated": "หนีบ"
+    },
+    {
+      "id": "native.android.c2210ea40e357fcd",
+      "source": "Surfacing",
+      "translated": "โผล่ขึ้นผิวน้ำ"
     },
     {
       "id": "native.android.3df4e24a0fc8810b",
@@ -8319,11 +8734,6 @@
       "translated": "ไม่สามารถใช้ตัวจดจำเสียงพูดได้"
     },
     {
-      "id": "native.android.47a59f8798682ea0",
-      "source": "Ready",
-      "translated": "พร้อม"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "เริ่มไม่สำเร็จ: $message"
@@ -8379,6 +8789,11 @@
       "translated": "พูดไม่สำเร็จ: $message"
     },
     {
+      "id": "native.android.47a59f8798682ea0",
+      "source": "Ready",
+      "translated": "พร้อม"
+    },
+    {
       "id": "native.android.bd863d5e8979cd79",
       "source": "Generating voice…",
       "translated": "กำลังสร้างเสียง…"
@@ -8392,11 +8807,6 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "กำลังพูด…"
-    },
-    {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "กำลังฟัง (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -8424,6 +8834,16 @@
       "translated": "หมดเวลาการเชื่อมต่อเครือข่าย"
     },
     {
+      "id": "native.android.7b4dacae0686d138",
+      "source": "Listening",
+      "translated": "กำลังฟัง"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "กำลังฟัง (PTT)"
+    },
+    {
       "id": "native.android.a445b7696f9b431c",
       "source": "Recognizer busy",
       "translated": "ตัวรู้จำไม่ว่าง"
@@ -8432,11 +8852,6 @@
       "id": "native.android.297438db6f5fe8d7",
       "source": "Server error",
       "translated": "ข้อผิดพลาดของเซิร์ฟเวอร์"
-    },
-    {
-      "id": "native.android.7b4dacae0686d138",
-      "source": "Listening",
-      "translated": "กำลังฟัง"
     },
     {
       "id": "native.android.ea5d9621ef0f0482",
@@ -8614,9 +9029,624 @@
       "translated": "คัดลอกประทับเวลาการสร้างแล้ว"
     },
     {
-      "id": "native.apple.8f741d09cc1d5495",
-      "source": "OpenClaw Activity",
-      "translated": "กิจกรรม OpenClaw"
+      "id": "native.android.522a27f673db3ea7",
+      "source": "Observed nodes: $count",
+      "translated": "โหนดที่สังเกต: $count"
+    },
+    {
+      "id": "native.android.db6c0a629047ec45",
+      "source": "Observing…",
+      "translated": "กำลังสังเกต…"
+    },
+    {
+      "id": "native.android.dae7cd6ba0f54d14",
+      "source": "Observing in ${remaining}s — switch to the target app",
+      "translated": "กำลังสังเกตในอีก ${remaining} วินาที — สลับไปยังแอปเป้าหมาย"
+    },
+    {
+      "id": "native.android.a57da8b7813642c5",
+      "source": "unknown",
+      "translated": "ไม่ทราบ"
+    },
+    {
+      "id": "native.android.c3bf7f7fca67def2",
+      "source": "Accessibility executor",
+      "translated": "ตัวดำเนินการช่วยการเข้าถึง"
+    },
+    {
+      "id": "native.android.3be1e4745a17f488",
+      "source": "Service connected",
+      "translated": "เชื่อมต่อบริการแล้ว"
+    },
+    {
+      "id": "native.android.cc9389562c8b2c59",
+      "source": "Service disabled",
+      "translated": "ปิดใช้งานบริการแล้ว"
+    },
+    {
+      "id": "native.android.137a6854a7a38355",
+      "source": "Open settings",
+      "translated": "เปิดการตั้งค่า"
+    },
+    {
+      "id": "native.android.21324b63c1100d44",
+      "source": "Observe",
+      "translated": "สังเกต"
+    },
+    {
+      "id": "native.android.060ac865b282278b",
+      "source": "Observe in 3s",
+      "translated": "สังเกตในอีก 3 วินาที"
+    },
+    {
+      "id": "native.android.e2d3ac19479204af",
+      "source": "Back",
+      "translated": "ย้อนกลับ"
+    },
+    {
+      "id": "native.android.d60b8ecd62fc0d80",
+      "source": "Home",
+      "translated": "หน้าหลัก"
+    },
+    {
+      "id": "native.android.3fce53a0ad295cf0",
+      "source": "Recents",
+      "translated": "รายการล่าสุด"
+    },
+    {
+      "id": "native.android.6b32ca413d180a5d",
+      "source": "Snapshot: $snapshotLabel",
+      "translated": "สแนปช็อต: $snapshotLabel"
+    },
+    {
+      "id": "native.android.8f5985122be4fc64",
+      "source": "Packages: snapshot=$snapshotPackage foreground=$foregroundPackage",
+      "translated": "แพ็กเกจ: snapshot=$snapshotPackage foreground=$foregroundPackage"
+    },
+    {
+      "id": "native.android.73c790b2ef43795b",
+      "source": "No action result",
+      "translated": "ไม่มีผลลัพธ์การดำเนินการ"
+    },
+    {
+      "id": "native.android.7cef45c1a4398242",
+      "source": "Selected $reference",
+      "translated": "เลือก $reference แล้ว"
+    },
+    {
+      "id": "native.android.080308b933291f72",
+      "source": "Node actions run only when the target app is foreground (validated via the remote path). Global actions and same-app actions work here.",
+      "translated": "การดำเนินการกับโหนดจะทำงานเฉพาะเมื่อแอปเป้าหมายอยู่เบื้องหน้า (ตรวจสอบผ่านเส้นทางระยะไกล) การดำเนินการระดับส่วนกลางและการดำเนินการในแอปเดียวกันสามารถทำงานได้ที่นี่"
+    },
+    {
+      "id": "native.android.7904ab3dbc7630d6",
+      "source": "Activate",
+      "translated": "เปิดใช้งาน"
+    },
+    {
+      "id": "native.android.720bad3536516e4c",
+      "source": "Scroll forward",
+      "translated": "เลื่อนไปข้างหน้า"
+    },
+    {
+      "id": "native.android.a9d246ec2201f652",
+      "source": "Scroll back",
+      "translated": "เลื่อนกลับ"
+    },
+    {
+      "id": "native.android.d5d6c692bf76ab30",
+      "source": "Text",
+      "translated": "ข้อความ"
+    },
+    {
+      "id": "native.android.b807999e8142fb16",
+      "source": "Set text",
+      "translated": "ตั้งค่าข้อความ"
+    },
+    {
+      "id": "native.android.234771b574070dbd",
+      "source": "$reference  $role",
+      "translated": "$reference  $role"
+    },
+    {
+      "id": "native.android.08bf43b43713bc39",
+      "source": "text: $value",
+      "translated": "text: $value"
+    },
+    {
+      "id": "native.android.b9b90cd213056618",
+      "source": "description: $value",
+      "translated": "description: $value"
+    },
+    {
+      "id": "native.android.b2932adead8a9404",
+      "source": "bounds: $value",
+      "translated": "bounds: $value"
+    },
+    {
+      "id": "native.android.96941ff341555a3c",
+      "source": "actions: $value",
+      "translated": "actions: $value"
+    },
+    {
+      "id": "native.android.595a568daf3c9686",
+      "source": "none",
+      "translated": "ไม่มี"
+    },
+    {
+      "id": "native.android.1bacd6da6858db46",
+      "source": "Control other apps",
+      "translated": "ควบคุมแอปอื่น"
+    },
+    {
+      "id": "native.android.7bb0d8ca016a7496",
+      "source": "Shown in Android Accessibility settings.",
+      "translated": "แสดงในการตั้งค่าการช่วยการเข้าถึงของ Android"
+    },
+    {
+      "id": "native.android.499618d59ec50110",
+      "source": "Other apps stay untouched.",
+      "translated": "แอปอื่นจะไม่ถูกแตะต้อง"
+    },
+    {
+      "id": "native.android.8132ebc5e9beff1a",
+      "source": "Allow control of other apps?",
+      "translated": "อนุญาตให้ควบคุมแอปอื่นหรือไม่?"
+    },
+    {
+      "id": "native.android.16d2abc828935351",
+      "source": "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
+      "translated": "การเปิดใช้งานจะทำให้ OpenClaw สังเกตและควบคุมหน้าจอของแอปอื่นได้เมื่อเปิดใช้ ต้องมีการเข้าถึงการช่วยการเข้าถึงของ Android"
+    },
+    {
+      "id": "native.android.2762510a90e577a3",
+      "source": "Enable and Open Settings",
+      "translated": "เปิดใช้งานและเปิดการตั้งค่า"
+    },
+    {
+      "id": "native.android.9f278b579e510dda",
+      "source": "Not Now",
+      "translated": "ไว้ภายหลัง"
+    },
+    {
+      "id": "native.android.b3cae8c7b0ac2222",
+      "source": "OpenClaw UI control",
+      "translated": "การควบคุม UI ของ OpenClaw"
+    },
+    {
+      "id": "native.android.d980d910a3466dc2",
+      "source": "Developer UI observation and control",
+      "translated": "การสังเกตและควบคุม UI สำหรับนักพัฒนา"
+    },
+    {
+      "id": "native.android.7f56eb025a774101",
+      "source": "Allows the third-party OpenClaw build to inspect and control the active app during local development.",
+      "translated": "อนุญาตให้บิลด์ OpenClaw ของบุคคลที่สามตรวจสอบและควบคุมแอปที่ใช้งานอยู่ระหว่างการพัฒนาบนเครื่อง"
+    },
+    {
+      "id": "native.android.e1c713595c555f5f",
+      "source": "OpenClaw Accessibility Developer",
+      "translated": "นักพัฒนา OpenClaw Accessibility"
+    },
+    {
+      "id": "native.android.342644995c7fa39d",
+      "source": "Chat",
+      "translated": "แชท"
+    },
+    {
+      "id": "native.android.f08059cbbd74d290",
+      "source": "Session",
+      "translated": "เซสชัน"
+    },
+    {
+      "id": "native.android.14c9261466ef05af",
+      "source": "Model",
+      "translated": "โมเดล"
+    },
+    {
+      "id": "native.android.15cab72e6f01fd53",
+      "source": "Previous %1$s",
+      "translated": "%1$s ก่อนหน้า"
+    },
+    {
+      "id": "native.android.3d3306e0ee9e21ee",
+      "source": "Next %1$s",
+      "translated": "%1$s ถัดไป"
+    },
+    {
+      "id": "native.android.27f269e3449860eb",
+      "source": "Controls",
+      "translated": "การควบคุม"
+    },
+    {
+      "id": "native.android.162045314bf6d856",
+      "source": "Talk",
+      "translated": "พูด"
+    },
+    {
+      "id": "native.android.1e47fb0c88ffb1bd",
+      "source": "Watch audio failed",
+      "translated": "เสียงจากนาฬิกาล้มเหลว"
+    },
+    {
+      "id": "native.android.64e07fdfab3f96c5",
+      "source": "Dictate",
+      "translated": "ป้อนตามคำบอก"
+    },
+    {
+      "id": "native.android.aa64f5544405ffed",
+      "source": "Live",
+      "translated": "สด"
+    },
+    {
+      "id": "native.android.5d4de99dd6fd6764",
+      "source": "Thread",
+      "translated": "เธรด"
+    },
+    {
+      "id": "native.android.4863e4958bf9a886",
+      "source": "← Swipe →",
+      "translated": "← ปัด →"
+    },
+    {
+      "id": "native.android.01979a7d84755f0e",
+      "source": "Hold",
+      "translated": "กดค้าง"
+    },
+    {
+      "id": "native.android.149e4509c9152931",
+      "source": "Tap",
+      "translated": "แตะ"
+    },
+    {
+      "id": "native.android.9f7fe0147a0b571a",
+      "source": "Double tap",
+      "translated": "แตะสองครั้ง"
+    },
+    {
+      "id": "native.android.65caac394b5e4871",
+      "source": "Start Live to see the conversation here.",
+      "translated": "เริ่ม Live เพื่อดูการสนทนาที่นี่"
+    },
+    {
+      "id": "native.android.80256ef5841e2f92",
+      "source": "New",
+      "translated": "ใหม่"
+    },
+    {
+      "id": "native.android.3091f3e818e51d8a",
+      "source": "Type",
+      "translated": "พิมพ์"
+    },
+    {
+      "id": "native.android.d6940b2883503ea3",
+      "source": "Message",
+      "translated": "ข้อความ"
+    },
+    {
+      "id": "native.android.e9035dd5aded082a",
+      "source": "Message agent",
+      "translated": "ส่งข้อความถึงเอเจนต์"
+    },
+    {
+      "id": "native.android.66f9ad9c9cd1a92c",
+      "source": "Send",
+      "translated": "ส่ง"
+    },
+    {
+      "id": "native.android.aed54d9c5e90b843",
+      "source": "Speak to your agent",
+      "translated": "พูดคุยกับเอเจนต์ของคุณ"
+    },
+    {
+      "id": "native.android.30aa9dbcae2ce3c1",
+      "source": "Stop speaking",
+      "translated": "หยุดพูด"
+    },
+    {
+      "id": "native.android.5c8f30c24360b983",
+      "source": "Speak latest reply",
+      "translated": "อ่านคำตอบล่าสุด"
+    },
+    {
+      "id": "native.android.e283a10e79578d3f",
+      "source": "Speaking",
+      "translated": "กำลังพูด"
+    },
+    {
+      "id": "native.android.0b19cfb5411358fa",
+      "source": "Listening",
+      "translated": "กำลังฟัง"
+    },
+    {
+      "id": "native.android.e40bdbd8bfc185e6",
+      "source": "Connecting",
+      "translated": "กำลังเชื่อมต่อ"
+    },
+    {
+      "id": "native.android.42ac9ae6e2a24424",
+      "source": "Thinking",
+      "translated": "กำลังคิด"
+    },
+    {
+      "id": "native.android.e87b09e74f59ca70",
+      "source": "Typing",
+      "translated": "กำลังพิมพ์"
+    },
+    {
+      "id": "native.android.5357284dcb751316",
+      "source": "Sending",
+      "translated": "กำลังส่ง"
+    },
+    {
+      "id": "native.android.df216228910e6a31",
+      "source": "Agent working",
+      "translated": "เอเจนต์กำลังทำงาน"
+    },
+    {
+      "id": "native.android.0ab95b2723a4b400",
+      "source": "Error",
+      "translated": "ข้อผิดพลาด"
+    },
+    {
+      "id": "native.android.6f790004e204e002",
+      "source": "Ready",
+      "translated": "พร้อม"
+    },
+    {
+      "id": "native.android.40984724c43be3ab",
+      "source": "You",
+      "translated": "คุณ"
+    },
+    {
+      "id": "native.android.4aaf8fd6103ce61d",
+      "source": "Agent",
+      "translated": "เอเจนต์"
+    },
+    {
+      "id": "native.android.c09b4d37b7750d4a",
+      "source": "System",
+      "translated": "ระบบ"
+    },
+    {
+      "id": "native.android.beff51b9bde563db",
+      "source": "Start a conversation",
+      "translated": "เริ่มการสนทนา"
+    },
+    {
+      "id": "native.android.b8de3221042b2fd3",
+      "source": "Talk or type on your watch. The paired phone sends the message through its authenticated OpenClaw session.",
+      "translated": "พูดหรือพิมพ์บนนาฬิกาของคุณ โทรศัพท์ที่จับคู่ไว้จะส่งข้อความผ่านเซสชัน OpenClaw ที่ผ่านการยืนยันตัวตน"
+    },
+    {
+      "id": "native.android.44c6bb3c4c7b61ae",
+      "source": "Current session",
+      "translated": "เซสชันปัจจุบัน"
+    },
+    {
+      "id": "native.android.29e0ff4871a97d3a",
+      "source": "Appearance",
+      "translated": "รูปลักษณ์"
+    },
+    {
+      "id": "native.android.f54dda8777a206c0",
+      "source": "Dark",
+      "translated": "มืด"
+    },
+    {
+      "id": "native.android.7709ce559ece7079",
+      "source": "Light",
+      "translated": "สว่าง"
+    },
+    {
+      "id": "native.android.bad64c6d810dd968",
+      "source": "Speak replies automatically",
+      "translated": "พูดข้อความตอบกลับโดยอัตโนมัติ"
+    },
+    {
+      "id": "native.android.bf13ece69b6f9e6d",
+      "source": "Reply alerts",
+      "translated": "การแจ้งเตือนข้อความตอบกลับ"
+    },
+    {
+      "id": "native.android.ab451b22b15fef6a",
+      "source": "Enable alerts",
+      "translated": "เปิดใช้การแจ้งเตือน"
+    },
+    {
+      "id": "native.android.2ac0bfe2c63028e6",
+      "source": "Abort run",
+      "translated": "ยกเลิกการทำงาน"
+    },
+    {
+      "id": "native.android.1c8ec9bc7a542592",
+      "source": "Open notification settings",
+      "translated": "เปิดการตั้งค่าการแจ้งเตือน"
+    },
+    {
+      "id": "native.android.cac22bf83ae5e538",
+      "source": "On",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.android.8b2c37db3d4bfe78",
+      "source": "Off",
+      "translated": "ปิด"
+    },
+    {
+      "id": "native.android.dcf724e915521154",
+      "source": "Connection",
+      "translated": "การเชื่อมต่อ"
+    },
+    {
+      "id": "native.android.d6576b5ea12e6635",
+      "source": "Gateway",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.android.5af2a90d687d5ded",
+      "source": "Security",
+      "translated": "ความปลอดภัย"
+    },
+    {
+      "id": "native.android.bfa2a9759e56e431",
+      "source": "Phone-controlled",
+      "translated": "ควบคุมโดยโทรศัพท์"
+    },
+    {
+      "id": "native.android.9d53b66d3444d63f",
+      "source": "Gateway credentials and identity stay on the paired phone. The watch only uses the Wear Data Layer.",
+      "translated": "ข้อมูลประจำตัวและข้อมูลยืนยันตัวตนของ Gateway จะอยู่ในโทรศัพท์ที่จับคู่ไว้ นาฬิกาจะใช้เฉพาะ Wear Data Layer เท่านั้น"
+    },
+    {
+      "id": "native.android.e4e15149f5634729",
+      "source": "Checking phone",
+      "translated": "กำลังตรวจสอบโทรศัพท์"
+    },
+    {
+      "id": "native.android.c1b0408a3b9a7855",
+      "source": "Reading agents, sessions, and chat",
+      "translated": "กำลังอ่านเอเจนต์ เซสชัน และแชต"
+    },
+    {
+      "id": "native.android.b6cb3ef2de0a91a1",
+      "source": "Phone ready",
+      "translated": "โทรศัพท์พร้อมใช้งาน"
+    },
+    {
+      "id": "native.android.71511621861ee1f8",
+      "source": "Gateway connected",
+      "translated": "เชื่อมต่อ Gateway แล้ว"
+    },
+    {
+      "id": "native.android.e8a185d4eb48abe2",
+      "source": "Gateway offline",
+      "translated": "Gateway ออฟไลน์"
+    },
+    {
+      "id": "native.android.5d98a2a8a4f1f793",
+      "source": "Reconnect the Gateway in OpenClaw on the paired phone.",
+      "translated": "เชื่อมต่อ Gateway อีกครั้งใน OpenClaw บนโทรศัพท์ที่จับคู่ไว้"
+    },
+    {
+      "id": "native.android.867011d568b0b0db",
+      "source": "Open OpenClaw on phone",
+      "translated": "เปิด OpenClaw บนโทรศัพท์"
+    },
+    {
+      "id": "native.android.e70d812f3bc1bb40",
+      "source": "The watch never starts or authenticates the Gateway itself.",
+      "translated": "นาฬิกาจะไม่เริ่มต้นหรือตรวจสอบสิทธิ์ Gateway ด้วยตัวเอง"
+    },
+    {
+      "id": "native.android.be82f33ff358e212",
+      "source": "Phone not reachable",
+      "translated": "ไม่สามารถติดต่อโทรศัพท์ได้"
+    },
+    {
+      "id": "native.android.d6c4dc6d15a4eaac",
+      "source": "Keep the paired phone nearby and install the matching OpenClaw app.",
+      "translated": "วางโทรศัพท์ที่จับคู่ไว้ใกล้ ๆ และติดตั้งแอป OpenClaw เวอร์ชันที่ตรงกัน"
+    },
+    {
+      "id": "native.android.bfebf63a2c96e9cd",
+      "source": "Selection no longer available",
+      "translated": "ตัวเลือกนี้ไม่พร้อมใช้งานแล้ว"
+    },
+    {
+      "id": "native.android.918aacdecf0e523b",
+      "source": "Action not accepted",
+      "translated": "ไม่ยอมรับการดำเนินการ"
+    },
+    {
+      "id": "native.android.375286e6dbb16606",
+      "source": "Something went wrong",
+      "translated": "เกิดข้อผิดพลาดบางอย่าง"
+    },
+    {
+      "id": "native.android.e0e6d9ff3b7d8970",
+      "source": "Refresh the lists and try again.",
+      "translated": "รีเฟรชรายการแล้วลองอีกครั้ง"
+    },
+    {
+      "id": "native.android.e9849178994c7414",
+      "source": "Try again from the watch.",
+      "translated": "ลองอีกครั้งจากนาฬิกา"
+    },
+    {
+      "id": "native.android.3d44911564ea1c5a",
+      "source": "Update required",
+      "translated": "จำเป็นต้องอัปเดต"
+    },
+    {
+      "id": "native.android.ce39278848b1615d",
+      "source": "Update OpenClaw on both phone and watch.",
+      "translated": "อัปเดต OpenClaw ทั้งบนโทรศัพท์และนาฬิกา"
+    },
+    {
+      "id": "native.android.b5d6a37fb96f38f1",
+      "source": "Refresh",
+      "translated": "รีเฟรช"
+    },
+    {
+      "id": "native.android.a64989382158df47",
+      "source": "Retry",
+      "translated": "ลองอีกครั้ง"
+    },
+    {
+      "id": "native.android.6b973e2d4540f1dc",
+      "source": "OpenClaw replies",
+      "translated": "การตอบกลับจาก OpenClaw"
+    },
+    {
+      "id": "native.android.daf75f1939c5048f",
+      "source": "Reply",
+      "translated": "ตอบกลับ"
+    },
+    {
+      "id": "native.android.2ab12cfd9399407c",
+      "source": "OpenClaw reply",
+      "translated": "การตอบกลับจาก OpenClaw"
+    },
+    {
+      "id": "native.android.289456e2626dd0f4",
+      "source": "Reply not sent",
+      "translated": "ไม่ได้ส่งการตอบกลับ"
+    },
+    {
+      "id": "native.android.bda7ccc6e4728f23",
+      "source": "Phone unavailable. Tap Reply to try again.",
+      "translated": "โทรศัพท์ไม่พร้อมใช้งาน แตะตอบกลับเพื่อลองอีกครั้ง"
+    },
+    {
+      "id": "native.android.3ec65645eda5ded7",
+      "source": "Open OpenClaw to reply",
+      "translated": "เปิด OpenClaw เพื่อตอบกลับ"
+    },
+    {
+      "id": "native.android.7658464805a4b605",
+      "source": "Your preferred phone changed. Open the app to reload the session before replying.",
+      "translated": "โทรศัพท์ที่คุณเลือกใช้มีการเปลี่ยนแปลง เปิดแอปเพื่อโหลดเซสชันใหม่ก่อนตอบกลับ"
+    },
+    {
+      "id": "native.android.6b2e913641d45f02",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.android.7c74dd9a2bf91d3a",
+      "source": "Open sessions and reply through your paired phone",
+      "translated": "เปิดเซสชันและตอบกลับผ่านโทรศัพท์ที่จับคู่ไว้"
+    },
+    {
+      "id": "native.android.6c2e2515598de209",
+      "source": "OPEN",
+      "translated": "เปิด"
+    },
+    {
+      "id": "native.android.709aff840be1f167",
+      "source": "PHONE PROXY",
+      "translated": "พร็อกซีโทรศัพท์"
     },
     {
       "id": "native.apple.093081590556db7f",
@@ -8694,11 +9724,6 @@
       "translated": "ยกเลิกการเชื่อมต่อแล้ว"
     },
     {
-      "id": "native.apple.9168fcd110c3019a",
-      "source": "OpenClaw Share",
-      "translated": "OpenClaw Share"
-    },
-    {
       "id": "native.apple.382fd936eaf238f7",
       "source": "Just received your iOS share + request, working on it.",
       "translated": "Just received your iOS share + request, working on it."
@@ -8722,6 +9747,26 @@
       "id": "native.apple.a811eb3e4d2174d5",
       "source": "that request",
       "translated": "คำขอนั้น"
+    },
+    {
+      "id": "native.apple.91108e396155b531",
+      "source": "Dashboard",
+      "translated": "แดชบอร์ด"
+    },
+    {
+      "id": "native.apple.8a315564807ba77d",
+      "source": "Done",
+      "translated": "เสร็จสิ้น"
+    },
+    {
+      "id": "native.apple.1a8ef1f77055764f",
+      "source": "Dashboard needs a connected gateway",
+      "translated": "แดชบอร์ดต้องเชื่อมต่อกับ Gateway"
+    },
+    {
+      "id": "native.apple.0561fc7c6a99da55",
+      "source": "Connect to your gateway to open this session dashboard.",
+      "translated": "เชื่อมต่อกับ Gateway ของคุณเพื่อเปิดแดชบอร์ดของเซสชันนี้"
     },
     {
       "id": "native.apple.1696cec8c3c6a511",
@@ -10924,6 +11969,11 @@
       "translated": "เซสชัน…"
     },
     {
+      "id": "native.apple.38fb02182bd2430c",
+      "source": "Dashboard",
+      "translated": "แดชบอร์ด"
+    },
+    {
       "id": "native.apple.17c13312e7532c89",
       "source": "Background Tasks",
       "translated": "งานเบื้องหลัง"
@@ -12399,26 +13449,6 @@
       "translated": "ตกลง"
     },
     {
-      "id": "native.apple.32230ecb2fbc2378",
-      "source": "Access Level",
-      "translated": "ระดับการเข้าถึง"
-    },
-    {
-      "id": "native.apple.7ed27029e9c313cc",
-      "source": "While Using the App",
-      "translated": "ขณะใช้งานแอป"
-    },
-    {
-      "id": "native.apple.b975064b240c9fd6",
-      "source": "Always",
-      "translated": "เสมอ"
-    },
-    {
-      "id": "native.apple.756ff21ca904b2d8",
-      "source": "Choose when OpenClaw may share this iPhone's location with gateway tools.",
-      "translated": "เลือกว่าเมื่อใดที่ OpenClaw สามารถแชร์ตำแหน่งของ iPhone เครื่องนี้กับเครื่องมือของ Gateway"
-    },
-    {
       "id": "native.apple.9515109ce97ec94e",
       "source": "Forget %@?",
       "translated": "ลืม %@ หรือไม่?"
@@ -12622,6 +13652,11 @@
       "id": "native.apple.f330bd62f5b05c15",
       "source": "Gateway",
       "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.2d878afa870cd7cc",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
     },
     {
       "id": "native.apple.b99af99847ac7823",
@@ -12964,6 +13999,11 @@
       "translated": "การเชื่อมต่อ"
     },
     {
+      "id": "native.apple.fc49f9b63e160581",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
       "id": "native.apple.2c2cdafd79f8ba5b",
       "source": "Permissions",
       "translated": "สิทธิ์"
@@ -13284,11 +14324,6 @@
       "translated": "OpenClaw ขอขอบคุณพันธมิตรในชุมชนโอเพนซอร์ส"
     },
     {
-      "id": "native.apple.fc49f9b63e160581",
-      "source": "OpenClaw",
-      "translated": "OpenClaw"
-    },
-    {
       "id": "native.apple.eaa4fe72f3730f3f",
       "source": "Personal AI on your devices",
       "translated": "AI ส่วนตัวบนอุปกรณ์ของคุณ"
@@ -13337,6 +14372,16 @@
       "id": "native.apple.72d124648efb5a97",
       "source": "Location Sharing",
       "translated": "การแชร์ตำแหน่ง"
+    },
+    {
+      "id": "native.apple.29e2ea3e063e4553",
+      "source": "While Using the App",
+      "translated": "ขณะใช้แอป"
+    },
+    {
+      "id": "native.apple.b7e8bf7dae32ab59",
+      "source": "Always",
+      "translated": "ตลอดเวลา"
     },
     {
       "id": "native.apple.aadb749ebce75251",
@@ -13399,14 +14444,24 @@
       "translated": "Gateway ที่จับคู่แล้ว"
     },
     {
-      "id": "native.apple.9a6bd720a544ec04",
-      "source": "Switch gateways without pairing again.",
-      "translated": "สลับ Gateway โดยไม่ต้องจับคู่ใหม่"
+      "id": "native.apple.0c5dae9bc264aaa1",
+      "source": "Keep multiple gateways connected and switch which one is in focus.",
+      "translated": "เชื่อมต่อ Gateway หลายรายการไว้และสลับรายการที่ต้องการใช้งาน"
     },
     {
-      "id": "native.apple.5f33cfe2d21e6dc6",
-      "source": "Active Gateway",
+      "id": "native.apple.a1d2ffbfe64ef4ce",
+      "source": "Focused Gateway",
       "translated": "Gateway ที่ใช้งานอยู่"
+    },
+    {
+      "id": "native.apple.f819d2ea384fe6ed",
+      "source": "Disconnect Gateway",
+      "translated": "ยกเลิกการเชื่อมต่อ Gateway"
+    },
+    {
+      "id": "native.apple.10d41627b8261536",
+      "source": "Keep Gateway Connected",
+      "translated": "เชื่อมต่อ Gateway ไว้"
     },
     {
       "id": "native.apple.4e1792b1044ec4a9",
@@ -14174,6 +15229,151 @@
       "translated": "ClawHub ไม่ได้รายงานเวอร์ชันที่ติดตั้งได้สำหรับ Skill นี้"
     },
     {
+      "id": "native.apple.0706fbaf1d690c8c",
+      "source": "I’ll keep this conversation separate from ordinary agent chat.",
+      "translated": "ฉันจะแยกการสนทนานี้ออกจากแชทของ agent ทั่วไป"
+    },
+    {
+      "id": "native.apple.8904786f15a5e8c6",
+      "source": "I can check Gateway status, repair configuration, change models, or connect channels.",
+      "translated": "ฉันสามารถตรวจสอบสถานะ Gateway ซ่อมแซมการกำหนดค่า เปลี่ยนโมเดล หรือเชื่อมต่อช่องทางได้"
+    },
+    {
+      "id": "native.apple.c541930fceee5dd7",
+      "source": "What should we look at first?",
+      "translated": "เราควรดูอะไรก่อนดี?"
+    },
+    {
+      "id": "native.apple.5877f7ad2a71eb89",
+      "source": "Check status",
+      "translated": "ตรวจสอบสถานะ"
+    },
+    {
+      "id": "native.apple.16a0d6cf12b8dffb",
+      "source": "Review the Gateway and active services.",
+      "translated": "ตรวจสอบ Gateway และบริการที่กำลังทำงาน"
+    },
+    {
+      "id": "native.apple.0408526f52d7c028",
+      "source": "Review setup",
+      "translated": "ตรวจสอบการตั้งค่า"
+    },
+    {
+      "id": "native.apple.ba578b311be24908",
+      "source": "Inspect models, channels, and configuration.",
+      "translated": "ตรวจสอบโมเดล ช่องทาง และการกำหนดค่า"
+    },
+    {
+      "id": "native.apple.1e1de0223a6380ef",
+      "source": "Gateway is not connected",
+      "translated": "Gateway ไม่ได้เชื่อมต่อ"
+    },
+    {
+      "id": "native.apple.3c75d45619e216db",
+      "source": "<redacted secret>",
+      "translated": "<redacted secret>"
+    },
+    {
+      "id": "native.apple.8aee90eb1e1061b9",
+      "source": "The Gateway connection changed. Restart OpenClaw to reconnect.",
+      "translated": "การเชื่อมต่อ Gateway เปลี่ยนแปลงไป รีสตาร์ท OpenClaw เพื่อเชื่อมต่อใหม่"
+    },
+    {
+      "id": "native.apple.47bc765cd8464c1e",
+      "source": "OpenClaw",
+      "translated": "OpenClaw"
+    },
+    {
+      "id": "native.apple.a791a671fb60b5f7",
+      "source": "OpenClaw is working…",
+      "translated": "OpenClaw กำลังทำงาน…"
+    },
+    {
+      "id": "native.apple.bd0e286399723c42",
+      "source": "Gateway Required",
+      "translated": "ต้องใช้ Gateway"
+    },
+    {
+      "id": "native.apple.7d707323fc24e456",
+      "source": "Full Access Required",
+      "translated": "ต้องมีสิทธิ์เข้าถึงเต็มรูปแบบ"
+    },
+    {
+      "id": "native.apple.d37a3b497fc2b746",
+      "source": "Checking Gateway",
+      "translated": "กำลังตรวจสอบ Gateway"
+    },
+    {
+      "id": "native.apple.55474e9051b8aabc",
+      "source": "Gateway Update Required",
+      "translated": "ต้องอัปเดต Gateway"
+    },
+    {
+      "id": "native.apple.441f1770a487a055",
+      "source": "Connect this iPhone to a Gateway before opening the OpenClaw settings assistant.",
+      "translated": "เชื่อมต่อ iPhone เครื่องนี้กับ Gateway ก่อนเปิดผู้ช่วยตั้งค่า OpenClaw"
+    },
+    {
+      "id": "native.apple.8e0a20f39742ff98",
+      "source": "Reconnect with operator.admin access to review and change Gateway settings.",
+      "translated": "เชื่อมต่อใหม่ด้วยสิทธิ์เข้าถึง operator.admin เพื่อตรวจสอบและเปลี่ยนการตั้งค่า Gateway"
+    },
+    {
+      "id": "native.apple.9115f5d67e36fd08",
+      "source": "Checking whether this Gateway supports the OpenClaw settings assistant.",
+      "translated": "กำลังตรวจสอบว่า Gateway นี้รองรับผู้ช่วยตั้งค่า OpenClaw หรือไม่"
+    },
+    {
+      "id": "native.apple.3a7955c72e7ab728",
+      "source": "Update this Gateway to use the OpenClaw settings assistant.",
+      "translated": "อัปเดต Gateway นี้เพื่อใช้ผู้ช่วยตั้งค่า OpenClaw"
+    },
+    {
+      "id": "native.apple.fd24248c00007ba3",
+      "source": "Restart",
+      "translated": "รีสตาร์ท"
+    },
+    {
+      "id": "native.apple.7ec6b261897ee62c",
+      "source": "OpenClaw is ready to continue in your ordinary chat.",
+      "translated": "OpenClaw พร้อมที่จะดำเนินการต่อในแชทปกติของคุณ"
+    },
+    {
+      "id": "native.apple.ad820dd76c74e3f8",
+      "source": "Open Chat",
+      "translated": "เปิดแชท"
+    },
+    {
+      "id": "native.apple.1cfa800d32483cfd",
+      "source": "Enter secret",
+      "translated": "ป้อน secret"
+    },
+    {
+      "id": "native.apple.7efa99fdc895022e",
+      "source": "Enter secret…",
+      "translated": "ป้อน secret…"
+    },
+    {
+      "id": "native.apple.e40e721e131e606e",
+      "source": "Reply to OpenClaw…",
+      "translated": "ตอบกลับ OpenClaw…"
+    },
+    {
+      "id": "native.apple.5b0adbb8a28011ab",
+      "source": "Send reply",
+      "translated": "ส่งการตอบกลับ"
+    },
+    {
+      "id": "native.apple.16be123afdcc66c1",
+      "source": "Skip for now",
+      "translated": "ข้ามไปก่อน"
+    },
+    {
+      "id": "native.apple.441673bf8bef63c3",
+      "source": "Recommended",
+      "translated": "แนะนำ"
+    },
+    {
       "id": "native.apple.dc57861a3ac5a08e",
       "source": "Open Settings",
       "translated": "เปิดการตั้งค่า"
@@ -14387,6 +15587,11 @@
       "id": "native.apple.f21a8e304b607dc8",
       "source": "Copy",
       "translated": "คัดลอก"
+    },
+    {
+      "id": "native.apple.7896bc893de41eae",
+      "source": "Reconnecting…",
+      "translated": "กำลังเชื่อมต่อใหม่…"
     },
     {
       "id": "native.apple.760dbcb0180666e1",
@@ -16034,11 +17239,6 @@
       "translated": "เปิดการตั้งค่า Gateway"
     },
     {
-      "id": "native.apple.f90c1fb8880c70c0",
-      "source": "[\\(host)]",
-      "translated": "[\\(host)]"
-    },
-    {
       "id": "native.apple.3b21081fb5ce84ba",
       "source": "Not checked",
       "translated": "ยังไม่ได้ตรวจสอบ"
@@ -16497,6 +17697,11 @@
       "id": "native.apple.00887489a998411e",
       "source": "%@ permission denied",
       "translated": "สิทธิ์ %@ ถูกปฏิเสธ"
+    },
+    {
+      "id": "native.apple.944004de80cfc8b7",
+      "source": "[\\(host)]",
+      "translated": "[\\(host)]"
     },
     {
       "id": "native.apple.12a4a51d251f65c0",
@@ -18419,6 +19624,16 @@
       "translated": "แก้ไข"
     },
     {
+      "id": "native.apple.919c9d3727497989",
+      "source": "Edit automation",
+      "translated": "แก้ไขการทำงานอัตโนมัติ"
+    },
+    {
+      "id": "native.apple.3587c8ad6de422b3",
+      "source": "Command and script payloads are read-only in the macOS app",
+      "translated": "เพย์โหลดคำสั่งและสคริปต์เป็นแบบอ่านอย่างเดียวในแอป macOS"
+    },
+    {
       "id": "native.apple.04c710cf31471ebd",
       "source": "Schedule",
       "translated": "กำหนดเวลา"
@@ -18504,11 +19719,6 @@
       "translated": "คิด \\(thinking)"
     },
     {
-      "id": "native.apple.a513a17d658a1aa2",
-      "source": "\\(timeoutSeconds)s",
-      "translated": "\\(timeoutSeconds)s"
-    },
-    {
       "id": "native.apple.41cd997805bd59e3",
       "source": "announce",
       "translated": "ประกาศ"
@@ -18517,6 +19727,56 @@
       "id": "native.apple.6e5597dd202288ee",
       "source": "no delivery",
       "translated": "ไม่มีการส่ง"
+    },
+    {
+      "id": "native.apple.c27e3019dfe8e877",
+      "source": "command · read-only",
+      "translated": "คำสั่ง · อ่านอย่างเดียว"
+    },
+    {
+      "id": "native.apple.5e02b5f297de21b0",
+      "source": "script · read-only",
+      "translated": "สคริปต์ · อ่านอย่างเดียว"
+    },
+    {
+      "id": "native.apple.a513a17d658a1aa2",
+      "source": "\\(timeoutSeconds)s",
+      "translated": "\\(timeoutSeconds)s"
+    },
+    {
+      "id": "native.apple.b42d8e457b71b478",
+      "source": "\\(toolBudget) tools",
+      "translated": "เครื่องมือ \\(toolBudget) รายการ"
+    },
+    {
+      "id": "native.apple.905508b749e99f2a",
+      "source": "OpenClaw Not Configured",
+      "translated": "ยังไม่ได้กำหนดค่า OpenClaw"
+    },
+    {
+      "id": "native.apple.293bf9a6e721036d",
+      "source": "Remote OpenClaw Active",
+      "translated": "OpenClaw ระยะไกลทำงานอยู่"
+    },
+    {
+      "id": "native.apple.a7b0d4e6bf5796c0",
+      "source": "OpenClaw Active",
+      "translated": "OpenClaw ทำงานอยู่"
+    },
+    {
+      "id": "native.apple.b36a54d8fef80333",
+      "source": "OpenClaw Not Configured — \\(primaryName)",
+      "translated": "ยังไม่ได้กำหนดค่า OpenClaw — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.adee4bfd71731d2d",
+      "source": "Remote OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw ระยะไกลทำงานอยู่ — \\(primaryName)"
+    },
+    {
+      "id": "native.apple.2be6d3dd1a0d2699",
+      "source": "OpenClaw Active — \\(primaryName)",
+      "translated": "OpenClaw ทำงานอยู่ — \\(primaryName)"
     },
     {
       "id": "native.apple.5eea57b14cab3876",
@@ -18542,6 +19802,26 @@
       "id": "native.apple.3ed077c15e06c140",
       "source": "Check Settings → Connection or use Debug → Reset Remote Tunnel, then try again.",
       "translated": "ตรวจสอบที่ Settings → Connection หรือใช้ Debug → Reset Remote Tunnel แล้วลองอีกครั้ง"
+    },
+    {
+      "id": "native.apple.224e2db353f3a459",
+      "source": "Could Not Switch Gateway",
+      "translated": "ไม่สามารถสลับ Gateway ได้"
+    },
+    {
+      "id": "native.apple.213d824f2205d071",
+      "source": "Could Not Open Gateway Window",
+      "translated": "ไม่สามารถเปิดหน้าต่าง Gateway ได้"
+    },
+    {
+      "id": "native.apple.11ffe8832b728acd",
+      "source": "\\(base)-\\(UUID().uuidString)",
+      "translated": "\\(base)-\\(UUID().uuidString)"
+    },
+    {
+      "id": "native.apple.f821306f90ed7692",
+      "source": "Could Not Set Primary Gateway",
+      "translated": "ไม่สามารถตั้ง Gateway หลักได้"
     },
     {
       "id": "native.apple.226341f8c8b5d459",
@@ -19092,6 +20372,121 @@
       "id": "native.apple.4bd8ea604f3c21fa",
       "source": "unknown error",
       "translated": "unknown error"
+    },
+    {
+      "id": "native.apple.e0b70da297ef8a61",
+      "source": "Remove Gateway?",
+      "translated": "นำ Gateway ออกหรือไม่?"
+    },
+    {
+      "id": "native.apple.983c58888b89f27f",
+      "source": "Remove",
+      "translated": "นำออก"
+    },
+    {
+      "id": "native.apple.7b53872a9637b308",
+      "source": "\\(profile.name) and its saved credentials will be removed. Its open windows will close.",
+      "translated": "\\(profile.name) และข้อมูลประจำตัวที่บันทึกไว้จะถูกนำออก หน้าต่างที่เปิดอยู่จะปิดลง"
+    },
+    {
+      "id": "native.apple.a4d437ba492adc8b",
+      "source": "Gateway Error",
+      "translated": "ข้อผิดพลาดของ Gateway"
+    },
+    {
+      "id": "native.apple.33c3c61e0fb62195",
+      "source": "OK",
+      "translated": "ตกลง"
+    },
+    {
+      "id": "native.apple.bfd13b43b2fd425c",
+      "source": "Gateways",
+      "translated": "Gateway"
+    },
+    {
+      "id": "native.apple.1ff05976802ac6c9",
+      "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
+      "translated": "บันทึกการเชื่อมต่อ Gateway สำหรับหน้าต่างแชท Gateway หลักในส่วนการเชื่อมต่อจะยังคงจัดการการผสานการทำงานกับ Mac และโหมดพูดคุย"
+    },
+    {
+      "id": "native.apple.7fdfccfafd3ff368",
+      "source": "Loading Gateways…",
+      "translated": "กำลังโหลด Gateway…"
+    },
+    {
+      "id": "native.apple.593c7f1b06caf821",
+      "source": "No Gateways saved",
+      "translated": "ไม่มี Gateway ที่บันทึกไว้"
+    },
+    {
+      "id": "native.apple.9053ce4456cc06f0",
+      "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
+      "translated": "เพิ่ม Gateway ที่นี่ จากนั้นใช้ ไฟล์ → หน้าต่าง Gateway ใหม่… (⌘N) เมื่อต้องการเปิดอีกหน้าต่างสำหรับ Gateway นั้น"
+    },
+    {
+      "id": "native.apple.5b3b79e66c434e33",
+      "source": "Saved Gateways",
+      "translated": "Gateway ที่บันทึกไว้"
+    },
+    {
+      "id": "native.apple.c49f6831863c8dae",
+      "source": "Open Window",
+      "translated": "เปิดหน้าต่าง"
+    },
+    {
+      "id": "native.apple.3c90290e04c6dc5f",
+      "source": "Remove \\(profile.name)",
+      "translated": "ลบ \\(profile.name)"
+    },
+    {
+      "id": "native.apple.98935e9c19760b62",
+      "source": "Add Gateway",
+      "translated": "เพิ่ม Gateway"
+    },
+    {
+      "id": "native.apple.fb5076533e3003a3",
+      "source": "Credentials are stored with this profile in your Mac Keychain.",
+      "translated": "ข้อมูลประจำตัวจะถูกจัดเก็บไว้กับโปรไฟล์นี้ในพวงกุญแจ Mac ของคุณ"
+    },
+    {
+      "id": "native.apple.a7ee8d846fd61525",
+      "source": "Name",
+      "translated": "ชื่อ"
+    },
+    {
+      "id": "native.apple.c65e3cdc3d2c9b36",
+      "source": "Studio",
+      "translated": "สตูดิโอ"
+    },
+    {
+      "id": "native.apple.ce48afbb966a6933",
+      "source": "Gateway URL",
+      "translated": "URL ของ Gateway"
+    },
+    {
+      "id": "native.apple.aeb21e4c3192125f",
+      "source": "wss://gateway.example.com",
+      "translated": "wss://gateway.example.com"
+    },
+    {
+      "id": "native.apple.f585ed08c1f6a65e",
+      "source": "Token",
+      "translated": "โทเค็น"
+    },
+    {
+      "id": "native.apple.9a090d8a5c8fb7cb",
+      "source": "Password",
+      "translated": "รหัสผ่าน"
+    },
+    {
+      "id": "native.apple.f3448df352fdd5d4",
+      "source": "Optional",
+      "translated": "ไม่บังคับ"
+    },
+    {
+      "id": "native.apple.1f1c9084eb6a2982",
+      "source": "Cancel",
+      "translated": "ยกเลิก"
     },
     {
       "id": "native.apple.7b5eaba753440639",
@@ -19739,6 +21134,11 @@
       "translated": "ร้ายแรง"
     },
     {
+      "id": "native.apple.130664b1dd61cbbf",
+      "source": "New Gateway Window…",
+      "translated": "หน้าต่าง Gateway ใหม่…"
+    },
+    {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
       "translated": "เธรดใหม่"
@@ -19894,21 +21294,6 @@
       "translated": "ออก"
     },
     {
-      "id": "native.apple.5021ed413c045620",
-      "source": "OpenClaw Not Configured",
-      "translated": "OpenClaw ยังไม่ได้กำหนดค่า"
-    },
-    {
-      "id": "native.apple.4d10ab5feb4add3f",
-      "source": "Remote OpenClaw Active",
-      "translated": "OpenClaw ระยะไกลกำลังทำงาน"
-    },
-    {
-      "id": "native.apple.b49dea5c1fdb3dd3",
-      "source": "OpenClaw Active",
-      "translated": "OpenClaw กำลังทำงาน"
-    },
-    {
       "id": "native.apple.1df24a30d7963640",
       "source": "Debug",
       "translated": "ดีบัก"
@@ -20044,6 +21429,31 @@
       "translated": "ตัดการเชื่อมต่อแล้ว (ใช้ค่าเริ่มต้นของระบบ)"
     },
     {
+      "id": "native.apple.ceb653c5fa582beb",
+      "source": "Gateways",
+      "translated": "Gateways"
+    },
+    {
+      "id": "native.apple.cce28f94dfe25e14",
+      "source": "Set \\(gateway.name) as Primary…",
+      "translated": "ตั้ง \\(gateway.name) เป็นหลัก…"
+    },
+    {
+      "id": "native.apple.86861746f8e1c38c",
+      "source": "\\(name), healthy",
+      "translated": "\\(name), สมบูรณ์ดี"
+    },
+    {
+      "id": "native.apple.184a5dddee2c5794",
+      "source": "\\(name), health error",
+      "translated": "\\(name), ข้อผิดพลาดด้านสถานะ"
+    },
+    {
+      "id": "native.apple.d34b1a73300c51f2",
+      "source": "\\(name), health unknown",
+      "translated": "\\(name), สถานะไม่ทราบ"
+    },
+    {
       "id": "native.apple.5a99e1ae62fe0ab9",
       "source": "Context",
       "translated": "บริบท"
@@ -20152,6 +21562,16 @@
       "id": "native.apple.dca2e9174fec56ce",
       "source": "Next",
       "translated": "ถัดไป"
+    },
+    {
+      "id": "native.apple.3db546546fbaf38e",
+      "source": "OpenClaw is preparing a local model.",
+      "translated": "OpenClaw กำลังเตรียมโมเดลในเครื่อง"
+    },
+    {
+      "id": "native.apple.c5992a23c991f948",
+      "source": "OpenClaw is completing provider sign-in.",
+      "translated": "OpenClaw กำลังดำเนินการลงชื่อเข้าใช้ผู้ให้บริการให้เสร็จสมบูรณ์"
     },
     {
       "id": "native.apple.0f3c1c6f0672bed7",
@@ -20289,6 +21709,21 @@
       "translated": "ตรวจสอบอีกครั้ง"
     },
     {
+      "id": "native.apple.82148c7c60e4fb74",
+      "source": "Set up a local model",
+      "translated": "ตั้งค่าโมเดลในเครื่อง"
+    },
+    {
+      "id": "native.apple.506a932536c642c2",
+      "source": "Download or prepare a local model on this Gateway.",
+      "translated": "ดาวน์โหลดหรือเตรียมโมเดลในเครื่องบน Gateway นี้"
+    },
+    {
+      "id": "native.apple.d31411a9f3c68c33",
+      "source": "Set up / Download model",
+      "translated": "ตั้งค่า / ดาวน์โหลดโมเดล"
+    },
+    {
       "id": "native.apple.7fc409b6aaa6d3b9",
       "source": "Sign in with a provider",
       "translated": "ลงชื่อเข้าใช้ด้วยผู้ให้บริการ"
@@ -20319,6 +21754,11 @@
       "translated": "ลงชื่อเข้าใช้"
     },
     {
+      "id": "native.apple.b62dfd708d5cfb14",
+      "source": "The model is downloaded and prepared on this Gateway.",
+      "translated": "ดาวน์โหลดและเตรียมโมเดลบน Gateway นี้แล้ว"
+    },
+    {
       "id": "native.apple.869fe436119bb8a6",
       "source": "Credentials stay on this Gateway and are saved only after the live test succeeds.",
       "translated": "ข้อมูลรับรองจะอยู่บน Gateway นี้และจะถูกบันทึกก็ต่อเมื่อการทดสอบแบบสดสำเร็จเท่านั้น"
@@ -20329,9 +21769,19 @@
       "translated": "เปิดหน้าลงชื่อเข้าใช้…"
     },
     {
+      "id": "native.apple.91cd595c858a6ea7",
+      "source": "Starting local model setup…",
+      "translated": "กำลังเริ่มการตั้งค่าโมเดลในเครื่อง…"
+    },
+    {
       "id": "native.apple.bb3352787887c424",
       "source": "Starting secure sign-in…",
       "translated": "กำลังเริ่มการลงชื่อเข้าใช้แบบปลอดภัย…"
+    },
+    {
+      "id": "native.apple.ba9a46f1e6c4d477",
+      "source": "Model setup didn’t complete",
+      "translated": "การตั้งค่าโมเดลไม่เสร็จสมบูรณ์"
     },
     {
       "id": "native.apple.d7519516740bfc93",
@@ -20754,9 +22204,49 @@
       "translated": "ขั้นสูง…"
     },
     {
-      "id": "native.apple.22947c17e44f76af",
-      "source": "Hide Advanced",
-      "translated": "ซ่อนขั้นสูง"
+      "id": "native.apple.2e11404d7539301e",
+      "source": "Remote connection",
+      "translated": "การเชื่อมต่อระยะไกล"
+    },
+    {
+      "id": "native.apple.f6332654911cb2e2",
+      "source": "Verify OpenClaw can reach this gateway.",
+      "translated": "ตรวจสอบว่า OpenClaw สามารถเข้าถึง gateway นี้ได้"
+    },
+    {
+      "id": "native.apple.6e5d3a3c3022e8c8",
+      "source": "Check connection",
+      "translated": "ตรวจสอบการเชื่อมต่อ"
+    },
+    {
+      "id": "native.apple.23254b5b9707c581",
+      "source": "Advanced options",
+      "translated": "ตัวเลือกขั้นสูง"
+    },
+    {
+      "id": "native.apple.dfc5606a4813ecfc",
+      "source": "Hide advanced options",
+      "translated": "ซ่อนตัวเลือกขั้นสูง"
+    },
+    {
+      "id": "native.apple.1907a86a6cc2165b",
+      "source": "Gateway token",
+      "translated": "โทเค็น Gateway"
+    },
+    {
+      "id": "native.apple.14a6b8d735579fae",
+      "source": "Paste the token from your gateway",
+      "translated": "วางโทเค็นจาก gateway ของคุณ"
+    },
+    {
+      "id": "native.apple.143603a153dd0100",
+      "source": "Only needed when the gateway requires token auth.",
+      "translated": "จำเป็นเฉพาะเมื่อ gateway ต้องการการยืนยันตัวตนด้วยโทเค็นเท่านั้น"
+    },
+    {
+      "id": "native.apple.2a50c3ee94dde35d",
+      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
+      "translated": "ค่า gateway.remote.token ปัจจุบันไม่ใช่ข้อความธรรมดา OpenClaw for macOS ไม่สามารถใช้ค่านี้โดยตรงได้ โปรดป้อนโทเค็นแบบ plaintext ที่นี่เพื่อแทนที่"
     },
     {
       "id": "native.apple.7881cec64b177026",
@@ -20827,41 +22317,6 @@
       "id": "native.apple.ab88df30f426b434",
       "source": "Tip: keep Tailscale enabled so your gateway stays reachable.",
       "translated": "เคล็ดลับ: เปิดใช้งาน Tailscale ไว้เสมอเพื่อให้ gateway ของคุณเข้าถึงได้"
-    },
-    {
-      "id": "native.apple.2e11404d7539301e",
-      "source": "Remote connection",
-      "translated": "การเชื่อมต่อระยะไกล"
-    },
-    {
-      "id": "native.apple.bee162bb681696a3",
-      "source": "Checks the real remote websocket and auth handshake.",
-      "translated": "ตรวจสอบ websocket ระยะไกลจริงและการจับมือยืนยันตัวตน"
-    },
-    {
-      "id": "native.apple.6e5d3a3c3022e8c8",
-      "source": "Check connection",
-      "translated": "ตรวจสอบการเชื่อมต่อ"
-    },
-    {
-      "id": "native.apple.1907a86a6cc2165b",
-      "source": "Gateway token",
-      "translated": "โทเค็น Gateway"
-    },
-    {
-      "id": "native.apple.014d9fcbd97f6c48",
-      "source": "remote gateway auth token (gateway.remote.token)",
-      "translated": "โทเค็นยืนยันตัวตน remote gateway (gateway.remote.token)"
-    },
-    {
-      "id": "native.apple.cc14b91d20cc33ba",
-      "source": "Used when the remote gateway requires token auth.",
-      "translated": "ใช้เมื่อ Gateway ระยะไกลต้องมีการยืนยันตัวตนด้วยโทเค็น"
-    },
-    {
-      "id": "native.apple.2a50c3ee94dde35d",
-      "source": "The current gateway.remote.token value is not plain text. OpenClaw for macOS cannot use it directly; enter a plaintext token here to replace it.",
-      "translated": "ค่า gateway.remote.token ปัจจุบันไม่ใช่ข้อความธรรมดา OpenClaw for macOS ไม่สามารถใช้ค่านี้โดยตรงได้ โปรดป้อนโทเค็นแบบ plaintext ที่นี่เพื่อแทนที่"
     },
     {
       "id": "native.apple.ef011af3c0e22127",
@@ -21169,6 +22624,21 @@
       "translated": "ตำแหน่งที่ตั้ง"
     },
     {
+      "id": "native.apple.c105a651c5f972b6",
+      "source": "Privacy",
+      "translated": "ความเป็นส่วนตัว"
+    },
+    {
+      "id": "native.apple.b98013fb799d4f3c",
+      "source": "Active computer detection",
+      "translated": "การตรวจจับคอมพิวเตอร์ที่ใช้งานอยู่"
+    },
+    {
+      "id": "native.apple.870e09824984a9b2",
+      "source": "Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.",
+      "translated": "แชร์ระยะเวลาที่ Mac เครื่องนี้ไม่ได้ใช้งาน เพื่อให้ OpenClaw ระบุ Mac ที่คุณใช้ล่าสุดและกำหนดเส้นทางการแจ้งเตือนโหนดได้ ไม่มีการส่งคีย์ ตำแหน่งตัวชี้ ชื่อแอป หรือชื่อหน้าต่าง ต้องใช้การช่วยการเข้าถึง"
+    },
+    {
       "id": "native.apple.89a4f5934df8268a",
       "source": "Setup",
       "translated": "ตั้งค่า"
@@ -21264,6 +22734,11 @@
       "translated": "รีเฟรช"
     },
     {
+      "id": "native.apple.326e187a6656d8d9",
+      "source": "Check",
+      "translated": "ตรวจสอบ"
+    },
+    {
       "id": "native.apple.7b62187659c9925f",
       "source": "Grant",
       "translated": "อนุญาต"
@@ -21284,9 +22759,14 @@
       "translated": "ขอสิทธิ์เข้าถึง"
     },
     {
-      "id": "native.apple.4a4c10ca63e99590",
-      "source": "Control other apps (e.g. Terminal) for automation actions",
-      "translated": "ควบคุมแอปอื่น (เช่น Terminal) สำหรับการทำงานอัตโนมัติ"
+      "id": "native.apple.5a5689d96828c424",
+      "source": "Status unavailable",
+      "translated": "สถานะไม่พร้อมใช้งาน"
+    },
+    {
+      "id": "native.apple.2d263648f3916394",
+      "source": "Control Terminal for automation actions; other apps request access separately",
+      "translated": "ควบคุม Terminal สำหรับการดำเนินการอัตโนมัติ แอปอื่นๆ ขอสิทธิ์การเข้าถึงแยกต่างหาก"
     },
     {
       "id": "native.apple.5f7eb4234f63c4ad",
@@ -21304,14 +22784,14 @@
       "translated": "จับภาพหน้าจอเพื่อใช้เป็นบริบทหรือภาพหน้าจอ"
     },
     {
-      "id": "native.apple.b004145c37a470f8",
-      "source": "Allow Voice Wake and audio capture",
-      "translated": "อนุญาต Voice Wake และการบันทึกเสียง"
+      "id": "native.apple.45119f87d3069501",
+      "source": "Allow Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation",
+      "translated": "อนุญาต Voice Wake, push-to-talk, Talk Mode และการป้อนตามคำบอกของ Quick Chat"
     },
     {
-      "id": "native.apple.7c8b825829b3924d",
-      "source": "Transcribe Voice Wake trigger phrases on-device",
-      "translated": "ถอดเสียงวลีทริกเกอร์ Voice Wake บนอุปกรณ์"
+      "id": "native.apple.33f1e220cc7d69e1",
+      "source": "Use Apple Speech; passive Voice Wake stays on-device",
+      "translated": "ใช้ Apple Speech; Voice Wake แบบพาสซีฟจะทำงานบนอุปกรณ์"
     },
     {
       "id": "native.apple.37880f3b7ae6c259",
@@ -21944,14 +23424,14 @@
       "translated": "OpenClaw ใช้เครือข่ายภายในเพื่อเชื่อมต่อกับ gateway OpenClaw ระยะไกลของคุณผ่าน LAN, Tailnet หรือ SSH"
     },
     {
-      "id": "native.apple.5db9a976fd1c7fcb",
-      "source": "OpenClaw needs the mic for Voice Wake tests and agent audio capture.",
-      "translated": "OpenClaw ต้องการไมโครโฟนสำหรับการทดสอบ Voice Wake และการบันทึกเสียงของเอเจนต์"
+      "id": "native.apple.0fdd4a93f90c6f95",
+      "source": "OpenClaw uses the microphone for Voice Wake, push-to-talk, Talk Mode, Quick Chat dictation, and agent audio capture.",
+      "translated": "OpenClaw ใช้ไมโครโฟนสำหรับ Voice Wake, push-to-talk, Talk Mode, การป้อนตามคำบอกของ Quick Chat และการบันทึกเสียงของเอเจนต์"
     },
     {
-      "id": "native.apple.b7aba524ef867e7f",
-      "source": "OpenClaw uses speech recognition to detect your Voice Wake trigger phrase.",
-      "translated": "OpenClaw ใช้การรู้จำเสียงพูดเพื่อตรวจจับวลีทริกเกอร์ Voice Wake ของคุณ"
+      "id": "native.apple.44701896858c9029",
+      "source": "OpenClaw uses Apple Speech for Voice Wake, push-to-talk, Talk Mode, and Quick Chat dictation. Voice Wake stays on-device.",
+      "translated": "OpenClaw ใช้ Apple Speech สำหรับ Voice Wake, push-to-talk, Talk Mode และการป้อนตามคำบอกของ Quick Chat โดย Voice Wake จะทำงานบนอุปกรณ์"
     },
     {
       "id": "native.apple.2d5411b5cc54a93e",
@@ -22087,6 +23567,11 @@
       "id": "native.apple.2af062df8d3934a4",
       "source": "Connection",
       "translated": "การเชื่อมต่อ"
+    },
+    {
+      "id": "native.apple.1d96f676261a5a05",
+      "source": "Gateways",
+      "translated": "Gateway"
     },
     {
       "id": "native.apple.8c2b0262f3a5ebea",
@@ -22604,34 +24089,34 @@
       "translated": "เอเจนต์สามารถเรียกใช้คำสั่งเชลล์บน Mac เครื่องนี้ได้โดยไม่ต้องตรวจสอบ allowlist"
     },
     {
-      "id": "native.apple.c8e6fc08f04b8d9f",
+      "id": "native.apple.5184684dc4a62edb",
       "source": "Block agent shell commands on this Mac.",
       "translated": "บล็อกคำสั่งเชลล์ของเอเจนต์บน Mac เครื่องนี้"
     },
     {
-      "id": "native.apple.e9371d48f629b039",
+      "id": "native.apple.bf1e546102919d3f",
       "source": "Allow trusted command patterns and handle misses with prompts.",
-      "translated": "อนุญาตรูปแบบคำสั่งที่เชื่อถือได้ และจัดการรายการที่ไม่ตรงด้วยการแจ้งถาม"
+      "translated": "อนุญาตรูปแบบคำสั่งที่เชื่อถือได้ และแสดงข้อความแจ้งเมื่อไม่ตรงกับรูปแบบ"
     },
     {
-      "id": "native.apple.935c981496e8689b",
+      "id": "native.apple.84214f3fae821163",
       "source": "Allow shell commands without checking the allowlist.",
-      "translated": "อนุญาตคำสั่งเชลล์โดยไม่ตรวจสอบ allowlist"
+      "translated": "อนุญาตคำสั่งเชลล์โดยไม่ตรวจสอบรายการที่อนุญาต"
     },
     {
-      "id": "native.apple.c494c0bb6a4182a2",
+      "id": "native.apple.d7404aa083ad6d58",
       "source": "Never show approval prompts.",
-      "translated": "ไม่ต้องแสดงการแจ้งขออนุมัติ"
+      "translated": "ไม่ต้องแสดงข้อความแจ้งขออนุมัติ"
     },
     {
-      "id": "native.apple.c04df969fed1b2ca",
+      "id": "native.apple.093c3c01af530076",
       "source": "Ask only when a command is not trusted yet.",
-      "translated": "ถามเฉพาะเมื่อคำสั่งยังไม่น่าเชื่อถือ"
+      "translated": "ถามเฉพาะเมื่อคำสั่งยังไม่ได้รับความเชื่อถือ"
     },
     {
-      "id": "native.apple.19950d3e6e99ee47",
+      "id": "native.apple.a5161a377e784404",
       "source": "Ask before every shell command.",
-      "translated": "ถามก่อนทุกคำสั่งเชลล์"
+      "translated": "ถามก่อนเรียกใช้คำสั่งเชลล์ทุกครั้ง"
     },
     {
       "id": "native.apple.b18215308bc4e7cf",
@@ -22809,9 +24294,14 @@
       "translated": "เปิดใช้งาน Voice Wake"
     },
     {
-      "id": "native.apple.e992b45cdbccdd10",
-      "source": "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
-      "translated": "ฟังวลีปลุกก่อนเรียกใช้คำสั่งเสียง การรู้จำทำงานบนอุปกรณ์ทั้งหมด"
+      "id": "native.apple.e2811fb1981c52f9",
+      "source": "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac.",
+      "translated": "ฟังวลีปลุกก่อนที่จะเรียกใช้คำสั่งเสียง การจดจำวลีปลุกจะทำงานบน Mac เครื่องนี้"
+    },
+    {
+      "id": "native.apple.8e55ed92eb632efa",
+      "source": "On-device recognition is unavailable for the selected language on this Mac.",
+      "translated": "การจดจำบนอุปกรณ์ไม่พร้อมใช้งานสำหรับภาษาที่เลือกบน Mac เครื่องนี้"
     },
     {
       "id": "native.apple.475eb587a8accd92",
@@ -22974,6 +24464,11 @@
       "translated": "\\(self.friendlyName(for: current)) (ระบบ)"
     },
     {
+      "id": "native.apple.2565d77dbe6ce76b",
+      "source": "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.",
+      "translated": "Voice Wake ต้องใช้การจดจำบนอุปกรณ์สำหรับภาษาที่เลือก Push-to-talk และ Talk Mode ยังคงใช้งานได้"
+    },
+    {
       "id": "native.apple.79db41c7b941a50f",
       "source": "Additional languages",
       "translated": "ภาษาเพิ่มเติม"
@@ -23004,14 +24499,19 @@
       "translated": "ลบคำทริกเกอร์"
     },
     {
-      "id": "native.apple.65b2687f8f16f9b2",
-      "source": "Language \\(self.index + 2)",
-      "translated": "ภาษา \\(self.index + 2)"
+      "id": "native.apple.dd0278dbfd438cdb",
+      "source": "Language %lld",
+      "translated": "ภาษา %lld"
     },
     {
       "id": "native.apple.a767de022c4a06db",
       "source": "Fallback recognition language.",
       "translated": "ภาษาสำรองสำหรับการรู้จำ"
+    },
+    {
+      "id": "native.apple.65b2687f8f16f9b2",
+      "source": "Language \\(self.index + 2)",
+      "translated": "ภาษา \\(self.index + 2)"
     },
     {
       "id": "native.apple.cfab77826c9ac1d1",
@@ -23067,6 +24567,16 @@
       "id": "native.apple.26960f2b7ebad5f9",
       "source": "Voice wake detected!",
       "translated": "ตรวจพบการปลุกด้วยเสียงแล้ว!"
+    },
+    {
+      "id": "native.apple.7dd4d4d2fc36ffce",
+      "source": "Could Not Open Gateway Window",
+      "translated": "ไม่สามารถเปิดหน้าต่าง Gateway ได้"
+    },
+    {
+      "id": "native.apple.93ad62dac611bdcd",
+      "source": "Talk mode uses the primary Gateway window",
+      "translated": "โหมดสนทนาใช้หน้าต่าง Gateway หลัก"
     },
     {
       "id": "native.apple.282d11786f2f4c4b",
@@ -23314,6 +24824,21 @@
       "translated": "เธรด"
     },
     {
+      "id": "native.apple.02f0965fdca227b2",
+      "source": "Branches",
+      "translated": "บรานช์"
+    },
+    {
+      "id": "native.apple.82ca9989fa432b38",
+      "source": "Untitled branch",
+      "translated": "บรานช์ไม่มีชื่อ"
+    },
+    {
+      "id": "native.apple.8d0ae98818aa39e8",
+      "source": "^[\\(count) message](inflect: true)",
+      "translated": "^[ข้อความ \\(count) รายการ](inflect: true)"
+    },
+    {
       "id": "native.apple.284b2b94c272591d",
       "source": "Add Image",
       "translated": "เพิ่มรูปภาพ"
@@ -23542,6 +25067,26 @@
       "id": "native.apple.fccc8a9ba3da1426",
       "source": "Agent avatar",
       "translated": "อวตารของเอเจนต์"
+    },
+    {
+      "id": "native.apple.9d4cffc5588d8730",
+      "source": "Show less",
+      "translated": "แสดงน้อยลง"
+    },
+    {
+      "id": "native.apple.b0b4af1981ac0818",
+      "source": "Show more",
+      "translated": "แสดงเพิ่มเติม"
+    },
+    {
+      "id": "native.apple.29122616e14321b1",
+      "source": "Collapsed",
+      "translated": "ยุบแล้ว"
+    },
+    {
+      "id": "native.apple.aa75dc50a6ff606c",
+      "source": "Expanded",
+      "translated": "ขยายแล้ว"
     },
     {
       "id": "native.apple.6426e369511b043c",
@@ -24289,14 +25834,14 @@
       "translated": "ยุบแล้ว"
     },
     {
-      "id": "native.apple.c4e808a2ec8d49f5",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
+      "id": "native.apple.c83fc1ba73fd0776",
+      "source": "'queued', 'sending', 'awaiting_confirmation', 'failed'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation', 'failed'"
     },
     {
-      "id": "native.apple.4e7e29be3f05b828",
-      "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'",
-      "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, '', payload, updated_at\nFROM cached_transcripts_pre_v3\nWHERE lower(trim(session_key)) GLOB 'agent:*:*'"
+      "id": "native.apple.ee4ea4d701fa5d07",
+      "source": "'queued', 'sending', 'awaiting_confirmation'",
+      "translated": "'queued', 'sending', 'awaiting_confirmation'"
     },
     {
       "id": "native.apple.e743b1178c2fdec8",
@@ -24679,6 +26224,116 @@
       "translated": "ย่อเธรด"
     },
     {
+      "id": "native.apple.fb7ba381b79044e1",
+      "source": "Shelling",
+      "translated": "กำลังสร้างเปลือก"
+    },
+    {
+      "id": "native.apple.27d2c232c46158f8",
+      "source": "Scuttling",
+      "translated": "กำลังไต่"
+    },
+    {
+      "id": "native.apple.146d26a76f1f661d",
+      "source": "Clawing",
+      "translated": "กำลังใช้ก้าม"
+    },
+    {
+      "id": "native.apple.9e590066459c45cf",
+      "source": "Pinching",
+      "translated": "กำลังหนีบ"
+    },
+    {
+      "id": "native.apple.98bce06ad906ac35",
+      "source": "Molting",
+      "translated": "กำลังลอกคราบ"
+    },
+    {
+      "id": "native.apple.0a1991f9ac99e5b2",
+      "source": "Bubbling",
+      "translated": "กำลังผุดฟอง"
+    },
+    {
+      "id": "native.apple.693de3befb7eaf8a",
+      "source": "Tiding",
+      "translated": "กำลังขึ้นลงตามน้ำ"
+    },
+    {
+      "id": "native.apple.3f77525b4b5bff6e",
+      "source": "Reefing",
+      "translated": "กำลังเกาะแนวปะการัง"
+    },
+    {
+      "id": "native.apple.e8726dfe7fa3a577",
+      "source": "Cracking",
+      "translated": "กำลังแตกร้าว"
+    },
+    {
+      "id": "native.apple.c861cd13f466af46",
+      "source": "Sifting",
+      "translated": "กำลังคัดกรอง"
+    },
+    {
+      "id": "native.apple.c58b34716364e0ef",
+      "source": "Brining",
+      "translated": "กำลังแช่น้ำเกลือ"
+    },
+    {
+      "id": "native.apple.f98d6769fad9ef63",
+      "source": "Nautiling",
+      "translated": "กำลังล่องทะเลแบบนอติลุส"
+    },
+    {
+      "id": "native.apple.40dbb800afe19da8",
+      "source": "Krilling",
+      "translated": "กำลังจับเคย"
+    },
+    {
+      "id": "native.apple.e92c5bb2e5342ce6",
+      "source": "Barnacling",
+      "translated": "กำลังเกาะเพรียง"
+    },
+    {
+      "id": "native.apple.2f27f7676f6a5406",
+      "source": "Lobstering",
+      "translated": "กำลังจับกุ้งมังกร"
+    },
+    {
+      "id": "native.apple.089a07837ab1cce7",
+      "source": "Tidepooling",
+      "translated": "กำลังสำรวจแอ่งน้ำทะเล"
+    },
+    {
+      "id": "native.apple.a17076dab69dac74",
+      "source": "Pearling",
+      "translated": "กำลังงมหาไข่มุก"
+    },
+    {
+      "id": "native.apple.5715a7bb435c57e8",
+      "source": "Snapping",
+      "translated": "กำลังงับ"
+    },
+    {
+      "id": "native.apple.6fbcf8a03da3315a",
+      "source": "Surfacing",
+      "translated": "กำลังโผล่ขึ้นสู่ผิวน้ำ"
+    },
+    {
+      "id": "native.apple.578503dfeef25502",
+      "source": "Done in %@",
+      "translated": "เสร็จสิ้นใน %@"
+    },
+    {
+      "id": "native.apple.4fb1ae0d89560d73",
+      "source": "1 token",
+      "translated": "1 โทเค็น"
+    },
+    {
+      "id": "native.apple.3f968fd475a91bb1",
+      "source": "%@ tokens",
+      "translated": "%@ โทเค็น"
+    },
+    {
       "id": "native.apple.fa10740f9e272e83",
       "source": "Voice note",
       "translated": "ข้อความเสียง"
@@ -24742,6 +26397,51 @@
       "id": "native.apple.f74d150ce05205dd",
       "source": "z",
       "translated": "z"
+    },
+    {
+      "id": "native.apple.d093ee119bfd5ab4",
+      "source": "Running",
+      "translated": "กำลังทำงาน"
+    },
+    {
+      "id": "native.apple.b8a4e570b04c8a5f",
+      "source": "Queued",
+      "translated": "อยู่ในคิว"
+    },
+    {
+      "id": "native.apple.caf64b5a59885ec0",
+      "source": "Failed",
+      "translated": "ล้มเหลว"
+    },
+    {
+      "id": "native.apple.4819936ea780db96",
+      "source": "Done",
+      "translated": "เสร็จสิ้น"
+    },
+    {
+      "id": "native.apple.1f8ce4f7dc387a62",
+      "source": "Swarm",
+      "translated": "Swarm"
+    },
+    {
+      "id": "native.apple.e8b9db6108d47853",
+      "source": "%1$lld Running · %2$lld Done · %3$lld Failed",
+      "translated": "%1$lld กำลังทำงาน · %2$lld เสร็จสิ้น · %3$lld ล้มเหลว"
+    },
+    {
+      "id": "native.apple.966f8d2b0b475f7c",
+      "source": "Unphased",
+      "translated": "Unphased"
+    },
+    {
+      "id": "native.apple.3b5805940eb33a47",
+      "source": "1 more worker",
+      "translated": "เวิร์กเกอร์อีก 1 รายการ"
+    },
+    {
+      "id": "native.apple.4278155768134e27",
+      "source": "%1$lld more workers",
+      "translated": "เวิร์กเกอร์อีก %1$lld รายการ"
     },
     {
       "id": "native.apple.71e0219d1501de06",
@@ -24827,6 +26527,36 @@
       "id": "native.apple.b737f84578f558eb",
       "source": "This device does not trust the TLS certificate presented by %@.",
       "translated": "อุปกรณ์นี้ไม่เชื่อถือใบรับรอง TLS ที่ %@ แสดง"
+    },
+    {
+      "id": "native.apple.7bd4905348ab44b0",
+      "source": "Gateway certificate unavailable",
+      "translated": "ไม่มีใบรับรอง Gateway"
+    },
+    {
+      "id": "native.apple.7493b8bf5dcaa05f",
+      "source": "OpenClaw could not securely save the TLS certificate pin for %@.",
+      "translated": "OpenClaw ไม่สามารถบันทึก TLS certificate pin สำหรับ %@ ได้อย่างปลอดภัย"
+    },
+    {
+      "id": "native.apple.9a4c4bd6b41420ae",
+      "source": "Retry",
+      "translated": "ลองใหม่"
+    },
+    {
+      "id": "native.apple.957ce87193e74f59",
+      "source": "Gateway certificate is not trusted",
+      "translated": "ใบรับรอง Gateway ไม่น่าเชื่อถือ"
+    },
+    {
+      "id": "native.apple.ad21028cb2974851",
+      "source": "The TLS challenge came from a different host or port than the requested Gateway.",
+      "translated": "การท้าทาย TLS มาจากโฮสต์หรือพอร์ตที่ต่างจาก Gateway ที่ร้องขอ"
+    },
+    {
+      "id": "native.apple.2ace7dd34f4ca3a2",
+      "source": "Check certificate",
+      "translated": "ตรวจสอบใบรับรอง"
     },
     {
       "id": "native.apple.a825441f646eb195",

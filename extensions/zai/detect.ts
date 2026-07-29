@@ -165,13 +165,13 @@ export async function detectZaiEndpoint(params: {
         endpoint: "global" as const,
         baseUrl: ZAI_GLOBAL_BASE_URL,
         modelId: ZAI_DEFAULT_MODEL_ID,
-        note: "Verified GLM-5.1 on global endpoint.",
+        note: "Verified GLM-5.2 on global endpoint.",
       },
       {
         endpoint: "cn" as const,
         baseUrl: ZAI_CN_BASE_URL,
         modelId: ZAI_DEFAULT_MODEL_ID,
-        note: "Verified GLM-5.1 on cn endpoint.",
+        note: "Verified GLM-5.2 on cn endpoint.",
       },
     ];
     const codingModels: ProbeCandidate[] = [

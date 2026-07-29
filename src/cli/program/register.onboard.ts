@@ -18,7 +18,7 @@ import type {
 import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatCliCommand } from "../command-format.js";
-import { parsePort } from "../shared/parse-port.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 
 export function resolveInstallDaemonFlag(command: Command): boolean | undefined {
   // Commander doesn't support option conflicts natively; keep original behavior.
@@ -333,7 +333,7 @@ export function registerOnboardCommand(program: Command): void {
       }
       const installDaemon = resolveInstallDaemonFlag(commandRuntime);
       const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
-      const gatewayPort = parsePort(opts.gatewayPort);
+      const gatewayPort = parseGatewayPortOption(opts.gatewayPort, "--gateway-port");
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
@@ -345,7 +345,7 @@ export function registerOnboardCommand(program: Command): void {
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
           ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
-          gatewayPort: gatewayPort ?? undefined,
+          gatewayPort,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,

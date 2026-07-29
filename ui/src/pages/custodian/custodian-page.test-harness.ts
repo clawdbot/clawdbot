@@ -13,10 +13,12 @@ import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
 } from "../../test-helpers/application-context.ts";
+import { CustodianSessionStore } from "./custodian-session-store.ts";
 import "./custodian-page.ts";
 
 type TestCustodianPage = HTMLElement & {
   onboarding: boolean;
+  store: CustodianSessionStore;
   updateComplete: Promise<boolean>;
 };
 
@@ -34,8 +36,9 @@ export function createContext(
   const client = { request } as unknown as GatewayBrowserClient;
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected: true,
-    reconnecting: false,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
@@ -71,6 +74,11 @@ export function createContext(
   } as unknown as ApplicationGateway;
   const context = {
     gateway,
+    agents: {
+      state: { agentsList: { mainKey: "main" } },
+      refreshList: vi.fn(),
+    },
+    agentSelection: { state: { selectedId: "main" } },
     basePath: "",
     navigate: vi.fn(),
   } as unknown as ApplicationContext;
@@ -103,6 +111,7 @@ export async function mountPage(
 }> {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement("openclaw-custodian-page") as TestCustodianPage;
+  page.store = new CustodianSessionStore();
   page.onboarding = options.onboarding ?? true;
   provider.append(page);
   document.body.append(provider);

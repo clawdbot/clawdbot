@@ -879,7 +879,6 @@ class WearProxyClientTest {
       WearUiState(
         loading = false,
         connected = true,
-        status = "Connected",
         proxyCapabilities = WearProxyCapability.entries.toSet(),
         sessions = listOf(selected),
         selectedSession = selected,
@@ -887,7 +886,7 @@ class WearProxyClientTest {
         streamText = "typing",
         activeRunId = "run-1",
         sending = true,
-        error = "old",
+        failure = WearConversationFailure.INTERNAL_ERROR,
       )
 
     val reset = state.resetForPhoneChange()
@@ -900,8 +899,8 @@ class WearProxyClientTest {
     assertTrue(reset.messages.isEmpty())
     assertEquals(null, reset.streamText)
     assertEquals(null, reset.activeRunId)
-    assertTrue(reset.sending)
-    assertEquals(null, reset.error)
+    assertTrue(!reset.sending)
+    assertEquals(null, reset.failure)
   }
 
   @Test

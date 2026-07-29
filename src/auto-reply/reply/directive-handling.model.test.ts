@@ -410,6 +410,7 @@ function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
   return {
     sessionId: "s1",
     updatedAt: Date.now(),
+    delivery: { kind: "none" },
     ...overrides,
   };
 }
@@ -637,6 +638,8 @@ async function resolveModelInfoReply(
     aliasIndex: baseAliasIndex(),
     allowedModelKeys: new Set(),
     allowedModelCatalog: [],
+    currentThinkLevel: "medium",
+    runtimePolicySessionKey: "agent:main:main",
     resetModelOverride: false,
     ...overrides,
   });
@@ -647,8 +650,63 @@ describe("/model chat UX", () => {
     const reply = await resolveModelInfoReply();
 
     expect(reply?.text).toContain("Current:");
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
     expect(reply?.text).toContain("Browse: /models");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("includes the thinking level in channel-specific model summaries", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "test",
+        plugin: {
+          id: "telegram",
+          commands: {
+            buildModelBrowseChannelData: () => ({ telegram: { inlineKeyboard: [] } }),
+          },
+        },
+        source: "test",
+      },
+    ] as never;
+    setActivePluginRegistry(registry);
+
+    const reply = await resolveModelInfoReply({ surface: "telegram" });
+
+    expect(reply?.channelData).toBeDefined();
+    expect(reply?.text).toContain("Think: medium (change with /think <level>)");
+  });
+
+  it("shows the effective thinking level for the selected runtime", async () => {
+    setDirectiveTestProviders([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        resolveThinkingProfile: ({ agentRuntime }) => ({
+          levels: [
+            { id: "off" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            { id: "max" },
+            ...(agentRuntime === "openclaw" ? ([{ id: "ultra" }] as const) : []),
+          ],
+        }),
+      },
+    ]);
+
+    const reply = await resolveModelInfoReply({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.6-luna",
+      currentThinkLevel: "ultra",
+      sessionEntry: { agentRuntimeOverride: "codex" },
+    });
+
+    expect(reply?.text).toContain("Think: max (change with /think <level>)");
+    expect(reply?.text).not.toContain("Think: ultra");
   });
 
   it("treats /model list as a models browser alias, not a model id", async () => {
@@ -1312,7 +1370,7 @@ describe("/model chat UX", () => {
     });
 
     expect(resolved.errorText).toContain(
-      'Add "openai/gpt-5.5" or its provider wildcard to agents.list[].modelPolicy.allow.',
+      'Add "openai/gpt-5.5" or its provider wildcard to agents.entries.*.modelPolicy.allow.',
     );
   });
 
@@ -1934,6 +1992,26 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     });
   });
 
+  it("announces the model change before the thinking remap in the ack", async () => {
+    const sessionEntry = createSessionEntry({ thinkingLevel: "adaptive" });
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/model openai/gpt-4o"),
+        allowedModelKeys: new Set(["anthropic/claude-opus-4-6", "openai/gpt-4o"]),
+        sessionEntry,
+      }),
+    );
+
+    const text = result?.text ?? "";
+    expect(text).toContain("Model set to openai/gpt-4o for this session.");
+    expect(text).toContain(
+      "Thinking level set to medium (adaptive not supported for openai/gpt-4o).",
+    );
+    // The model change (cause) must be reported before the thinking remap (effect).
+    expect(text.indexOf("Model set to")).toBeLessThan(text.indexOf("Thinking level set to"));
+  });
+
   it("fires session:patch when /model changes the persisted session model", async () => {
     const events: InternalHookEvent[] = [];
     registerInternalHook("session:patch", async (event) => {
@@ -1998,6 +2076,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "openai",
       nextModel: "gpt-4o",
+      nextRouteResolution: "resolved",
       nextModelOverrideSource: "user",
       nextAuthProfileId: undefined,
       nextAuthProfileIdSource: undefined,
@@ -2064,6 +2143,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     const rotatedEntry: SessionEntry = {
       sessionId: "s2",
       updatedAt: sessionEntry.updatedAt + 1,
+      delivery: { kind: "none" },
       elevatedLevel: "full",
     };
     await replaceSessionEntry({ sessionKey, storePath }, rotatedEntry);
@@ -2204,6 +2284,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       key: sessionKey,
       nextProvider: "anthropic",
       nextModel: "claude-opus-4-6",
+      nextRouteResolution: "resolved",
       nextModelOverrideSource: "user",
       nextAuthProfileId: "anthropic:work",
       nextAuthProfileIdSource: "user",

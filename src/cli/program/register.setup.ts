@@ -14,7 +14,7 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isUnconfiguredConfigSource } from "../fresh-install-config.js";
-import { parsePort } from "../shared/parse-port.js";
+import { parseGatewayPortOption } from "../gateway-port-option.js";
 import {
   pickOnboardAuthOptionValues,
   registerOnboardAuthOptions,
@@ -23,6 +23,7 @@ import {
 } from "./register.onboard.js";
 
 const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
+const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "json"]);
 
 const optionalString = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
@@ -53,6 +54,24 @@ function hasExplicitOnboardingOption(command: Command): boolean {
     const name = option.attributeName();
     return !SYSTEM_AGENT_OPTION_NAMES.has(name) && command.getOptionValueSource(name) === "cli";
   });
+}
+
+function listUnsupportedBaselineOptions(command: Command): string[] {
+  const optionsByName = new Map<string, (typeof command.options)[number]>();
+  for (const option of command.options) {
+    const name = option.attributeName();
+    if (BASELINE_OPTION_NAMES.has(name) || command.getOptionValueSource(name) !== "cli") {
+      continue;
+    }
+    const existing = optionsByName.get(name);
+    const valueIsNegated = command.getOptionValue(name) === false;
+    if (!existing || option.negate === valueIsNegated) {
+      optionsByName.set(name, option);
+    }
+  }
+  return [...optionsByName.values()]
+    .map((option) => option.long ?? option.short ?? option.flags)
+    .toSorted();
 }
 
 async function isConfiguredInstance(): Promise<boolean> {
@@ -89,13 +108,19 @@ async function runOnboardingEntry(
   runtime: RuntimeEnv,
 ): Promise<void> {
   if (options.baseline) {
+    const unsupportedOptions = listUnsupportedBaselineOptions(commandRuntime);
+    if (unsupportedOptions.length > 0) {
+      runtime.error(`--baseline cannot be combined with: ${unsupportedOptions.join(", ")}.`);
+      runtime.exit(1);
+      return;
+    }
     const { setupCommand } = await import("../../commands/setup.js");
     await setupCommand({ workspace: optionalString(options.workspace) }, runtime);
     return;
   }
   const installDaemon = resolveInstallDaemonFlag(commandRuntime);
   const tailscaleResetOnExit = resolveTailscaleResetOnExitFlag(commandRuntime);
-  const gatewayPort = parsePort(options.gatewayPort);
+  const gatewayPort = parseGatewayPortOption(options.gatewayPort, "--gateway-port");
   const { setupWizardCommand } = await import("../../commands/onboard.js");
   await setupWizardCommand(
     {
@@ -103,12 +128,13 @@ async function runOnboardingEntry(
       nonInteractive: Boolean(options.nonInteractive),
       acceptRisk: Boolean(options.acceptRisk),
       classic: Boolean(options.classic),
+      tui: Boolean(options.tui),
       flow: options.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
       mode: options.mode as "local" | "remote" | undefined,
       ...pickOnboardAuthOptionValues(options),
       reset: Boolean(options.reset),
       resetScope: options.resetScope as ResetScope | undefined,
-      gatewayPort: gatewayPort ?? undefined,
+      gatewayPort,
       gatewayBind: options.gatewayBind as GatewayBind | undefined,
       gatewayAuth: options.gatewayAuth as GatewayAuthChoice | undefined,
       gatewayToken: optionalString(options.gatewayToken),
@@ -179,6 +205,7 @@ export function registerSetupCommand(program: Command): void {
     .option("--reset-scope <scope>", "Reset scope: config|config+creds+sessions|full")
     .option("--non-interactive", "Run onboarding without prompts", false)
     .option("--classic", "Use the classic multi-step setup wizard", false)
+    .option("--tui", "Use the terminal hatch instead of the browser handoff", false)
     .option(
       "--accept-risk",
       "Acknowledge that agents are powerful and full system access is risky (required for --non-interactive)",

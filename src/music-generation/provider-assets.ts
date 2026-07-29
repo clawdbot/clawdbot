@@ -1,4 +1,5 @@
 // Validates and normalizes provider asset attachments for music generation.
+import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -84,9 +85,13 @@ export function generatedMusicAssetFromBase64(params: {
   index?: number;
   fileName?: string;
 }): GeneratedMusicAsset {
+  const canonicalAudio = canonicalizeBase64(params.base64);
+  if (!canonicalAudio) {
+    throw new Error("Generated music asset contains malformed base64 audio data");
+  }
   const ext = extensionForMime(params.mimeType)?.replace(/^\./u, "") || "mp3";
   return {
-    buffer: Buffer.from(params.base64, "base64"),
+    buffer: Buffer.from(canonicalAudio, "base64"),
     mimeType: params.mimeType,
     fileName: params.fileName ?? `track-${(params.index ?? 0) + 1}.${ext}`,
   };

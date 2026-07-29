@@ -5,6 +5,7 @@ import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import type { QueueMode } from "./queue/types.js";
+import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 
 export type ReplySessionBinding = {
@@ -31,7 +32,8 @@ type InternalReplySessionOptions = {
 
 export type InternalGetReplyOptions = GetReplyOptions &
   InternalReplySessionOptions &
-  ReplyOptionsWithHeartbeatRunScope;
+  ReplyOptionsWithHeartbeatRunScope &
+  ReplyOptionsWithOperationRunState;
 
 export function shouldBridgeCliPreambleEvents(opts: InternalGetReplyOptions | undefined): boolean {
   return opts?.commentaryProgressEnabled === true || opts?.progressPreambleEnabled === true;

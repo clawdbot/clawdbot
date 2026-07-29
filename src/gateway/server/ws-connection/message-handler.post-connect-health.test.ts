@@ -10,6 +10,10 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
+import {
+  getActiveDiagnosticTraceContext,
+  type DiagnosticTraceContext,
+} from "../../../infra/diagnostic-trace-context.js";
 import { setAvatar } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
@@ -48,7 +52,6 @@ const {
       auth: { mode: "none" },
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   })),
@@ -283,23 +286,30 @@ function attachGatewayHarness(options: {
     logWsControl,
     send,
     socketSend,
-    sendRequest: (id: string, method: string, params: Record<string, unknown> = {}) => {
+    sendRequest: (
+      id: string,
+      method: string,
+      params: Record<string, unknown> = {},
+      traceparent?: string,
+    ) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method,
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
-    sendConnect: (id: string, params: Record<string, unknown>) => {
+    sendConnect: (id: string, params: Record<string, unknown>, traceparent?: string) => {
       sendMessage(
         JSON.stringify({
           type: "req",
           id,
           method: "connect",
           params,
+          ...(traceparent ? { traceparent } : {}),
         }),
       );
     },
@@ -308,6 +318,54 @@ function attachGatewayHarness(options: {
     },
   };
 }
+
+describe("WebSocket request trace context", () => {
+  const upstreamTraceId = "4bf92f3577b34da6a3ce929d0e0e4736";
+  const upstreamSpanId = "00f067aa0ba902b7";
+  const upstreamTraceparent = `00-${upstreamTraceId}-${upstreamSpanId}-01`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not carry connect-frame trace context into later requests", async () => {
+    let observed: DiagnosticTraceContext | undefined;
+    vi.mocked(handleGatewayRequest).mockImplementation(async () => {
+      observed = getActiveDiagnosticTraceContext();
+    });
+    const harness = attachGatewayHarness({
+      connId: "conn-connect-trace",
+      connectNonce: "nonce-connect-trace",
+    });
+
+    harness.sendConnect(
+      "connect-1",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: {
+          id: "gateway-client",
+          version: "dev",
+          platform: "test",
+          mode: "backend",
+        },
+        role: "operator",
+        caps: [],
+      },
+      upstreamTraceparent,
+    );
+    await waitForFast(() => {
+      expect(harness.client).not.toBeNull();
+    });
+
+    harness.sendRequest("untraced-1", "status.summary");
+
+    await waitForFast(() => {
+      expect(observed).toBeDefined();
+    });
+    expect(observed?.traceId).not.toBe(upstreamTraceId);
+  });
+});
 
 function connectTrustedProxyUser(connId: string) {
   loadConfigMock.mockImplementationOnce(() => ({
@@ -322,7 +380,6 @@ function connectTrustedProxyUser(connId: string) {
       trustedProxies: ["10.0.0.1"],
       controlUi: {
         allowedOrigins: ["http://127.0.0.1:19001"],
-        dangerouslyDisableDeviceAuth: true,
       },
     },
   }));
@@ -540,7 +597,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     const isClosed = vi.fn(() => false);
     const harness = attachGatewayHarness({
       connId: "conn-1",
-      requestOrigin: "http://127.0.0.1:19001",
       connectNonce: "nonce-1",
       refreshHealthSnapshot,
       isClosed,
@@ -552,10 +608,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: {
-          id: "openclaw-control-ui",
+          id: "gateway-client",
           version: "dev",
           platform: "test",
-          mode: "ui",
+          mode: "backend",
         },
         role: "operator",
         caps: [],
@@ -582,7 +638,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         auth_mode: "none",
         auth_method: "none",
         auth_provided: "none",
-        client_mode: "ui",
+        client_mode: "backend",
         has_device_identity: false,
         scope_count: 0,
       },
@@ -675,13 +731,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     );
   });
 
-  it("keeps token-authenticated presence free of user identity", async () => {
+  it("does not project user identity for a token-authenticated backend", async () => {
     const harness = attachGatewayHarness({
       connId: "conn-token-userless",
       connectNonce: "nonce-token-userless",
-      requestHost: "gateway.example.com:18789",
-      requestOrigin: "http://127.0.0.1:19001",
-      remoteAddr: "203.0.113.50",
       resolvedAuth: {
         mode: "token",
         token: "gateway-token",
@@ -693,10 +746,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
       client: {
-        id: "openclaw-control-ui",
+        id: "gateway-client",
         version: "dev",
         platform: "test",
-        mode: "ui",
+        mode: "backend",
       },
       role: "operator",
       caps: [],
@@ -714,12 +767,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     ).toMatchObject({
       ok: true,
     });
-    await waitForFast(() => {
-      expect(upsertPresenceMock).toHaveBeenCalledWith(
-        "conn-token-userless",
-        expect.not.objectContaining({ user: expect.anything() }),
-      );
-    });
+    expect(upsertPresenceMock).not.toHaveBeenCalled();
     expect(harness.client).not.toMatchObject({ authenticatedUserId: expect.anything() });
     expect(ensureProfileForEmailMock).not.toHaveBeenCalled();
   });

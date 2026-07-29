@@ -33,7 +33,7 @@ import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   type AbortCutoff,
   resolveAbortCutoffFromContext,
@@ -168,7 +168,7 @@ function resolveStoredSessionId(params: {
 }
 
 function resolveBoundAcpAbortTargetSessionKey(params: {
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   activeSessionKey: string;
 }): string | undefined {
@@ -315,7 +315,7 @@ export function stopSubagentsForRequester(params: {
 }
 
 export async function tryFastAbortFromMessage(params: {
-  ctx: FinalizedMsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
 }): Promise<{
   handled: boolean;
@@ -327,8 +327,7 @@ export async function tryFastAbortFromMessage(params: {
   const commandSessionKey =
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.ParentSessionKey);
   const targetKey = normalizeOptionalString(ctx.CommandTargetSessionKey) ?? commandSessionKey;
-  // Use RawBody/CommandBody for abort detection (clean message without structural context).
-  const raw = stripStructuralPrefixes(ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "");
+  const raw = stripStructuralPrefixes(ctx.commandText);
   const isGroup = normalizeOptionalLowercaseString(ctx.ChatType) === "group";
   const stripped = isGroup
     ? stripMentions(

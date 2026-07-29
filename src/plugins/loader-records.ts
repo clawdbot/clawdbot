@@ -3,7 +3,11 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import type { PluginBundleFormat, PluginDiagnosticCode, PluginFormat } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type {
+  PluginManifestContracts,
+  PluginManifestDashboard,
+  PluginManifestMcpServer,
+} from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
@@ -18,6 +22,7 @@ export function createPluginRecord(params: {
   name?: string;
   description?: string;
   version?: string;
+  builtWithOpenClawVersion?: string;
   packageName?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -35,12 +40,15 @@ export function createPluginRecord(params: {
   providerIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
+  mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
     id: params.id,
     name: params.name ?? params.id,
     description: params.description,
     version: params.version,
+    builtWithOpenClawVersion: params.builtWithOpenClawVersion,
     packageName: params.packageName,
     format: params.format ?? "openclaw",
     bundleFormat: params.bundleFormat,
@@ -89,6 +97,8 @@ export function createPluginRecord(params: {
     configUiHints: undefined,
     configJsonSchema: undefined,
     contracts: params.contracts,
+    dashboard: params.dashboard,
+    mcpServers: params.mcpServers,
   };
 }
 

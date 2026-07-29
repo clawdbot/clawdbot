@@ -28,6 +28,7 @@ type MockResult = {
 };
 
 type MockSubprocess = EventEmitter & {
+  nodeChildProcess: MockSubprocess;
   exitCode: number | null;
   finish: (result?: Partial<MockResult>) => void;
   kill: ReturnType<typeof vi.fn>;
@@ -53,6 +54,7 @@ function createMockSubprocess(params?: {
   stdoutChunks?: Buffer[];
 }): MockSubprocess {
   const child = new EventEmitter() as MockSubprocess;
+  child.nodeChildProcess = child;
   child.pid = 1234;
   child.exitCode = null;
   child.signalCode = null;
@@ -67,7 +69,7 @@ function createMockSubprocess(params?: {
   const completion = new Promise<MockResult>((resolvePromise) => {
     resolve = resolvePromise;
   });
-  // oxlint-disable-next-line unicorn/no-thenable -- Stub matches Execa's event-emitting promise shape.
+  // oxlint-disable-next-line unicorn/no-thenable -- Stub combines Execa's promise with its exposed Node child.
   child.then = completion.then.bind(completion);
   child.catch = completion.catch.bind(completion);
   child.finally = completion.finally.bind(completion);

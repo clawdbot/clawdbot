@@ -29,4 +29,27 @@ describe("chat pane read markers", () => {
       { agentId: "main" },
     );
   });
+
+  it("marks an active agent status read even without other unread state", () => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+
+    pane.markSessionRead({
+      key: "agent:main:current",
+      kind: "direct",
+      label: "Waiting",
+      updatedAt: 20,
+      unread: false,
+      agentStatus: { note: "Need the staging password", expiresAt: Date.now() + 60_000 },
+    });
+
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main" },
+    );
+  });
 });

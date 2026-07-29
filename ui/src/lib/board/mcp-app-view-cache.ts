@@ -37,11 +37,7 @@ export class BoardMcpAppViewCache {
     }
     const cached = this.entries.get(key);
     if (cached) {
-      const resolved = await cached;
-      if (resolved.status !== "ready" || resolved.expiresAtMs > Date.now() + 5_000) {
-        return resolved;
-      }
-      this.entries.delete(key);
+      return await cached;
     }
     const pending = request()
       .then<BoardWidgetAppViewState>((result) => ({ status: "ready", ...result }))

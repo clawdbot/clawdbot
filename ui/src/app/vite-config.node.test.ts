@@ -269,13 +269,28 @@ describe("Control UI Vite config", () => {
       find: "@openclaw/normalization-core/string-coerce",
       replacement: path.join(repoRoot, "packages/normalization-core/src/string-coerce.ts"),
     });
+    expect(
+      aliases.find((alias) => alias.find === "@openclaw/normalization-core/phone-presentation"),
+    )?.toEqual({
+      find: "@openclaw/normalization-core/phone-presentation",
+      replacement: path.join(repoRoot, "packages/normalization-core/src/phone-presentation.ts"),
+    });
   });
 
-  it("resolves published OpenClaw packages before the broad plugin alias", () => {
-    const aliases = resolveExternalPackageAliasesForVite();
+  it("uses Node package resolution for external packages inherited by worktrees", () => {
+    const resolvePackage = vi.fn((specifier: string) =>
+      path.join("/parent/node_modules", specifier),
+    );
+
+    const aliases = resolveExternalPackageAliasesForVite(resolvePackage);
+
+    expect(resolvePackage.mock.calls).toEqual([
+      ["@openclaw/libterminal/package.json"],
+      ["@openclaw/uirouter/package.json"],
+    ]);
     expect(aliases.find((alias) => alias.find === "@openclaw/libterminal/browser")).toEqual({
       find: "@openclaw/libterminal/browser",
-      replacement: path.join(repoRoot, "node_modules/@openclaw/libterminal/dist/browser.js"),
+      replacement: path.join("/parent/node_modules/@openclaw/libterminal", "dist/browser.js"),
     });
   });
 

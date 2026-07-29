@@ -30,12 +30,28 @@ function terminal(id: string, resolvedAtMs: number): ApprovalHistoryResult["item
   };
 }
 
-function createPage(request: GatewayBrowserClient["request"]): TestApprovalsPage {
+function createPage(
+  request: GatewayBrowserClient["request"],
+  auth?: { role: string; scopes?: string[] },
+): {
+  page: TestApprovalsPage;
+  updateGateway: (next: Partial<ApplicationGatewaySnapshot>) => void;
+} {
   const client = { request } as GatewayBrowserClient;
-  const snapshot = { connected: true, client } as ApplicationGatewaySnapshot;
+  let snapshot = {
+    phase: "connected",
+    client,
+    ...(auth ? { hello: { auth } } : {}),
+  } as ApplicationGatewaySnapshot;
+  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const gateway = {
-    snapshot,
-    subscribe: () => () => undefined,
+    get snapshot() {
+      return snapshot;
+    },
+    subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
   } as unknown as ApplicationContext["gateway"];
   const provider = createApplicationContextProvider({
     basePath: "",
@@ -44,7 +60,15 @@ function createPage(request: GatewayBrowserClient["request"]): TestApprovalsPage
   const page = document.createElement("openclaw-approvals-page") as TestApprovalsPage;
   provider.append(page);
   document.body.append(provider);
-  return page;
+  return {
+    page,
+    updateGateway(next) {
+      snapshot = { ...snapshot, ...next };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
+    },
+  };
 }
 
 async function settle(page: TestApprovalsPage): Promise<void> {
@@ -68,7 +92,7 @@ describe("ApprovalsPage", () => {
       .fn()
       .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
       .mockResolvedValueOnce({ items: [terminal("second", 1_000)] });
-    const page = createPage(request as GatewayBrowserClient["request"]);
+    const { page } = createPage(request as GatewayBrowserClient["request"]);
 
     await settle(page);
 
@@ -93,7 +117,7 @@ describe("ApprovalsPage", () => {
 
   it("does not claim an empty history when the load failed", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
-    const page = createPage(request as GatewayBrowserClient["request"]);
+    const { page } = createPage(request as GatewayBrowserClient["request"]);
 
     await settle(page);
 
@@ -103,11 +127,84 @@ describe("ApprovalsPage", () => {
 
   it("shows the empty message only after a successful zero-row load", async () => {
     const request = vi.fn().mockResolvedValueOnce({ items: [] });
-    const page = createPage(request as GatewayBrowserClient["request"]);
+    const { page } = createPage(request as GatewayBrowserClient["request"]);
 
     await settle(page);
 
     const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
     expect(body).toContain("No resolved approvals");
+  });
+
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+  ])("does not request or render approval history for a $name operator", async ({ scopes }) => {
+    const request = vi.fn().mockResolvedValue({ items: [] });
+    const { page } = createPage(request as GatewayBrowserClient["request"], {
+      role: "operator",
+      scopes,
+    });
+
+    await settle(page);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.querySelector(".approval-history-table")).toBeNull();
+    expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
+  });
+
+  it.each([
+    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
+    { name: "admin", auth: { role: "operator", scopes: ["operator.admin"] } },
+    { name: "legacy operator", auth: { role: "operator" } },
+  ])("loads approval history for a $name", async ({ auth }) => {
+    const request = vi.fn().mockResolvedValue({ items: [] });
+    const { page } = createPage(request as GatewayBrowserClient["request"], auth);
+
+    await settle(page);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("approval.history", { limit: 50 });
+    expect(page.querySelector(".approval-history-table")).not.toBeNull();
+  });
+
+  it("discards stale history when approval access changes on the same gateway", async () => {
+    let resolveStaleHistory!: (result: ApprovalHistoryResult) => void;
+    const staleHistory = new Promise<ApprovalHistoryResult>((resolve) => {
+      resolveStaleHistory = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(staleHistory)
+      .mockResolvedValueOnce({ items: [terminal("current", 2_000)] });
+    const { page, updateGateway } = createPage(request as GatewayBrowserClient["request"], {
+      role: "operator",
+      scopes: ["operator.approvals"],
+    });
+
+    await settle(page);
+    expect(request).toHaveBeenCalledOnce();
+
+    updateGateway({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.querySelector(".approval-history-table")).toBeNull();
+
+    updateGateway({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo current");
+
+    resolveStaleHistory({ items: [terminal("stale", 1_000)] });
+    await settle(page);
+    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo current");
+    expect(page.querySelector(".approval-history-table")?.textContent).not.toContain("echo stale");
   });
 });

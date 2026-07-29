@@ -48,6 +48,17 @@ describe("createLazyGatewayCronState", () => {
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
   });
 
+  it("respects a configured legacy cron store partition", () => {
+    const customStore = "/tmp/openclaw-custom-cron/jobs.json";
+    const params = createParams();
+    const lazy = createLazyGatewayCronState({
+      ...params,
+      cfg: { ...params.cfg, cron: { store: customStore } } as unknown as OpenClawConfig,
+    });
+
+    expect(lazy.storePath).toBe(customStore);
+  });
+
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
     const cron = createCronService();
     const state = createCronState(cron);
@@ -319,10 +330,13 @@ function createCronService(): GatewayCronServiceContract {
     update: vi.fn(async () => ({ ok: true }) as never),
     updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
     remove: vi.fn(async () => ({ ok: true }) as never),
+    removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
+    readScratch: vi.fn(async () => ({ currentRevision: 0 })),
+    writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
     wake: vi.fn(() => ({ ok: true })),
   };

@@ -79,13 +79,13 @@ describe("sandbox explain command", () => {
     expect(parsed).toHaveProperty("sandbox.tools.sources.allow.source");
     expect(parsed.fixIt).toEqual([
       "agents.defaults.sandbox.mode=off",
-      "agents.list[].sandbox.mode=off",
+      "agents.entries.*.sandbox.mode=off",
       "tools.sandbox.tools.allow",
       "tools.sandbox.tools.alsoAllow",
       "tools.sandbox.tools.deny",
-      "agents.list[].tools.sandbox.tools.allow",
-      "agents.list[].tools.sandbox.tools.alsoAllow",
-      "agents.list[].tools.sandbox.tools.deny",
+      "agents.entries.*.tools.sandbox.tools.allow",
+      "agents.entries.*.tools.sandbox.tools.alsoAllow",
+      "agents.entries.*.tools.sandbox.tools.deny",
       "tools.elevated.enabled",
     ]);
   });
@@ -131,7 +131,7 @@ describe("sandbox explain command", () => {
     expect(parsed.sandbox.tools.deny).not.toContain("browser");
     expect(parsed.sandbox.tools.sources.allow).toEqual({
       source: "agent",
-      key: "agents.list[].tools.sandbox.tools.alsoAllow",
+      key: "agents.entries.*.tools.sandbox.tools.alsoAllow",
     });
   });
 

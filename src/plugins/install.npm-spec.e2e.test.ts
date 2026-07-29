@@ -81,7 +81,6 @@ process.stdin.on("end", () => {
 });
 `,
           ],
-          allowInsecurePath: true,
           timeoutMs: 5000,
           maxOutputBytes: 16 * 1024,
         },

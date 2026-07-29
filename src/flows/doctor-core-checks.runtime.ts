@@ -83,7 +83,7 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
         checkId: "core/doctor/local-audio-acceleration",
         severity: "info",
         message: `Local STT auto-selection: ${summary}.`,
-        path: "tools.media.audio.models",
+        path: "tools.media.models",
       },
     ];
   }
@@ -95,9 +95,9 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
       checkId: "core/doctor/local-audio-acceleration",
       severity: "info",
       message: `Local STT commands were found but none are ready for auto-selection: ${blockers}.`,
-      path: "tools.media.audio.models",
+      path: "tools.media.models",
       fixHint:
-        "Install the matching local model/runtime, or configure an explicit tools.media.audio.models CLI entry.",
+        "Install the matching local model/runtime, or configure an audio-capable tools.media.models CLI entry.",
     },
   ];
 }

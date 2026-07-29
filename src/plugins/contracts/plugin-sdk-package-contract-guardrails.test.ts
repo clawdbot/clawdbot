@@ -52,7 +52,6 @@ const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
 ]);
 const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
   "extensions/amazon-bedrock/register.sync.runtime.ts",
-  "extensions/deepinfra/index.ts",
   "extensions/github-copilot/index.ts",
   "extensions/google/index.ts",
   "extensions/lmstudio/index.ts",
@@ -64,7 +63,6 @@ const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
 ]);
 const LEGACY_MEMORY_EMBEDDING_PROVIDER_MANIFEST_FILES = new Set([
   "extensions/amazon-bedrock/openclaw.plugin.json",
-  "extensions/deepinfra/openclaw.plugin.json",
   "extensions/github-copilot/openclaw.plugin.json",
   "extensions/google/openclaw.plugin.json",
   "extensions/lmstudio/openclaw.plugin.json",
@@ -748,7 +746,15 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
-    expect(collectPluginSdkPackageExports()).toEqual([...publicPluginSdkEntrypoints].toSorted());
+    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
+    const packageExports = collectPluginSdkPackageExports();
+
+    expect(packageExports.filter((entrypoint) => !localOnly.has(entrypoint))).toEqual(
+      [...publicPluginSdkEntrypoints].toSorted(),
+    );
+    expect(
+      publicPluginSdkEntrypoints.filter((entrypoint) => !packageExports.includes(entrypoint)),
+    ).toEqual([]);
   });
 
   it("keeps Vitest-backed SDK test helpers local-only", () => {

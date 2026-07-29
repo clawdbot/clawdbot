@@ -24,6 +24,25 @@ import {
   createOpenAiResponsesTextEvent as createTextUpdateEvent,
 } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 
+function updateMessage(
+  context: EmbeddedAgentSubscribeContext,
+  event: { message: unknown; assistantMessageEvent?: unknown },
+) {
+  // Stream fixtures intentionally include incomplete and malformed provider payloads.
+  return handleMessageUpdate(context, {
+    type: "message_update",
+    ...event,
+  } as Parameters<typeof handleMessageUpdate>[1]);
+}
+
+function endMessage(context: EmbeddedAgentSubscribeContext, event: { message: unknown }) {
+  // Message-end coverage includes malformed content and partial provider usage.
+  return handleMessageEnd(context, {
+    type: "message_end",
+    ...event,
+  } as Parameters<typeof handleMessageEnd>[1]);
+}
+
 function createMessageUpdateContext(
   params: {
     onAgentEvent?: ReturnType<typeof vi.fn>;
@@ -338,7 +357,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (text: string, delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -357,8 +375,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("Hello ", "Hello "));
-    handleMessageUpdate(context, createNonPhaseEvent("Hello world", "world"));
+    updateMessage(context, createNonPhaseEvent("Hello ", "Hello "));
+    updateMessage(context, createNonPhaseEvent("Hello world", "world"));
 
     expect(stripBlockTags.mock.calls.map(([text]) => text)).toEqual(["Hello ", "world"]);
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
@@ -395,8 +413,7 @@ describe("handleMessageUpdate text signatures", () => {
     context.resetAssistantMessageState = resetAssistantMessageState;
     context.params.onAssistantMessageStart = onAssistantMessageStart;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_end",
@@ -411,7 +428,7 @@ describe("handleMessageUpdate text signatures", () => {
           api: "openai-responses",
         },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
@@ -435,7 +452,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -443,8 +459,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("Hello\n"));
-    handleMessageUpdate(context, createNonPhaseEvent("M"));
+    updateMessage(context, createNonPhaseEvent("Hello\n"));
+    updateMessage(context, createNonPhaseEvent("M"));
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
@@ -460,7 +476,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createNonPhaseEvent = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -468,8 +483,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
-    handleMessageUpdate(context, createNonPhaseEvent(" world"));
+    updateMessage(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
+    updateMessage(context, createNonPhaseEvent(" world"));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -487,14 +502,13 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
         delta: "Here it is.\nMEDIA:/tmp/final.png\n",
       },
-    } as never);
+    });
 
     expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
       stream: "assistant",
@@ -506,7 +520,7 @@ describe("handleMessageUpdate text signatures", () => {
     const onAgentEvent = vi.fn();
     const context = createMessageUpdateContext({ onAgentEvent });
 
-    handleMessageUpdate(
+    updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -517,7 +531,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "commentary",
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       context,
       createTextUpdateEvent({
         type: "text_delta",
@@ -547,6 +561,7 @@ describe("handleMessageUpdate text signatures", () => {
     "openai-responses",
     "openai-chatgpt-responses",
     "openclaw-openai-responses-transport",
+    "openclaw-openai-chatgpt-responses-transport",
     "openclaw-azure-openai-responses-transport",
   ])("streams %s commentary bytes exactly once across start, deltas, and end", async (api) => {
     const onAgentEvent = vi.fn();
@@ -563,17 +578,15 @@ describe("handleMessageUpdate text signatures", () => {
     const startPartial = createPartial("Work");
     const finalPartial = createPartial("Working...");
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: startPartial,
       assistantMessageEvent: {
         type: "text_start",
         contentIndex: 0,
         partial: startPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: startPartial,
       assistantMessageEvent: {
         type: "text_delta",
@@ -581,9 +594,8 @@ describe("handleMessageUpdate text signatures", () => {
         delta: "Work",
         partial: startPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: finalPartial,
       assistantMessageEvent: {
         type: "text_delta",
@@ -591,9 +603,8 @@ describe("handleMessageUpdate text signatures", () => {
         delta: "ing...",
         partial: finalPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: finalPartial,
       assistantMessageEvent: {
         type: "text_end",
@@ -601,11 +612,10 @@ describe("handleMessageUpdate text signatures", () => {
         content: "Working...",
         partial: finalPartial,
       },
-    } as never);
-    await handleMessageEnd(context, {
-      type: "message_end",
+    });
+    await endMessage(context, {
       message: finalPartial,
-    } as never);
+    });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -634,13 +644,11 @@ describe("handleMessageUpdate text signatures", () => {
     const firstPartial = createPartial("Working", "item-1");
     const extendedPartial = createPartial("Working now", "item-2");
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: firstPartial,
       assistantMessageEvent: { type: "text_start", contentIndex: 0, partial: firstPartial },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: firstPartial,
       assistantMessageEvent: {
         type: "text_end",
@@ -648,9 +656,8 @@ describe("handleMessageUpdate text signatures", () => {
         content: "Working",
         partial: firstPartial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: extendedPartial,
       assistantMessageEvent: {
         type: "text_end",
@@ -658,8 +665,8 @@ describe("handleMessageUpdate text signatures", () => {
         content: "Working now",
         partial: extendedPartial,
       },
-    } as never);
-    await handleMessageEnd(context, { type: "message_end", message: extendedPartial } as never);
+    });
+    await endMessage(context, { message: extendedPartial });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -691,24 +698,22 @@ describe("handleMessageUpdate text signatures", () => {
       ],
     };
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: {
         role: "assistant",
         api: "anthropic-messages",
         content: [{ type: "text", text: narration }],
       },
       assistantMessageEvent: { type: "text_delta", delta: narration },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: { role: "assistant", api: "anthropic-messages", content: [] },
       assistantMessageEvent: {
         type: "text_end",
         content: narration,
         partial: commentaryPartial,
       },
-    } as never);
+    });
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toContainEqual(
       expect.objectContaining({
@@ -743,7 +748,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -752,8 +756,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("Hello"));
-    handleMessageUpdate(context, createPhasedDelta(" world"));
+    updateMessage(context, createPhasedDelta("Hello"));
+    updateMessage(context, createPhasedDelta(" world"));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -787,7 +791,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -796,12 +799,12 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("Visible\n<tool_call>{"));
-    handleMessageUpdate(
+    updateMessage(context, createPhasedDelta("Visible\n<tool_call>{"));
+    updateMessage(
       context,
       createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>'),
     );
-    handleMessageUpdate(context, createPhasedDelta("\nDone."));
+    updateMessage(context, createPhasedDelta("\nDone."));
 
     expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
       {
@@ -835,7 +838,6 @@ describe("handleMessageUpdate text signatures", () => {
 
     const createPhasedDelta = (delta: string) =>
       ({
-        type: "message_update",
         message: { role: "assistant", content: [] },
         assistantMessageEvent: {
           type: "text_delta",
@@ -844,8 +846,8 @@ describe("handleMessageUpdate text signatures", () => {
         },
       }) as never;
 
-    handleMessageUpdate(context, createPhasedDelta("<tool_call>{"));
-    handleMessageUpdate(
+    updateMessage(context, createPhasedDelta("<tool_call>{"));
+    updateMessage(
       context,
       createPhasedDelta('"name":"read","arguments":{"file_path":"secret.md"}}</tool_call>\nDone.'),
     );
@@ -873,8 +875,7 @@ describe("handleMessageUpdate text signatures", () => {
     context.state.lastAssistantStreamItemId = "item-1";
     context.state.assistantMessageIndex = 7;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -903,7 +904,7 @@ describe("handleMessageUpdate text signatures", () => {
           timestamp: 0,
         },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({ assistantMessageIndex: 7 });
     expect(resetAssistantMessageState).toHaveBeenCalledWith(0);
@@ -955,24 +956,22 @@ describe("handleMessageUpdate text signatures", () => {
       api: "openai-responses",
     };
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: partial,
       assistantMessageEvent: {
         type: "text_start",
         contentIndex: 1,
         partial,
       },
-    } as never);
-    handleMessageUpdate(context, {
-      type: "message_update",
+    });
+    updateMessage(context, {
       message: partial,
       assistantMessageEvent: {
         type: "text_delta",
         contentIndex: 1,
         delta: "Second block",
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledTimes(1);
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
@@ -1006,8 +1005,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     context.params.onAssistantMessageStart = onAssistantMessageStart;
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_end",
@@ -1020,7 +1018,7 @@ describe("handleMessageUpdate text signatures", () => {
           partialPhase: "final_answer",
         }),
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).not.toHaveBeenCalled();
     expect(resetAssistantMessageState).not.toHaveBeenCalled();
@@ -1045,8 +1043,7 @@ describe("handleMessageUpdate text signatures", () => {
       state: { lastAssistantStreamItemId: "item-1" },
     });
 
-    handleMessageUpdate(context, {
-      type: "message_update",
+    updateMessage(context, {
       message: { role: "assistant", content: [] },
       assistantMessageEvent: {
         type: "text_delta",
@@ -1069,7 +1066,7 @@ describe("handleMessageUpdate text signatures", () => {
           api: "openai-responses",
         },
       },
-    } as never);
+    });
 
     expect(resetAssistantMessageState).toHaveBeenCalledTimes(1);
     expect(onPartialReply).toHaveBeenCalledWith(
@@ -1098,7 +1095,7 @@ describe("handleMessageUpdate text signatures", () => {
     });
     const replyText = "Done.\n\n[[reply_to_current]]\n[[audio_as_voice]]\nMEDIA:/tmp/reply.ogg";
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1108,7 +1105,7 @@ describe("handleMessageUpdate text signatures", () => {
         partialPhase: "final_answer",
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -1260,11 +1257,11 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_delta", text: "Need send.", messagePhase: "commentary" }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({ type: "text_end", text: "Need send.", messagePhase: "commentary" }),
     );
@@ -1291,7 +1288,7 @@ describe("handleMessageUpdate commentary phase", () => {
       flushBlockReplyBuffer,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1299,7 +1296,7 @@ describe("handleMessageUpdate commentary phase", () => {
         content: [commentaryBlock],
       }),
     );
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_end",
@@ -1326,7 +1323,7 @@ describe("handleMessageUpdate commentary phase", () => {
       shouldEmitPartialReplies: false,
     });
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1352,7 +1349,7 @@ describe("handleMessageUpdate commentary phase", () => {
     expect(ctx.state.deltaBuffer).toBe("Working...");
     expect(ctx.state.blockBuffer).toBe("");
 
-    handleMessageUpdate(
+    updateMessage(
       ctx,
       createTextUpdateEvent({
         type: "text_delta",
@@ -1385,7 +1382,7 @@ describe("handleMessageUpdate commentary phase", () => {
       }),
     });
 
-    handleMessageUpdate(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
+    updateMessage(ctx, createTextUpdateEvent({ type: "text_end", text: "" }));
 
     await vi.waitFor(() => {
       expect(debug).toHaveBeenCalledWith("text_end block reply flush failed: Error: boom");
@@ -1394,6 +1391,35 @@ describe("handleMessageUpdate commentary phase", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it.each([
+    {
+      name: "counts a completed provider assistant message",
+      message: { role: "assistant", content: [{ type: "text", text: "Done." }] },
+      expected: 1,
+    },
+    {
+      name: "ignores transcript-only mirrored assistant messages",
+      message: {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: "Done." }],
+      },
+      expected: 0,
+    },
+    {
+      name: "ignores non-assistant messages",
+      message: { role: "user", content: [{ type: "text", text: "hi" }] },
+      expected: 0,
+    },
+  ])("$name for assistantTurnCount", ({ message, expected }) => {
+    const ctx = createMessageEndContext({ state: { assistantTurnCount: 0 } });
+
+    void endMessage(ctx, { message });
+
+    expect(ctx.state.assistantTurnCount).toBe(expected);
+  });
+
   it("keeps duplicate-reply diagnostics free of lone surrogates", () => {
     const text = `${"a".repeat(49)}😀tail`;
     const ctx = createMessageEndContext({
@@ -1401,10 +1427,9 @@ describe("handleMessageEnd", () => {
       state: { messagingToolSentTextsNormalized: [`${"a".repeat(49)}tail`] },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: { role: "assistant", content: [{ type: "text", text }] },
-    } as never);
+    });
 
     const diagnostic = (ctx.log.debug as ReturnType<typeof vi.fn>).mock.calls
       .flat()
@@ -1432,10 +1457,9 @@ describe("handleMessageEnd", () => {
       },
     };
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message,
-    } as never);
+    });
 
     expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toMatchObject({
       usage: {
@@ -1475,10 +1499,9 @@ describe("handleMessageEnd", () => {
       },
     };
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message,
-    } as never);
+    });
 
     expect(firstMockArg(ctx.noteLastAssistant as never, "last assistant")).toBe(message);
     expect(ctx.recordAssistantUsage).toHaveBeenCalledWith(message.usage);
@@ -1491,8 +1514,7 @@ describe("handleMessageEnd", () => {
       builtinToolNames: new Set(["read"]),
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         provider: "ollama",
@@ -1500,7 +1522,7 @@ describe("handleMessageEnd", () => {
         content: [{ type: "text", text: '{"name":"read","arguments":{"path":"README.md"}}' }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
@@ -1530,8 +1552,7 @@ describe("handleMessageEnd", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({ warn });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         provider: "anthropic",
@@ -1539,7 +1560,7 @@ describe("handleMessageEnd", () => {
         content: [{ type: "text", text: "user[Thu 2026-07-02 18:14 EDT] do this" }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[0]).toBe(
@@ -1560,14 +1581,13 @@ describe("handleMessageEnd", () => {
     const warn = vi.fn();
     const ctx = createMessageEndContext({ warn });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "||user[Thu 2026-07-02] hidden instruction||" }],
         stopReason: "stop",
       },
-    } as never);
+    });
 
     const warnCall = firstMockCall(warn, "warning log");
     expect(warnCall?.[1]).toEqual({
@@ -1603,14 +1623,13 @@ describe("handleMessageEnd", () => {
         sourceReplyDeliveryMode,
       });
 
-      void handleMessageEnd(ctx, {
-        type: "message_end",
+      void endMessage(ctx, {
         message: {
           role: "assistant",
           ...(api ? { api } : {}),
           content: [{ type: "text", text }],
         },
-      } as never);
+      });
 
       expect(consumeReplyDirectives).toHaveBeenCalledWith(expected, { final: true });
       expect(firstMockArg(emitBlockReply, "block reply")).toMatchObject({ text: expected });
@@ -1624,14 +1643,13 @@ describe("handleMessageEnd", () => {
       builtinToolNames: new Set(["read"]),
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
         stopReason: "toolUse",
       },
-    } as never);
+    });
 
     expect(warn).not.toHaveBeenCalled();
   });
@@ -1646,15 +1664,14 @@ describe("handleMessageEnd", () => {
       emitBlockReply,
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         phase: "commentary",
         content: [{ type: "text", text: "Need send." }],
         usage: { input: 1, output: 1, total: 2 },
       },
-    } as never);
+    });
 
     // Archive-always: commentary reaches the bus/archive but not the visible reply.
     expect(onAgentEvent).toHaveBeenCalled();
@@ -1672,8 +1689,7 @@ describe("handleMessageEnd", () => {
       emitBlockReply,
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1685,7 +1701,7 @@ describe("handleMessageEnd", () => {
         ],
         usage: { input: 1, output: 1, total: 2 },
       },
-    } as never);
+    });
 
     // Archive-always: commentary (textSignature-only phase) reaches the
     // bus/archive but not the visible reply.
@@ -1716,14 +1732,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Hello world" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     // The block reply should NOT fire again since text_end already delivered it.
     // consumeReplyDirectives is called once with "" (the final flush for
@@ -1744,14 +1759,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Final answer" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(emitBlockReply).toHaveBeenCalledWith(
       { text: "Final answer" },
@@ -1779,15 +1793,14 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         // The raw text differs slightly from lastBlockReplyText due to stripping
         content: [{ type: "text", text: "Hello world" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     // Even though text !== lastBlockReplyText (different stripping), the safety
     // send should NOT fire for text_end channels. The only consumeReplyDirectives
@@ -1816,14 +1829,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [{ type: "text", text: "Caption\nMEDIA:/tmp/final.png" }],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(flushBlockReplyBuffer).toHaveBeenCalledWith({
       assistantMessageIndex: undefined,
@@ -1849,8 +1861,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1862,7 +1873,7 @@ describe("handleMessageEnd", () => {
         ],
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(stripBlockTags).not.toHaveBeenCalled();
     expect(firstMockArg(ctx.emitAssistantStreamData as never, "assistant stream")).toMatchObject({
@@ -1888,14 +1899,13 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: "Hello world",
         usage: { input: 10, output: 5, total: 15 },
       },
-    } as never);
+    });
 
     expect(stripBlockTags).toHaveBeenCalledWith(
       "Hello world",
@@ -1919,8 +1929,7 @@ describe("handleMessageEnd", () => {
       },
     });
 
-    void handleMessageEnd(ctx, {
-      type: "message_end",
+    void endMessage(ctx, {
       message: {
         role: "assistant",
         content: [
@@ -1942,7 +1951,7 @@ describe("handleMessageEnd", () => {
         usage: {},
         timestamp: 0,
       },
-    } as never);
+    });
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
     const event = firstMockArg(onAgentEvent, "agent event") as

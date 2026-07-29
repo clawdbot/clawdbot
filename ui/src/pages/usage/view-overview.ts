@@ -592,8 +592,9 @@ function renderPeakErrorList(
 }
 
 function focusSummaryHint(event: MouseEvent) {
-  if (event.currentTarget instanceof HTMLElement) {
-    event.currentTarget.focus();
+  const target = event.currentTarget;
+  if (target instanceof HTMLElement) {
+    target.focus();
   }
 }
 
@@ -608,7 +609,6 @@ function renderSummaryStat(params: {
   compactValue?: boolean;
 }) {
   const hintId = `usage-summary-hint-${params.hintId}`;
-  const tooltipId = `${hintId}-tooltip`;
   const classes = [
     "stat",
     "usage-summary-card",
@@ -629,25 +629,22 @@ function renderSummaryStat(params: {
     <div class=${classes}>
       <div class="usage-summary-title">
         ${params.title}
-        <button
-          id=${hintId}
-          type="button"
-          class="usage-summary-hint"
-          aria-label=${params.hint}
-          @click=${focusSummaryHint}
-        >
-          ?
-        </button>
-        <!-- Some browsers do not focus buttons on pointer activation; the
-             click handler normalizes that path without adding a second toggle. -->
-        <wa-tooltip
-          id=${tooltipId}
-          class="usage-summary-tooltip"
-          for=${hintId}
-          trigger="hover focus"
-        >
-          ${params.hint}
-        </wa-tooltip>
+        <openclaw-tooltip open-on-click>
+          <button
+            id=${hintId}
+            type="button"
+            class="usage-summary-hint"
+            aria-label=${params.title}
+            @click=${focusSummaryHint}
+          >
+            ?
+          </button>
+          <!-- Shared tooltips dismiss pointer activation so action buttons never
+               strand one open. This hint exists only to be read, so it opts in to
+               click-to-open; the click handler still normalizes browsers that do
+               not focus buttons on pointer activation. -->
+          <span slot="content">${params.hint}</span>
+        </openclaw-tooltip>
       </div>
       <div class=${valueClasses}>${params.value}</div>
       <div class="usage-summary-sub">${params.sub}</div>

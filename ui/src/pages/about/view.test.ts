@@ -87,6 +87,7 @@ describe("renderAbout", () => {
     const values = facts?.querySelectorAll("dd");
     expect(facts?.getAttribute("role")).toBe("group");
     expect(facts?.getAttribute("aria-label")).toBe("Control UI build details");
+    expect(facts?.classList.contains("about-build-grid")).toBe(true);
     expect(values).toHaveLength(4);
     expect(values?.[0]?.textContent).toContain("2026.7.10");
     expect(values?.[1]?.querySelector("code")?.textContent).toBe(COMMIT.slice(0, 12));
@@ -101,6 +102,7 @@ describe("renderAbout", () => {
         new Date(COMMIT_AT),
       ),
     );
+    expect(commitAge?.nextElementSibling?.tagName.toLowerCase()).toBe("openclaw-tooltip");
 
     expect(values?.[2]?.textContent).toContain("feature/build-chip*");
 

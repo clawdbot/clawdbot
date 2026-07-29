@@ -19,15 +19,22 @@ bot using **Setup code (recommended)**, and copy the generated command:
 openclaw channels add clickclack --code 'https://clickclack.example.com/#XXXX-XXXX-XXXX'
 ```
 
+For separate frontend and API origins or a path-mounted API, ClickClack emits an
+exact claim endpoint instead:
+
+```bash
+openclaw channels add clickclack --code 'https://api.example.com/services/clickclack/api/bot-setup-codes/claim#XXXX-XXXX-XXXX'
+```
+
 The setup code is single-use and expires after 10 minutes. OpenClaw claims it,
 receives the newly minted bot token and workspace settings, saves the account,
 verifies the connection, and reports whether the running gateway picked it up.
-The setup code itself is not stored in OpenClaw config.
+For versioned exact endpoints, OpenClaw validates and saves the canonical API
+base returned by ClickClack, including any path prefix. The setup code itself is
+not stored in OpenClaw config.
 
 Setup-code claims use HTTPS for public servers. Plain HTTP is also supported for
-local installations on loopback or private networks, including `localhost`,
-private IP addresses, and internal hostnames that resolve only to private
-addresses.
+local installations on loopback addresses such as `localhost` and `127.0.0.1`.
 
 If OpenClaw is already running, ClickClack connects automatically and no second
 command is needed. Otherwise, start it with:
@@ -105,7 +112,8 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 
 | Key                     | Default             | Notes                                                                                   |
 | ----------------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| `baseUrl`               | none (required)     | ClickClack server URL.                                                                  |
+| `baseUrl`               | none (required)     | Public ClickClack URL used for browser-facing links.                                    |
+| `apiBaseUrl`            | `baseUrl`           | Optional server-to-server endpoint for REST and realtime WebSocket traffic.             |
 | `token`                 | none                | Bot token as a plain string or secret ref (`source: "env" \| "file" \| "exec"`).        |
 | `tokenFile`             | none                | Path to a bot-token file; takes precedence over `token`.                                |
 | `workspace`             | none (required)     | Workspace id, slug, or name.                                                            |
@@ -119,6 +127,31 @@ id (`wsp_...`), slug, or name; the gateway resolves it to the id at startup.
 | `commandMenu`           | `true`              | Publish native commands to ClickClack composer autocomplete.                            |
 | `reconnectMs`           | `1500`              | Realtime reconnect delay (100 to 60000).                                                |
 | `discussions`           | disabled            | Managed per-session channel settings; see [Session discussions](#session-discussions).  |
+
+### Keep an auth-gated public hostname
+
+Use `apiBaseUrl` when ClickClack and the OpenClaw gateway run on the same host
+but the public ClickClack hostname is protected by an authentication gateway
+such as Cloudflare Access:
+
+```json5
+{
+  channels: {
+    clickclack: {
+      baseUrl: "https://clack.openclaw.ai",
+      apiBaseUrl: "http://127.0.0.1:8484",
+      token: { source: "env", provider: "default", id: "CLICKCLACK_BOT_TOKEN" },
+      workspace: "default",
+    },
+  },
+}
+```
+
+The public hostname can remain fully auth-gated for browser users. OpenClaw
+uses the loopback endpoint for REST requests, setup verification, and the
+realtime WebSocket, while discussion `embedUrl` and `openUrl` links continue to
+use the public `baseUrl`. If `apiBaseUrl` is omitted, all traffic uses
+`baseUrl`, preserving existing behavior.
 
 If `plugins.allow` is a non-empty restrictive list, explicitly selecting
 ClickClack in channel setup or running `openclaw plugins enable clickclack`
@@ -187,8 +220,8 @@ setup token cannot create or synchronize channels.
 `discussions.workspace` accepts the same workspace id, slug, or display name
 as the account-level `workspace` and defaults to that value. `section` controls
 the ClickClack sidebar section and defaults to `Sessions`. When
-`controlUrlBase` is set, the managed channel links back to the real Control UI
-session route, `/chat?session=<encoded-session-key>`.
+`controlUrlBase` is set, the managed channel links back to the canonical
+[Control UI session path](/web/urls#session-and-dashboard-urls).
 
 Enable discussions on exactly one ClickClack account. The gateway provider has
 no account selector, so multiple enabled discussion accounts are rejected

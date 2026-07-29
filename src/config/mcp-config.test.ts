@@ -113,6 +113,75 @@ describe("config mcp config", () => {
     });
   });
 
+  it("does not overwrite an existing server in create-only mode", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["existing.mjs"] } } } },
+      async () => {
+        const result = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs-mcp"] },
+          createOnly: true,
+        });
+
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("already exists"),
+        });
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "node",
+          args: ["existing.mjs"],
+        });
+      },
+    );
+  });
+
+  it("only replaces a server that still matches the expected config", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["current.mjs"] } } } },
+      async () => {
+        const stale = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs@2"] },
+          expectedServer: { command: "node", args: ["stale.mjs"] },
+        });
+        expect(stale).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
+
+        const replaced = await setConfiguredMcpServer({
+          name: "docs",
+          server: { command: "uvx", args: ["docs@2"] },
+          expectedServer: { command: "node", args: ["current.mjs"] },
+        });
+        expect(replaced.ok).toBe(true);
+
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "uvx",
+          args: ["docs@2"],
+        });
+      },
+    );
+  });
+
+  it("does not remove a server that changed after ownership inspection", async () => {
+    await withMcpConfigHome(
+      { mcp: { servers: { docs: { command: "node", args: ["changed.mjs"] } } } },
+      async () => {
+        const result = await unsetConfiguredMcpServer({
+          name: "docs",
+          expectedServer: { command: "uvx", args: ["docs-mcp"] },
+        });
+
+        expect(result).toMatchObject({ ok: false, error: expect.stringContaining("changed") });
+        const loaded = await listConfiguredMcpServers();
+        expect(loaded.ok && loaded.mcpServers.docs).toEqual({
+          command: "node",
+          args: ["changed.mjs"],
+        });
+      },
+    );
+  });
+
   it("fails closed when the config file is invalid", async () => {
     await withMcpConfigHome({}, async ({ configPath }) => {
       await fs.writeFile(configPath, "{", "utf-8");

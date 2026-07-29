@@ -6,8 +6,6 @@ export type McpServerCodexConfig = {
   agents?: string[];
   /** Codex MCP tool approval mode emitted as default_tools_approval_mode. */
   defaultToolsApprovalMode?: McpCodexToolApprovalMode;
-  /** Codex-native spelling accepted for operator-authored config. */
-  default_tools_approval_mode?: McpCodexToolApprovalMode;
 };
 
 export type McpServerToolFilterConfig = {
@@ -32,8 +30,6 @@ export type McpServerConfig = {
   env?: Record<string, string | number | boolean>;
   /** Working directory for stdio server. */
   cwd?: string;
-  /** Alias for cwd. */
-  workingDirectory?: string;
   /** HTTP transport: URL of the remote MCP server (http or https). */
   url?: string;
   /** Transport type — "stdio" for command-bearing servers, "sse" or "streamable-http" for remote URLs. */
@@ -58,16 +54,10 @@ export type McpServerConfig = {
   };
   /** HTTP TLS verification, disabled only for explicitly trusted private endpoints. */
   sslVerify?: boolean;
-  /** Alias for sslVerify. */
-  ssl_verify?: boolean;
   /** HTTP mutual TLS client certificate path. */
   clientCert?: string;
-  /** Alias for clientCert. */
-  client_cert?: string;
   /** HTTP mutual TLS client key path. */
   clientKey?: string;
-  /** Alias for clientKey. */
-  client_key?: string;
   /** Optional per-server OpenClaw MCP tool selection. */
   toolFilter?: McpServerToolFilterConfig;
   /** Codex-specific projection controls for Codex app-server/runtime config. */
@@ -86,9 +76,4 @@ export type McpConfig = {
     /** Dedicated listener port. Defaults to the Gateway port plus one. */
     sandboxPort?: number;
   };
-  /**
-   * Idle TTL for session-scoped bundled MCP runtimes, in milliseconds.
-   *
-   * Defaults to 10 minutes. Set to 0 to disable idle eviction.
-   */
 };

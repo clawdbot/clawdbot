@@ -195,6 +195,12 @@ describe("buildOfficialChannelCatalog", () => {
         docsPath: "/channels/whatsapp",
         blurb: "works with your own number; recommend a separate phone + eSIM.",
         systemImage: "message",
+        cliAddOptions: [
+          {
+            flags: "--auth-dir <path>",
+            description: "WhatsApp auth directory override",
+          },
+        ],
       },
       install: {
         clawhubSpec: "clawhub:@openclaw/whatsapp",
@@ -326,6 +332,12 @@ describe("buildOfficialChannelCatalog", () => {
         docsPath: "/channels/whatsapp",
         blurb: "works with your own number; recommend a separate phone + eSIM.",
         systemImage: "message",
+        cliAddOptions: [
+          {
+            flags: "--auth-dir <path>",
+            description: "WhatsApp auth directory override",
+          },
+        ],
       },
       install: {
         clawhubSpec: "clawhub:@openclaw/whatsapp",
