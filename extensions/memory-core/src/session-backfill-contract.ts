@@ -4,7 +4,7 @@ export type SessionBackfillDay = {
   topCandidates: string[];
 };
 
-export type SessionBackfillBatchProgress = {
+type SessionBackfillBatchProgress = {
   batch: number;
   days: number;
   candidates: number;
@@ -29,7 +29,7 @@ export type SessionBackfillResult = {
   };
 };
 
-export type SessionBackfillContinuation = {
+type SessionBackfillContinuation = {
   advanced: boolean;
   hasMore: boolean;
 };

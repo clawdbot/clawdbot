@@ -54,10 +54,7 @@ const TOP_CANDIDATE_LIMIT = 5;
 const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
 
 export { normalizeSessionBackfillSelection } from "./session-backfill-lifecycle.js";
-export type {
-  SessionBackfillExecution,
-  SessionBackfillResult,
-} from "./session-backfill-contract.js";
+export type { SessionBackfillResult } from "./session-backfill-contract.js";
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
