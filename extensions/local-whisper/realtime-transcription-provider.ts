@@ -9,7 +9,7 @@ import { createLocalWhisperRealtimeTranscriptionSession } from "./session.js";
 
 export const DEFAULT_LOCAL_WHISPER_MODEL = "small";
 
-export type LocalWhisperConfig = {
+type LocalWhisperConfig = {
   model: string;
   language: string;
   device: string;
