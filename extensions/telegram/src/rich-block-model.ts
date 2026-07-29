@@ -364,12 +364,24 @@ export function countInputRichBlockMedia(block: InputRichBlock): number {
   }
 }
 
-export function richTextToPlainString(text: RichText): string {
+type TelegramPlainTextProjectionOptions = {
+  preserveLinkTargets?: boolean;
+};
+
+function hasVisibleLinkTarget(label: string, url: string): boolean {
+  const normalize = (value: string) => value.replace(/^https?:\/\//iu, "").replace(/\/$/u, "");
+  return normalize(label) === normalize(url);
+}
+
+export function richTextToPlainString(
+  text: RichText,
+  options: TelegramPlainTextProjectionOptions = {},
+): string {
   if (typeof text === "string") {
     return text;
   }
   if (Array.isArray(text)) {
-    return text.map(richTextToPlainString).join("");
+    return text.map((part) => richTextToPlainString(part, options)).join("");
   }
   if (text.type === "mathematical_expression") {
     return text.expression;
@@ -378,23 +390,30 @@ export function richTextToPlainString(text: RichText): string {
     return text.alternative_text;
   }
   if (text.type === "url") {
-    const label = richTextToPlainString(text.text);
-    return !label || label === text.url ? text.url : `${label} (${text.url})`;
+    const label = richTextToPlainString(text.text, options);
+    if (!label || hasVisibleLinkTarget(label, text.url)) {
+      return label || text.url;
+    }
+    return options.preserveLinkTargets === false ? label : `${label} (${text.url})`;
   }
-  return richTextToPlainString(text.text);
+  return richTextToPlainString(text.text, options);
 }
 
-function captionToPlainText(caption: RichBlockCaption | undefined): string {
+function captionToPlainText(
+  caption: RichBlockCaption | undefined,
+  options: TelegramPlainTextProjectionOptions,
+): string {
   if (!caption) {
     return "";
   }
-  const credit = caption.credit ? ` — ${richTextToPlainString(caption.credit)}` : "";
-  return `${richTextToPlainString(caption.text)}${credit}`.trim();
+  const credit = caption.credit ? ` — ${richTextToPlainString(caption.credit, options)}` : "";
+  return `${richTextToPlainString(caption.text, options)}${credit}`.trim();
 }
 
 function inputRichBlocksToPlainTextAtDepth(
   blocks: readonly InputRichBlock[],
   listDepth: number,
+  options: TelegramPlainTextProjectionOptions,
 ): string {
   const parts: string[] = [];
   const push = (value: string) => {
@@ -407,7 +426,7 @@ function inputRichBlocksToPlainTextAtDepth(
       case "paragraph":
       case "heading":
       case "footer":
-        push(richTextToPlainString(block.text));
+        push(richTextToPlainString(block.text, options));
         break;
       case "pre":
         push(block.text);
@@ -418,24 +437,24 @@ function inputRichBlocksToPlainTextAtDepth(
       case "pullquote":
         push(
           block.credit
-            ? `${richTextToPlainString(block.text)} — ${richTextToPlainString(block.credit)}`
-            : richTextToPlainString(block.text),
+            ? `${richTextToPlainString(block.text, options)} — ${richTextToPlainString(block.credit, options)}`
+            : richTextToPlainString(block.text, options),
         );
         break;
       case "blockquote":
-        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth, options));
         if (block.credit) {
-          push(`— ${richTextToPlainString(block.credit)}`);
+          push(`— ${richTextToPlainString(block.credit, options)}`);
         }
         break;
       case "collage":
       case "slideshow":
-        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
-        push(captionToPlainText(block.caption));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth, options));
+        push(captionToPlainText(block.caption, options));
         break;
       case "details":
-        push(richTextToPlainString(block.summary));
-        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth));
+        push(richTextToPlainString(block.summary, options));
+        push(inputRichBlocksToPlainTextAtDepth(block.blocks, listDepth, options));
         break;
       case "list":
         for (const item of block.items) {
@@ -447,37 +466,39 @@ function inputRichBlocksToPlainTextAtDepth(
               ? `${item.value}. `
               : "• ";
           const marker = `${"  ".repeat(listDepth)}${markerText}`;
-          push(`${marker}${inputRichBlocksToPlainTextAtDepth(item.blocks, listDepth + 1)}`);
+          push(
+            `${marker}${inputRichBlocksToPlainTextAtDepth(item.blocks, listDepth + 1, options)}`,
+          );
         }
         break;
       case "table":
         if (block.caption !== undefined) {
-          push(richTextToPlainString(block.caption));
+          push(richTextToPlainString(block.caption, options));
         }
         for (const row of block.cells) {
-          push(row.map((cell) => richTextToPlainString(cell.text ?? "")).join(" | "));
+          push(row.map((cell) => richTextToPlainString(cell.text ?? "", options)).join(" | "));
         }
         break;
       // Fallback text keeps BOTH caption and source so a degraded delivery
       // still lets the user reach the media.
       case "photo":
-        push(`${captionToPlainText(block.caption)} ${block.photo.media}`.trim());
+        push(`${captionToPlainText(block.caption, options)} ${block.photo.media}`.trim());
         break;
       case "video":
-        push(`${captionToPlainText(block.caption)} ${block.video.media}`.trim());
+        push(`${captionToPlainText(block.caption, options)} ${block.video.media}`.trim());
         break;
       case "audio":
-        push(`${captionToPlainText(block.caption)} ${block.audio.media}`.trim());
+        push(`${captionToPlainText(block.caption, options)} ${block.audio.media}`.trim());
         break;
       case "animation":
-        push(`${captionToPlainText(block.caption)} ${block.animation.media}`.trim());
+        push(`${captionToPlainText(block.caption, options)} ${block.animation.media}`.trim());
         break;
       case "voice_note":
-        push(`${captionToPlainText(block.caption)} ${block.voice_note.media}`.trim());
+        push(`${captionToPlainText(block.caption, options)} ${block.voice_note.media}`.trim());
         break;
       case "map":
         push(
-          `${captionToPlainText(block.caption)} ${block.location.latitude},${block.location.longitude}`.trim(),
+          `${captionToPlainText(block.caption, options)} ${block.location.latitude},${block.location.longitude}`.trim(),
         );
         break;
       case "divider":
@@ -488,8 +509,11 @@ function inputRichBlocksToPlainTextAtDepth(
   return parts.join("\n");
 }
 
-export function inputRichBlocksToPlainText(blocks: readonly InputRichBlock[]): string {
-  return inputRichBlocksToPlainTextAtDepth(blocks, 0);
+export function inputRichBlocksToPlainText(
+  blocks: readonly InputRichBlock[],
+  options: TelegramPlainTextProjectionOptions = {},
+): string {
+  return inputRichBlocksToPlainTextAtDepth(blocks, 0, options);
 }
 
 export function boldRichText(text: string): RichText {

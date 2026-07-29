@@ -402,9 +402,11 @@ describe("markdownToTelegramRichBlocks", () => {
 
   it("preserves link destinations in the plain fallback without duplicating autolinks", () => {
     const { plainText } = markdownToTelegramRichBlocks(
-      "**[docs](https://example.com/docs)** and https://example.com/plain",
+      "**[docs](https://example.com/docs)** and example.com and https://example.com/plain",
     );
-    expect(plainText).toBe("docs (https://example.com/docs) and https://example.com/plain");
+    expect(plainText).toBe(
+      "docs (https://example.com/docs) and example.com and https://example.com/plain",
+    );
   });
 
   it("keeps table content in plainText for the plain fallback", () => {

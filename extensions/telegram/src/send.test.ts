@@ -4558,6 +4558,30 @@ describe("editMessageTelegram", () => {
     expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, text);
   });
 
+  it("keeps rich edit fallback within the plain-text limit after expanding links", async () => {
+    const links = Array.from({ length: 50 }, (_, index) => ({
+      label: `link-${index}`,
+      url: `https://example.com/${"a".repeat(100)}-${index}`,
+    }));
+    const text = links.map(({ label, url }) => `[${label}](${url})`).join(" ");
+    const compactText = links.map(({ label }) => label).join(" ");
+    const expandedText = links.map(({ label, url }) => `${label} (${url})`).join(" ");
+    botRawApi.editMessageText.mockRejectedValueOnce(
+      createRichEntityInvalidError("URL", "editMessageText"),
+    );
+    botApi.editMessageText.mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: { channels: { telegram: { richMessages: true } } },
+    });
+
+    expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, compactText);
+    expect(expandedText.length).toBeGreaterThan(4000);
+    expect(compactText.length).toBeLessThanOrEqual(4000);
+  });
+
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {
     botApi.editMessageText
       .mockRejectedValueOnce(Object.assign(new Error("502: Bad Gateway"), { error_code: 502 }))

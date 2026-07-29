@@ -14,7 +14,10 @@ import {
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
 import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
-import type { TelegramRichBlocksDegradationReason } from "../rich-block-model.js";
+import {
+  inputRichBlocksToPlainText,
+  type TelegramRichBlocksDegradationReason,
+} from "../rich-block-model.js";
 import {
   buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
@@ -26,6 +29,7 @@ import {
 import {
   buildTelegramPlainFallbackPlan,
   isTelegramHtmlParseError,
+  selectTelegramSingleMessagePlainFallback,
   warnTelegramRichBlocksDegradations,
 } from "../rich-plain-fallback.js";
 import { buildInlineKeyboard } from "../send.js";
@@ -199,7 +203,14 @@ export async function sendTelegramText(
       if (!fallbackPlan || !hasFallbackText) {
         throw err;
       }
-      return await sendPlainFallback(fallbackPlan.plainText);
+      return await sendPlainFallback(
+        selectTelegramSingleMessagePlainFallback(
+          fallbackPlan,
+          inputRichBlocksToPlainText(richPlan.richMessage.blocks, {
+            preserveLinkTargets: false,
+          }),
+        ),
+      );
     }
   }
 

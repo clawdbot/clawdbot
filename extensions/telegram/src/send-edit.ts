@@ -4,6 +4,7 @@ import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { isRecoverableTelegramNetworkError, isTelegramServerError } from "./network-errors.js";
+import { inputRichBlocksToPlainText } from "./rich-block-model.js";
 import {
   buildTelegramRichMarkdownPlan,
   getTelegramRichRawApi,
@@ -11,6 +12,7 @@ import {
 } from "./rich-message.js";
 import {
   buildTelegramPlainFallbackPlan,
+  selectTelegramSingleMessagePlainFallback,
   warnTelegramRichBlocksDegradations,
 } from "./rich-plain-fallback.js";
 import {
@@ -233,11 +235,17 @@ async function editMessageTelegramWithContext(
         if (!fallbackPlan) {
           throw err;
         }
+        const fallbackText = selectTelegramSingleMessagePlainFallback(
+          fallbackPlan,
+          inputRichBlocksToPlainText(richMessagePlan.richMessage.blocks, {
+            preserveLinkTargets: false,
+          }),
+        );
         return requestWithEditShouldLog(
           () =>
             Object.keys(plainTextParams).length > 0
-              ? api.editMessageText(chatId, messageId, fallbackPlan.plainText, plainTextParams)
-              : api.editMessageText(chatId, messageId, fallbackPlan.plainText),
+              ? api.editMessageText(chatId, messageId, fallbackText, plainTextParams)
+              : api.editMessageText(chatId, messageId, fallbackText),
           "editMessage-plain",
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         );

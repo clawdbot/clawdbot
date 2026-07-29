@@ -26,6 +26,13 @@ type TelegramPlainFallbackPlan = {
   chunks: string[];
 };
 
+export function selectTelegramSingleMessagePlainFallback(
+  plan: TelegramPlainFallbackPlan,
+  compactPlainText: string,
+): string {
+  return plan.chunks.length > 1 ? compactPlainText : plan.plainText;
+}
+
 function isTelegramRichEntityInvalidError(err: unknown): boolean {
   return RICH_ENTITY_INVALID_RE.test(formatErrorMessage(err));
 }
