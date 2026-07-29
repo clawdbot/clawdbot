@@ -2400,7 +2400,9 @@ export const en: TranslationMap = {
       description:
         "Exactly one memory plugin owns the memory slot. Selecting an engine enables it and disables the others.",
       rowTitle: "Memory engine",
+      openClawMemory: "OpenClaw Memory",
       off: "Off",
+      unavailable: "Unavailable",
       autoHint: "No engine is pinned in config, so the slot falls back to its default owner.",
       explicitHint: "This engine is pinned in config under plugins.slots.memory.",
       offHint: "Memory is switched off in config: plugins.slots.memory is set to none.",
