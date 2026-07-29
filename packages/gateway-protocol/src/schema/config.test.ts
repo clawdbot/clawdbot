@@ -1,11 +1,12 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
-import { ConfigSchemaResponseSchema } from "./config.js";
+import { ConfigSchemaLookupResultSchema, ConfigSchemaResponseSchema } from "./config.js";
 
 const response = {
   schema: {},
   uiHints: {
     "channels.sms.fromNumber": {
+      docsUrl: "https://docs.openclaw.ai/channels/sms",
       presentation: "phone-number",
     },
   },
@@ -29,5 +30,18 @@ describe("ConfigSchemaResponseSchema", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("ConfigSchemaLookupResultSchema", () => {
+  it("accepts a documentation URL in the resolved hint", () => {
+    expect(
+      Value.Check(ConfigSchemaLookupResultSchema, {
+        path: "gateway",
+        schema: { type: "object" },
+        hint: { docsUrl: "https://docs.openclaw.ai/gateway" },
+        children: [],
+      }),
+    ).toBe(true);
   });
 });

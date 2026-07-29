@@ -1671,6 +1671,65 @@ describe("runCopilotAttempt", () => {
     ).toBe(sdkTools);
   });
 
+  it("applies before_prompt_build toolsAllow to the submitted SDK tool surface", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+    const sdk = makeFakeSdk();
+    const sdkTools: SdkTool[] = [
+      {
+        description: "Fake SDK tool",
+        handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+        name: "fake_sdk_tool",
+        parameters: { type: "object" },
+      },
+    ];
+
+    await runCopilotAttempt(makeParams(), {
+      createToolBridge: vi.fn(async () => ({ sdkTools, sourceTools: [] })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools).toEqual([]);
+  });
+
+  it("preserves the required message tool through before_prompt_build toolsAllow", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          handler: () => ({ toolsAllow: [] }),
+        },
+      ]),
+    );
+    const sdk = makeFakeSdk();
+    const makeTool = (name: string): SdkTool => ({
+      description: name,
+      handler: async () => ({ resultType: "success", textResultForLlm: "ok" }),
+      name,
+      parameters: { type: "object" },
+    });
+
+    await runCopilotAttempt(makeParams({ sourceReplyDeliveryMode: "message_tool_only" }), {
+      createToolBridge: vi.fn(async () => ({
+        sdkTools: [makeTool("message"), makeTool("read")],
+        sourceTools: [],
+      })),
+      pool: makeFakePool(sdk),
+    });
+
+    expect(
+      ((requireCreateSessionConfig(sdk) as { tools?: SdkTool[] }).tools ?? []).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["message"]);
+  });
+
   it("F6: sessionRef is populated after createSession so the tool bridge's onYield can abort the live SDK session", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);

@@ -52,6 +52,7 @@ export {
   compactToolSearchCatalogEntry,
   createToolSearchCatalogRef,
   registerHeadlessToolSearchCatalog,
+  restrictToolSearchCatalog,
 } from "./tool-search-catalog.js";
 export { resolveToolSearchConfig } from "./tool-search-config.js";
 export {

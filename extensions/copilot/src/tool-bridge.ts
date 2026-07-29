@@ -800,7 +800,7 @@ function isCopilotRawModelRun(params: CopilotToolAttemptParams): boolean {
  * codex equivalent at
  * `extensions/codex/src/app-server/run-attempt.ts:4253-4258`.
  */
-function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
+export function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolean {
   if (params.disableMessageTool === true) {
     return false;
   }
@@ -813,14 +813,20 @@ function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams): boolea
  * so final filtering keeps aliases, groups, plugin policies, and glob
  * semantics identical to the in-tree embedded runner.
  */
-function filterCopilotToolsForAllowlist<T extends { name: string }>(
+export function filterCopilotToolsForAllowlist<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
+  options?: { forceToolNames?: readonly string[] },
 ): T[] {
-  return applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
+  const filtered = applyEmbeddedAttemptToolsAllow(tools, toolsAllow, {
     toolMeta: (tool) =>
       getPluginToolMeta(tool as unknown as AnyAgentTool) ?? readInlinePluginToolMeta(tool),
   });
+  if (!options?.forceToolNames?.length) {
+    return filtered;
+  }
+  const allowedNames = new Set([...filtered.map((tool) => tool.name), ...options.forceToolNames]);
+  return tools.filter((tool) => allowedNames.has(tool.name));
 }
 
 function filterCopilotToolsForConstructionPlan<T extends { name: string }>(

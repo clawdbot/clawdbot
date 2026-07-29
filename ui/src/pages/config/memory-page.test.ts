@@ -289,7 +289,7 @@ describe("MemorySettingsPage engine slot", () => {
       configObject: {},
       catalog: [
         engine("memory-lancedb", true, "Memory LanceDB"),
-        engine("memory-core", false, "OpenClaw Memory"),
+        engine("memory-core", false, "memory-core"),
       ],
     });
     document.body.append(element);
@@ -542,6 +542,10 @@ describe("MemorySettingsPage catalog state", () => {
       expect(addonStatus(element, "Memory wiki")).toBe("Disabled");
       expect(addonSwitch(element, "Active memory")).toBeNull();
       expect(addonSwitch(element, "Memory wiki")).toBeNull();
+      const engineGroup = element.querySelector<HTMLElement & { disabled?: boolean }>(
+        "wa-radio-group.settings-segmented",
+      );
+      expect(engineGroup?.disabled).toBe(true);
     } finally {
       element.remove();
     }

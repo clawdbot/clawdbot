@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
-type ResolveStaticCatalog =
-  typeof import("./embedded-agent-runner/model.static-catalog.js").resolveBundledStaticCatalogModel;
+type CreateStaticCatalogResolver =
+  typeof import("./embedded-agent-runner/model.static-catalog.js").createBundledStaticCatalogModelResolver;
+type StaticCatalogResolver = ReturnType<CreateStaticCatalogResolver>;
 
 const mocks = vi.hoisted(() => ({
   authStorage: { getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })) },
@@ -23,7 +24,8 @@ const mocks = vi.hoisted(() => ({
   })),
   ensureRuntimePluginsLoaded: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
-  resolveBundledStaticCatalogModel: vi.fn<ResolveStaticCatalog>(() => undefined),
+  resolveStaticCatalogModel: vi.fn<StaticCatalogResolver>(() => undefined),
+  createStaticCatalogResolver: vi.fn<CreateStaticCatalogResolver>(),
   configuredAgentIds: [] as string[],
   mutationListener: undefined as
     | ((event: { agentDir?: string; affectsInheritedStores: boolean }) => void)
@@ -80,8 +82,8 @@ vi.mock("./runtime-plugins.js", () => ({
 vi.mock("./embedded-agent-runner/model.static-catalog.js", () => ({
   loadBundledProviderStaticCatalogContextModels: (...args: Parameters<LoadStaticCatalog>) =>
     mocks.loadStaticCatalog(...args),
-  resolveBundledStaticCatalogModel: (...args: Parameters<ResolveStaticCatalog>) =>
-    mocks.resolveBundledStaticCatalogModel(...args),
+  createBundledStaticCatalogModelResolver: (...args: Parameters<CreateStaticCatalogResolver>) =>
+    mocks.createStaticCatalogResolver(...args),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -117,7 +119,9 @@ describe("prepared model runtime snapshots", () => {
     mocks.buildPreparedModelCatalogSnapshot.mockClear();
     mocks.ensureRuntimePluginsLoaded.mockClear();
     mocks.loadStaticCatalog.mockClear();
-    mocks.resolveBundledStaticCatalogModel.mockClear();
+    mocks.resolveStaticCatalogModel.mockReset();
+    mocks.createStaticCatalogResolver.mockReset();
+    mocks.createStaticCatalogResolver.mockReturnValue(mocks.resolveStaticCatalogModel);
     mocks.modelRegistry.fork.mockClear();
     mocks.configuredAgentIds = [];
   });
@@ -286,7 +290,7 @@ describe("prepared model runtime snapshots", () => {
       contextWindow: 1_050_000,
       maxTokens: 128_000,
     };
-    mocks.resolveBundledStaticCatalogModel.mockReturnValueOnce(runtimeModel);
+    mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
     const config = {
       agents: {
         defaults: {
@@ -311,7 +315,17 @@ describe("prepared model runtime snapshots", () => {
       env: process.env,
       workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
     });
-    expect(mocks.resolveBundledStaticCatalogModel).toHaveBeenCalledOnce();
+    expect(mocks.createStaticCatalogResolver).toHaveBeenCalledOnce();
+    expect(mocks.createStaticCatalogResolver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: config,
+        env: process.env,
+        includeRuntimeDiscovery: true,
+        metadataSnapshot: snapshot.metadataSnapshot,
+        workspaceDir: "/tmp/prepared-model-runtime-manifest-workspace",
+      }),
+    );
+    expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledOnce();
     expect(snapshot.agentId).toBe("qa");
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
@@ -350,7 +364,7 @@ describe("prepared model runtime snapshots", () => {
         baseUrl: "https://provider-static.example.test/v1",
       },
     ]);
-    mocks.resolveBundledStaticCatalogModel.mockReturnValueOnce(runtimeModel);
+    mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
 
     const snapshot = await publishPreparedModelRuntimeSnapshot({
       config: { agents: { defaults: { model: { primary: "nvidia/nemotron-static" } } } },

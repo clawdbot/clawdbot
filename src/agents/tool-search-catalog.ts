@@ -311,6 +311,30 @@ export function clearToolSearchCatalog(params: {
   }
 }
 
+/** Restricts a run-scoped catalog to an already-resolved set of concrete tool names. */
+export function restrictToolSearchCatalog(params: {
+  catalogRef?: ToolSearchCatalogRef;
+  allowedToolNames: ReadonlySet<string>;
+  baselineEntries?: readonly ToolSearchCatalogEntry[];
+}): number {
+  const current = params.catalogRef?.current;
+  if (!current) {
+    return 0;
+  }
+  const entries = (params.baselineEntries ?? current.entries).filter((entry) =>
+    params.allowedToolNames.has(entry.name),
+  );
+  if (
+    entries.length === current.entries.length &&
+    entries.every((entry, index) => entry === current.entries[index])
+  ) {
+    return entries.length;
+  }
+  current.entries = entries;
+  catalogFingerprints.set(current, catalogEntriesFingerprint(entries));
+  return entries.length;
+}
+
 export function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   const catalog = ctx.catalogRef?.current;
   if (!catalog) {

@@ -151,6 +151,7 @@ export function renderAppearanceSection(
                     props.theme
                       ? "settings-theme-card--active"
                       : ""}"
+                    aria-pressed=${String(opt.id === props.theme)}
                     title=${opt.description}
                     @click=${(e: Event) => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
@@ -267,6 +268,7 @@ export function renderAppearanceSection(
                     <button
                       type="button"
                       class="settings-text-scale__btn ${stop === props.textScale ? "active" : ""}"
+                      aria-pressed=${String(stop === props.textScale)}
                       @click=${() => props.setTextScale(stop)}
                     >
                       <span class="settings-text-scale__sample">${t(TEXT_SCALE_LABELS[stop])}</span>
