@@ -416,11 +416,40 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
       delayMs: 0,
+      shouldContinue: expect.any(Function),
       gatewayRuntime: expect.any(Object),
     });
     expect(hoisted.scheduleSubagentOrphanRecovery).toHaveBeenCalledWith();
     expect(methodsAtRecoveryRegistration).toStrictEqual([["chat.history", "models.list"]]);
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
+  });
+
+  it("fences startup recovery as soon as its gateway close prelude begins", async () => {
+    let closing = false;
+    const recoverySidecar = { stop: vi.fn(async () => {}) };
+    const onGatewayLifetimeSidecars = vi.fn();
+    hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
+      (params: { shouldContinue?: () => boolean }) => {
+        expect(params.shouldContinue?.()).toBe(true);
+        closing = true;
+        expect(params.shouldContinue?.()).toBe(false);
+        return recoverySidecar;
+      },
+    );
+
+    await startGatewayPostAttachRuntime({
+      ...createPostAttachParams(),
+      isClosing: () => closing,
+      onGatewayLifetimeSidecars,
+    });
+
+    await waitForGatewayTestState(() => {
+      expect(onGatewayLifetimeSidecars).toHaveBeenCalledOnce();
+    });
+    expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledOnce();
+    expect(onGatewayLifetimeSidecars).toHaveBeenCalledWith(
+      expect.arrayContaining([recoverySidecar]),
+    );
   });
 
   it("stops restart recovery with gateway-lifetime sidecars", async () => {

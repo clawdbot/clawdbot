@@ -350,8 +350,13 @@ export async function resumeMainSession(params: {
   pendingFinalDeliveryText?: string | null;
   forceRestartSafeTools?: boolean;
   sessionWorkAdmissionHandoffId?: string;
+  lifecycleGeneration?: string;
+  shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
 }): Promise<MainSessionResumeResult> {
+  if (params.shouldContinue?.() === false) {
+    return "skipped";
+  }
   const sanitizedPendingText =
     typeof params.pendingFinalDeliveryText === "string"
       ? sanitizePendingFinalDeliveryText(params.pendingFinalDeliveryText)
@@ -381,24 +386,38 @@ export async function resumeMainSession(params: {
       command: {
         kind: "prepare_attempt",
         attempt: params.recoveryAttempt,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        lifecycleGeneration: params.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
         now: Date.now(),
         observation: params.observation,
         runId: recoveryRunId,
       },
       requireWriteSuccess: true,
+      shouldContinue: params.shouldContinue,
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
     });
     if (reserved.transition.kind !== "reserved") {
       return "skipped";
     }
     reservation = reserved.transition.reservation;
+    if (params.shouldContinue?.() === false) {
+      await rollbackRestartRecoveryReservation({
+        kind: "cancel_reservation",
+        reservation,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
+      reservation = undefined;
+      return "skipped";
+    }
     // Persist one stable RPC id before dispatch. A transport rejection is
     // ambiguous; retries must reuse this id so accepted work cannot duplicate.
     const recoveryStatePrepared = await applySessionEntryReplacements({
       sessionKeys: [params.sessionKey],
       storePath: params.storePath,
       update: (entries) => {
+        if (params.shouldContinue?.() === false) {
+          return { result: false };
+        }
         const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
         const entry = current?.entry;
         if (
@@ -430,6 +449,9 @@ export async function resumeMainSession(params: {
         storePath: params.storePath,
       });
       reservation = undefined;
+      if (params.shouldContinue?.() === false) {
+        return "skipped";
+      }
       const current = rollback.entry;
       return current?.sessionId === params.entry.sessionId &&
         current.status === "running" &&
@@ -472,6 +494,16 @@ export async function resumeMainSession(params: {
         agentParams.threadId = String(deliveryContext.threadId);
       }
     }
+    if (params.shouldContinue?.() === false) {
+      await rollbackRestartRecoveryReservation({
+        kind: "cancel_reservation",
+        reservation,
+        sessionKey: params.sessionKey,
+        storePath: params.storePath,
+      });
+      reservation = undefined;
+      return "skipped";
+    }
     if (params.forceRestartSafeTools) {
       log.info(`dispatching restart-safe recovery for ${params.sessionKey}`);
     }
@@ -480,6 +512,11 @@ export async function resumeMainSession(params: {
       runId: string;
       status?: unknown;
     }>(agentParams, 10_000);
+    if (params.shouldContinue?.() === false) {
+      // The accepted run belongs to its original Gateway; never let a stopped
+      // owner settle or transfer that durable claim into a new lifecycle.
+      return "skipped";
+    }
     // Real Gateway admission consumes the reservation before returning accepted.
     // Recovery-runtime fakes may return directly, so keep this idempotent fallback
     // to make the durable acceptance boundary explicit in focused tests too.
@@ -490,7 +527,8 @@ export async function resumeMainSession(params: {
         params.gatewayRuntime,
       );
     }
-    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const lifecycleGeneration =
+      params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
     const admission = await commitMainSessionRecovery({
       command: {
         kind: "admit_recovery",
@@ -499,6 +537,7 @@ export async function resumeMainSession(params: {
         runId: recoveryRunId,
         sessionId: params.entry.sessionId,
       },
+      shouldContinue: params.shouldContinue,
       target: { sessionKey: params.sessionKey, storePath: params.storePath },
     });
     if (

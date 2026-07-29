@@ -98,10 +98,7 @@ import {
   runQaSuiteWithInfraRetry,
 } from "./suite-launch.runtime.js";
 import { resolveQaSuiteScenarioChannel, resolveQaSuiteScenarioChannels } from "./suite-planning.js";
-import {
-  isQaSuiteReportOnlyOptionalScenario,
-  readQaSuiteFailedOrSkippedScenarioCountFromFile,
-} from "./suite-summary.js";
+import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "./suite-summary.js";
 import {
   buildTokenEfficiencyReport,
   renderTokenEfficiencyMarkdownReport,
@@ -1046,17 +1043,16 @@ export async function runQaSuiteCommand(opts: QaSuiteCommandOptions) {
       process.stdout.write(`QA suite evidence: ${result.evidencePath}\n`);
       process.stdout.write(`QA suite summary: ${result.summaryPath}\n`);
       if (!allowFailures) {
-        const optionalScenarioNames = resolveQaReportOnlyOptionalScenarioNames({
-          scenarioIds,
-          explicitScenarioSelection: opts.explicitScenarioSelection,
-        });
-        if (
-          result.scenarios.some(
-            (scenario) =>
-              scenario.status !== "pass" &&
-              !isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
-          )
-        ) {
+        const blockingScenarioCount = await readQaSuiteFailedOrSkippedScenarioCountFromFile(
+          result.summaryPath,
+          {
+            optionalScenarioNames: resolveQaReportOnlyOptionalScenarioNames({
+              scenarioIds,
+              explicitScenarioSelection: opts.explicitScenarioSelection,
+            }),
+          },
+        );
+        if (blockingScenarioCount > 0) {
           process.exitCode = 1;
         }
       }

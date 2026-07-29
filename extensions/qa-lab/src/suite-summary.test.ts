@@ -77,6 +77,23 @@ describe("qa suite summary helpers", () => {
     ).resolves.toBe(2);
   });
 
+  it.each([
+    ["missing", {}],
+    ["timeout", { status: "timeout" }],
+    ["blocked", { status: "blocked" }],
+    ["error", { status: "error" }],
+  ] as const)("counts %s scenario statuses as failures in both gates", async (_name, scenario) => {
+    const summary = {
+      counts: { failed: 0, skipped: 0 },
+      scenarios: [scenario],
+    };
+
+    await expect(readSummary(summary, readQaSuiteFailedScenarioCountFromFile)).resolves.toBe(1);
+    await expect(
+      readSummary(summary, readQaSuiteFailedOrSkippedScenarioCountFromFile),
+    ).resolves.toBe(1);
+  });
+
   it("rejects a suite containing only catalog-confirmed report-only skips", async () => {
     await expect(
       readSummary(
@@ -148,6 +165,24 @@ describe("qa suite summary helpers", () => {
       ).resolves.toBe(1);
     },
   );
+
+  it.each([
+    ["blocked", { status: "blocked" }],
+    ["timeout", { status: "timeout" }],
+    ["error", { status: "error" }],
+    ["missing", {}],
+  ] as const)("keeps standalone %s evidence fail-closed in both gates", async (_name, result) => {
+    const summary = {
+      counts: { total: 1, passed: 1, failed: 0, skipped: 0 },
+      scenarios: [{ status: "pass" }],
+      entries: [{ result }],
+    };
+
+    await expect(readSummary(summary, readQaSuiteFailedScenarioCountFromFile)).resolves.toBe(1);
+    await expect(
+      readSummary(summary, readQaSuiteFailedOrSkippedScenarioCountFromFile),
+    ).resolves.toBe(1);
+  });
 
   it("rejects evidence-only results without an observed status", async () => {
     await expect(

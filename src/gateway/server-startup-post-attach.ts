@@ -1211,13 +1211,20 @@ export async function startGatewayPostAttachRuntime(
         ]);
         let mainSessionRecoverySidecar: GatewayPostReadySidecarHandle | undefined;
         try {
-          const { scheduleRestartAbortedMainSessionRecovery } =
-            await loadMainSessionRestartRecoveryModule();
-          mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
-            cfg: params.cfgAtStart,
-            delayMs: 0,
-            gatewayRuntime: params.recoveryRuntime,
-          });
+          if (params.isClosing?.() !== true) {
+            const { scheduleRestartAbortedMainSessionRecovery } =
+              await loadMainSessionRestartRecoveryModule();
+            // Closing can begin while the runtime module is loading; a late owner
+            // would miss lifetime registration and race the replacement gateway.
+            if (params.isClosing?.() !== true) {
+              mainSessionRecoverySidecar = scheduleRestartAbortedMainSessionRecovery({
+                cfg: params.cfgAtStart,
+                delayMs: 0,
+                shouldContinue: () => params.isClosing?.() !== true,
+                gatewayRuntime: params.recoveryRuntime,
+              });
+            }
+          }
         } catch (err) {
           params.log.warn(`main-session restart recovery failed to schedule: ${String(err)}`);
         }

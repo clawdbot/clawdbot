@@ -118,6 +118,25 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
+async function writeNativeVitestReport(
+  command: QaScenarioCommandExecution,
+  counts: { failed?: number; passed: number },
+) {
+  const reportArg = command.args.find((arg) => arg.startsWith("--outputFile.json="));
+  if (!reportArg) {
+    return;
+  }
+  await fs.writeFile(
+    reportArg.slice("--outputFile.json=".length),
+    JSON.stringify({
+      numFailedTests: counts.failed ?? 0,
+      numPassedTests: counts.passed,
+      success: (counts.failed ?? 0) === 0,
+    }),
+    "utf8",
+  );
+}
+
 async function writeScriptProducerEvidence(params: {
   outputDir: string;
   scenarioId?: string;
@@ -202,6 +221,7 @@ describe("qa test file scenario runner", () => {
       ],
       runCommand: async (command) => {
         commands.push(command);
+        await writeNativeVitestReport(command, { passed: 1 });
         return {
           exitCode: 0,
           stdout: "pass\n",
@@ -225,6 +245,14 @@ describe("qa test file scenario runner", () => {
         "runner",
         "ui/src/e2e/chat-flow.e2e.test.ts",
         "--reporter=verbose",
+        "--reporter=json",
+        `--outputFile.json=${path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-playwright",
+          "scenario-playwright.vitest-report.json",
+        )}`,
         "--testNamePattern",
         "sends a chat turn through the GUI",
       ],
@@ -288,11 +316,14 @@ describe("qa test file scenario runner", () => {
       primaryModel: "mock-openai/gpt-5.6-luna",
       scenarios: [makeTestFileScenario("playwright", "ui/src/e2e/chat-flow.e2e.test.ts")],
       writeEvidenceFile: false,
-      runCommand: async () => ({
-        exitCode: 0,
-        stdout: "pass\n",
-        stderr: "",
-      }),
+      runCommand: async (command) => {
+        await writeNativeVitestReport(command, { passed: 1 });
+        return {
+          exitCode: 0,
+          stdout: "pass\n",
+          stderr: "",
+        };
+      },
     });
 
     expect(result.evidence.entries).toHaveLength(1);
@@ -324,6 +355,14 @@ describe("qa test file scenario runner", () => {
         "scripts/run-vitest.mjs",
         "extensions/qa-lab/src/coverage-report.test.ts",
         "--reporter=verbose",
+        "--reporter=json",
+        `--outputFile.json=${path.join(
+          repoRoot,
+          ".artifacts",
+          "qa-e2e",
+          "scenario-vitest",
+          "scenario-vitest.vitest-report.json",
+        )}`,
       ],
     ]);
     expect(commands.map((command) => command.timeoutMs)).toEqual([undefined]);
@@ -366,6 +405,47 @@ describe("qa test file scenario runner", () => {
       },
     });
   });
+
+  it.each([
+    { executionKind: "vitest" as const, passed: 0, expectedStatus: "fail" as const },
+    { executionKind: "playwright" as const, passed: 0, expectedStatus: "fail" as const },
+    { executionKind: "vitest" as const, passed: 1, expectedStatus: "pass" as const },
+    { executionKind: "playwright" as const, passed: 1, expectedStatus: "pass" as const },
+  ])(
+    "requires an actually passed $executionKind test when the native child exits successfully ($passed passed)",
+    async ({ executionKind, expectedStatus, passed }) => {
+      const repoRoot = await makeTempRepo(`qa-${executionKind}-executed-tests-`);
+      const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", `scenario-${executionKind}`);
+      const scenarioPath =
+        executionKind === "playwright"
+          ? "ui/src/e2e/chat-flow.e2e.test.ts"
+          : "extensions/qa-lab/src/coverage-report.test.ts";
+      const commands: QaScenarioCommandExecution[] = [];
+      const result = await runQaTestFileScenarios({
+        repoRoot,
+        outputDir,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        scenarios: [makeTestFileScenario(executionKind, scenarioPath)],
+        runCommand: async (command) => {
+          commands.push(command);
+          await writeNativeVitestReport(command, { passed });
+          return { exitCode: 0, stdout: "child exited successfully\n", stderr: "" };
+        },
+      });
+
+      expect(result.results[0]).toMatchObject({ status: expectedStatus });
+      expect(result.evidence.entries[0]?.result.status).toBe(expectedStatus);
+      expect(commands.filter((command) => command.args[0] === "scripts/run-vitest.mjs")).toHaveLength(
+        1,
+      );
+      if (expectedStatus === "fail") {
+        expect(result.results[0]?.failureMessage).toBe(
+          "Vitest exited successfully without reporting a successfully executed test.",
+        );
+      }
+    },
+  );
 
   it.each([
     { failFast: true, expectedScenarioIds: ["first-native-scenario"] },

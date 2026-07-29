@@ -97,16 +97,37 @@ export function isQaTestFileScenario(
   );
 }
 
-function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+function vitestReporterArgs(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): string[] {
+  return [
+    "--reporter=verbose",
+    "--reporter=json",
+    `--outputFile.json=${path.join(context.outputDir, `${scenario.id}.vitest-report.json`)}`,
+  ];
+}
+
+function vitestSteps(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): QaScenarioCommandStep[] {
   return [
     {
       command: process.execPath,
-      args: ["scripts/run-vitest.mjs", scenario.execution.path, "--reporter=verbose"],
+      args: [
+        "scripts/run-vitest.mjs",
+        scenario.execution.path,
+        ...vitestReporterArgs(scenario, context),
+      ],
     },
   ];
 }
 
-function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+function playwrightSteps(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): QaScenarioCommandStep[] {
   const testNamePattern =
     scenario.execution.kind === "playwright" ? scenario.execution.testNamePattern : undefined;
   const testNameArgs = testNamePattern ? ["--testNamePattern", testNamePattern] : [];
@@ -125,7 +146,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
         "--configLoader",
         "runner",
         scenario.execution.path,
-        "--reporter=verbose",
+        ...vitestReporterArgs(scenario, context),
         ...testNameArgs,
       ],
     },
@@ -208,6 +229,32 @@ function withScenarioCoverage(
   return { ...entry, coverage: coverageForScenario(scenario) };
 }
 
+async function readNativeVitestExecutionFailure(params: {
+  outputDir: string;
+  scenario: QaTestFileScenario;
+}): Promise<string | undefined> {
+  const reportPath = path.join(params.outputDir, `${params.scenario.id}.vitest-report.json`);
+  const report = await readJsonFileIfExists(reportPath);
+  if (!report || typeof report !== "object") {
+    return `Vitest exited successfully without writing a valid JSON test report at ${reportPath}.`;
+  }
+  const { numFailedTests, numPassedTests, success } = report as {
+    numFailedTests?: unknown;
+    numPassedTests?: unknown;
+    success?: unknown;
+  };
+  if (
+    success !== true ||
+    typeof numPassedTests !== "number" ||
+    !Number.isSafeInteger(numPassedTests) ||
+    numPassedTests < 1 ||
+    numFailedTests !== 0
+  ) {
+    return "Vitest exited successfully without reporting a successfully executed test.";
+  }
+  return undefined;
+}
+
 async function runScenarioCommandSteps(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
@@ -248,6 +295,18 @@ async function runScenarioCommandSteps(params: {
             ? `${path.basename(step.command)} terminated by ${result.signal}`
             : `${path.basename(step.command)} exited with ${result.exitCode}`);
         break;
+      }
+      // Chromium installation and script producers do not execute Vitest tests.
+      // Only the final native test command can prove an assertion actually ran.
+      if (
+        params.scenario.execution.kind !== "script" &&
+        step.args[0] === "scripts/run-vitest.mjs"
+      ) {
+        failureMessage = await readNativeVitestExecutionFailure(params);
+        if (failureMessage) {
+          logChunks.push(`${failureMessage}\n`);
+          break;
+        }
       }
     } catch (error) {
       failureMessage = formatErrorMessage(error);

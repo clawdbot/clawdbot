@@ -2180,6 +2180,180 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
+  it("cancels an immediate startup recovery before its queued attempt can claim a session", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
+    await recovery.stop();
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+  });
+
+  it("fences an in-flight startup recovery before its durable session claim", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    const originalApply = sessionAccessor.applySessionEntryReplacements;
+    const observeEntered = createDeferred();
+    const releaseObserve = createDeferred();
+    let pausedObservation = false;
+    const replacementSpy = vi
+      .spyOn(sessionAccessor, "applySessionEntryReplacements")
+      .mockImplementation(async (params) => {
+        if (params.requireWriteSuccess === true && !pausedObservation) {
+          pausedObservation = true;
+          observeEntered.resolve();
+          await releaseObserve.promise;
+        }
+        return await originalApply(params);
+      });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await observeEntered.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      let stopSettled = false;
+      stopping = recovery.stop().then(() => {
+        stopSettled = true;
+      });
+      await Promise.resolve();
+
+      expect(stopSettled).toBe(false);
+      expect(callGateway).not.toHaveBeenCalled();
+
+      releaseObserve.resolve();
+      await stopping;
+
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect(loadSessionEntry({ sessionKey: "agent:main:main", storePath })).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+      });
+      expect(
+        loadSessionEntry({ sessionKey: "agent:main:main", storePath })?.mainRestartRecovery,
+      ).toBeUndefined();
+    } finally {
+      releaseObserve.resolve();
+      await stopping;
+      replacementSpy.mockRestore();
+    }
+  });
+
+  it("joins an in-flight startup dispatch before stopping its recovery owner", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    const dispatchEntered = createDeferred();
+    const releaseDispatch = createDeferred();
+    vi.mocked(callGateway).mockImplementationOnce(async () => {
+      dispatchEntered.resolve();
+      await releaseDispatch.promise;
+      return { runId: "run-resumed" };
+    });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await dispatchEntered.promise;
+      let stopSettled = false;
+      stopping = recovery.stop().then(() => {
+        stopSettled = true;
+      });
+      await Promise.resolve();
+
+      expect(stopSettled).toBe(false);
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+
+      releaseDispatch.resolve();
+      await stopping;
+
+      expect(callGateway).toHaveBeenCalledOnce();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      releaseDispatch.resolve();
+      await stopping;
+    }
+  });
+
+  it("retains canonical retry backoff when startup recovery begins immediately", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("transient startup failure"));
+
+    vi.useFakeTimers();
+    let recovery: ReturnType<typeof scheduleRestartAbortedMainSessionRecovery> | undefined;
+    try {
+      recovery = scheduleRestartAbortedMainSessionRecovery({
+        cfg: {},
+        delayMs: 0,
+        maxRetries: 2,
+        stateDir: tmpDir,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const initialGatewayCalls = vi.mocked(callGateway).mock.calls.length;
+      expect(initialGatewayCalls).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(callGateway).toHaveBeenCalledTimes(initialGatewayCalls);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(vi.mocked(callGateway).mock.calls.length).toBeGreaterThan(initialGatewayCalls);
+    } finally {
+      await recovery?.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("admits each scheduled recovery attempt as independent root work", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
@@ -2212,7 +2386,7 @@ describe("main-session-restart-recovery", () => {
 
     scheduleRestartAbortedMainSessionRecovery({
       cfg: {},
-      delayMs: 0,
+      delayMs: 1,
       maxRetries: 2,
       stateDir: tmpDir,
     });

@@ -401,6 +401,103 @@ describe("qa cli runtime", () => {
     expectWriteContains(stdoutWrite, `QA suite summary: ${suiteSummaryPath}`);
   });
 
+  it("rejects a direct suite containing only report-only optional tool skips", async () => {
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+        scenarios: [optionalScenario],
+      }),
+    );
+
+    await expect(runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" })).rejects.toThrow(
+      "did not include any executed scenarios",
+    );
+  });
+
+  it("keeps a direct suite green for a real pass and a report-only optional tool skip", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 2, passed: 1, failed: 0, skipped: 1 },
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+        scenarios: [QA_PASSING_SUITE_SCENARIO, optionalScenario],
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo" });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
+  it("keeps direct-suite zero-work validation disabled with --allow-failures", async () => {
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+    const optionalScenario = {
+      name: "Runtime tool fixture — image_generate",
+      status: "skip" as const,
+      details: "image_generate mock provider report-only: tool unavailable",
+    };
+    await fs.writeFile(
+      suiteSummaryPath,
+      JSON.stringify({
+        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
+        scenarios: [optionalScenario],
+      }),
+      "utf8",
+    );
+    runQaSuite.mockResolvedValueOnce(
+      unifiedSuiteRuntimeResult({
+        outputDir: suiteArtifactsDir,
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        evidencePath: suiteEvidencePath,
+        scenarios: [optionalScenario],
+      }),
+    );
+
+    try {
+      await runQaSuiteCommand({ repoRoot: "/tmp/openclaw-repo", allowFailures: true });
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      process.exitCode = priorExitCode;
+    }
+  });
+
   it("rejects host-only resource options for Playwright scenarios", async () => {
     await expect(
       runQaSuiteCommand({

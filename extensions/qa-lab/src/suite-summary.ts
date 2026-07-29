@@ -67,7 +67,9 @@ export type QaSuiteSummaryJson = {
   };
 };
 
-type QaSuiteScenarioStatus = Pick<QaSuiteSummaryScenario, "status">;
+type QaSuiteScenarioStatus = {
+  status?: unknown;
+};
 type QaSuiteReportOnlyScenario = {
   name?: unknown;
   status?: unknown;
@@ -78,6 +80,10 @@ type QaEvidenceEntryStatus = {
     status?: unknown;
   };
 };
+
+function isQaSuiteFailureStatus(status: unknown): boolean {
+  return status !== "pass" && status !== "skip" && status !== "skipped";
+}
 
 async function readQaSuiteSummaryFile(summaryPath: string): Promise<unknown> {
   let summaryText: string;
@@ -132,7 +138,7 @@ function assertQaSuiteSummaryHasExecutedScenarios(
     ? (payload.entries as QaEvidenceEntryStatus[])
     : undefined;
   const hasExecutedScenario =
-    scenarios?.some((scenario) => scenario.status !== "skip" && scenario.status !== "skipped") ===
+    scenarios?.some((scenario) => scenario.status === "pass" || scenario.status === "fail") ===
       true ||
     entries?.some((entry) => entry.result?.status === "pass" || entry.result?.status === "fail") ===
       true ||
@@ -146,10 +152,15 @@ function assertQaSuiteSummaryHasExecutedScenarios(
         (scenario.status === "skip" || scenario.status === "skipped") &&
         !isQaSuiteReportOnlyOptionalScenario(scenario, optionalScenarioNames),
     ) === true;
+  const hasBlockingUnknownOrFailedScenario =
+    scenarios?.some((scenario) => isQaSuiteFailureStatus(scenario.status)) === true;
   const hasBlockingNonPassEvidence =
-    errorCode === "summary_blocking_count_missing" &&
     entries?.some(
-      (entry) => typeof entry.result?.status === "string" && entry.result.status !== "pass",
+      (entry) =>
+        typeof entry.result?.status === "string" &&
+        (errorCode === "summary_blocking_count_missing"
+          ? isQaSuiteBlockingStatus(entry.result.status)
+          : isQaSuiteFailureStatus(entry.result.status)),
     ) === true;
 
   // Optional skips are not execution: only a real scenario, evidence result,
@@ -158,7 +169,10 @@ function assertQaSuiteSummaryHasExecutedScenarios(
   if (
     total === 0 ||
     scenarios?.length === 0 ||
-    (!hasExecutedScenario && !hasBlockingNonOptionalSkip && !hasBlockingNonPassEvidence)
+    (!hasExecutedScenario &&
+      !hasBlockingUnknownOrFailedScenario &&
+      !hasBlockingNonOptionalSkip &&
+      !hasBlockingNonPassEvidence)
   ) {
     throw new QaSuiteArtifactError(
       errorCode,
@@ -189,7 +203,7 @@ export function countQaSuiteFailedScenarios(
 ): number {
   let failed = 0;
   for (const scenario of scenarios) {
-    if (scenario.status === "fail") {
+    if (isQaSuiteFailureStatus(scenario.status)) {
       failed += 1;
     }
   }
@@ -224,7 +238,7 @@ function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | n
     ? countQaSuiteFailedScenarios(payload.scenarios)
     : null;
   const evidenceFailures = Array.isArray(payload.entries)
-    ? payload.entries.filter((entry) => entry.result?.status === "fail").length
+    ? payload.entries.filter((entry) => isQaSuiteFailureStatus(entry.result?.status)).length
     : null;
   if (countedFailures !== null && scenarioFailures !== null) {
     return Math.max(countedFailures, scenarioFailures, evidenceFailures ?? 0);
