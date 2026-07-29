@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -226,6 +227,7 @@ type HookAgentPayload = {
   idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
+  sessionMode: HookSessionMode;
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
@@ -517,6 +519,15 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKeyRaw = payload.sessionKey;
   const sessionKey = normalizeOptionalString(sessionKeyRaw);
+  const sessionModeRaw = payload.sessionMode;
+  if (
+    sessionModeRaw !== undefined &&
+    sessionModeRaw !== "isolated" &&
+    sessionModeRaw !== "persistent"
+  ) {
+    return { ok: false, error: "sessionMode must be isolated or persistent" };
+  }
+  const sessionMode = sessionModeRaw ?? "isolated";
   const delivery = normalizeHookAgentDelivery({
     deliver: payload.deliver,
     channel: payload.channel,
@@ -546,6 +557,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       idempotencyKey,
       wakeMode,
       sessionKey,
+      sessionMode,
       ...delivery.value,
       model,
       thinking,

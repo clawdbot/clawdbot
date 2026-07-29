@@ -902,6 +902,7 @@ Lifetime values are data only in the first cloud-worker release; automatic enfor
         wakeMode: "now",
         name: "Gmail",
         sessionKey: "hook:gmail:{{messages[0].id}}",
+        sessionMode: "persistent",
         messageTemplate: "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
         deliver: true,
         channel: "last",
@@ -927,8 +928,9 @@ Validation and safety notes:
 **Endpoints:**
 
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, agentId?, sessionKey?, sessionMode?, wakeMode?, deliver?, channel?, to?, model?, thinking?, timeoutSeconds? }`
   - `sessionKey` from request payload is accepted only when `hooks.allowRequestSessionKey=true` (default: `false`).
+  - `sessionMode` is `"isolated"` by default. `"persistent"` reuses the resolved session and requires an explicit request `sessionKey`, `hooks.allowRequestSessionKey=true`, and non-empty `hooks.allowedSessionKeyPrefixes`.
   - Direct announce delivery requires both a concrete `channel` and `to`; supplying only one fails before the run is scheduled.
   - Omit both delivery fields for completion-only hooks, or set `deliver: false` to ignore supplied destination data.
   - The request waits up to 15 seconds for runner admission, not run completion. `200` means the agent runner was entered.
@@ -950,6 +952,7 @@ Validation and safety notes:
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
 - `allowRequestSessionKey`: allow `/hooks/agent` callers and template-driven mapping session keys to set `sessionKey` (default: `false`).
 - `allowedSessionKeyPrefixes`: optional prefix allowlist for explicit `sessionKey` values (request + mapping), e.g. `["hook:"]`. It becomes required when any mapping or preset uses a templated `sessionKey`.
+- `sessionMode`: mapping session behavior (`"isolated"` by default or `"persistent"`). Persistent mappings must resolve a stable key from `sessionKey` or `hooks.defaultSessionKey`; template-derived keys retain the request-key and prefix checks.
 - `deliver: true` sends the final reply to a channel; mapped hooks may use `channel: "last"`.
 - `deliver: false` keeps the mapped run completion-only.
 - `model` overrides LLM for this hook run (must be allowed if model catalog is set).
