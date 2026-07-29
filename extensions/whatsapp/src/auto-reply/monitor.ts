@@ -33,9 +33,8 @@ import {
   type WhatsAppBaileysMessageCache,
 } from "../inbound/baileys-cache.js";
 import type { WhatsAppGroupMetadataCache } from "../inbound/group-metadata-cache.js";
-import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
 import { attachWebInboxToSocket } from "../inbound/monitor.js";
-import type { WebInboundMessageInput } from "../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import {
   newConnectionId,
   resolveHeartbeatSeconds,
@@ -230,17 +229,12 @@ export async function monitorWebChannel(
         cfg,
         channel: "whatsapp",
       });
-      const shouldDebounce = (msg: WebInboundMessageInput) => {
-        const normalized = normalizeWebInboundMessage(msg);
+      const shouldDebounce = (msg: AdmittedWebInboundMessage) => {
         return shouldDebounceTextInbound({
-          text: normalized.payload.commandBody ?? normalized.payload.body,
+          text: msg.payload.commandBody ?? msg.payload.body,
           cfg,
-          hasMedia: Boolean(normalized.payload.media?.path || normalized.payload.media?.type),
-          allowDebounce: !(
-            normalized.payload.location ||
-            normalized.quote?.id ||
-            normalized.quote?.body
-          ),
+          hasMedia: Boolean(msg.payload.media?.path || msg.payload.media?.type),
+          allowDebounce: !(msg.payload.location || msg.quote?.id || msg.quote?.body),
         });
       };
 
@@ -299,12 +293,11 @@ export async function monitorWebChannel(
               groupMetadataCache,
               recentMessageKeys,
               baileysGroupMetaCache,
-              onMessage: async (msg: WebInboundMessageInput) => {
-                const normalized = normalizeWebInboundMessage(msg);
+              onMessage: async (msg: AdmittedWebInboundMessage) => {
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
-                await onMessage(normalized);
+                await onMessage(msg);
               },
               onPendingWorkChanged: (pendingWorkCount, at) => {
                 statusController.noteBusy(pendingWorkCount > 0, at);

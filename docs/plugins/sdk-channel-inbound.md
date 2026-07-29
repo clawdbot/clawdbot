@@ -38,6 +38,78 @@ import {
 - `dispatchChannelInboundReply(...)`: records and dispatches an already
   assembled inbound reply with a delivery adapter.
 
+## Prepared inbound envelope
+
+Channels that finish transport admission and normalization before entering the
+shared runner can use `PreparedChannelInbound` as the boundary:
+
+```ts
+import {
+  projectPreparedChannelInbound,
+  resolveChannelInboundReplyPolicy,
+  runChannelInboundEvent,
+  type PreparedChannelInbound,
+} from "openclaw/plugin-sdk/channel-inbound";
+
+const inbound = {
+  channel: "demo",
+  event: { id: nativeEvent.id, timestamp: nativeEvent.timestamp },
+  from: conversation.id,
+  sender: { id: sender.id, name: sender.name },
+  conversation: { kind: "group", id: conversation.id },
+  route: { agentId, accountId, routeSessionKey },
+  reply: { to: conversation.id, replyToId: quote?.id },
+  message: {
+    rawBody,
+    body: formattedBody,
+    bodyForAgent,
+    commandBody,
+  },
+  command: {
+    kind: "text-slash",
+    body: commandBody,
+    authorization: { kind: "authorized" },
+  },
+  media,
+} satisfies PreparedChannelInbound;
+
+const prepared = projectPreparedChannelInbound({
+  inbound,
+  control: { messageReceivedHooks: "core" },
+});
+const replyPolicy = resolveChannelInboundReplyPolicy({
+  cfg,
+  ctx: prepared.context,
+  blockStreamingEnabled,
+});
+
+await runChannelInboundEvent({
+  channel: inbound.channel,
+  accountId,
+  raw: inbound,
+  adapter: {
+    ingest: () => prepared.input,
+    resolveTurn: () => buildTurnPlan(prepared.context, replyPolicy),
+  },
+});
+```
+
+The envelope contains prepared product facts only. Keep native callbacks,
+socket objects, provider message records, and transport lifecycle symbols in a
+channel-private context beside it. Represent command authorization explicitly
+as `not_checked`, `authorized`, or `denied`; do not make core infer it from a
+transport payload.
+
+Use `resolveChannelInboundReplyPolicy(...)` after building the portable inbound
+context. Core resolves product policy for source reply delivery, block
+streaming, and typing suppression. The channel supplies prepared context facts,
+including mention state, plus native capabilities such as whether block
+streaming is enabled.
+
+Keep quote encoding, reply callbacks, native target lookup, and other
+transport mechanics in the channel. Do not duplicate visible-reply policy in a
+channel adapter.
+
 For media-only inbound events, keep the message body and command text empty and
 pass one `ChannelInboundMediaInput` fact per native attachment. When an ambient
 history line or another text-only carrier must describe those facts, use

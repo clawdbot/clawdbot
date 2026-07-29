@@ -84,13 +84,8 @@ type MonitorWebInboxOptions = {
   durableInboundQueue?: WhatsAppDurableInboundQueue;
 };
 
-type AttachWebInboxToSocketOptions = Omit<
-  MonitorWebInboxOptions,
-  "onMessage" | "shouldDebounce" | "socketTiming"
-> & {
+type AttachWebInboxToSocketOptions = Omit<MonitorWebInboxOptions, "socketTiming"> & {
   socketTiming: Required<WhatsAppSocketTimingOptions>;
-  onMessage: (msg: WebInboundMessageInput) => Promise<void>;
-  shouldDebounce?: (msg: WebInboundMessageInput) => boolean;
 };
 
 export async function attachWebInboxToSocket(

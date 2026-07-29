@@ -6,7 +6,10 @@ import {
 } from "./message-aliases.js";
 import type { monitorWebInbox } from "./monitor.js";
 import { createAcceptedWhatsAppSendResult } from "./send-result.test-helper.js";
-import { createTestWhatsAppInboundAdmission } from "./test-message.test-helper.js";
+import {
+  createTestLegacyFlatWebInboundMessage,
+  createTestWhatsAppInboundAdmission,
+} from "./test-message.test-helper.js";
 import type { LegacyFlatWebInboundMessage, WebInboundCallbackMessage } from "./types.js";
 
 type MonitorWebInboxMessage = Parameters<Parameters<typeof monitorWebInbox>[0]["onMessage"]>[0];
@@ -361,7 +364,7 @@ describe("WhatsApp inbound flat aliases", () => {
       decisiveGateId: "legacy-flat-compat",
       reasonCode: "dm_policy_allowlisted",
     });
-    expect(normalized.accessControlPassed).toBe(true);
+    expect(normalized.accessControlPassed).toBeUndefined();
     expect(normalized.quote).toMatchObject({
       id: "quote-legacy",
       body: "legacy quoted",
@@ -413,5 +416,17 @@ describe("WhatsApp inbound flat aliases", () => {
       },
     });
     expect(normalized.accessControlPassed).toBe(false);
+  });
+
+  it("preserves explicit legacy access proof through normalization", () => {
+    const normalized = normalizeWebInboundMessage({
+      ...createTestLegacyFlatWebInboundMessage(),
+      accessControlPassed: true,
+    });
+
+    expect(normalized.admission?.ingress.decisiveGateId).toBe("legacy-flat-compat");
+    expect(normalized.accessControlPassed).toBe(true);
+    normalized.accessControlPassed = false;
+    expect(normalized.accessControlPassed).toBe(true);
   });
 });

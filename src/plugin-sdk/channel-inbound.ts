@@ -114,6 +114,11 @@ export type {
   FinalizeChannelInboundContextParams,
   FinalizeChannelInboundContextResult,
 };
+export {
+  projectPreparedChannelInbound,
+  type PreparedChannelInbound,
+} from "../channels/inbound-event/prepared.js";
+export { resolveChannelInboundReplyPolicy } from "../channels/message/index.js";
 /**
  * Deprecated turn-context input alias that still accepts the old `inboundTurnKind` name.
  *

@@ -192,12 +192,22 @@ function defineDeprecatedAdmissionTopLevelAccessors<T extends WebInboundCallback
       },
     },
     accessControlPassed: {
-      get: () =>
-        msg.admission ? msg.admission.ingress.decision === "allow" : fallbackAccessControlPassed,
+      get: () => {
+        // Legacy flat inputs used absence to mean access was not explicitly proven.
+        // Preserve that tri-state after normalization so preflight work cannot run early.
+        if (msg.admission?.ingress.decisiveGateId === "legacy-flat-compat") {
+          return fallbackAccessControlPassed;
+        }
+        return msg.admission
+          ? msg.admission.ingress.decision === "allow"
+          : fallbackAccessControlPassed;
+      },
       set: (value) => {
         // The legacy boolean is derived from the ingress graph; writes only preserve
         // no-admission legacy inputs instead of fabricating a partial graph update.
-        fallbackAccessControlPassed = value as boolean | undefined;
+        if (!msg.admission) {
+          fallbackAccessControlPassed = value as boolean | undefined;
+        }
       },
     },
     chatType: {
