@@ -1685,11 +1685,6 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
-function allowsToolOnlyReadTurnForLiveModel(modelKey?: string): boolean {
-  const provider = modelKey?.split("/", 1)[0];
-  return provider === "minimax" || provider === "minimax-portal";
-}
-
 describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
   it.each([
     { modelKey: "anthropic/claude-opus-4-6", expected: true },
@@ -1706,16 +1701,6 @@ describe("shouldSkipToolNonceProbeMissForLiveModel", () => {
     { modelKey: "openai/gpt-5.4", expected: false },
   ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
     expect(shouldSkipToolNonceProbeMissForLiveModel(modelKey)).toBe(expected);
-  });
-});
-
-describe("allowsToolOnlyReadTurnForLiveModel", () => {
-  it.each([
-    { modelKey: "minimax/MiniMax-M2.7", expected: true },
-    { modelKey: "minimax-portal/MiniMax-M2.7", expected: true },
-    { modelKey: "anthropic/claude-opus-4-6", expected: false },
-  ])("returns $expected for $modelKey", ({ modelKey, expected }) => {
-    expect(allowsToolOnlyReadTurnForLiveModel(modelKey)).toBe(expected);
   });
 });
 
@@ -2690,14 +2675,6 @@ function buildGatewayToolReadMessage(params: {
   );
 }
 
-function buildGatewayToolReadFollowUpMessage(params: { toolProbePath: string }): string {
-  const filename = path.basename(params.toolProbePath);
-  return (
-    `Continue the OpenClaw release-validation check for the synthetic local note "${filename}" ` +
-    "you just inspected. Reply with only its LEFT and RIGHT values, separated by one space."
-  );
-}
-
 describe("buildGatewayToolReadMessage", () => {
   it("keeps the request inside the workspace and out of tool-call syntax", () => {
     const message = buildGatewayToolReadMessage({
@@ -2712,16 +2689,6 @@ describe("buildGatewayToolReadMessage", () => {
     expect(message).not.toContain("/tmp/operator");
     expect(message).not.toContain('{"path"');
     expect(message).not.toContain("tool named");
-  });
-  it("keeps the tool-only follow-up scoped to the same synthetic note", () => {
-    const message = buildGatewayToolReadFollowUpMessage({
-      toolProbePath: "/tmp/operator/workspace/.openclaw-live-tool-probe-deadbeef.txt",
-    });
-
-    expect(message).toContain('".openclaw-live-tool-probe-deadbeef.txt"');
-    expect(message).toContain("synthetic local note");
-    expect(message).toContain("Reply with only");
-    expect(message).not.toContain("/tmp/operator");
   });
 });
 
@@ -3516,7 +3483,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               logProgress(`${progressLabel}: tool-read`);
               const runIdTool = randomUUID();
               const maxToolReadAttempts = 3;
-              const allowsToolOnlyReadTurn = allowsToolOnlyReadTurnForLiveModel(modelKey);
               let toolText = "";
               for (
                 let toolReadAttempt = 0;
@@ -3533,9 +3499,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                     message: buildGatewayToolReadMessage({ toolProbePath, strictReply }),
                     thinkingLevel,
                     context: `${progressLabel}: tool-read`,
-                    ...(allowsToolOnlyReadTurn && toolReadAttempt === 0
-                      ? { assistantText: "optional" as const }
-                      : {}),
                   });
                 } catch (error) {
                   const message = String(error instanceof Error ? error.message : error);
@@ -3559,7 +3522,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 }
                 if (
                   isEmptyStreamText(toolText) &&
-                  !allowsToolOnlyReadTurn &&
                   shouldSkipEmptyResponseForLiveModel({
                     provider: model.provider,
                     allowNotFoundSkip: params.allowNotFoundSkip,
@@ -3576,30 +3538,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
                 });
                 if (hasExpectedToolNonce(toolText, nonceA, nonceB)) {
                   break;
-                }
-                if (allowsToolOnlyReadTurn && toolReadAttempt === 0) {
-                  logProgress(`${progressLabel}: tool-read follow-up`);
-                  toolText = await requestGatewayAgentText({
-                    client,
-                    sessionKey,
-                    idempotencyKey: `idem-${runIdTool}-tool-follow-up`,
-                    modelKey,
-                    message: buildGatewayToolReadFollowUpMessage({ toolProbePath }),
-                    thinkingLevel,
-                    context: `${progressLabel}: tool-read follow-up`,
-                  });
-                  assertNoReasoningTags({
-                    text: toolText,
-                    model: modelKey,
-                    phase: "tool-read-follow-up",
-                    label: params.label,
-                  });
-                  if (hasExpectedToolNonce(toolText, nonceA, nonceB)) {
-                    break;
-                  }
-                  // MiniMax can finish the read turn without a final reply. A separate reply
-                  // must still carry the values; repeating the same read would hide that contract.
-                  throw new Error(`tool probe missing nonce: ${toolText}`);
                 }
                 if (
                   shouldRetryToolReadProbe({
