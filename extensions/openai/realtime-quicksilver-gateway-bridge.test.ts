@@ -28,6 +28,26 @@ function createRelayTone(): Buffer {
   return pcm;
 }
 
+type TestableAudioPeer = {
+  connected: boolean;
+  pendingAudio: Buffer;
+  sequenceNumber: number;
+  timestamp: number;
+  sendNextAudioFrame(): void;
+  state: {
+    peer: {
+      connectionStateChange: {
+        execute(state: "closed" | "disconnected"): void;
+      };
+    };
+    transceiver: {
+      sender: {
+        sendRtp(packet: unknown): Promise<void>;
+      };
+    };
+  };
+};
+
 describe("GPT-Live werift audio peer", () => {
   it("creates a full-candidate Opus sendrecv offer without a data channel", async () => {
     const peer = await OpenAIQuicksilverAudioPeer.create({
@@ -79,6 +99,85 @@ describe("GPT-Live werift audio peer", () => {
       encoder.free();
       decoder.free();
     }
+  });
+
+  it("consumes every audio tick while earlier RTP sends remain pending", async () => {
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError: vi.fn() },
+      iceServers: [],
+    });
+    const testPeer = peer as unknown as TestableAudioPeer;
+    const sendRtp = vi
+      .spyOn(testPeer.state.transceiver.sender, "sendRtp")
+      .mockImplementation(async () => await new Promise<void>(() => {}));
+    const frames = [Buffer.alloc(480 * 2, 1), Buffer.alloc(480 * 2, 2), Buffer.alloc(480 * 2, 3)];
+    const initialTimestamp = testPeer.timestamp;
+    const initialSequenceNumber = testPeer.sequenceNumber;
+    try {
+      peer.sendAudio(Buffer.concat(frames));
+      testPeer.connected = true;
+
+      for (let index = 0; index < frames.length; index += 1) {
+        testPeer.sendNextAudioFrame();
+        expect(testPeer.pendingAudio).toEqual(Buffer.concat(frames.slice(index + 1)));
+      }
+
+      expect(sendRtp).toHaveBeenCalledTimes(3);
+      const packets = sendRtp.mock.calls.map(
+        ([packet]) => packet as { header: { sequenceNumber: number; timestamp: number } },
+      );
+      expect(packets.map((packet) => packet.header.timestamp)).toEqual([
+        initialTimestamp,
+        (initialTimestamp + 960) >>> 0,
+        (initialTimestamp + 1_920) >>> 0,
+      ]);
+      expect(packets.map((packet) => packet.header.sequenceNumber)).toEqual([
+        initialSequenceNumber,
+        (initialSequenceNumber + 1) & 0xffff,
+        (initialSequenceNumber + 2) & 0xffff,
+      ]);
+    } finally {
+      peer.close();
+    }
+  });
+
+  it.each(["disconnected", "closed"] as const)(
+    "reports a terminal %s connection state",
+    async (connectionState) => {
+      const onError = vi.fn();
+      const peer = await OpenAIQuicksilverAudioPeer.create({
+        callbacks: { onAudio: vi.fn(), onError },
+        iceServers: [],
+      });
+      try {
+        (peer as unknown as TestableAudioPeer).state.peer.connectionStateChange.execute(
+          connectionState,
+        );
+        expect(onError).toHaveBeenCalledOnce();
+        expect(onError).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: `GPT-Live WebRTC media connection ${connectionState}`,
+          }),
+        );
+      } finally {
+        peer.close();
+      }
+    },
+  );
+
+  it("suppresses terminal state callbacks after local close", async () => {
+    const onError = vi.fn();
+    const peer = await OpenAIQuicksilverAudioPeer.create({
+      callbacks: { onAudio: vi.fn(), onError },
+      iceServers: [],
+    });
+    const connectionStateChange = (peer as unknown as TestableAudioPeer).state.peer
+      .connectionStateChange;
+
+    peer.close();
+    connectionStateChange.execute("closed");
+
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it("constructs and offers under Bun without network access", ({ skip }) => {

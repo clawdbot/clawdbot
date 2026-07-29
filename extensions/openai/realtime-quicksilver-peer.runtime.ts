@@ -149,7 +149,6 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
 
   private connected = false;
   private closed = false;
-  private mediaSendPending = false;
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
   private pendingAudio = Buffer.alloc(0);
   private sequenceNumber = randomInt(0x1_0000);
@@ -168,11 +167,19 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   ) {
     state.peer.onTrack.subscribe((track) => this.attachInboundTrack(track));
     state.peer.connectionStateChange.subscribe((connectionState) => {
+      if (this.closed) {
+        return;
+      }
       if (connectionState === "connected") {
         this.connected = true;
         this.startMediaPump();
-      } else if (connectionState === "failed") {
-        this.state.callbacks.onError(new Error("GPT-Live WebRTC media connection failed"));
+      } else if (["failed", "disconnected", "closed"].includes(connectionState)) {
+        this.connected = false;
+        // werift-ice 0.2.2 exits consent polling after setting disconnected
+        // (lib/ice/src/ice.js:289), so recovery requires an explicit ICE restart.
+        this.state.callbacks.onError(
+          new Error(`GPT-Live WebRTC media connection ${connectionState}`),
+        );
       }
     });
   }
@@ -258,7 +265,7 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   }
 
   private sendNextAudioFrame(): void {
-    if (!this.connected || this.closed || this.mediaSendPending) {
+    if (!this.connected || this.closed) {
       return;
     }
     const hasRelayAudio = this.pendingAudio.length >= RELAY_FRAME_BYTES;
@@ -283,15 +290,11 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       );
       this.sequenceNumber = (this.sequenceNumber + 1) & 0xffff;
       this.timestamp = (this.timestamp + OPUS_FRAME_SAMPLES) >>> 0;
-      this.mediaSendPending = true;
-      void this.state.transceiver.sender
-        .sendRtp(rtp)
-        .catch((error: unknown) => {
-          this.state.callbacks.onError(toError(error));
-        })
-        .finally(() => {
-          this.mediaSendPending = false;
-        });
+      // werift queues encrypted UDP synchronously before sendRtp yields
+      // (rtpSender.js:538; transport/dtls.js:455), preserving per-tick order.
+      void this.state.transceiver.sender.sendRtp(rtp).catch((error: unknown) => {
+        this.state.callbacks.onError(toError(error));
+      });
     } catch (error) {
       this.state.callbacks.onError(toError(error));
     }
