@@ -811,6 +811,41 @@ describe("qa mock openai server", () => {
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
+  it("prefers a current tool-result marker over system and stale user directives", async () => {
+    const server = await startMockServer();
+    const prompt = [
+      "Tool progress QA check: call the read tool exactly once on `QA_KICKOFF_TASK.md` before answering.",
+      "The only valid final marker is inside that file.",
+      "After the read completes, reply with only the exact marker from the file.",
+    ].join(" ");
+    const marker = "TOOL_PROGRESS_OUTPUT_MARKER_OK";
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      instructions: "If nothing needs attention, reply exactly: HEARTBEAT_OK",
+      input: [
+        makeUserInput(
+          "Earlier tool progress QA check: after the tool returns, reply exactly `STALE_PROGRESS_MARKER`.",
+        ),
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: [
+            "Matrix tool progress QA task.",
+            "Reply with only this exact marker and no other text:",
+            marker,
+          ].join("\n"),
+        },
+        makeUserInput(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION),
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe(marker);
+  });
+
   it("plans deterministic tool-progress exec commands from exact command prompts", async () => {
     const server = await startMockServer();
     const command =
@@ -942,7 +977,7 @@ describe("qa mock openai server", () => {
     expect(errorOutput.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_ERROR_OK");
   });
 
-  it("uses the latest user prompt path for tool-progress plans", async () => {
+  it("uses the latest user tool-progress prompt kind and target for plans", async () => {
     const server = await startMockServer();
 
     const response = await postResponses(server, {
@@ -965,6 +1000,30 @@ describe("qa mock openai server", () => {
     expect(body).toContain('"name":"read"');
     expect(body).toContain("latest-missing-progress-target.txt");
     expect(body).not.toContain("older-progress-target.txt");
+
+    const command = "sleep 2; cat 'current-progress-target.txt'";
+    const currentNormal = await postResponses(server, {
+      stream: true,
+      input: [
+        makeUserInput(
+          "Tool progress error QA check: read `stale-missing-progress-target.txt` before answering. After the read fails, reply exactly `STALE_PROGRESS_OK`.",
+        ),
+        {
+          type: "function_call_output",
+          call_id: "call_stale_progress_read",
+          output: JSON.stringify({ error: "ENOENT: stale turn" }),
+        },
+        makeUserInput(
+          `Tool progress QA check: call the exec tool exactly once with this exact command before answering: \`${command}\`. After that command completes, reply exactly \`CURRENT_PROGRESS_OK\`.`,
+        ),
+      ],
+    });
+
+    expect(currentNormal.status).toBe(200);
+    const currentNormalBody = await currentNormal.text();
+    expect(currentNormalBody).toContain('"name":"exec"');
+    expect(currentNormalBody).toContain(command);
+    expect(currentNormalBody).not.toContain("stale-missing-progress-target.txt");
   });
 
   it("prefers path-like refs over generic quoted keys in prompts", async () => {

@@ -24,6 +24,21 @@ export function extractLastUserText(input: ResponsesInputItem[]) {
   return "";
 }
 
+export function extractLastMatchingUserTurn(input: ResponsesInputItem[], pattern: RegExp) {
+  const matcher = new RegExp(pattern.source, pattern.flags.replace(/[gy]/g, ""));
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (item?.role !== "user" || !Array.isArray(item.content)) {
+      continue;
+    }
+    const text = extractInputText(item.content);
+    if (text && !isInternalRuntimeContextCarrierText(text) && matcher.test(text)) {
+      return { index, text };
+    }
+  }
+  return null;
+}
+
 function findLastUserIndex(input: ResponsesInputItem[]) {
   return input.findLastIndex(
     (item) =>
