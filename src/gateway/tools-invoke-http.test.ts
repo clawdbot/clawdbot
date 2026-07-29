@@ -9,6 +9,7 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -86,6 +87,7 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/tools.js", () => ({
+  copyPluginToolMeta: () => {},
   getPluginToolMeta: (tool: { name?: string }) =>
     typeof tool?.name === "string" ? pluginToolMetaState.get(tool.name) : undefined,
 }));
@@ -174,6 +176,16 @@ vi.mock("../agents/openclaw-tools.js", () => {
       name: "write_scoped_test",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "write-scoped" }),
+    },
+    {
+      name: "caller_identity_test",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, identity: getGatewayToolCallerIdentity() }),
+    },
+    {
+      name: "plugin_identity_test",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, identity: getGatewayToolCallerIdentity() }),
     },
     {
       name: "tools_invoke_test",
@@ -364,6 +376,7 @@ const invokeTool = async (params: {
   action?: string;
   headers?: Record<string, string>;
   sessionKey?: string;
+  agentId?: string;
 }) => {
   const body: Record<string, unknown> = withOptionalSessionKey(
     {
@@ -374,6 +387,9 @@ const invokeTool = async (params: {
   );
   if (params.action) {
     body.action = params.action;
+  }
+  if (params.agentId) {
+    body.agentId = params.agentId;
   }
   return await postToolsInvoke({ port: params.port, headers: params.headers, body });
 };
@@ -405,6 +421,7 @@ const invokeToolAuthed = async (params: {
   args?: Record<string, unknown>;
   action?: string;
   sessionKey?: string;
+  agentId?: string;
 }) =>
   invokeTool({
     port: sharedPort,
@@ -542,6 +559,43 @@ describe("POST /tools/invoke", () => {
     expect(hookCtx.config).toBe(cfg);
     expect(hookCtx.sessionKey).toBe("agent:main:main");
     expect(hookCtx.loopDetection).toEqual({ warnAt: 3 });
+  });
+
+  it("propagates HTTP tools.invoke caller identity into tool execution", async () => {
+    setMainAllowedTools({ allow: ["caller_identity_test"] });
+
+    const res = await invokeToolAuthed({
+      tool: "caller_identity_test",
+      sessionKey: "main",
+      agentId: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result?.identity).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("propagates requested agent identity into plugin tool execution", async () => {
+    setMainAllowedTools({ allow: ["plugin_identity_test"] });
+    pluginToolMetaState.set("plugin_identity_test", { pluginId: "test-plugin", optional: true });
+
+    const res = await invokeToolAuthed({
+      tool: "plugin_identity_test",
+      sessionKey: "main",
+      agentId: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result?.identity).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    expect(lastCreateOpenClawToolsContext?.requesterAgentIdOverride).toBe("main");
+    const hookCtx = firstHookCallArg().ctx;
+    expect(hookCtx?.agentId).toBe("main");
+    expect(hookCtx?.sessionKey).toBe("agent:main:main");
   });
 
   it("opts direct gateway tool invocation into gateway subagent binding", async () => {

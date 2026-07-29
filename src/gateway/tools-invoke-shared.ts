@@ -9,6 +9,7 @@ import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
+import { wrapToolWithGatewayCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   normalizeConversationReadInvocationOrigin,
   type ConversationReadInvocationOrigin,
@@ -20,6 +21,7 @@ import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -211,6 +213,9 @@ export async function invokeGatewayTool(params: {
       ? (argsRaw as Record<string, unknown>)
       : {};
   const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const requestedAgentId = normalizeOptionalString(params.input.agentId);
+  const sessionAgentId = resolveAgentIdFromSessionKey(sessionKey);
+  const effectiveAgentId = requestedAgentId ?? sessionAgentId;
   const harnessEntry = isAgentHarnessSessionKey(sessionKey)
     ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey }).entry
     : undefined;
@@ -232,6 +237,7 @@ export async function invokeGatewayTool(params: {
     resolveGatewayScopedTools({
       cfg: params.cfg,
       sessionKey,
+      ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
       messageProvider: params.messageChannel,
       accountId: params.accountId,
       agentTo: params.agentTo,
@@ -250,15 +256,15 @@ export async function invokeGatewayTool(params: {
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools, workspaceDir } = resolveTools(false));
   }
-  const requestedAgentId = normalizeOptionalString(params.input.agentId);
-  if (requestedAgentId && agentId && requestedAgentId !== agentId) {
+  const resolvedAgentId = sessionAgentId ?? agentId;
+  if (requestedAgentId && resolvedAgentId && requestedAgentId !== resolvedAgentId) {
     return {
       ok: false,
       status: 400,
       toolName,
       error: {
         type: "invalid_request",
-        message: `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
+        message: `agent id "${requestedAgentId}" does not match session agent "${resolvedAgentId}"`,
       },
     };
   }
@@ -271,9 +277,22 @@ export async function invokeGatewayTool(params: {
       error: { type: "not_found", message: `Tool not available: ${toolName}` },
     };
   }
+  const hookAgentId = resolvedAgentId ?? agentId;
 
   try {
-    const gatewayTool: AnyAgentTool = tool;
+    const gatewayTool: AnyAgentTool = wrapToolWithGatewayCallerIdentity(
+      tool,
+      resolvedAgentId
+        ? {
+            agentId: resolvedAgentId,
+            sessionKey,
+            turnSourceChannel: params.messageChannel,
+            turnSourceTo: params.agentTo,
+            turnSourceAccountId: params.accountId,
+            turnSourceThreadId: params.agentThreadId,
+          }
+        : undefined,
+    );
     const idempotencyKey = normalizeOptionalString(params.input.idempotencyKey);
     const toolCallId = idempotencyKey
       ? `${params.toolCallIdPrefix}-${conversationReadOrigin}-${idempotencyKey}`
@@ -288,11 +307,11 @@ export async function invokeGatewayTool(params: {
       params: toolArgs,
       toolCallId,
       ctx: {
-        agentId,
+        agentId: hookAgentId,
         config: params.cfg,
         sessionKey,
         workspaceDir,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
+        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId: hookAgentId }),
       },
       approvalMode: params.approvalMode,
     });
