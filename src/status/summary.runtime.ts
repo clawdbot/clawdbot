@@ -15,6 +15,7 @@ import { waitForContextWindowCacheLoad } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
+import { hasLegacyAutoFallbackWithoutOrigin } from "../config/sessions/model-override-provenance.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
@@ -154,7 +155,16 @@ function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
     | SessionEntry
-    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
+    | Pick<
+        SessionEntry,
+        | "model"
+        | "modelProvider"
+        | "modelOverride"
+        | "providerOverride"
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >,
   agentId?: string,
 ): { provider: string; model: string } {
   const resolved = resolveConfiguredStatusModelRef({
@@ -164,11 +174,16 @@ function resolveSessionModelRef(
     agentId,
   });
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
+  // Legacy auto-fallback pins have no trustworthy origin and are ignored by
+  // execution. Status must not resurrect them ahead of the live runtime model.
+  const ignoreStoredOverride = hasLegacyAutoFallbackWithoutOrigin(entry);
+  const overrideProvider = ignoreStoredOverride ? undefined : entry?.providerOverride;
+  const overrideModel = ignoreStoredOverride ? undefined : entry?.modelOverride;
   const providerlessPersisted =
     resolveProviderlessPersistedStatusModelRef({
       defaultProvider,
-      provider: entry?.providerOverride,
-      model: entry?.modelOverride,
+      provider: overrideProvider,
+      model: overrideModel,
     }) ??
     resolveProviderlessPersistedStatusModelRef({
       defaultProvider,
@@ -184,8 +199,8 @@ function resolveSessionModelRef(
       defaultProvider,
       runtimeProvider: entry?.modelProvider,
       runtimeModel: entry?.model,
-      overrideProvider: entry?.providerOverride,
-      overrideModel: entry?.modelOverride,
+      overrideProvider,
+      overrideModel,
       allowManifestNormalization: false,
       allowPluginNormalization: false,
     }) ?? resolved

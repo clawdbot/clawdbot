@@ -2,6 +2,25 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "./types.js";
 
+/** Detects old auto-fallback session entries that lack primary-origin metadata. */
+export function hasLegacyAutoFallbackWithoutOrigin(
+  entry:
+    | Pick<
+        SessionEntry,
+        | "modelOverrideSource"
+        | "modelOverrideFallbackOriginProvider"
+        | "modelOverrideFallbackOriginModel"
+      >
+    | null
+    | undefined,
+): boolean {
+  return (
+    entry?.modelOverrideSource === "auto" &&
+    (!normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ||
+      !normalizeOptionalString(entry.modelOverrideFallbackOriginModel))
+  );
+}
+
 /** Detects model overrides created by automatic fallback provenance. */
 export function hasSessionAutoModelFallbackProvenance(
   entry:

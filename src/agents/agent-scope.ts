@@ -4,7 +4,10 @@ import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
-export { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
+export {
+  hasLegacyAutoFallbackWithoutOrigin,
+  hasSessionAutoModelFallbackProvenance,
+} from "../config/sessions/model-override-provenance.js";
 import {
   lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -104,25 +107,6 @@ export type AutoFallbackPrimaryProbe = {
   fallbackAuthProfileId?: string;
   fallbackAuthProfileIdSource?: "auto" | "user";
 };
-
-/** Detects old auto-fallback session entries that lack primary-origin metadata. */
-export function hasLegacyAutoFallbackWithoutOrigin(
-  entry:
-    | Pick<
-        SessionEntry,
-        | "modelOverrideSource"
-        | "modelOverrideFallbackOriginProvider"
-        | "modelOverrideFallbackOriginModel"
-      >
-    | null
-    | undefined,
-): boolean {
-  return (
-    entry?.modelOverrideSource === "auto" &&
-    (!normalizeOptionalString(entry.modelOverrideFallbackOriginProvider) ||
-      !normalizeOptionalString(entry.modelOverrideFallbackOriginModel))
-  );
-}
 
 export function resolveAutoFallbackPrimaryProbe(params: {
   entry:
