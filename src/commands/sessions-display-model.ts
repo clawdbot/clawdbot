@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 /**
  * Model display resolution for session listings.
  *
@@ -48,8 +49,7 @@ function resolveAgentPrimaryModel(
   if (!agentId) {
     return undefined;
   }
-  const agentConfig = cfg.agents?.list?.find((agent) => agent.id === agentId);
-  return resolveAgentModelPrimaryValue(agentConfig?.model);
+  return resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model);
 }
 
 function normalizeStoredOverrideModel(params: {

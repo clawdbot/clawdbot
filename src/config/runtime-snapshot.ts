@@ -1,5 +1,6 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
@@ -165,6 +166,7 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
@@ -178,7 +180,24 @@ export function setAppliedRuntimeConfigSnapshot(
   runtimeConfigAppliedHash = hashRuntimeConfigValue(sourceConfig);
 }
 
+/** Publish a newer canonical source without changing the active runtime object. */
+export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
+  expectedRevision: number;
+  sourceConfig: OpenClawConfig;
+}): boolean {
+  if (
+    !runtimeConfigSnapshot ||
+    !runtimeConfigSnapshotMetadata ||
+    runtimeConfigSnapshotMetadata.revision !== params.expectedRevision
+  ) {
+    return false;
+  }
+  setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
+  return true;
+}
+
 export function resetConfigRuntimeState(): void {
+  clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;

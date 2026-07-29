@@ -86,12 +86,13 @@ async function seedWaitingActiveMainSession() {
 }
 
 async function resetMainSession() {
-  return await directSessionReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-    "sessions.reset",
-    {
-      key: "main",
-    },
-  );
+  return await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: { lifecycleRevision?: string; sessionId: string };
+  }>("sessions.reset", {
+    key: "main",
+  });
 }
 
 function installAcpRuntimeBackendWithFreshSession() {
@@ -161,7 +162,8 @@ test("sessions.reset aborts active runs and clears queues", async () => {
   const reset = await resetMainSession();
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:main");
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+  expect(reset.payload?.entry.sessionId).toBe("sess-main");
+  expect(reset.payload?.entry.lifecycleRevision).toEqual(expect.any(String));
   expectActiveRunCleanup("agent:main:main", ["main", "agent:main:main", "sess-main"], "sess-main");
   expect(peekSystemEvents("main")).toStrictEqual([]);
   expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
@@ -346,7 +348,7 @@ test("sessions.reset forwards the retired generation to registered agent harness
       agentId: "main",
       sessionId: "sess-main",
       sessionKey: "agent:main:main",
-      sessionFile: expect.stringMatching(/^sqlite:main:sess-main:/),
+      sessionFile: "agent:main:main",
       reason: "reset",
     });
   } finally {
@@ -546,7 +548,7 @@ test("sessions.reset finishes after lifecycle rotation during destructive cleanu
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
-    sessionId: "sess-main",
+    lifecycleRevision: undefined,
     meta: resolvedAcpMeta({
       recordId: "agent:main:main",
       backendSessionId: "backend-session-1",
@@ -621,7 +623,7 @@ test("sessions.reset rejects a concurrent archive during lifecycle rotation", as
   });
   const entry = loadSessionEntry({ storePath, sessionKey });
   expect(entry?.archivedAt).toBeUndefined();
-  expect(entry?.sessionId).not.toBe("sess-archive-race");
+  expect(entry?.sessionId).toBe("sess-archive-race");
 });
 
 test.each([
@@ -698,7 +700,7 @@ test("sessions.reset preserves a newer session after lifecycle rotation", async 
   });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
-    sessionId: "sess-main",
+    lifecycleRevision: undefined,
     meta: resolvedAcpMeta({
       recordId: "agent:main:main",
       backendSessionId: "backend-session-1",
@@ -995,7 +997,7 @@ test("sessions.reset emits subagent targetKind for subagent sessions", async () 
   });
   expect(reset.ok).toBe(true);
   expect(reset.payload?.key).toBe("agent:main:subagent:worker");
-  expect(reset.payload?.entry.sessionId).not.toBe("sess-subagent");
+  expect(reset.payload?.entry.sessionId).toBe("sess-subagent");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   const event = (subagentLifecycleHookMocks.runSubagentEnded.mock.calls as unknown[][])[0]?.[0] as
     | { targetKind?: string; targetSessionKey?: string; reason?: string; outcome?: string }
@@ -1040,17 +1042,22 @@ test("sessions.reset preserves explicit responseUsage preference across session 
   await writeSingleLineSession(dir, "sess-main", "hello");
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main", { responseUsage: "tokens", pinnedAt: 123 }),
+      main: sessionStoreEntry("sess-main", {
+        responseUsage: "tokens",
+        pinnedAt: 123,
+        icon: "name:spark",
+      }),
     },
   });
 
   const reset = await directSessionReq<{
     ok: true;
     key: string;
-    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number };
+    entry: { sessionId: string; responseUsage?: string; pinnedAt?: number; icon?: string };
   }>("sessions.reset", { key: "main" });
 
   expect(reset.ok).toBe(true);
   expect(reset.payload?.entry.responseUsage).toBe("tokens");
   expect(reset.payload?.entry.pinnedAt).toBe(123);
+  expect(reset.payload?.entry.icon).toBe("name:spark");
 });

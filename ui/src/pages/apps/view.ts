@@ -11,6 +11,8 @@ import { appsBrandIcons } from "./brand-icons.ts";
 
 type AppsProps = {
   onNavigate: (routeId: RouteId) => void;
+  /** Opens the device-pairing dialog; absent when the operator cannot pair. */
+  onPairDevice?: () => void;
 };
 
 type AppCardCta =
@@ -258,10 +260,22 @@ function renderAppCard(card: AppCard, props: AppsProps) {
 }
 
 function renderSection(section: AppSection, props: AppsProps) {
+  const pairHint =
+    section.id === "mobile" && props.onPairDevice
+      ? html`
+          <p class="apps-pair-hint">
+            ${t("appsPage.havePhone")}
+            <button type="button" @click=${props.onPairDevice}>
+              ${t("appsPage.pairDevice")}
+            </button>
+          </p>
+        `
+      : nothing;
   return html`
     <section class="apps-section" aria-label=${section.label()}>
       <h2 class="apps-section__heading">${section.label()}</h2>
       <div class="apps-grid">${section.cards.map((card) => renderAppCard(card, props))}</div>
+      ${pairHint}
     </section>
   `;
 }

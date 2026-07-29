@@ -828,7 +828,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     this.harness.outputActivity.markPlaybackStarted();
     const realtimeConfig = this.realtimeConfig;
     logger.info(
-      `discord voice: realtime audio playback started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} mode=${this.params.mode} model=${realtimeConfig?.model ?? "provider-default"} voice=${realtimeConfig?.voice ?? "provider-default"}`,
+      `discord voice: realtime audio playback started guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} mode=${this.params.mode} model=${realtimeConfig?.model ?? "provider-default"} voice=${realtimeConfig?.speakerVoice ?? realtimeConfig?.speakerVoiceId ?? "provider-default"}`,
     );
   }
 
@@ -1738,9 +1738,7 @@ function buildProviderConfigOverrides(
       ? { voice: realtimeConfig.speakerVoice }
       : realtimeConfig?.speakerVoiceId
         ? { voice: realtimeConfig.speakerVoiceId }
-        : realtimeConfig?.voice
-          ? { voice: realtimeConfig.voice }
-          : {}),
+        : {}),
     ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
       ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
       : {}),

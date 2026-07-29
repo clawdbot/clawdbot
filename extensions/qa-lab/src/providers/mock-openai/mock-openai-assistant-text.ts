@@ -46,12 +46,32 @@ import {
   extractSnackPreference,
   isSnackRecallPrompt,
 } from "./mock-openai-tooling.js";
+
+function readCompletedImageGenerationMediaPath(prompt: string): string | undefined {
+  const eventStart = prompt.lastIndexOf("[Internal task completion event]");
+  if (eventStart < 0) {
+    return undefined;
+  }
+  const completionEvent = prompt.slice(eventStart);
+  if (
+    !/^source:\s*image_generation\s*$/im.test(completionEvent) ||
+    !/^status:\s*completed successfully\s*$/im.test(completionEvent)
+  ) {
+    return undefined;
+  }
+  return /^MEDIA:\s*([^\r\n]+)$/im.exec(completionEvent)?.[1]?.trim() || undefined;
+}
+
 export function buildAssistantText(
   input: ResponsesInputItem[],
   body: Record<string, unknown>,
   scenarioState: MockScenarioState,
 ) {
   const prompt = extractLastUserText(input);
+  const completedImageMediaPath = readCompletedImageGenerationMediaPath(prompt);
+  if (completedImageMediaPath) {
+    return `Protocol note: generated the QA lighthouse image successfully.\nMEDIA:${completedImageMediaPath}`;
+  }
   const toolOutput = extractToolOutput(input);
   const scenarioToolOutput =
     toolOutput ||
@@ -61,6 +81,16 @@ export function buildAssistantText(
       ? extractLatestToolOutput(input)
       : "");
   const toolJson = parseToolOutputJson(scenarioToolOutput);
+  const structuredToolText = Array.isArray(toolJson?.content)
+    ? toolJson.content
+        .map((entry) =>
+          entry && typeof entry === "object" && !Array.isArray(entry)
+            ? (entry as { text?: unknown }).text
+            : undefined,
+        )
+        .filter((value): value is string => typeof value === "string")
+        .join("\n")
+    : "";
   const userTexts = extractAllUserTexts(input);
   const allInputText = extractAllRequestTexts(input, body);
   const rememberedFact = extractRememberedFact(userTexts);
@@ -80,9 +110,13 @@ export function buildAssistantText(
       : "";
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const allUserText = userTexts.join("\n");
+  const userExactReplyDirective =
+    promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
+  const userExactMarkerDirective =
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
-  const exactMarkerDirective =
-    promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -94,7 +128,6 @@ export function buildAssistantText(
     : "";
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
@@ -151,11 +184,11 @@ export function buildAssistantText(
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return promptExactReplyDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return exactMarkerDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
+    return userExactMarkerDirective;
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return exactReplyDirective;
+  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
+    return userExactReplyDirective;
   }
   if (promptExactReplyDirective) {
     return promptExactReplyDirective;
@@ -320,6 +353,24 @@ export function buildAssistantText(
       return "Protocol note: replay unsafe after write.";
     }
     return "";
+  }
+  const askUserResult = structuredToolText || toolOutput;
+  const askUserDeploy = /^Deploy:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  const askUserChecks = /^Checks:\s*(.+)$/m
+    .exec(askUserResult)?.[1]
+    ?.split(",")
+    .map((value) => value.replace(/\s*\(Recommended\)\s*$/, "").trim())
+    .filter(Boolean)
+    .join(",");
+  const askUserNote = /^Note:\s*(.+)$/m.exec(askUserResult)?.[1]?.trim();
+  if (
+    toolOutput &&
+    /"status"\s*:\s*"answered"/.test(askUserResult) &&
+    askUserDeploy &&
+    askUserChecks &&
+    askUserNote
+  ) {
+    return `ASK-USER-ROUNDTRIP-OK | deploy=${askUserDeploy} | checks=${askUserChecks} | note=${askUserNote}`;
   }
   if (
     toolOutput &&

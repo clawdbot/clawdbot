@@ -18,6 +18,9 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+  setRuntimeConfigSourceSnapshotIfCurrent,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,
   type RuntimeConfigSnapshotRefreshHandler,
@@ -56,24 +59,28 @@ type LocatedSecretRef = {
   ref: SecretRef;
 };
 
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
+
 function listLocatedSecretRefs(
   value: unknown,
+  defaults: SecretDefaults | undefined,
   path: Array<string | number> = [],
   refs: LocatedSecretRef[] = [],
 ): LocatedSecretRef[] {
-  if (isSecretRef(value)) {
-    refs.push({ path, ref: value });
+  const ref = coerceSecretRef(value, defaults);
+  if (ref) {
+    refs.push({ path, ref });
     return refs;
   }
   if (Array.isArray(value)) {
     for (const [index, entry] of value.entries()) {
-      listLocatedSecretRefs(entry, [...path, index], refs);
+      listLocatedSecretRefs(entry, defaults, [...path, index], refs);
     }
     return refs;
   }
   if (isRecord(value)) {
     for (const key of Object.keys(value).toSorted()) {
-      listLocatedSecretRefs(value[key], [...path, key], refs);
+      listLocatedSecretRefs(value[key], defaults, [...path, key], refs);
     }
   }
   return refs;
@@ -83,12 +90,12 @@ function listLocatedSecretRefs(
 export function hasSameSecretReloadContract(left: OpenClawConfig, right: OpenClawConfig): boolean {
   return isDeepStrictEqual(
     {
-      refs: listLocatedSecretRefs(left),
+      refs: listLocatedSecretRefs(left, left.secrets?.defaults),
       defaults: left.secrets?.defaults,
       providers: left.secrets?.providers,
     },
     {
-      refs: listLocatedSecretRefs(right),
+      refs: listLocatedSecretRefs(right, right.secrets?.defaults),
       defaults: right.secrets?.defaults,
       providers: right.secrets?.providers,
     },
@@ -168,6 +175,45 @@ function cloneSecretsRuntimeRefreshContext(
   return cloned;
 }
 
+function cloneDegradedSecretOwner(owner: DegradedSecretOwner): DegradedSecretOwner {
+  const cloned: DegradedSecretOwner = {
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    state: owner.state,
+    paths: [...owner.paths],
+    refKeys: [...owner.refKeys],
+    reason: owner.reason,
+  };
+  if (owner.degradationState) {
+    cloned.degradationState = owner.degradationState;
+  }
+  if (owner.providerFailures) {
+    cloned.providerFailures = owner.providerFailures.map((failure) => ({ ...failure }));
+  }
+  if (owner.refFailureReason) {
+    cloned.refFailureReason = owner.refFailureReason;
+  }
+  return cloned;
+}
+
+function cloneSecretOwnerRefState(owner: SecretOwnerRefState): SecretOwnerRefState {
+  const cloned: SecretOwnerRefState = {
+    ownerKind: owner.ownerKind,
+    ownerId: owner.ownerId,
+    refKeys: [...owner.refKeys],
+  };
+  if (owner.contractDigest) {
+    cloned.contractDigest = owner.contractDigest;
+  }
+  if (owner.resolvedValues) {
+    cloned.resolvedValues = owner.resolvedValues.map((entry) => ({
+      refKey: entry.refKey,
+      value: structuredClone(entry.value),
+    }));
+  }
+  return cloned;
+}
+
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
     sourceConfig: structuredClone(snapshot.sourceConfig),
@@ -178,19 +224,8 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
     })),
     authStoreCredentialsRevision: snapshot.authStoreCredentialsRevision,
     warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    degradedOwners: (snapshot.degradedOwners ?? []).map((owner) => ({
-      ownerKind: owner.ownerKind,
-      ownerId: owner.ownerId,
-      state: owner.state,
-      paths: [...owner.paths],
-      refKeys: [...owner.refKeys],
-      reason: owner.reason,
-    })),
-    secretOwners: (snapshot.secretOwners ?? []).map((owner) => ({
-      ownerKind: owner.ownerKind,
-      ownerId: owner.ownerId,
-      refKeys: [...owner.refKeys],
-    })),
+    degradedOwners: (snapshot.degradedOwners ?? []).map(cloneDegradedSecretOwner),
+    secretOwners: (snapshot.secretOwners ?? []).map(cloneSecretOwnerRefState),
     webTools: structuredClone(snapshot.webTools),
   };
 }
@@ -1008,6 +1043,78 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
 /** Stable token for compare-and-activate ownership across cloned snapshot reads. */
 export function getActiveSecretsRuntimeSnapshotRevision(): number {
   return activeSnapshotRevision;
+}
+
+/** Whether the active snapshot is the activation or a scoped descendant of one revision. */
+export function hasActiveSecretsRuntimeSnapshotLineage(revision: number): boolean {
+  return activeSnapshot !== null && activeSnapshotLineageStartRevision === revision;
+}
+
+/** Advance canonical source ownership without replacing resolved runtime or auth bytes. */
+export function setSecretsRuntimeSourceSnapshotIfCurrent(params: {
+  expectedSecretsRevision: number;
+  expectedRuntimeConfigRevision: number;
+  runtimeSourceConfig: OpenClawConfig;
+  secretsSourceConfig: OpenClawConfig;
+}): boolean {
+  if (activeSnapshotRevision !== params.expectedSecretsRevision) {
+    return false;
+  }
+  const nextRuntimeSourceConfig = structuredClone(params.runtimeSourceConfig);
+  const nextSecretsSourceConfig = structuredClone(params.secretsSourceConfig);
+  if (
+    !setRuntimeConfigSourceSnapshotIfCurrent({
+      expectedRevision: params.expectedRuntimeConfigRevision,
+      sourceConfig: nextRuntimeSourceConfig,
+    })
+  ) {
+    return false;
+  }
+  advanceSecretsRuntimeSourceSnapshot(nextSecretsSourceConfig);
+  return true;
+}
+
+function advanceSecretsRuntimeSourceSnapshot(sourceConfig: OpenClawConfig): void {
+  if (activeSnapshot) {
+    activeSnapshot.sourceConfig = sourceConfig;
+    activeSnapshotRevision += 1;
+    activeSnapshotLineageStartRevision = activeSnapshotRevision;
+    activeSnapshotLineageAuthStores = structuredClone(listRuntimeAuthProfileStoreSnapshots());
+    activeSnapshotLineageAuthMutations = captureAuthStoreMutationLineage(
+      activeSnapshotLineageAuthStores,
+      activeSnapshotLineageAuthStores,
+    );
+  }
+}
+
+/** Reverts source ownership while retaining scoped descendants of the committed source write. */
+export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
+  expectedLineageRevision: number;
+  runtimeSourceConfig: OpenClawConfig;
+  secretsSourceConfig: OpenClawConfig;
+}): boolean {
+  if (!activeSnapshot || activeSnapshotLineageStartRevision !== params.expectedLineageRevision) {
+    return false;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeMetadata = getRuntimeConfigSnapshotMetadata();
+  if (
+    !runtimeConfig ||
+    !runtimeMetadata ||
+    !isDeepStrictEqual(runtimeConfig, activeSnapshot.config)
+  ) {
+    return false;
+  }
+  if (
+    !setRuntimeConfigSourceSnapshotIfCurrent({
+      expectedRevision: runtimeMetadata.revision,
+      sourceConfig: structuredClone(params.runtimeSourceConfig),
+    })
+  ) {
+    return false;
+  }
+  advanceSecretsRuntimeSourceSnapshot(structuredClone(params.secretsSourceConfig));
+  return true;
 }
 
 // Hot-path readers only need the config pair for availability decisions.

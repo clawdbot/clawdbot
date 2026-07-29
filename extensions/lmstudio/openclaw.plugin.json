@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "modelCatalog": {
+    "discovery": {
+      "lmstudio": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "lmstudio": {

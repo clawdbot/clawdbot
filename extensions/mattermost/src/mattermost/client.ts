@@ -75,6 +75,15 @@ export const MattermostPostSchema = z
 
 export type MattermostPost = z.infer<typeof MattermostPostSchema>;
 
+const MattermostPostListSchema = z
+  .object({
+    order: z.array(z.string()),
+    posts: z.record(z.string(), MattermostPostSchema),
+    next_post_id: z.string().nullable().optional(),
+    prev_post_id: z.string().nullable().optional(),
+  })
+  .passthrough();
+
 type MattermostFileInfo = {
   id: string;
   name?: string | null;
@@ -310,7 +319,50 @@ export async function fetchMattermostChannel(
   client: MattermostClient,
   channelId: string,
 ): Promise<MattermostChannel> {
-  return await client.request<MattermostChannel>(`/channels/${channelId}`);
+  return await client.request<MattermostChannel>(`/channels/${encodeURIComponent(channelId)}`);
+}
+
+export async function fetchMattermostChannelPosts(
+  client: MattermostClient,
+  channelId: string,
+  options: {
+    limit?: number;
+    before?: string;
+    after?: string;
+  } = {},
+): Promise<{ messages: MattermostPost[]; hasMore: boolean }> {
+  const before = normalizeOptionalString(options.before);
+  const after = normalizeOptionalString(options.after);
+  if (before && after) {
+    throw new Error("Mattermost read accepts either before or after, not both.");
+  }
+
+  if (options.limit !== undefined && (!Number.isSafeInteger(options.limit) || options.limit <= 0)) {
+    throw new Error("Mattermost read limit must be a positive integer.");
+  }
+  const perPage = Math.min(options.limit ?? 60, 200);
+  const query = new URLSearchParams({ per_page: String(perPage) });
+  if (before) {
+    query.set("before", before);
+  }
+  if (after) {
+    query.set("after", after);
+  }
+  const response = await client.request<unknown>(
+    `/channels/${encodeURIComponent(channelId)}/posts?${query.toString()}`,
+  );
+  const parsed = MattermostPostListSchema.safeParse(response);
+  if (!parsed.success || parsed.data.order.some((postId) => !parsed.data.posts[postId])) {
+    throw new Error("Unexpected Mattermost channel posts response.");
+  }
+
+  return {
+    messages: parsed.data.order.map((postId) => parsed.data.posts[postId] as MattermostPost),
+    // Mattermost returns the cursor for the opposite direction as well. For
+    // descending/default and `before` reads, `prev_post_id` points to older
+    // posts; for `after` reads, `next_post_id` points to newer posts.
+    hasMore: Boolean(after ? parsed.data.next_post_id : parsed.data.prev_post_id),
+  };
 }
 
 export async function fetchMattermostChannelByName(

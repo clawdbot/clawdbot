@@ -50,6 +50,38 @@ function createFactoryContext(
   };
 }
 
+async function createCleanupAdapter(
+  cleanup?: () => Promise<void>,
+  cleanupAfterGatewayStop?: () => Promise<void>,
+) {
+  const definition = createAdapterDefinition(cleanup, cleanupAfterGatewayStop);
+  return await createQaTransportAdapter(
+    createFactoryContext({ channelId: "cleanup", driver: "live" }),
+    [
+      {
+        id: "cleanup",
+        matches: () => true,
+        async create() {
+          return definition;
+        },
+      },
+    ],
+  );
+}
+
+function createPendingCleanup() {
+  let finish = () => {};
+  const pending = new Promise<void>((resolve) => {
+    finish = () => resolve();
+  });
+  return {
+    cleanup: vi.fn(async () => {
+      await pending;
+    }),
+    finish,
+  };
+}
+
 describe("qa transport registry", () => {
   it("rejects inherited prototype keys as unsupported transport ids", () => {
     expect(() => normalizeQaTransportId("toString")).toThrow("unsupported QA transport: toString");
@@ -113,6 +145,76 @@ describe("qa transport registry", () => {
 
     expect(cleanup).toHaveBeenCalledOnce();
     expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+  });
+
+  it.each(["before", "after"] as const)(
+    "shares concurrent %s-gateway cleanup for the selected adapter",
+    async (phase) => {
+      const pendingCleanup = createPendingCleanup();
+      const created =
+        phase === "before"
+          ? await createCleanupAdapter(pendingCleanup.cleanup)
+          : await createCleanupAdapter(undefined, pendingCleanup.cleanup);
+      const cleanup =
+        phase === "before" ? created.cleanupBeforeGatewayStop : created.cleanupAfterGatewayStop;
+      const attempts = [cleanup(), cleanup(), cleanup()];
+
+      await Promise.resolve();
+      try {
+        expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+      } finally {
+        pendingCleanup.finish();
+        await Promise.allSettled(attempts);
+      }
+
+      await cleanup();
+      expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("shares cleanup between concurrent gateway-less and phase-specific callers", async () => {
+    const pendingCleanup = createPendingCleanup();
+    const cleanupAfterGatewayStop = vi.fn(async () => undefined);
+    const created = await createCleanupAdapter(pendingCleanup.cleanup, cleanupAfterGatewayStop);
+    const attempts = [
+      created.cleanupWithoutGateway(),
+      created.cleanupWithoutGateway(),
+      created.cleanupBeforeGatewayStop(),
+    ];
+
+    await Promise.resolve();
+    try {
+      expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+    } finally {
+      pendingCleanup.finish();
+      await Promise.allSettled(attempts);
+    }
+
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+    await created.cleanupWithoutGateway();
+    expect(pendingCleanup.cleanup).toHaveBeenCalledOnce();
+    expect(cleanupAfterGatewayStop).toHaveBeenCalledOnce();
+  });
+
+  it("shares a failed cleanup and permits one subsequent retry", async () => {
+    const failure = new Error("pre-cleanup failed");
+    const cleanup = vi.fn().mockRejectedValueOnce(failure).mockResolvedValue(undefined);
+    const created = await createCleanupAdapter(cleanup);
+
+    const attempts = await Promise.allSettled([
+      created.cleanupBeforeGatewayStop(),
+      created.cleanupBeforeGatewayStop(),
+    ]);
+
+    expect(attempts).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    expect(cleanup).toHaveBeenCalledOnce();
+
+    await created.cleanupBeforeGatewayStop();
+    await created.cleanupBeforeGatewayStop();
+    expect(cleanup).toHaveBeenCalledTimes(2);
   });
 
   it("runs post-gateway cleanup when gateway-less pre-cleanup fails", async () => {

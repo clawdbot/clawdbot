@@ -409,6 +409,9 @@ function readIgnoredCompactionOverridePaths(params: CompactEmbeddedAgentSessionP
     if (typeof entry.record.model === "string" && entry.record.model.trim()) {
       ignored.add(`${entry.path}.compaction.model`);
     }
+    if (typeof entry.record.thinkingLevel === "string" && entry.record.thinkingLevel.trim()) {
+      ignored.add(`${entry.path}.compaction.thinkingLevel`);
+    }
     if (providerPath) {
       ignored.add(providerPath);
     }
@@ -555,8 +558,12 @@ async function compactCodexNativeThread(
   const shouldReleaseDefaultLease = !options.clientFactory;
   const clientFactory = options.clientFactory ?? getLeasedSharedCodexAppServerClient;
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
+  // A user-home app-server keeps its native Codex account; injecting a prepared key
+  // would rewrite the CODEX_HOME auth that Codex CLI and Desktop share.
   const usesPreparedApiKey =
-    !usesSupervisionConnection && runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
+    !usesSupervisionConnection &&
+    appServer.start.homeScope !== "user" &&
+    runtimeAuthPlan?.modelRoute?.authRequirement === "api-key";
   const preparedApiKey = usesPreparedApiKey ? params.resolvedApiKey?.trim() : undefined;
   if (usesPreparedApiKey && !preparedApiKey) {
     return {

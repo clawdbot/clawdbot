@@ -126,7 +126,8 @@ describe("checkGatewayHealth", () => {
             ownerKind: "capability",
             ownerId: "tts",
             state: "unavailable",
-            paths: ["messages.tts.providers.elevenlabs.apiKey"],
+            degradationState: "stale",
+            paths: ["tts.providers.elevenlabs.apiKey"],
             reason: "secret provider policy denied resolution",
           },
           {
@@ -147,7 +148,7 @@ describe("checkGatewayHealth", () => {
       [
         "- cold account:discord:ops (channels.discord.accounts.ops.token): secret resolution failed",
         "  Retry: openclaw secrets reload",
-        "- cold capability:tts (messages.tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
+        "- stale capability:tts (tts.providers.elevenlabs.apiKey): secret provider policy denied resolution",
         "  Retry: openclaw secrets reload",
         "- cold capability:web-fetch:firecrawl (plugins.entries.firecrawl.config.webFetch.apiKey): resolved secret value was invalid",
         "  Retry: openclaw secrets reload",

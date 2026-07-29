@@ -3,6 +3,7 @@
 // list — alerts surface where the user already is instead of on a dashboard
 // they have to visit.
 import { consume } from "@lit/context";
+import { initialState, Task } from "@lit/task";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -27,6 +28,7 @@ import {
   buildSidebarAttentionItems,
   type SidebarAttentionItem,
 } from "./sidebar-attention-items.ts";
+import "./tooltip.ts";
 
 // Reloads are connection-scoped; a visibility change only refetches after the
 // snapshot is older than this, so tab switches stay free of request bursts.
@@ -47,9 +49,42 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenApprovals?: () => void;
 
   private loadedClient: GatewayBrowserClient | null = null;
+  private loadedGateway: ApplicationContext["gateway"] | null = null;
   private loadedAtMs = 0;
   private dismissedScope: string | null = null;
   private idleRefreshTimer: ReturnType<typeof globalThis.setInterval> | null = null;
+
+  private readonly loadTask = new Task(this, {
+    autoRun: false,
+    // Gateway identity matters when a replacement source reuses the same client object.
+    args: () =>
+      [null as ApplicationContext["gateway"] | null, null as GatewayBrowserClient | null] as const,
+    task: async ([gateway, client], { signal }) => {
+      if (!gateway || !client) {
+        return initialState;
+      }
+      const cron = createInitialCronState({ client, connected: true });
+      await Promise.allSettled([
+        loadCronJobsPage(cron).then(() => {
+          if (!signal.aborted) {
+            this.cronJobs = cron.cronJobs;
+          }
+        }),
+        loadModelAuthStatus(client, { signal })
+          .catch(() => null)
+          .then((modelAuthStatus) => {
+            if (!signal.aborted) {
+              this.modelAuthStatus = modelAuthStatus;
+            }
+          }),
+      ]);
+      return true;
+    },
+    onComplete: () => {
+      this.loadedAtMs = Date.now();
+      this.pruneAfterRefresh();
+    },
+  });
 
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -101,7 +136,9 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.idleRefreshTimer = null;
     }
     this.subscriptions.clear();
+    void this.loadTask.run([null, null]);
     this.loadedClient = null;
+    this.loadedGateway = null;
     super.disconnectedCallback();
   }
 
@@ -112,44 +149,20 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
       this.dismissedScope = gatewayUrl;
       this.dismissed = loadDismissals(gatewayUrl);
     }
-    if (!snapshot.connected || !snapshot.client) {
+    if (snapshot.phase !== "connected" || !snapshot.client) {
+      void this.loadTask.run([null, null]);
       this.loadedClient = null;
+      this.loadedGateway = null;
       this.cronJobs = [];
       this.modelAuthStatus = null;
       return;
     }
-    if (snapshot.client === this.loadedClient) {
+    if (gateway === this.loadedGateway && snapshot.client === this.loadedClient) {
       return;
     }
+    this.loadedGateway = gateway;
     this.loadedClient = snapshot.client;
-    void this.load(gateway, snapshot.client);
-  }
-
-  private async load(gateway: ApplicationContext["gateway"], client: GatewayBrowserClient) {
-    const isCurrent = () =>
-      this.isConnected &&
-      this.loadedClient === client &&
-      gateway.snapshot.client === client &&
-      gateway.snapshot.connected;
-    const cron = createInitialCronState({ client, connected: true });
-    await Promise.allSettled([
-      loadCronJobsPage(cron).then(() => {
-        if (isCurrent()) {
-          this.cronJobs = cron.cronJobs;
-        }
-      }),
-      loadModelAuthStatus(client, {})
-        .catch(() => null)
-        .then((result) => {
-          if (isCurrent()) {
-            this.modelAuthStatus = result;
-          }
-        }),
-    ]);
-    if (isCurrent()) {
-      this.loadedAtMs = Date.now();
-      this.pruneAfterRefresh();
-    }
+    void this.loadTask.run([gateway, snapshot.client]);
   }
 
   // Re-arm stale snoozes only right after this tab's own data refresh: fresh
@@ -194,7 +207,7 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    if (!this.context?.gateway.snapshot.connected) {
+    if (this.context?.gateway.snapshot.phase !== "connected") {
       return nothing;
     }
     const items = buildSidebarAttentionItems({
@@ -211,24 +224,28 @@ class SidebarAttention extends OpenClawLightDomContentsElement {
         ${items.map(
           (item) => html`
             <div class="sidebar-attention__item sidebar-attention__item--${item.severity}">
-              <button
-                type="button"
-                class="sidebar-attention__open"
-                title=${item.label}
-                @click=${() => this.open(item)}
-              >
-                <span class="sidebar-attention__icon" aria-hidden="true">${icons[item.icon]}</span>
-                <span class="sidebar-attention__label">${item.label}</span>
-              </button>
-              <button
-                type="button"
-                class="sidebar-attention__dismiss"
-                title=${t("common.dismiss")}
-                aria-label=${t("common.dismiss")}
-                @click=${() => this.dismiss(item)}
-              >
-                ${icons.x}
-              </button>
+              <openclaw-tooltip .content=${item.detail ?? item.label}>
+                <button
+                  type="button"
+                  class="sidebar-attention__open"
+                  @click=${() => this.open(item)}
+                >
+                  <span class="sidebar-attention__icon" aria-hidden="true"
+                    >${icons[item.icon]}</span
+                  >
+                  <span class="sidebar-attention__label">${item.label}</span>
+                </button>
+              </openclaw-tooltip>
+              <openclaw-tooltip .content=${t("common.dismiss")}>
+                <button
+                  type="button"
+                  class="sidebar-attention__dismiss"
+                  aria-label=${t("common.dismiss")}
+                  @click=${() => this.dismiss(item)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>
             </div>
           `,
         )}

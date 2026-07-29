@@ -6,6 +6,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
 import {
   killProcessTree as killProcessTreeGracefully,
@@ -266,13 +267,17 @@ function resolveShellFromPath(
     return undefined;
   }
   const entries = envPath.split(path.delimiter).filter(Boolean);
-  for (const entry of entries) {
-    const candidate = path.join(entry, name);
-    try {
-      fs.accessSync(candidate, fs.constants.X_OK);
-      return candidate;
-    } catch {
-      // ignore missing or non-executable entries
+  const executableNames =
+    process.platform === "win32" && !path.extname(name) ? [`${name}.exe`, name] : [name];
+  for (const executableName of executableNames) {
+    for (const entry of entries) {
+      const candidate = path.join(entry, executableName);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      } catch {
+        // Ignore missing or non-executable entries.
+      }
     }
   }
   return undefined;
@@ -361,9 +366,21 @@ export function sanitizeBinaryOutput(
 ): string {
   // Output callbacks are stream chunks, not true EOF. Preserve a pending CSI
   // visibly so a split final byte cannot leak from the following chunk.
-  const scrubbed = stripAnsiForStreamChunk(text, {
-    compatibilityGrammar: options?.ansiMode === "compat",
-  }).replace(/[\p{Format}\p{Surrogate}]/gu, "");
+  return sanitizeStrippedBinaryOutput(
+    stripAnsiForStreamChunk(text, {
+      compatibilityGrammar: options?.ansiMode === "compat",
+    }),
+  );
+}
+
+/** Keep one ANSI parser per process stream so control sequences can span callbacks. */
+export function createStreamingBinaryOutputSanitizer(): (text: string) => string {
+  const ansiStripper = new AnsiSequenceStripper();
+  return (text) => sanitizeStrippedBinaryOutput(ansiStripper.write(text));
+}
+
+function sanitizeStrippedBinaryOutput(text: string): string {
+  const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
   if (!scrubbed) {
     return scrubbed;
   }

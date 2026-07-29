@@ -86,16 +86,22 @@ describe("widget prompts", () => {
     );
     // The bridge posts its offer at parse time, before the frame's load event.
     const port = offerPromptPort(frame);
+    const hostMessages: unknown[] = [];
+    port.addEventListener("message", (event) => hostMessages.push(event.data));
+    port.start();
     frame.dispatchEvent(new Event("load"));
+    await flushPorts();
+    expect(hostMessages).toContainEqual({ type: "openclaw:widget-prompt-host-ready" });
     emulateInteractableFrame(frame);
     const received = collectPromptEvents(container);
     try {
       postPrompt(port, "  Show details  ");
       await flushPorts();
       expect(received).toEqual(["Show details"]);
-      // Slash commands would run UI commands such as /approve on the widget's
-      // behalf; the send path must only ever receive conversational text.
+      // Slash and bang commands would run host commands on the widget's behalf;
+      // the send path must only ever receive conversational text.
       postPrompt(port, "/approve");
+      postPrompt(port, "!pwd");
       postPrompt(port, "   ");
       postPrompt(port, 42);
       postPrompt(port, "x".repeat(4_001));

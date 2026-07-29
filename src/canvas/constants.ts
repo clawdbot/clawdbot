@@ -25,9 +25,10 @@ export function resolveCanvasNodeCapability(
 /** Adds the core Canvas surface while removing stale plugin-owned duplicates. */
 export function withCoreCanvasNodeCapability(
   surfaces: readonly PluginNodeCapabilitySurface[],
+  enabled = true,
 ): PluginNodeCapabilitySurface[] {
-  return [
-    CANVAS_NODE_CAPABILITY,
-    ...surfaces.filter((entry) => entry.surface.trim() !== CANVAS_NODE_CAPABILITY.surface),
-  ];
+  const withoutStaleCanvas = surfaces.filter(
+    (entry) => entry.surface.trim() !== CANVAS_NODE_CAPABILITY.surface,
+  );
+  return enabled ? [CANVAS_NODE_CAPABILITY, ...withoutStaleCanvas] : withoutStaleCanvas;
 }

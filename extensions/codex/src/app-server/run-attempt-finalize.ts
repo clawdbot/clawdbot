@@ -7,7 +7,6 @@ import {
   resolveContextEngineOwnerPluginId,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
-  type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMirroredSessionHistoryMessages } from "./attempt-context.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
@@ -17,6 +16,8 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
+import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
@@ -35,6 +36,7 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
 import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
@@ -145,11 +147,12 @@ export async function finalizeCodexAttempt(
   const result = activeProjector.buildResult(toolBridge.telemetry, {
     yieldDetected: toolState.yieldDetected,
   });
+  const projectedTerminal = attemptTerminal.project(result.terminal);
   const effectiveTimedOut = state.timedOut && !recoveredTurnWatchTimeout;
   const effectiveTurnCompletionIdleTimedOut =
     state.turnCompletionIdleTimedOut && !recoveredTurnWatchTimeout;
   const isFinalAborted = () =>
-    result.aborted ||
+    projectedTerminal.aborted ||
     terminalState.explicitCancellationObserved ||
     (runAbortController.signal.aborted && !state.clientClosedAbort && !recoveredTurnWatchTimeout);
   const clientClosedPromptErrorForFinal =
@@ -162,7 +165,7 @@ export async function finalizeCodexAttempt(
       ? state.turnCompletionIdleTimeoutMessage
       : effectiveTimedOut
         ? "codex app-server attempt timed out"
-        : result.promptError);
+        : projectedTerminal.promptError);
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
       ? finalPromptError
@@ -225,7 +228,9 @@ export async function finalizeCodexAttempt(
     });
   }
   const finalPromptErrorSource =
-    effectiveTimedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
+    effectiveTimedOut || clientClosedPromptErrorForFinal
+      ? "prompt"
+      : projectedTerminal.promptErrorSource;
   const codexAppServerFailureKind = clientClosedPromptErrorForFinal
     ? "client_closed_before_turn_completed"
     : effectiveTurnCompletionIdleTimedOut
@@ -289,6 +294,7 @@ export async function finalizeCodexAttempt(
     result.agentHarnessResultClassification = undefined;
   }
   const attemptSucceeded = turnSucceeded && result.agentHarnessResultClassification === undefined;
+  terminalState.turnSucceeded = turnSucceeded;
   terminalState.sharedAbortAllowedAfterTerminalOutcome = shouldKeepCodexSharedAbortOpen({
     trigger: params.trigger,
     result,
@@ -319,7 +325,7 @@ export async function finalizeCodexAttempt(
   } else {
     codexModelCallDiagnostics.emitCompleted(result);
   }
-  const assistantTranscriptOwned = await codexTranscriptMirrorRuntime.mirrorBestEffort({
+  const mirrorOutcome = await codexTranscriptMirrorRuntime.mirrorBestEffort({
     params,
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
@@ -329,6 +335,27 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
+  const { assistantTranscriptOwned, assistantTranscriptIdempotencyKey } = mirrorOutcome;
+  const shouldCaptureSettledTurnFinalizationContext =
+    turnSucceeded &&
+    result.assistantTexts.every((text) => !text.trim()) &&
+    result.messagesSnapshot.some((message) => message.role === "toolResult");
+  const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
+    ? await captureCodexSettledTurnFinalizationContext({
+        ...activeTranscriptTarget,
+        mirroredMessages: mirrorOutcome.mirroredMessages,
+        settledMessages: result.messagesSnapshot,
+        turnId: activeTurnId,
+      })
+    : undefined;
+  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
+    // The isolated child must not infer around a partial or drifting transcript.
+    // Omitting this field preserves the existing incomplete-turn failure.
+    embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
+      threadId: resourceState.thread.threadId,
+      turnId: activeTurnId,
+    });
+  }
   if (activeContextEngine) {
     const contextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const isHeartbeat =
@@ -407,7 +434,31 @@ export async function finalizeCodexAttempt(
       ...(finalPromptError ? { error: formatErrorMessage(finalPromptError) } : {}),
       durationMs: Date.now() - attemptStartedAt,
     },
-    ctx: hookContext,
+    ctx: {
+      ...hookContext,
+      modelProviderId: resourceState.thread.modelProvider ?? effectiveRuntimeProviderId,
+      modelId: resourceState.thread.model ?? effectiveRuntimeModelId,
+      authProfileId: resourceState.thread.authProfileId ?? startupAuthProfileId,
+      modelIterations: result.modelIterations ?? 0,
+      skillWorkshopAvailable: flattenCodexDynamicToolFunctions(
+        attemptTools.toolBridge.availableSpecs,
+      ).some((tool) => tool.name === "skill_workshop"),
+      compacted: (result.compactionCount ?? 0) > 0,
+      messageChannel: params.messageChannel,
+      messageProvider: params.messageProvider,
+      chatType: params.chatType,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId ?? undefined,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+    },
     hookRunner,
   });
   state.shouldDelayNativeHookRelayUnregister =
@@ -491,13 +542,17 @@ export async function finalizeCodexAttempt(
   );
   return {
     ...result,
-    timedOut: effectiveTimedOut,
-    aborted: finalAborted,
-    promptError: finalPromptError,
-    promptErrorSource: finalPromptErrorSource,
+    terminal: attemptTerminal.normalize({
+      timedOut: effectiveTimedOut,
+      aborted: finalAborted,
+      promptError: finalPromptError,
+      promptErrorSource: finalPromptErrorSource,
+    }),
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+    ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
+    ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }

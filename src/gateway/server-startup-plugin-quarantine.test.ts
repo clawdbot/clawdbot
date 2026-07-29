@@ -33,7 +33,7 @@ describe("Gateway startup plugin quarantine", () => {
     }
   });
 
-  it("reaches readiness without importing one broken configured plugin", async () => {
+  it("reaches readiness without importing a configured plugin with a broken host peer", async () => {
     const pluginId = "broken-payload";
     const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-quarantined-plugin-"));
     tempDirs.push(pluginRoot);
@@ -44,6 +44,7 @@ describe("Gateway startup plugin quarantine", () => {
         type: "commonjs",
         main: "./missing-main.cjs",
         openclaw: { extensions: ["./index.cjs"] },
+        peerDependencies: { openclaw: ">=2026.1.1" },
       }),
       "utf8",
     );
@@ -76,7 +77,7 @@ describe("Gateway startup plugin quarantine", () => {
       env: process.env,
     });
     expect(smoke.failures).toMatchObject([
-      { pluginId, reason: "missing-main-entry", installPath: pluginRoot },
+      { pluginId, reason: "missing-openclaw-peer-link", installPath: pluginRoot },
     ]);
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
 
@@ -97,7 +98,7 @@ describe("Gateway startup plugin quarantine", () => {
       status: "error",
       activated: false,
       failurePhase: "validation",
-      activationReason: "configured-unavailable: missing-main-entry",
+      activationReason: "configured-unavailable: missing-openclaw-peer-link",
     });
     expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
@@ -124,6 +125,76 @@ describe("Gateway startup plugin quarantine", () => {
     expect(ready.status).toBe(200);
     await expect(ready.json()).resolves.toMatchObject({ ready: true });
     expect((globalThis as Record<string, unknown>).brokenPluginImported).toBeUndefined();
+  });
+
+  it("reaches readiness and loads a valid declared extension when npm main is stale", async () => {
+    const pluginId = "valid-declared-extension";
+    const pluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-valid-stale-main-"));
+    tempDirs.push(pluginRoot);
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: pluginId,
+        type: "commonjs",
+        main: "./missing-main.cjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: pluginId,
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginRoot, "index.cjs"),
+      `globalThis.selectedPluginImported = true; module.exports = { id: '${pluginId}', register() {} };`,
+      "utf8",
+    );
+
+    const smoke = await runPluginPayloadSmokeCheck({
+      records: { [pluginId]: { source: "npm", spec: pluginId, installPath: pluginRoot } },
+      env: process.env,
+    });
+    expect(smoke).toEqual({ checked: [pluginId], failures: [] });
+    setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
+
+    const { loadOpenClawPlugins } =
+      await vi.importActual<typeof import("../plugins/loader.js")>("../plugins/loader.js");
+    const pluginConfig = {
+      enabled: true,
+      load: { paths: [pluginRoot] },
+      allow: [pluginId],
+      entries: { [pluginId]: { enabled: true } },
+    };
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: { plugins: pluginConfig },
+      onlyPluginIds: [pluginId],
+    });
+    expect(registry.plugins.find((plugin) => plugin.id === pluginId)).toMatchObject({
+      status: "loaded",
+      activated: true,
+    });
+    expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
+
+    setTestPluginRegistry(registry);
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      plugins: pluginConfig,
+    });
+
+    const port = await getFreePort();
+    server = await startGatewayServer(port, { auth: { mode: "none" } });
+    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
+
+    expect(ready.status).toBe(200);
+    await expect(ready.json()).resolves.toMatchObject({ ready: true });
+    expect((globalThis as Record<string, unknown>).selectedPluginImported).toBe(true);
   });
 
   it("does not quarantine a healthy explicit root that shadows a broken install with the same id", async () => {

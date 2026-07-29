@@ -275,6 +275,26 @@ describe("buildUsageAgentMetaFields", () => {
     expect(fields.lastCallUsage).toEqual(latestCallUsage);
     expect(fields.promptTokens).toBeUndefined();
   });
+
+  it("does not label aggregate attempt usage as last-call usage", () => {
+    const usageAccumulator = createUsageAccumulator();
+    mergeUsageIntoAccumulator(usageAccumulator, {
+      input: 497_720,
+      output: 7_485,
+      cacheRead: 1_323_520,
+      total: 1_828_725,
+    });
+
+    const fields = buildUsageAgentMetaFields({
+      usageAccumulator,
+      lastAssistantUsage: { input: 0, output: 0, cacheRead: 0, total: 0 },
+      lastRunPromptUsage: undefined,
+    });
+
+    expect(fields.usage?.input).toBe(497_720);
+    expect(fields.lastCallUsage).toBeUndefined();
+    expect(fields.promptTokens).toBeUndefined();
+  });
 });
 
 describe("buildErrorAgentMeta", () => {

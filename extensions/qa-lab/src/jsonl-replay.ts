@@ -171,7 +171,7 @@ function assertSupportedRuntimePair(runtimePair: JsonlReplayInput["runtimePair"]
 
 export function createMockJsonlReplayCellRunner(): JsonlReplayCellRunner {
   return async ({ runtime, turn }) => ({
-    scenarioStatus: "pass",
+    status: "pass",
     cell: {
       runtime,
       transcriptBytes: turn.transcriptPrefix,

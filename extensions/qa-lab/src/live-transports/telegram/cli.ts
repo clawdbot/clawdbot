@@ -31,7 +31,7 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
     description: "Run the manual Telegram live QA lane against a private bot-to-bot group harness",
     listScenariosHelp: "Print available Telegram scenario ids and exit",
     outputDirHelp: "Telegram QA artifact directory",
-    profileHelp: "QA Lab Telegram profile: release or all (default: release)",
+    profileHelp: "Taxonomy profile for Telegram scenario selection (default: release)",
     async run(opts: LiveTransportQaCommandOptions) {
       await (await loadTelegramQaCliRuntime()).runQaTelegramCommand(opts);
     },

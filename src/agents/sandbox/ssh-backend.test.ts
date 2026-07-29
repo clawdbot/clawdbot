@@ -185,6 +185,16 @@ describe("ssh sandbox backend", () => {
     vi.restoreAllMocks();
   });
 
+  it("preserves shared runtime identity and hashes workspace-qualified scopes", () => {
+    expect(resolveSshRuntimePaths("/remote/openclaw", "shared").runtimeId).toBe(
+      "openclaw-ssh-shared-8198076c",
+    );
+    expect(
+      resolveSshRuntimePaths("/remote/openclaw", `agent:main:workspace:${"a".repeat(32)}`)
+        .runtimeId,
+    ).toMatch(/^openclaw-ssh-workspace-[a-f0-9]{32}$/);
+  });
+
   it("describes runtimes via the configured ssh target", async () => {
     const result = await sshSandboxBackendManager.describeRuntime({
       entry: {
@@ -430,7 +440,7 @@ describe("ssh sandbox backend", () => {
           vncPort: 5900,
           noVncPort: 6080,
           headless: true,
-          enableNoVnc: false,
+          noVncEnabled: false,
           allowHostControl: false,
           autoStart: false,
           autoStartTimeoutMs: 1000,

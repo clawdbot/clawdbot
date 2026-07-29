@@ -43,9 +43,15 @@ vi.mock("node:child_process", async () => {
 describe("restart-helper", () => {
   const originalPlatform = process.platform;
   const originalGetUid = process.getuid;
+  const originalGetEuid = process.geteuid;
+
+  const mockLinuxUserBusSocket = () =>
+    vi
+      .spyOn(fs, "stat")
+      .mockResolvedValue({ isSocket: () => true } as Awaited<ReturnType<typeof fs.stat>>);
 
   async function prepareAndReadScript(
-    env: Record<string, string>,
+    env: NodeJS.ProcessEnv,
     gatewayPort = 18789,
     windowsGatewayArgv: readonly string[] = [],
   ) {
@@ -211,6 +217,7 @@ exit 0
   afterEach(() => {
     Object.defineProperty(process, "platform", { value: originalPlatform });
     process.getuid = originalGetUid;
+    process.geteuid = originalGetEuid;
   });
 
   describe("prepareRestartScript", () => {
@@ -225,6 +232,172 @@ exit 0
       // Script should self-cleanup
       expect(content).toContain('rm -f "$0"');
       expect(content).toContain('rmdir "$script_dir" 2>/dev/null || true');
+      await cleanupScript(scriptPath);
+    });
+
+    it("repairs a mismatched inherited user bus before running systemctl --user", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.getuid = () => 2000;
+      process.geteuid = () => 1000;
+      const statSpy = mockLinuxUserBusSocket();
+      const tmpDir = await makeTempDir("openclaw-restart-helper-");
+      const fakeBinDir = path.join(tmpDir, "bin");
+      const callsPath = path.join(tmpDir, "systemctl-calls.log");
+      await fs.mkdir(fakeBinDir, { recursive: true });
+      await writeFakeSleep(fakeBinDir);
+      await fs.writeFile(
+        path.join(fakeBinDir, "systemctl"),
+        `#!/bin/sh
+printf 'runtime=%s bus=%s args=%s\n' "$XDG_RUNTIME_DIR" "$DBUS_SESSION_BUS_ADDRESS" "$*" >> "$OPENCLAW_SYSTEMCTL_CALLS"
+case "$2" in
+  is-active|restart) exit 0 ;;
+esac
+exit 1
+`,
+        { mode: 0o755 },
+      );
+
+      const { scriptPath } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        HOME: path.join(tmpDir, "home"),
+        OPENCLAW_STATE_DIR: path.join(tmpDir, "state"),
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+      const result = await executeScript(scriptPath, {
+        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+        OPENCLAW_SYSTEMCTL_CALLS: callsPath,
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+      const calls = await fs.readFile(callsPath, "utf-8");
+
+      expect(result.code).toBeNull();
+      expect(statSpy).toHaveBeenCalledWith("/run/user/1000/bus");
+      expect(calls).toContain(
+        "runtime=/run/user/1000 bus=unix:path=/run/user/1000/bus args=--user is-active --quiet openclaw-gateway.service",
+      );
+      expect(calls).toContain(
+        "runtime=/run/user/1000 bus=unix:path=/run/user/1000/bus args=--user restart openclaw-gateway.service",
+      );
+      expect(calls).not.toContain("runtime=/run/user/0");
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    });
+
+    it.each([
+      ["an abstract bus", "unix:abstract=/openclaw-user-bus"],
+      ["a genuinely absent bus", undefined],
+      ["an explicitly empty bus", ""],
+      ["a whitespace-only bus", "   "],
+      ["a cross-user standard bus", "unix:path=/run/user/0/bus"],
+      ["a fallback bus", "unix:path=/run/user/0/bus;unix:abstract=/openclaw-user-bus"],
+    ])("does not rewrite a custom user runtime with %s", async (_name, busAddress) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      const statSpy = mockLinuxUserBusSocket();
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/srv/openclaw-runtime",
+        DBUS_SESSION_BUS_ADDRESS: busAddress,
+      });
+
+      const shouldClearBusAddress = busAddress !== undefined && !busAddress.trim();
+      expect(statSpy.mock.calls).toEqual(
+        shouldClearBusAddress ? [["/srv/openclaw-runtime/bus"]] : [],
+      );
+      expect(content.includes("unset DBUS_SESSION_BUS_ADDRESS")).toBe(shouldClearBusAddress);
+      expect(content).not.toContain("export XDG_RUNTIME_DIR=");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it.each([
+      ["abstract transport", "unix:abstract=/openclaw-user-bus"],
+      ["path-looking abstract transport", "unix:abstract=/run/user/0/bus"],
+      ["multi-address transport", "unix:path=/run/user/0/bus;unix:abstract=/custom-openclaw-bus"],
+      ["malformed escaped path", "unix:path=%2Frun%2Fuser%2F0%2Fbus%ZZ"],
+    ])("preserves a custom %s when the runtime directory is missing", async (_name, busAddress) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      mockLinuxUserBusSocket();
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: busAddress,
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it.each([
+      ["path first", "unix:path=/run/user/0/bus,guid=0123456789abcdef", "/run/user/0"],
+      ["guid first", "unix:guid=0123456789abcdef,path=/run/user/0/bus", "/run/user/0"],
+      ["escaped path", "unix:guid=0123456789abcdef,path=%2Frun%2Fuser%2F0%2Fbus", "/run/user/0"],
+      ["trailing-slash runtime", "unix:path=/run/user/0/bus", "/run/user/0/"],
+      ["missing runtime", "unix:path=/run/user/0/bus", ""],
+    ])("repairs the canonical D-Bus bus (%s)", async (_name, address, runtimeDir) => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      mockLinuxUserBusSocket();
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: runtimeDir,
+        DBUS_SESSION_BUS_ADDRESS: address,
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).toContain("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("repairs both missing standard user bus values", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      mockLinuxUserBusSocket();
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "",
+        DBUS_SESSION_BUS_ADDRESS: "",
+      });
+
+      expect(content).toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
+      expect(content).toContain("export DBUS_SESSION_BUS_ADDRESS='unix:path=/run/user/1000/bus'");
+      await cleanupScript(scriptPath);
+    });
+
+    it("keeps a valid standard user bus environment", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      const statSpy = vi.spyOn(fs, "stat");
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/1000",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus",
+      });
+
+      expect(statSpy).not.toHaveBeenCalled();
+      expect(content).not.toContain("export XDG_RUNTIME_DIR=");
+      expect(content).not.toContain("export DBUS_SESSION_BUS_ADDRESS=");
+      await cleanupScript(scriptPath);
+    });
+
+    it("keeps the inherited environment when the effective user bus is unavailable", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      process.geteuid = () => 1000;
+      vi.spyOn(fs, "stat").mockRejectedValue(
+        Object.assign(new Error("missing bus"), { code: "ENOENT" }),
+      );
+      const { scriptPath, content } = await prepareAndReadScript({
+        OPENCLAW_PROFILE: "default",
+        XDG_RUNTIME_DIR: "/run/user/0",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/0/bus",
+      });
+
+      expect(content).not.toContain("export XDG_RUNTIME_DIR='/run/user/1000'");
       await cleanupScript(scriptPath);
     });
 

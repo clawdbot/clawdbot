@@ -4,6 +4,7 @@ import type { DB as StateDatabase } from "../../state/openclaw-state-db.generate
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import { getRequired } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { clearWorkerWorkspaceReconciliation } from "./placement-workspace-journal.js";
 
 type WorkspaceResultDatabase = Pick<
   StateDatabase,
@@ -22,6 +23,7 @@ type WorkerWorkspacePendingResult = {
   gatewayInstanceId: string;
   recoveryRequestedAtMs: number | null;
   workspaceAcceptedAtMs: number | null;
+  stagedResultRef: string | null;
 };
 
 export function clearWorkerWorkspacePendingResult(db: DatabaseSync, sessionId: string): void {
@@ -96,6 +98,7 @@ export function insertWorkerWorkspacePendingResult(
         gateway_instance_id: gatewayInstanceId,
         recovery_requested_at_ms: null,
         workspace_accepted_at_ms: null,
+        staged_result_ref: null,
         created_at_ms: nowMs,
       })
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
@@ -191,6 +194,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
             "gateway_instance_id",
             "recovery_requested_at_ms",
             "workspace_accepted_at_ms",
+            "staged_result_ref",
           ])
           .orderBy("session_id"),
       ).rows.map((row) => ({
@@ -203,6 +207,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
         gatewayInstanceId: row.gateway_instance_id,
         recoveryRequestedAtMs: row.recovery_requested_at_ms,
         workspaceAcceptedAtMs: row.workspace_accepted_at_ms,
+        stagedResultRef: row.staged_result_ref,
       }));
     },
 
@@ -212,10 +217,40 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
       });
     },
 
+    recordStagedWorkspaceResult(claim: WorkerSessionTurnClaim, stagedResultRef: string): void {
+      if (!/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u.test(stagedResultRef)) {
+        throw new Error("Worker workspace staged result reference is invalid");
+      }
+      write((db) => {
+        const pending = assertPendingClaim(db, claim);
+        if (pending.workspace_accepted_at_ms !== null) {
+          throw new Error(`Cannot restage accepted worker workspace result for ${claim.sessionId}`);
+        }
+        if (pending.staged_result_ref && pending.staged_result_ref !== stagedResultRef) {
+          throw new Error(`Worker workspace result ref changed for ${claim.sessionId}`);
+        }
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .updateTable("worker_workspace_pending_results")
+            .set({ staged_result_ref: stagedResultRef })
+            .where("session_id", "=", claim.sessionId)
+            .where("claim_id", "=", claim.claimId)
+            .where("run_id", "=", claim.runId),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Cannot stage stale worker workspace result for ${claim.sessionId}`);
+        }
+      });
+    },
+
     acceptWorkspaceResult(claim: WorkerSessionTurnClaim): void {
       write((db) => {
         assertPendingClaim(db, claim);
         markWorkerWorkspacePendingResultAccepted(db, claim, now());
+        // Keep the applied journal as the crash-safe marker until this fence is
+        // accepted. Recovery then inspects reality instead of replaying a result.
+        clearWorkerWorkspaceReconciliation(db, claim.sessionId);
       });
     },
 

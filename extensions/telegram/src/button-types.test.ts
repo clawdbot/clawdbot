@@ -408,22 +408,25 @@ describe("buildTelegramPresentationButtons", () => {
 
   it("renders typed and legacy URL and Web App actions natively", () => {
     expect(
-      buildTelegramPresentationButtons({
-        blocks: [
-          {
-            type: "buttons",
-            buttons: [
-              { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
-              {
-                label: "Typed App",
-                action: { type: "web-app", url: "https://example.com/app" },
-              },
-              { label: "Legacy URL", url: "https://example.com/legacy" },
-              { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
-            ],
-          },
-        ],
-      }),
+      buildTelegramPresentationButtons(
+        {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
+                {
+                  label: "Typed App",
+                  action: { type: "web-app", url: "https://example.com/app" },
+                },
+                { label: "Legacy URL", url: "https://example.com/legacy" },
+                { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
+              ],
+            },
+          ],
+        },
+        { allowWebAppButtons: true },
+      ),
     ).toEqual([
       [
         { text: "Typed URL", url: "https://example.com/typed", style: undefined },
@@ -442,6 +445,21 @@ describe("buildTelegramPresentationButtons", () => {
         },
       ],
     ]);
+  });
+
+  it("skips Web App actions unless a direct target was confirmed", () => {
+    expect(
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "App", action: { type: "web-app", url: "https://example.com/app" } },
+            ],
+          },
+        ],
+      }),
+    ).toBeUndefined();
   });
 
   it("skips hosted widget actions without a Telegram web app URL", () => {

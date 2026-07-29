@@ -1,7 +1,6 @@
 // Gateway health state builds snapshots, caches health probes, and broadcasts health/presence version changes.
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { getHealthSnapshot, type HealthSummary } from "../../commands/health.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
@@ -11,6 +10,8 @@ import { getUpdateAvailable } from "../../infra/update-startup.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
+import { collectGatewayHealthSnapshot } from "../health/collector.js";
+import type { HealthSummary } from "../health/types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
 
@@ -30,8 +31,8 @@ export function buildGatewaySnapshot(opts?: { includeSensitive?: boolean }): Sna
   const presence = listSystemPresence();
   const uptimeMs = Math.round(process.uptime() * 1000);
   const updateAvailable = getUpdateAvailable() ?? undefined;
-  // Health is async; caller should await getHealthSnapshot and replace later if needed.
-  const emptyHealth: unknown = {};
+  // Health is async; the caller replaces this with the collected snapshot.
+  const emptyHealth: Snapshot["health"] = {};
   const snapshot: Snapshot = {
     presence,
     health: emptyHealth,
@@ -96,9 +97,9 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       }
       const eventLoop = opts?.getEventLoopHealth?.();
       const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
-      const snap = await getHealthSnapshot({
-        probe: opts?.probe,
-        includeSensitive,
+      const snap = await collectGatewayHealthSnapshot({
+        audience: includeSensitive ? "admin" : "public",
+        probe: opts?.probe !== false,
         runtimeSnapshot,
         ...(eventLoop ? { eventLoop } : {}),
         ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),

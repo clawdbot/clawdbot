@@ -22,7 +22,7 @@ import {
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 
-const CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS = 5_000;
+const CODEX_PLUGIN_THREAD_CONFIG_MAX_TIMEOUT_MS = 60_000;
 const CODEX_PLUGIN_THREAD_CONFIG_TIMEOUT_DIVISOR = 4;
 const CODEX_PLUGIN_THREAD_CONFIG_MIN_TIMEOUT_MS = 100;
 
@@ -56,7 +56,7 @@ export function resolveCodexPluginThreadConfigStartupPolicy(params: {
   const pluginThreadConfigRequired =
     !params.nativeToolSurfaceEnabled || shouldBuildCodexPluginThreadConfig(params.pluginConfig);
   // Restricted runs still need a config so thread/start carries an explicit
-  // apps._default denial patch without app/list discovery.
+  // apps._default denial patch without app inventory discovery.
   const pluginThreadConfigPluginConfig = params.nativeToolSurfaceEnabled
     ? params.pluginConfig
     : disableCodexPluginThreadConfig(params.pluginConfig);
@@ -195,6 +195,7 @@ export function createCodexPluginThreadConfigStartupProvider(params: {
           policy,
           metadataCache,
           appCacheKey: params.appCacheKey,
+          configCwd: params.configCwd,
         })
       : undefined,
     build: () =>

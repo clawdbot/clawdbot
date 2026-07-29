@@ -5,10 +5,10 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.group-messages
+      - channels.mention-required-group-visible-replies
     secondary:
-      - channels.qa-channel
-      - runtime.delivery
+      - channels.qa-channel-final-reply
+      - channels.automatic-final-reply
   objective: Verify the selected channel transport can deliver one mention-triggered group reply through the canonical QA host.
   successCriteria:
     - One mentioned group message produces one visible reply containing the exact marker.
@@ -20,16 +20,6 @@ scenario:
     - extensions/qa-lab/src/qa-transport.ts
     - extensions/qa-lab/src/suite.ts
   execution:
-    profiles:
-      {
-        "matrix:adapter": 1,
-        "slack:adapter": 1,
-        "telegram:adapter": 1,
-        "telegram:all": 0,
-        "telegram:mock-release": 0,
-        "telegram:release": 0,
-        "whatsapp:adapter": 1,
-      }
     kind: flow
     summary: Run the shared channel canary through QA Channel, Crabline, or a live adapter.
     transportPolicy:

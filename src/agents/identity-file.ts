@@ -5,7 +5,11 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import type { IdentityConfig } from "../config/types.base.js";
 import { readRegularFile, readRegularFileSync } from "../infra/regular-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "./workspace.js";
 
@@ -40,6 +44,41 @@ const IDENTITY_PLACEHOLDER_VALUES = new Set([
   "your signature - pick one that feels right",
   "workspace-relative path, http(s) url, or data uri",
 ]);
+
+export function sanitizeAgentIdentityLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+const IDENTITY_CONFIG_FIELDS = ["name", "theme", "emoji", "avatar"] as const;
+
+function compactIdentityConfig(identity: IdentityConfig): IdentityConfig | undefined {
+  const resolved: IdentityConfig = {};
+  for (const field of IDENTITY_CONFIG_FIELDS) {
+    const value = identity[field]?.trim();
+    if (value) {
+      resolved[field] = value;
+    }
+  }
+  return Object.keys(resolved).length ? resolved : undefined;
+}
+
+export function createAgentIdentityConfig(params: {
+  name?: string;
+  emoji?: unknown;
+  avatar?: unknown;
+}): IdentityConfig | undefined {
+  return compactIdentityConfig({
+    ...(params.name ? { name: sanitizeAgentIdentityLine(params.name) } : {}),
+    emoji: sanitizeAgentIdentityLine(normalizeOptionalString(params.emoji) ?? ""),
+    avatar: sanitizeAgentIdentityLine(normalizeOptionalString(params.avatar) ?? ""),
+  });
+}
+
+export function normalizeIdentityForFile(
+  identity: IdentityConfig | undefined,
+): IdentityConfig | undefined {
+  return identity ? compactIdentityConfig(identity) : undefined;
+}
 
 function normalizeIdentityValue(value: string): string {
   // Normalize markdown decoration and punctuation so generated template

@@ -255,7 +255,9 @@ class GatewayClientTransientPreHelloCloseError extends Error {
   }
 }
 
-class GatewayClientTransportPolicyError extends Error {}
+class GatewayClientSocketFactoryConfigurationError extends Error {}
+
+class GatewayClientTransportPolicyError extends GatewayClientSocketFactoryConfigurationError {}
 
 const GATEWAY_CONNECT_ASSEMBLY_ERROR = Symbol("gateway.connectAssemblyError");
 
@@ -454,6 +456,11 @@ export class GatewayClient {
       },
       reconnect: { initialMs: 1_000, multiplier: 2, maxMs: 30_000 },
       requestTimeoutMs: this.requestTimeoutMs,
+      shouldRetrySocketFactoryError: (error) =>
+        !(error instanceof GatewayClientSocketFactoryConfigurationError) &&
+        !(error instanceof SyntaxError) &&
+        !(error instanceof TypeError) &&
+        !(error instanceof RangeError),
       rethrowSocketFactoryError: (error) => error instanceof GatewayClientTransportPolicyError,
     });
   }
@@ -490,7 +497,9 @@ export class GatewayClient {
   private createSocket(handlers: GatewayProtocolSocketHandlers): GatewayProtocolSocket {
     const url = this.opts.url ?? DEFAULT_GATEWAY_CLIENT_URL;
     if (this.opts.tlsFingerprint && !url.startsWith("wss://")) {
-      throw new Error("gateway tls fingerprint requires wss:// gateway url");
+      throw new GatewayClientSocketFactoryConfigurationError(
+        "gateway tls fingerprint requires wss:// gateway url",
+      );
     }
 
     const allowPrivateWs =
@@ -505,7 +514,7 @@ export class GatewayClient {
       } catch {
         // Use raw URL if parsing fails
       }
-      throw new Error(
+      throw new GatewayClientSocketFactoryConfigurationError(
         `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
           "Both credentials and chat data would be exposed to network interception. " +
           "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
@@ -1189,6 +1198,7 @@ export class GatewayClient {
       expectFinal,
       timeoutMs,
       signal: opts?.signal,
+      onSent: opts?.onSent,
       onAccepted: opts?.onAccepted,
     });
   }

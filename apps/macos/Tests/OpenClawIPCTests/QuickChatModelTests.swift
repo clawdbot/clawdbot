@@ -58,7 +58,7 @@ struct QuickChatModelTests {
 
     @Test func `unchanged draft reuses idempotency key after transport failure`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
             if keys.count == 1 { throw FakeSendError.rejected }
             return "started"
@@ -72,9 +72,44 @@ struct QuickChatModelTests {
         #expect(keys[0] == keys[1])
     }
 
+    @Test func `no-op reasoning selection preserves idempotent retry`() async {
+        var keys: [String] = []
+        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
+            keys.append(idempotencyKey)
+            if keys.count == 1 { throw FakeSendError.rejected }
+            return "started"
+        })
+        await self.prepare(model)
+        model.text = "hello"
+
+        #expect(await !(model.send()))
+        model.selectThinkingLevel(nil)
+        #expect(await model.send())
+
+        #expect(keys.count == 2)
+        #expect(keys[0] == keys[1])
+    }
+
+    @Test func `new dispatch clears the previous accepted reply key`() async {
+        var shouldFail = false
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
+            if shouldFail { throw FakeSendError.rejected }
+            return "started"
+        })
+        await self.prepare(model)
+        model.text = "first"
+        #expect(await model.send())
+        #expect(model.lastAcceptedIdempotencyKey != nil)
+
+        shouldFail = true
+        model.text = "second"
+        #expect(await !(model.send()))
+        #expect(model.lastAcceptedIdempotencyKey == nil)
+    }
+
     @Test func `edited draft gets new idempotency key`() async {
         var keys: [String] = []
-        let model = self.makeModel(sendHandler: { _, _, _, idempotencyKey, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, idempotencyKey, _ in
             keys.append(idempotencyKey)
             throw FakeSendError.rejected
         })
@@ -91,7 +126,7 @@ struct QuickChatModelTests {
 
     @Test func `empty text does not call gateway`() async {
         var sendCount = 0
-        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
             sendCount += 1
             return "ok"
         })
@@ -107,7 +142,7 @@ struct QuickChatModelTests {
         var sendCount = 0
         let model = self.makeModel(
             gate: .disconnected,
-            sendHandler: { _, _, _, _, _ in
+            sendHandler: { _, _, _, _, _, _ in
                 sendCount += 1
                 return "ok"
             })
@@ -135,7 +170,7 @@ struct QuickChatModelTests {
 
     @Test func `dismissal lets dispatched send settle without retry`() async {
         let latch = SendLatch()
-        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
             try await latch.wait()
         })
         await self.prepare(model)
@@ -182,13 +217,26 @@ struct QuickChatModelTests {
         #expect(model.sessionKey == "agent:three:main")
     }
 
+    @Test func `system agents are not quick chat targets`() async {
+        let model = self.makeModel(agentsProvider: {
+            Self.agentsResult(
+                defaultID: "main",
+                agentIDs: ["main", "ordinary-looking-id", "legacy"],
+                kinds: [.agent, .system, nil])
+        })
+
+        await self.prepare(model)
+
+        #expect(model.agents.map(\.id) == ["main", "legacy"])
+    }
+
     @Test func `grant refreshes permission status immediately`() async {
         let granted = GrantFlag()
         let model = QuickChatModel(
             sessionKeyProvider: { "main" },
             agentsProvider: { Self.agentsResult(defaultID: "main", agentIDs: ["main"]) },
             agentIdentityProvider: { _ in .placeholder },
-            sendProvider: { _, _, _, _, _ in "ok" },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
             permissionStatusProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map {
                     ($0, granted.value || $0 != .screenRecording)
@@ -198,7 +246,9 @@ struct QuickChatModelTests {
                 granted.value = true
                 return Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { .available })
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
         await self.prepare(model)
         #expect(model.missingPermissions == [.screenRecording])
 
@@ -209,6 +259,36 @@ struct QuickChatModelTests {
 
         #expect(model.missingPermissions.isEmpty)
         #expect(!model.shouldShowPermissionStrip)
+    }
+
+    @Test func `capture controls stay disabled while granting permissions`() async {
+        let latch = PermissionGrantLatch()
+        let model = QuickChatModel(
+            sessionKeyProvider: { "main" },
+            agentsProvider: { Self.agentsResult(defaultID: "main", agentIDs: ["main"]) },
+            agentIdentityProvider: { _ in .placeholder },
+            sendProvider: { _, _, _, _, _, _ in "ok" },
+            permissionStatusProvider: { capabilities in
+                Dictionary(uniqueKeysWithValues: capabilities.map { ($0, $0 != .accessibility) })
+            },
+            permissionGrantProvider: { capabilities in
+                await latch.wait()
+                return Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
+            },
+            connectionGateProvider: { .available },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
+        await self.prepare(model)
+
+        model.grantMissingPermissions()
+
+        #expect(model.isGrantingPermissions)
+        #expect(!model.canCaptureWindow)
+        #expect(!model.canCaptureTextContext)
+        latch.finish()
+        while model.isGrantingPermissions {
+            await Task.yield()
+        }
     }
 
     @Test func `routing target follows scope contract`() {
@@ -282,7 +362,7 @@ struct QuickChatModelTests {
 
     @Test func `override send uses canonical session key verbatim`() async {
         var sentRoute: QuickChatRoutingTarget?
-        let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _ in
+        let model = self.makeModel(sendHandler: { sessionKey, agentID, _, _, _, _ in
             sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
             return "started"
         })
@@ -304,7 +384,7 @@ struct QuickChatModelTests {
                     agentIDs: ["main", "work"],
                     scope: "global")
             },
-            sendHandler: { sessionKey, agentID, _, _, _ in
+            sendHandler: { sessionKey, agentID, _, _, _, _ in
                 sentRoute = QuickChatRoutingTarget(sessionKey: sessionKey, agentID: agentID)
                 return "started"
             })
@@ -317,7 +397,7 @@ struct QuickChatModelTests {
         #expect(sentRoute == QuickChatRoutingTarget(sessionKey: "global", agentID: "work"))
     }
 
-    @Test func `agent display parses avatar forms and monogram`() throws {
+    @Test func `agent display parses avatar forms and monogram`() {
         let imageData = Data([0x89, 0x50, 0x4E, 0x47])
         let dataSummary = AgentSummary(
             id: "molty",
@@ -381,7 +461,7 @@ struct QuickChatModelTests {
     @Test func `edits during a screenshot send survive and keep their draft`() async throws {
         let latch = SendLatch()
         var receivedMessage: String?
-        let model = self.makeModel(sendHandler: { _, _, message, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
             receivedMessage = message
             return try await latch.wait()
         })
@@ -391,11 +471,11 @@ struct QuickChatModelTests {
                 Data(
                     base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
         let pipelineID = try #require(model.beginCapturePipeline())
-        let send = Task { await model.sendWindowScreenshot(
+        let send = Task { await model.sendCapturedImage(
             pipelineID: pipelineID,
             data: png,
-            appName: "Safari",
-            title: "Docs") }
+            label: "Safari — Docs",
+            fileName: "window-safari.jpg") }
         while !latch.started {
             await Task.yield()
         }
@@ -411,7 +491,7 @@ struct QuickChatModelTests {
 
     @Test func `capture pipeline blocks concurrent sends and unwinds`() async {
         var sendCount = 0
-        let model = self.makeModel(sendHandler: { _, _, _, _, _ in
+        let model = self.makeModel(sendHandler: { _, _, _, _, _, _ in
             sendCount += 1
             return "ok"
         })
@@ -450,7 +530,7 @@ struct QuickChatModelTests {
     @Test func `window screenshot sends attachment and default caption`() async throws {
         var receivedMessage: String?
         var receivedAttachments: [OpenClawChatAttachmentPayload] = []
-        let model = self.makeModel(sendHandler: { _, _, message, _, attachments in
+        let model = self.makeModel(sendHandler: { _, _, message, _, _, attachments in
             receivedMessage = message
             receivedAttachments = attachments
             return "started"
@@ -462,17 +542,70 @@ struct QuickChatModelTests {
                     base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="))
 
         let pipelineID = try #require(model.beginCapturePipeline())
-        #expect(await model.sendWindowScreenshot(
+        #expect(await model.sendCapturedImage(
             pipelineID: pipelineID,
             data: png,
-            appName: "Safari",
-            title: "Docs"))
+            label: "Safari — Docs",
+            fileName: "window-safari.jpg"))
         #expect(receivedMessage == "Screenshot: Safari — Docs")
         #expect(receivedAttachments.count == 1)
         #expect(receivedAttachments[0].type == "file")
         #expect(receivedAttachments[0].mimeType == "image/jpeg")
         #expect(receivedAttachments[0].fileName == "window-safari.jpg")
         #expect(!receivedAttachments[0].content.hasPrefix("data:"))
+    }
+
+    @Test func `message assembly appends context block`() {
+        let context = QuickChatTextContext(
+            appName: "Safari",
+            windowTitle: "Docs",
+            text: "Selected text")
+
+        #expect(QuickChatModel.assembleMessage(draft: "Question", context: context) == """
+        Question
+
+        [Context from Safari — Docs]
+        Selected text
+        """)
+        #expect(QuickChatModel.assembleMessage(draft: "  ", context: context) == """
+        [Context from Safari — Docs]
+        Selected text
+        """)
+    }
+
+    @Test func `accepted send clears attached context`() async {
+        var receivedMessage: String?
+        let model = self.makeModel(sendHandler: { _, _, message, _, _, _ in
+            receivedMessage = message
+            return "ok"
+        })
+        await self.prepare(model)
+        model.replaceTextContext(QuickChatTextContext(
+            appName: "Notes",
+            windowTitle: "Plan",
+            text: "Ship it"))
+
+        #expect(model.canSend)
+        #expect(await model.send())
+        #expect(receivedMessage == """
+        [Context from Notes — Plan]
+        Ship it
+        """)
+        #expect(model.textContext == nil)
+    }
+
+    @Test func `context replaces and clears on hide`() async {
+        let model = self.makeModel()
+        await self.prepare(model)
+        let first = QuickChatTextContext(appName: "One", windowTitle: "First", text: "old")
+        let second = QuickChatTextContext(appName: "Two", windowTitle: "Second", text: "new")
+
+        model.replaceTextContext(first)
+        model.replaceTextContext(second)
+        #expect(model.textContext == second)
+
+        model.endPresentation()
+        #expect(model.textContext == nil)
     }
 
     @Test func `permission strip tracks missing permissions and session dismissal`() async {
@@ -510,7 +643,7 @@ struct QuickChatModelTests {
             agentIdentityProvider: { _ in
                 QuickChatAgentDisplay(id: "main", name: "Molty", emoji: "🦞")
             },
-            sendProvider: sendHandler ?? { _, _, _, _, _ in
+            sendProvider: sendHandler ?? { _, _, _, _, _, _ in
                 if let sendError { throw sendError }
                 return sendStatus
             },
@@ -520,13 +653,16 @@ struct QuickChatModelTests {
             permissionGrantProvider: { capabilities in
                 Dictionary(uniqueKeysWithValues: capabilities.map { ($0, true) })
             },
-            connectionGateProvider: { gate })
+            connectionGateProvider: { gate },
+            modelControlsProvider: { _ in .testFixture },
+            modelPatchProvider: { _, _ in nil })
     }
 
     private static func agentsResult(
         defaultID: String,
         agentIDs: [String],
         names: [String] = [],
+        kinds: [AgentKind?] = [],
         scope: String = "per-agent") -> AgentsListResult
     {
         AgentsListResult(
@@ -536,6 +672,7 @@ struct QuickChatModelTests {
             agents: agentIDs.enumerated().map { index, id in
                 AgentSummary(
                     id: id,
+                    kind: kinds.indices.contains(index) ? kinds[index] : nil,
                     name: names.indices.contains(index) ? names[index] : id,
                     identity: ["emoji": AnyCodable("🦞")])
             })
@@ -553,6 +690,25 @@ private enum FakeSendError: LocalizedError {
 @MainActor
 private final class GrantFlag {
     var value = false
+}
+
+@MainActor
+private final class PermissionGrantLatch {
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var finished = false
+
+    func wait() async {
+        if self.finished { return }
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func finish() {
+        self.finished = true
+        self.continuation?.resume()
+        self.continuation = nil
+    }
 }
 
 @MainActor

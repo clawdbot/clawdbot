@@ -46,6 +46,33 @@ describe("qa-bus state", () => {
     expect(snapshot.messages.map((message) => message.id)).toEqual([inbound.id, outbound.id]);
   });
 
+  it("normalizes the dm ingress alias before channel routing", () => {
+    const state = createQaBusState();
+
+    const inbound = state.addInboundMessage({
+      conversation: { id: "alice", kind: "dm" as never },
+      senderId: "alice",
+      text: "hello",
+    });
+
+    expect(inbound.conversation).toEqual({ id: "alice", kind: "direct" });
+    expect(state.getSnapshot().conversations).toEqual([
+      expect.objectContaining({ id: "alice", kind: "direct" }),
+    ]);
+  });
+
+  it("rejects unknown inbound conversation kinds instead of treating them as groups", () => {
+    const state = createQaBusState();
+
+    expect(() =>
+      state.addInboundMessage({
+        conversation: { id: "alice", kind: "private" as never },
+        senderId: "alice",
+        text: "hello",
+      }),
+    ).toThrow("invalid qa-channel conversation kind: private");
+  });
+
   it("creates threads and mutates message state", () => {
     const state = createQaBusState();
 

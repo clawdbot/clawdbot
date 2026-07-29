@@ -1,4 +1,4 @@
-// Control UI E2E tests cover docked Gateway questions through the mocked WebSocket.
+// Control UI E2E tests cover composer-replacing Gateway questions through the mocked WebSocket.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
@@ -26,7 +26,7 @@ let server: ControlUiE2eServer;
 function questionRecord(
   id: string,
   questions: Array<{
-    id: string;
+    questionId: string;
     header: string;
     question: string;
     options: Array<{ label: string; description?: string }>;
@@ -67,7 +67,7 @@ function historyMessages() {
         text:
           index === 11
             ? "I have the release context ready. I only need your deployment choice."
-            : `Release preparation note ${index + 1}: deterministic transcript content for the docked panel proof.`,
+            : `Release preparation note ${index + 1}: deterministic transcript content for the question panel proof.`,
       },
     ],
     timestamp: 1_750_000_000_000 + index * 1_000,
@@ -123,11 +123,13 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await server?.close();
   });
 
-  it("docks a pending question and replaces it with a compact answer summary", async () => {
+  it("replaces the composer, restores it on collapse, and preserves its draft through resolution", async () => {
     const { gateway, page } = await openQuestionPage();
+    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    await composer.fill("Keep this release note draft");
     const request = questionRecord("question-deploy-target", [
       {
-        id: "deploy_target",
+        questionId: "deploy_target",
         header: "Deploy",
         question: "Where should I deploy?",
         options: [
@@ -152,17 +154,29 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       .toBe(0);
     await expect.poll(() => panel.getByText("1/1", { exact: true }).count()).toBe(1);
     await expect.poll(() => panel.getByPlaceholder("Type your own answer here").count()).toBe(1);
+    await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+    await expect.poll(() => page.locator(".agent-chat__composer-footer").count()).toBe(0);
+    await expect
+      .poll(() =>
+        panel
+          .locator(".chat-question-panel")
+          .evaluate((element) => document.activeElement === element),
+      )
+      .toBe(true);
 
     await expect
       .poll(async () => {
         const panelBox = await panel.boundingBox();
-        const composerBox = await page.locator(".agent-chat__input").boundingBox();
-        if (!panelBox || !composerBox) {
+        const shellBox = await page.locator(".agent-chat__composer-shell").boundingBox();
+        if (!panelBox || !shellBox) {
           return null;
         }
-        return Math.round(composerBox.y - (panelBox.y + panelBox.height));
+        return {
+          left: Math.round(panelBox.x - shellBox.x),
+          width: Math.round(panelBox.width - shellBox.width),
+        };
       })
-      .toBeGreaterThanOrEqual(0);
+      .toEqual({ left: 0, width: 0 });
     await expect
       .poll(async () => {
         const panelHeight = (await panel.boundingBox())?.height ?? 0;
@@ -174,6 +188,22 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       .toBe(true);
     await screenshot(page, "01-question-pending.png");
 
+    await panel.locator(".chat-question-panel__collapse").click();
+    await composer.waitFor();
+    await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
+    await expect
+      .poll(() => composer.evaluate((element) => document.activeElement === element))
+      .toBe(true);
+    await page.locator(".chat-question-panel__collapsed-button").click();
+    await expect.poll(() => page.locator(".agent-chat__input").count()).toBe(0);
+    await expect
+      .poll(() =>
+        panel
+          .locator(".chat-question-panel")
+          .evaluate((element) => document.activeElement === element),
+      )
+      .toBe(true);
+
     await panel.getByRole("radio", { name: /Staging \(Recommended\)/ }).click();
     await panel.getByRole("button", { name: "Submit", exact: true }).click();
     const resolveRequest = await gateway.waitForRequest("question.resolve");
@@ -181,7 +211,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       id: request.id,
       answers: {
         answers: {
-          deploy_target: { answers: ["Staging (Recommended)"] },
+          deploy_target: ["Staging (Recommended)"],
         },
       },
     });
@@ -191,7 +221,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       status: "answered",
       answers: {
         answers: {
-          deploy_target: { answers: ["Staging (Recommended)"] },
+          deploy_target: ["Staging (Recommended)"],
         },
       },
     });
@@ -201,6 +231,11 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await expect
       .poll(() => summary.getByText("Staging (Recommended)", { exact: true }).count())
       .toBe(1);
+    await composer.waitFor();
+    await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
+    await expect
+      .poll(() => composer.evaluate((element) => document.activeElement === element))
+      .toBe(true);
     await screenshot(page, "02-question-answered.png");
   });
 
@@ -208,7 +243,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     const { gateway, page } = await openQuestionPage();
     const request = questionRecord("question-release-checks", [
       {
-        id: "release_checks",
+        questionId: "release_checks",
         header: "Checks",
         question: "Which release checks should I run?",
         options: [
@@ -240,17 +275,46 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
       id: request.id,
       answers: {
         answers: {
-          release_checks: { answers: ["Tests", "Metrics"] },
+          release_checks: ["Tests", "Metrics"],
         },
       },
     });
+  });
+
+  it("restores the composer when reconnect recovery cannot find an old question", async () => {
+    const { gateway, page } = await openQuestionPage();
+    const request = questionRecord("question-expired-during-disconnect", [
+      {
+        questionId: "deploy_target",
+        header: "Deploy",
+        question: "Where should I deploy after reconnecting?",
+        options: [{ label: "Staging" }, { label: "Production" }],
+      },
+    ]);
+    await emitRequested(gateway, request);
+    const panel = panelFor(page, "Where should I deploy after reconnecting?");
+    await panel.waitFor();
+
+    await gateway.deferNext("question.get");
+    await gateway.closeLatest();
+    const recovery = await gateway.waitForRequest("question.get");
+    expect(recovery.params).toEqual({ id: request.id });
+    await gateway.rejectDeferred("question.get", {
+      code: "INVALID_REQUEST",
+      message: "question was not found",
+      details: { reason: "QUESTION_NOT_FOUND" },
+    });
+
+    await expect.poll(() => panel.count()).toBe(0);
+    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    expect(await gateway.getRequests("question.get")).toHaveLength(1);
   });
 
   it("shows a 1/2 stepper with answered and expired summaries", async () => {
     const { gateway, page } = await openQuestionPage();
     const elsewhere = questionRecord("question-external-answer", [
       {
-        id: "approval_path",
+        questionId: "approval_path",
         header: "Approval",
         question: "Who should approve the release?",
         options: [{ label: "Maintainer" }, { label: "Release manager" }],
@@ -258,7 +322,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     ]);
     const expired = questionRecord("question-expired-window", [
       {
-        id: "release_window",
+        questionId: "release_window",
         header: "Window",
         question: "When should the release start?",
         options: [{ label: "Now" }, { label: "Tomorrow" }],
@@ -269,7 +333,7 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
     await gateway.emitGatewayEvent("question.resolved", {
       id: elsewhere.id,
       status: "answered",
-      answers: { answers: { approval_path: { answers: ["Release manager"] } } },
+      answers: { answers: { approval_path: ["Release manager"] } },
     });
     await emitRequested(gateway, expired);
     await gateway.emitGatewayEvent("question.resolved", {
@@ -279,14 +343,14 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
 
     const stepper = questionRecord("question-release-plan", [
       {
-        id: "channel",
+        questionId: "channel",
         header: "Channel",
         question: "Which release channel should I use?",
         options: [{ label: "Beta" }, { label: "Stable" }],
         isOther: true,
       },
       {
-        id: "notes",
+        questionId: "notes",
         header: "Notes",
         question: "Which notes should I include?",
         options: [{ label: "Highlights" }, { label: "Full details" }],
@@ -304,9 +368,9 @@ describeControlUiE2e("Control UI Gateway question flow", () => {
         page.locator(".chat-question-summary").filter({ hasText: "Release manager" }).count(),
       )
       .toBe(1);
-    await expect
-      .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Expired" }).count())
-      .toBe(1);
+    const expiredSummary = page.locator(".chat-question-summary").filter({ hasText: "Expired" });
+    await expect.poll(() => expiredSummary.count()).toBe(1);
+    await expiredSummary.scrollIntoViewIfNeeded();
     await screenshot(page, "04-question-terminal-states.png");
   });
 });

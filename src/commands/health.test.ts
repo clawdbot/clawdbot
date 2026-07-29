@@ -13,7 +13,6 @@ import {
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
-  formatModelPricingHealthLine,
   healthCommand,
 } from "./health.js";
 
@@ -181,9 +180,39 @@ describe("healthCommand", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
+    expect(parsed.durationMs).toBe(5);
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+  });
+
+  it("prints the gateway probe duration in text output", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Gateway probe duration: 5ms");
+  });
+
+  it("omits the probe duration for legacy gateway snapshots", async () => {
+    const { durationMs, ...legacySnapshot } = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    expect(durationMs).toBe(5);
+    callGatewayMock.mockResolvedValueOnce(legacySnapshot);
+
+    await healthCommand({ json: false, timeoutMs: 1000, config: {} }, runtime as never);
+
+    const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).not.toContain("Gateway probe duration:");
   });
 
   it("prints the delivery queue warning line when the gateway reports dead-letters", async () => {
@@ -426,31 +455,6 @@ describe("healthCommand", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
-  it("formats degraded model-pricing health as a warning", () => {
-    const snapshot = createHealthSummary({
-      channels: {},
-      channelOrder: [],
-      channelLabels: {},
-    });
-    snapshot.modelPricing = {
-      state: "degraded",
-      sources: [
-        {
-          source: "openrouter",
-          state: "degraded",
-          lastFailureAt: Date.now(),
-          detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-        },
-      ],
-      detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-      lastFailureAt: Date.now(),
-    };
-
-    expect(formatModelPricingHealthLine(snapshot)).toBe(
-      "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
-    );
-  });
-
   it("formats per-account probe timings", () => {
     const summary = createHealthSummary({
       channels: {
@@ -569,6 +573,25 @@ describe("formatDeliveryQueueHealthLine", () => {
 
     expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
       "Delivery queue: warning (dead-lettered entries — outbound: 3, session: 1; oldest 2h ago)",
+    );
+  });
+
+  it("summarizes dead-lettered ingress entries per channel account", () => {
+    const summary = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    summary.deliveryQueues = {
+      failed: [],
+      ingressFailed: [
+        { channelId: "line", accountId: "default", count: 1, oldestFailedAt: 90_000 },
+        { channelId: "telegram", accountId: "ops", count: 2 },
+      ],
+    };
+
+    expect(formatDeliveryQueueHealthLine(summary, 7_290_000)).toBe(
+      "Delivery queue: warning (dead-lettered entries — inbound line/default: 1, inbound telegram/ops: 2; oldest 2h ago)",
     );
   });
 

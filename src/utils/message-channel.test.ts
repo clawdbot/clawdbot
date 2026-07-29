@@ -10,7 +10,6 @@ import {
   isEphemeralGatewayClient,
   isInternalNonDeliveryChannel,
   isMarkdownCapableMessageChannel,
-  isNativeApprovalChannel,
   isOperatorUiClient,
   resolveGatewayMessageChannel,
 } from "./message-channel.js";
@@ -103,28 +102,35 @@ describe("message-channel", () => {
     expect(isInternalNonDeliveryChannel("HEARTBEAT")).toBe(false);
   });
 
-  it("lists native chat exec approval channels", () => {
-    for (const channel of [
-      "webchat",
-      "discord",
-      "googlechat",
-      "imessage",
-      "matrix",
-      "qqbot",
-      "signal",
-      "slack",
-      "telegram",
-      "whatsapp",
-    ]) {
-      expect(isNativeApprovalChannel(channel)).toBe(true);
+  it("reads native approval behavior from bundled channel manifests", async () => {
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const previousTrust = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.resolve("extensions");
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    vi.resetModules();
+    try {
+      const channelModule = await import("./message-channel.js");
+      const promptModule = await import("../channels/plugins/native-approval-prompt.js");
+      for (const channel of ["webchat", "discord", "imessage", "telegram", "whatsapp"]) {
+        expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(true);
+      }
+      expect(promptModule.isKnownNativeApprovalPromptChannel("whatsapp")).toBe(true);
+      for (const channel of ["feishu", "msteams", "line", "heartbeat", "", "TELEGRAM"]) {
+        expect(channelModule.isNativeApprovalChannel(channel), channel).toBe(false);
+      }
+    } finally {
+      if (previousBundledPluginsDir === undefined) {
+        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+      }
+      if (previousTrust === undefined) {
+        delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      } else {
+        process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrust;
+      }
+      vi.resetModules();
     }
-    // Channels without a bundled exec-capable native approval runtime must not claim it.
-    expect(isNativeApprovalChannel("feishu")).toBe(false);
-    expect(isNativeApprovalChannel("msteams")).toBe(false);
-    expect(isNativeApprovalChannel("line")).toBe(false);
-    expect(isNativeApprovalChannel("heartbeat")).toBe(false);
-    expect(isNativeApprovalChannel("")).toBe(false);
-    expect(isNativeApprovalChannel("TELEGRAM")).toBe(false);
   });
 
   it("reads markdown capability from channel metadata", () => {

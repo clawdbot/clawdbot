@@ -31,13 +31,11 @@ describe("config secret refs schema", () => {
             path: "~/.openclaw/secrets.json",
             mode: "json",
             timeoutMs: 10_000,
-            allowInsecurePath: true,
           },
           vault: {
             source: "exec",
             command: "/usr/local/bin/openclaw-secret-resolver",
             args: ["resolve"],
-            allowSymlinkCommand: true,
           },
         },
       },
@@ -113,8 +111,8 @@ describe("config secret refs schema", () => {
                 passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
               },
             },
-            models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
           },
+          models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
         },
       },
     });
