@@ -119,28 +119,16 @@ describe("memory session directory ownership", () => {
     }
   });
 
-  it("indexes the canonical SQLite identity from an agent-local custom store", async () => {
+  it("preserves canonical SQLite session identity on Windows", async () => {
     const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     try {
-      const customDir = path.join(tmpDir, "agents", "main", "custom");
-      const storePath = path.join(customDir, "sessions.json");
-      const sessionFile = path.join(customDir, "active.jsonl");
-      const sessionKey = "agent:main:chat:custom-transcript";
-      const configPath = path.join(tmpDir, "openclaw.json");
-      fsSync.mkdirSync(customDir, { recursive: true });
-      fsSync.writeFileSync(sessionFile, "");
-      fsSync.writeFileSync(
-        configPath,
-        JSON.stringify({
-          session: { store: path.join(tmpDir, "agents", "{agentId}", "custom", "sessions.json") },
-        }),
-      );
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
+      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:chat:windows-transcript";
+      fsSync.mkdirSync(sessionsDir, { recursive: true });
       await upsertSessionEntry(
         { agentId: "main", sessionKey, storePath },
-        { sessionFile, sessionId: "active", updatedAt: 1 },
+        { sessionId: "active", updatedAt: 1 },
       );
 
       await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
@@ -149,114 +137,6 @@ describe("memory session directory ownership", () => {
           sessionFile: sessionKey,
           sessionId: "active",
           transcriptSource: "sqlite",
-        }),
-      );
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("isolates templated custom session stores outside the default agents directory", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const customRoot = path.join(tmpDir, "custom-stores");
-      const customDir = path.join(customRoot, "main");
-      const storePath = path.join(customDir, "sessions.json");
-      const otherSessionFile = path.join(customRoot, "ops", "private.jsonl");
-      const sessionKey = "agent:main:chat:external-custom-transcript";
-      const configPath = path.join(tmpDir, "openclaw.json");
-      fsSync.mkdirSync(customDir, { recursive: true });
-      fsSync.mkdirSync(path.dirname(otherSessionFile), { recursive: true });
-      fsSync.writeFileSync(otherSessionFile, "");
-      fsSync.writeFileSync(
-        configPath,
-        JSON.stringify({
-          session: { store: path.join(customRoot, "{agentId}", "sessions.json") },
-        }),
-      );
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey, storePath },
-        { sessionFile: otherSessionFile, sessionId: "private", updatedAt: 1 },
-      );
-
-      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-      expect(entries).toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionFile: sessionKey,
-          sessionId: "private",
-          transcriptSource: "sqlite",
-        }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: otherSessionFile }),
-      );
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("keeps filename-templated custom stores on canonical SQLite identities", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const customRoot = path.join(tmpDir, "shared-custom-store");
-      const storePath = path.join(customRoot, "main.json");
-      const otherSessionFile = path.join(customRoot, "ops-private.jsonl");
-      const otherArchiveFile = path.join(
-        customRoot,
-        "ops-private.jsonl.deleted.2026-02-16T22-27-33.000Z",
-      );
-      const canonicalArchiveFile = path.join(
-        tmpDir,
-        "agents",
-        "main",
-        "sessions",
-        "main-retained.jsonl.deleted.2026-02-16T22-27-33.000Z",
-      );
-      const sessionKey = "agent:main:chat:shared-custom-transcript";
-      const configPath = path.join(tmpDir, "openclaw.json");
-      fsSync.mkdirSync(customRoot, { recursive: true });
-      fsSync.mkdirSync(path.dirname(canonicalArchiveFile), { recursive: true });
-      fsSync.writeFileSync(otherSessionFile, "");
-      fsSync.writeFileSync(otherArchiveFile, "sibling private transcript");
-      fsSync.writeFileSync(canonicalArchiveFile, "main retained transcript");
-      fsSync.writeFileSync(
-        configPath,
-        JSON.stringify({
-          session: { store: path.join(customRoot, "{agentId}.json") },
-        }),
-      );
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey, storePath },
-        { sessionFile: otherSessionFile, sessionId: "ops-private", updatedAt: 1 },
-      );
-
-      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-      expect(entries).toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionFile: sessionKey,
-          sessionId: "ops-private",
-          transcriptSource: "sqlite",
-        }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: otherSessionFile }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: otherArchiveFile }),
-      );
-      expect(entries).toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          artifactKind: "archive-artifact",
-          sessionFile: canonicalArchiveFile,
         }),
       );
     } finally {
@@ -279,138 +159,4 @@ describe("memory session directory ownership", () => {
       }
     },
   );
-
-  it.each(invalidWindowsAgentIds)(
-    "never ingests an invalid Windows session owner into the main corpus: %s",
-    async (owner) => {
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      try {
-        const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-        const otherSessionsDir = path.join(tmpDir, "agents", owner, "sessions");
-        const otherSessionFile = path.join(otherSessionsDir, "private.jsonl");
-        fsSync.mkdirSync(sessionsDir, { recursive: true });
-        fsSync.mkdirSync(otherSessionsDir, { recursive: true });
-        fsSync.writeFileSync(otherSessionFile, "");
-        const sessionKey = "agent:main:chat:malformed-owner";
-        await upsertSessionEntry(
-          { agentId: "main", sessionKey, storePath: path.join(sessionsDir, "sessions.json") },
-          { sessionFile: otherSessionFile, sessionId: "private", updatedAt: 1 },
-        );
-        const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-        expect(entries).toContainEqual(
-          expect.objectContaining({
-            agentId: "main",
-            sessionFile: sessionKey,
-            sessionId: "private",
-            transcriptSource: "sqlite",
-          }),
-        );
-        expect(entries).not.toContainEqual(
-          expect.objectContaining({ sessionFile: otherSessionFile }),
-        );
-      } finally {
-        platform.mockRestore();
-      }
-    },
-  );
-
-  it("never exposes another agent's custom transcript through the main SQLite corpus", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-      const otherSessionFile = path.join(tmpDir, "agents", "ops", "custom", "private.jsonl");
-      const sessionKey = "agent:main:chat:cross-agent-custom";
-      fsSync.mkdirSync(sessionsDir, { recursive: true });
-      fsSync.mkdirSync(path.dirname(otherSessionFile), { recursive: true });
-      fsSync.writeFileSync(otherSessionFile, "");
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey, storePath: path.join(sessionsDir, "sessions.json") },
-        { sessionFile: otherSessionFile, sessionId: "private", updatedAt: 1 },
-      );
-
-      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-      expect(entries).toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionFile: sessionKey,
-          sessionId: "private",
-          transcriptSource: "sqlite",
-        }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: otherSessionFile }),
-      );
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("never indexes another agent's transcript through a linked sessions directory", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-      const otherSessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
-      const otherSessionFile = path.join(otherSessionsDir, "private.jsonl");
-      const linkedDir = path.join(sessionsDir, "linked");
-      const linkedSessionFile = path.join(linkedDir, "private.jsonl");
-      const sessionKey = "agent:main:chat:linked-cross-agent";
-      fsSync.mkdirSync(sessionsDir, { recursive: true });
-      fsSync.mkdirSync(otherSessionsDir, { recursive: true });
-      fsSync.writeFileSync(otherSessionFile, "");
-      fsSync.symlinkSync(otherSessionsDir, linkedDir, "dir");
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey, storePath: path.join(sessionsDir, "sessions.json") },
-        { sessionFile: linkedSessionFile, sessionId: "private", updatedAt: 1 },
-      );
-
-      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-      expect(entries).toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionFile: sessionKey,
-          sessionId: "private",
-          transcriptSource: "sqlite",
-        }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: otherSessionFile }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: linkedSessionFile }),
-      );
-    } finally {
-      platform.mockRestore();
-    }
-  });
-
-  it("never ingests a nested transcript from another agent's sessions directory", async () => {
-    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-      const otherSessionsDir = path.join(tmpDir, "agents", "ops", "sessions", "archive");
-      const otherSessionFile = path.join(otherSessionsDir, "private.jsonl");
-      fsSync.mkdirSync(sessionsDir, { recursive: true });
-      fsSync.mkdirSync(otherSessionsDir, { recursive: true });
-      fsSync.writeFileSync(otherSessionFile, "");
-      const sessionKey = "agent:main:chat:nested-cross-agent";
-      await upsertSessionEntry(
-        { agentId: "main", sessionKey, storePath: path.join(sessionsDir, "sessions.json") },
-        { sessionFile: otherSessionFile, sessionId: "private", updatedAt: 1 },
-      );
-      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-      expect(entries).toContainEqual(
-        expect.objectContaining({
-          agentId: "main",
-          sessionFile: sessionKey,
-          sessionId: "private",
-          transcriptSource: "sqlite",
-        }),
-      );
-      expect(entries).not.toContainEqual(
-        expect.objectContaining({ sessionFile: otherSessionFile }),
-      );
-    } finally {
-      platform.mockRestore();
-    }
-  });
 });

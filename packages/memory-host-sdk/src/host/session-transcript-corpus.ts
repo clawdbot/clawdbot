@@ -124,7 +124,6 @@ function resolveSessionStoreTranscriptCorpusSource(
   sessionsDir: string,
   storePath: string,
   entry: { sessionFile?: unknown; sessionId?: unknown } | undefined,
-  configuredStoreRootIsAgentScoped: boolean,
 ): ResolvedSessionStoreCorpusSource | null {
   const sessionFile =
     typeof entry?.sessionFile === "string" && entry.sessionFile.trim().length > 0
@@ -190,43 +189,11 @@ function resolveSessionStoreTranscriptCorpusSource(
         ? { sessionFile: candidate, sessionId, transcriptSource: "file" }
         : null;
     }
-    const canonicalAgentsRoot = normalizeRealComparablePath(
-      path.dirname(path.dirname(resolveSessionTranscriptsDirForAgent(agentId))),
-    );
-    const canonicalSessionFile = normalizeRealComparablePath(sessionFile);
-    const relativeStorePath = path.relative(
-      normalizeRealComparablePath(sessionsDir),
-      canonicalSessionFile,
-    );
-    const isUnderConfiguredStoreRoot =
-      relativeStorePath !== ".." &&
-      !relativeStorePath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativeStorePath);
-    const relativeAgentPath = path.relative(canonicalAgentsRoot, canonicalSessionFile);
-    const isUnderCanonicalAgentsRoot =
-      relativeAgentPath !== ".." &&
-      !relativeAgentPath.startsWith(`..${path.sep}`) &&
-      !path.isAbsolute(relativeAgentPath);
-    const rootAgentSegment = isUnderCanonicalAgentsRoot
-      ? relativeAgentPath.split(path.sep).at(0)
-      : undefined;
-    const rootAgentId = rootAgentSegment
-      ? extractAgentIdFromSessionsDir(path.join(canonicalAgentsRoot, rootAgentSegment, "sessions"))
-      : null;
-    const pathAgentId = extractAgentIdFromSessionPath(canonicalSessionFile);
-    // Authorize real paths so a junction below one agent cannot redirect
-    // indexing into a sibling agent's canonical or custom transcript store.
-    // A shared parent of `{agentId}.json` is not an agent-owned directory.
-    if (
-      (!isUnderCanonicalAgentsRoot &&
-        (!isUnderConfiguredStoreRoot || !configuredStoreRootIsAgentScoped)) ||
-      (isUnderCanonicalAgentsRoot &&
-        (!rootAgentId || normalizeAgentId(rootAgentId) !== normalizeAgentId(agentId))) ||
-      (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId))
-    ) {
+    const pathAgentId = extractAgentIdFromSessionPath(sessionFile);
+    if (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId)) {
       return null;
     }
-    return normalizeRealComparablePath(resolved) === canonicalSessionFile
+    return normalizeRealComparablePath(resolved) === normalizeRealComparablePath(sessionFile)
       ? { sessionFile, sessionId, transcriptSource: "file" }
       : null;
   } catch {
@@ -328,7 +295,6 @@ function toSessionStoreCorpusEntry(
   storePath: string,
   summary: SessionEntrySummary,
   cronGeneratedSessionKeys: ReadonlySet<string>,
-  configuredStoreRootIsAgentScoped: boolean,
 ): SessionTranscriptCorpusEntry | null {
   const source = resolveSessionStoreTranscriptCorpusSource(
     agentId,
@@ -336,7 +302,6 @@ function toSessionStoreCorpusEntry(
     sessionsDir,
     storePath,
     summary.entry,
-    configuredStoreRootIsAgentScoped,
   );
   if (!source) {
     return null;
@@ -508,12 +473,6 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
     agentId: normalizedAgentId,
   });
   const sessionsDir = path.dirname(storePath);
-  const configuredStoreRootIsAgentScoped =
-    typeof configuredStore === "string" &&
-    path
-      .dirname(configuredStore)
-      .split(path.sep)
-      .some((segment) => segment.includes("{agentId}"));
   const fixedStoreOwnerAgentId = extractAgentIdFromSessionsDir(sessionsDir);
   const isAgentOwnedFixedStore =
     fixedStoreOwnerAgentId !== null &&
@@ -527,11 +486,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
   const activeEntriesBySessionId = new Map<string, SessionTranscriptCorpusEntry>();
   const activeEntryOwnersByPath = new Map<string, string>();
   const artifactDirsByPath = new Map<string, string>();
-  // Filename-templated stores share their parent across agents. Only discover
-  // archives from an explicitly agent-scoped or canonical-owned store root.
-  if (configuredStoreRootIsAgentScoped || isAgentOwnedFixedStore) {
-    rememberArtifactDir(artifactDirsByPath, sessionsDir);
-  }
+  rememberArtifactDir(artifactDirsByPath, sessionsDir);
   rememberArtifactDir(artifactDirsByPath, resolveSessionTranscriptsDirForAgent(normalizedAgentId));
   const sessionEntries = listSessionEntries({
     agentId: normalizedAgentId,
@@ -569,7 +524,6 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
       storePath,
       summary,
       cronGeneratedSessionKeys,
-      configuredStoreRootIsAgentScoped,
     );
     if (!entry) {
       continue;
