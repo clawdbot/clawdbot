@@ -118,4 +118,59 @@ suite.define(() => {
       await context.close();
     }
   });
+
+  it("distinguishes a configured provider that fails its live check", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1660 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["openclaw.chat"],
+      featureMethods: ["chat.metadata", "chat.startup", "openclaw.chat"],
+      methodResponses: {
+        "agents.list": {
+          agents: [
+            {
+              id: "main",
+              identity: { name: "OpenClaw" },
+              model: { primary: "openai/gpt-5.5" },
+              name: "OpenClaw",
+            },
+          ],
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+        },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}custodian`);
+      await gateway.waitForRequest("openclaw.chat");
+      await gateway.rejectDeferred("openclaw.chat", {
+        code: "UNAVAILABLE",
+        details: { code: "system_agent_inference_unavailable" },
+        message: "OpenClaw requires working inference: provider authentication failed",
+      });
+
+      await page
+        .getByRole("heading", { name: "OpenClaw couldn't use your configured AI" })
+        .waitFor();
+      await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(0);
+      await expect
+        .poll(() => page.getByRole("button", { name: "Check provider settings" }).count())
+        .toBe(1);
+      await expect.poll(() => page.getByRole("button", { name: "Retry" }).count()).toBe(1);
+      await captureProof(page, "custodian-provider-unavailable.png");
+
+      await page.getByRole("button", { name: "Check provider settings" }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      const modelsLink = page.locator('.settings-sidebar__item[href="/settings/model-providers"]');
+      await expect.poll(() => modelsLink.getAttribute("aria-current")).toBe("page");
+    } finally {
+      await context.close();
+    }
+  });
 });

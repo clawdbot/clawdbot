@@ -72,6 +72,7 @@ describe("CustodianSessionStore", () => {
 
     store.connect(context, "caretaker");
     await waitForFast(() => expect(store.setupRequired).toBe(true));
+    expect(store.setupIssue).toBe("unavailable");
 
     await expect(store.send("should not send")).resolves.toBe("rejected");
     expect(request).toHaveBeenCalledOnce();
@@ -96,6 +97,7 @@ describe("CustodianSessionStore", () => {
     store.connect(context, "caretaker");
 
     expect(store.setupRequired).toBe(true);
+    expect(store.setupIssue).toBe("missing");
     expect(store.sending).toBe(false);
     expect(request).not.toHaveBeenCalled();
     await expect(store.send("should not send")).resolves.toBe("rejected");

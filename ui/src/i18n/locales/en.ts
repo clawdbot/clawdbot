@@ -1871,6 +1871,11 @@ export const en: TranslationMap = {
       body: "OpenClaw couldn't find a provider and model configured for this agent. Add one before starting a conversation.",
       action: "Configure a provider",
     },
+    connectionFailure: {
+      title: "OpenClaw couldn't use your configured AI",
+      body: "This agent has a provider and model selected, but the connection failed. Check the provider login or API key, model access, and service status, then try again.",
+      action: "Check provider settings",
+    },
     loading: "Checking this Gateway for available AI access…",
     retry: "Retry",
     checkAgain: "Check again",

@@ -32,6 +32,7 @@ const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 type StoreListener = () => void;
 type ConfiguredInferenceState = "unresolved" | "required" | "ready";
+export type CustodianSetupIssue = "missing" | "unavailable";
 
 /** One process-local conversation owner shared by the full page and dock surface. */
 export class CustodianSessionStore {
@@ -42,7 +43,7 @@ export class CustodianSessionStore {
   wizardInputPending = false;
   questionReplyUncertain = false;
   error: string | null = null;
-  setupRequired = false;
+  setupIssue: CustodianSetupIssue | null = null;
   dismissedQuestions = new Set<string>();
   answeredQuestions = new Set<string>();
   activeClient: GatewayBrowserClient | null = null;
@@ -136,6 +137,10 @@ export class CustodianSessionStore {
 
   canRetry(): boolean {
     return this.retryParams !== null && this.retryParams.message === undefined;
+  }
+
+  get setupRequired(): boolean {
+    return this.setupIssue !== null;
   }
 
   retry(): void {
@@ -307,7 +312,7 @@ export class CustodianSessionStore {
     this.input = "";
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.error = null;
-    this.setupRequired = false;
+    this.setupIssue = null;
     this.earlierBoundaryAfterId = this.messages.at(-1)?.id ?? null;
     this.startSession(client, variant, false);
   }
@@ -387,11 +392,11 @@ export class CustodianSessionStore {
     if (configuredInferenceState === "required") {
       this.sessionStarted = false;
       this.clearConversation();
-      this.setupRequired = true;
+      this.setupIssue = "missing";
       return;
     }
     if (inferenceStateChanged) {
-      this.setupRequired = false;
+      this.setupIssue = null;
     }
     if (this.sessionStarted) {
       if (!this.retryParams) {
@@ -436,7 +441,6 @@ export class CustodianSessionStore {
     const epoch = ++this.requestEpoch;
     this.sending = true;
     this.error = null;
-    this.setupRequired = false;
     this.retryParams = params;
     this.emit();
     if (loadTranscript) {
@@ -476,7 +480,7 @@ export class CustodianSessionStore {
     this.answeredQuestions = new Set();
     this.retryParams = null;
     this.error = null;
-    this.setupRequired = false;
+    this.setupIssue = null;
     this.input = "";
     this.sensitive = this.wizardInputPending = this.questionReplyUncertain = false;
     this.earlierBoundaryAfterId = null;
@@ -507,7 +511,9 @@ export class CustodianSessionStore {
     let delivery: eventNudgeState.CustodianSendDelivery = "unsent";
     this.sending = true;
     this.error = null;
-    this.setupRequired = false;
+    if (params.message !== undefined) {
+      this.setupIssue = null;
+    }
     this.retryParams = params;
     this.emit();
     try {
@@ -523,6 +529,7 @@ export class CustodianSessionStore {
       this.sensitive = result.sensitive === true;
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
+      this.setupIssue = null;
       const question = parseCustodianQuestion(result.question);
       const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
       if (!silentReply || question) {
@@ -563,7 +570,12 @@ export class CustodianSessionStore {
         this.error = custodianErrorMessage(error);
         const details =
           error && typeof error === "object" ? (error as { details?: unknown }).details : undefined;
-        this.setupRequired = readSystemAgentInferenceUnavailableErrorDetails(details) !== undefined;
+        this.setupIssue =
+          readSystemAgentInferenceUnavailableErrorDetails(details) !== undefined
+            ? this.configuredInferenceState === "required"
+              ? "missing"
+              : "unavailable"
+            : null;
         if (params.message !== undefined && isCustodianSessionInvalidatedError(error)) {
           // Retained transcript rows are display context only; the next turn needs a fresh id.
           this.rotateVolatileSession(client, this.currentSessionVariant());

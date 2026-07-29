@@ -93,6 +93,7 @@ class CustodianSurface extends OpenClawLightDomElement {
     const store = this.store;
     const assistantAvatar = controlUiPublicAssetPath("favicon.svg", this.context.basePath);
     if (store.setupRequired) {
+      const unavailable = store.setupIssue === "unavailable";
       return html`
         <section
           class="custodian-surface custodian-surface--setup-required ${this.compact
@@ -101,14 +102,27 @@ class CustodianSurface extends OpenClawLightDomElement {
         >
           <div class="custodian__setup-state" role="alert">
             <openclaw-mascot mood="idle" .size=${this.compact ? 72 : 96}></openclaw-mascot>
-            <h2>${t("modelSetup.required.title")}</h2>
-            <p>${t("modelSetup.required.body")}</p>
+            <h2>
+              ${t(unavailable ? "modelSetup.connectionFailure.title" : "modelSetup.required.title")}
+            </h2>
+            <p>
+              ${t(unavailable ? "modelSetup.connectionFailure.body" : "modelSetup.required.body")}
+            </p>
             <div class="custodian__setup-actions">
               <button class="btn primary" type="button" @click=${() => store.openModelSetup()}>
-                ${t("modelSetup.required.action")}
+                ${t(
+                  unavailable
+                    ? "modelSetup.connectionFailure.action"
+                    : "modelSetup.required.action",
+                )}
               </button>
               ${store.activeClient && store.chatAvailable && store.canRetry()
-                ? html`<button class="btn" type="button" @click=${() => store.retry()}>
+                ? html`<button
+                    class="btn"
+                    type="button"
+                    ?disabled=${store.sending}
+                    @click=${() => store.retry()}
+                  >
                     ${t("common.retry")}
                   </button>`
                 : nothing}
