@@ -211,9 +211,12 @@ export async function runWhatsAppScenario(
   implementation: WhatsAppQaScenarioImplementation,
 ) {
   const scenario = environment.scenario;
-  const { run } = await environment.configureScenario(implementation);
+  const { run: configuredRun } = await environment.configureScenario(implementation);
   for (let attempt = 1; attempt <= WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS; attempt += 1) {
     try {
+      // Retry with fresh markers and callback state while retaining the gateway config
+      // prepared from the equivalent first run.
+      const run = attempt === 1 ? configuredRun : implementation.buildRun();
       const result = await runWhatsAppScenarioAttempt({
         environment,
         implementation,
