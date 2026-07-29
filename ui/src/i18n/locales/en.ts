@@ -50,6 +50,7 @@ export const en: TranslationMap = {
     na: "n/a",
     never: "never",
     justNow: "just now",
+    now: "now",
     unknown: "Unknown",
     configured: "Configured",
     running: "Running",

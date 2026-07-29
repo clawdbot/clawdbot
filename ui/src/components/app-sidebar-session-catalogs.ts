@@ -3,6 +3,7 @@ import type {
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
+import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import type {
   CatalogSessionContinuedDetail,
@@ -12,7 +13,7 @@ import type {
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const now = Date.now();
   if (timestampMs != null && Number.isFinite(timestampMs) && Math.abs(now - timestampMs) < 60_000) {
-    return formatRelativeTimestamp(timestampMs, { fallback: "" });
+    return t("common.now");
   }
   return formatRelativeTimestamp(timestampMs, {
     fallback: "",
