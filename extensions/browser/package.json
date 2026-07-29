@@ -5,7 +5,7 @@
   "description": "OpenClaw browser tool plugin",
   "type": "module",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@noble/ed25519": "3.1.0",
     "esbuild": "0.28.1",
     "express": "5.2.1",

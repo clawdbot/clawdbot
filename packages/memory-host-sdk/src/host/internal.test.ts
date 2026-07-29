@@ -154,6 +154,7 @@ describe("memory host SDK package internals", () => {
   it("lists canonical markdown and enabled multimodal files", async () => {
     const tmpDir = getTmpDir();
     fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# Default memory");
+    fsSync.writeFileSync(path.join(tmpDir, "USER.md"), "# User profile");
     fsSync.writeFileSync(path.join(tmpDir, "memory.md"), "# Legacy memory");
     const extraDir = path.join(tmpDir, "extra");
     fsSync.mkdirSync(extraDir, { recursive: true });
@@ -170,6 +171,7 @@ describe("memory host SDK package internals", () => {
 
     expect(files.map((file) => path.relative(tmpDir, file)).toSorted()).toEqual([
       "MEMORY.md",
+      "USER.md",
       path.join("extra", "diagram.png"),
       path.join("extra", "note.md"),
       path.join("extra", "recording.m2a"),
@@ -177,6 +179,7 @@ describe("memory host SDK package internals", () => {
   });
 
   it("allows top-level dreams path casing variants", () => {
+    expect(isMemoryPath("USER.md")).toBe(true);
     expect(isMemoryPath("dreams.md")).toBe(true);
     expect(isMemoryPath("DREAMS.md")).toBe(true);
   });

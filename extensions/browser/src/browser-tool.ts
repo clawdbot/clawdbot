@@ -16,7 +16,6 @@ import {
   executeConsoleAction,
   executeDownloadAction,
   executeExtractAction,
-  executeSnapshotAction,
   executeTabsAction,
 } from "./browser-tool.actions.js";
 import {
@@ -70,6 +69,7 @@ import {
   untrackSessionBrowserTab,
   validateJsonSchemaValue,
 } from "./browser-tool.runtime.js";
+import { appendNavigatedPageState, executeSnapshotAction } from "./browser-tool.snapshot.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { parseBrowserNavigationUrl } from "./browser/navigation-guard.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
@@ -900,28 +900,36 @@ export function createBrowserTool(opts?: {
         case "navigate": {
           const targetUrl = readTargetUrlParam(params);
           const targetId = readStringParam(params, "targetId");
-          if (proxyRequest) {
-            const result = await proxyRequest({
-              method: "POST",
-              path: "/navigate",
-              profile,
-              body: {
+          const result = proxyRequest
+            ? await proxyRequest({
+                method: "POST",
+                path: "/navigate",
+                profile,
+                body: {
+                  url: targetUrl,
+                  targetId,
+                },
+              })
+            : await browserToolDeps.browserNavigate(baseUrl, {
                 url: targetUrl,
                 targetId,
-              },
-            });
-            sessionTabs.touch(
-              readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
-            );
+                profile,
+              });
+          const navigatedTargetId =
+            readStringValue((result as { targetId?: unknown }).targetId) ?? targetId;
+          sessionTabs.touch(navigatedTargetId);
+          // A navigation that resolved to a download leaves the document
+          // unchanged, so inline page state would describe the wrong thing.
+          if ((result as { download?: unknown }).download) {
             return jsonResult(result);
           }
-          const result = await browserToolDeps.browserNavigate(baseUrl, {
-            url: targetUrl,
-            targetId,
+          return await appendNavigatedPageState({
+            result: jsonResult(result),
+            targetId: navigatedTargetId,
+            baseUrl,
             profile,
+            proxyRequest,
           });
-          sessionTabs.touch(readStringValue(result.targetId) ?? targetId);
-          return jsonResult(result);
         }
         case "console": {
           const result = await executeConsoleAction({

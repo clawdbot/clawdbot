@@ -15,13 +15,6 @@ scenario:
     - extensions/telegram/src/bot-message-context.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
-    profiles:
-      {
-        "telegram:adapter": 8,
-        "telegram:all": 7,
-        "telegram:mock-release": 7,
-        "telegram:release": 7,
-      }
     kind: flow
     channel: telegram
     suiteIsolation: isolated

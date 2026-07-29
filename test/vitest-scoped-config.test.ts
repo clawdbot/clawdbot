@@ -9,7 +9,7 @@ import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-conf
 import { createAcpVitestConfig } from "./vitest/vitest.acp.config.ts";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
-import { agentsCoreIsolatedTestFiles } from "./vitest/vitest.agents-paths.mjs";
+import { agentVitestProjectOwners } from "./vitest/vitest.agents-paths.mjs";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
 import { createAutoReplyCoreVitestConfig } from "./vitest/vitest.auto-reply-core.config.ts";
 import { createAutoReplyReplyVitestConfig } from "./vitest/vitest.auto-reply-reply.config.ts";
@@ -663,7 +663,7 @@ describe("scoped vitest configs", () => {
     const sharedConfig = requireTestConfig(defaultAgentsCoreConfig);
     const isolatedConfig = requireTestConfig(defaultAgentsCoreIsolatedConfig);
 
-    const scopedIsolatedFiles = agentsCoreIsolatedTestFiles.map((file) =>
+    const scopedIsolatedFiles = agentVitestProjectOwners.coreIsolated.include.map((file) =>
       file.replace("src/agents/", ""),
     );
     expect(sharedConfig.exclude).toEqual(expect.arrayContaining(scopedIsolatedFiles));

@@ -6,13 +6,14 @@ import { fileURLToPath } from "node:url";
 import { format } from "node:util";
 import { isRootHelpInvocation } from "./cli/argv.js";
 import { parseCliContainerArgs, resolveCliContainerTarget } from "./cli/container-target.js";
-import { runCliWithExitFinalization } from "./cli/one-shot-exit.js";
+import { requestExitAfterOneShotOutput, runCliWithExitFinalization } from "./cli/one-shot-exit.js";
 import {
   tryOutputPrecomputedCommandHelp,
   type PrecomputedCommandHelpDeps,
 } from "./cli/precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
+import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayStartupTrace,
@@ -29,6 +30,7 @@ import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
+import { defaultRuntime } from "./runtime.js";
 
 const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" },
@@ -266,6 +268,13 @@ export async function tryHandlePrecomputedCommandHelpFastPath(
 async function runMainOrRootHelp(argv: string[]): Promise<void> {
   await runCliWithExitFinalization({
     run: async () => {
+      if (isNativeHookRelayArgv(argv) && !argv.includes("--help") && !argv.includes("-h")) {
+        const { runNativeHookRelayCliFromArgv } = await import("./cli/native-hook-relay-cli.js");
+        const exitCode = await runNativeHookRelayCliFromArgv(argv);
+        process.exitCode = exitCode;
+        requestExitAfterOneShotOutput(defaultRuntime, exitCode);
+        return;
+      }
       if (await tryHandleRootHelpFastPath(argv)) {
         await flushEntryStartupTraceForEarlyReturn(argv);
         return;

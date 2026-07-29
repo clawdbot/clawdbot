@@ -39,9 +39,6 @@ export function classifyPrForSweep({ pr, ciRuns, botCloseCount, now }) {
   if (pr.draft) {
     return { action: "skip", reason: "draft" };
   }
-  if (now - Date.parse(pr.created_at) > LOOKBACK_MS) {
-    return { action: "skip", reason: "outside-lookback" };
-  }
   if (now - Date.parse(pr.updated_at) < MIN_QUIET_MS) {
     return { action: "skip", reason: "recently-updated" };
   }
@@ -81,7 +78,12 @@ export function classifyRunForRevive({ run, prCreatedAt, prHeadBranch, repoFullN
   }
   // A head SHA can be reused by a later PR. Reruns replay the original event
   // context, so a run created before this PR existed cannot safely be revived.
-  if (Date.parse(run.created_at) < Date.parse(prCreatedAt)) {
+  const runCreatedAt = Date.parse(run.created_at);
+  const pullCreatedAt = Date.parse(prCreatedAt);
+  if (!Number.isFinite(runCreatedAt) || !Number.isFinite(pullCreatedAt)) {
+    return { action: "skip", reason: "unverifiable-created-at" };
+  }
+  if (runCreatedAt < pullCreatedAt) {
     return { action: "skip", reason: "predates-pr" };
   }
   if (run.run_attempt >= 3) {
@@ -92,12 +94,12 @@ export function classifyRunForRevive({ run, prCreatedAt, prHeadBranch, repoFullN
   // triggering PR's branch. Same-repo branch names are unique, so requiring
   // branch + repo match ties the rerun to this PR's event context; fork-headed
   // or foreign-branch runs are refused rather than replayed on inference.
-  if (prHeadBranch !== undefined && run.head_branch !== prHeadBranch) {
+  if (!prHeadBranch || run.head_branch !== prHeadBranch) {
     return { action: "skip", reason: "different-head-branch" };
   }
   // Absent metadata fails closed: an unverifiable head repository must never
   // default to "same repo" — that would replay fork-triggered privileged runs.
-  if (repoFullName !== undefined && run.head_repository?.full_name !== repoFullName) {
+  if (!repoFullName || run.head_repository?.full_name !== repoFullName) {
     return { action: "skip", reason: "fork-head-repository" };
   }
   return { action: "revive", reason: "cancelled-pr-event-run" };
@@ -142,8 +144,8 @@ async function listLatestChecksForHead({ github, owner, repo, headSha }) {
   // Checks are the PR association GitHub's merge box and auto-merge actually
   // wait on. pull_request_target workflow runs can have a base-side head_sha
   // and an empty pull_requests array, so neither run field identifies the PR.
-  // filter=latest also omits cancelled checks superseded by a newer same-name
-  // check, leaving only cancelled work that still blocks this head.
+  // filter=latest is scoped to a check suite, not a workflow: cancelled checks
+  // from older runs may coexist with their completed replacements on this head.
   // Accepted tradeoff: checks are commit-scoped, so a second PR sharing this
   // exact head (a duplicate PR off the same automation branch) could have its
   // run revived under our candidate's eligibility. GitHub exposes no trigger
@@ -159,12 +161,82 @@ async function listLatestChecksForHead({ github, owner, repo, headSha }) {
   });
 }
 
-function workflowRunIdForCheck(check) {
-  if (check.conclusion !== "cancelled" || check.app?.slug !== "github-actions") {
+function githubActionsWorkflowRunIdForCheck(check) {
+  if (check.app?.slug !== "github-actions") {
     return undefined;
   }
   const match = check.details_url?.match(/\/actions\/runs\/(\d+)(?:\/|$)/);
-  return match ? Number(match[1]) : undefined;
+  if (!match) {
+    return undefined;
+  }
+  const runId = Number(match[1]);
+  return Number.isSafeInteger(runId) && runId > 0 ? runId : undefined;
+}
+
+function workflowRunIdForCheck(check) {
+  if (check.conclusion !== "cancelled") {
+    return undefined;
+  }
+  return githubActionsWorkflowRunIdForCheck(check);
+}
+
+async function resolveWorkflowSupersession({
+  github,
+  owner,
+  repo,
+  checks,
+  run,
+  prCreatedAt,
+  prHeadBranch,
+  repoFullName,
+  workflowRunsById,
+}) {
+  if (!Number.isSafeInteger(run.workflow_id) || run.workflow_id <= 0) {
+    return "unverifiable-workflow";
+  }
+
+  for (const check of checks) {
+    if (check.app?.slug !== "github-actions") {
+      continue;
+    }
+    const replacementRunId = githubActionsWorkflowRunIdForCheck(check);
+    if (replacementRunId === undefined) {
+      return "unverifiable-workflow";
+    }
+    if (replacementRunId <= run.id) {
+      continue;
+    }
+
+    let replacementRun = workflowRunsById.get(replacementRunId);
+    if (!replacementRun) {
+      // A run's owning workflow is immutable, so cache only this exact run-id
+      // lookup; current cancellation/attempt state is still fetched fresh.
+      replacementRun = github.rest.actions
+        .getWorkflowRun({ owner, repo, run_id: replacementRunId })
+        .then(({ data }) => data);
+      workflowRunsById.set(replacementRunId, replacementRun);
+    }
+    const replacement = await replacementRun;
+    if (!Number.isSafeInteger(replacement?.workflow_id) || replacement.workflow_id <= 0) {
+      return "unverifiable-workflow";
+    }
+    // Workflow identity alone is shared by dispatches, pushes, and other PRs.
+    // Match the candidate's trusted PR-event lineage, not head_sha: target
+    // workflows can report their base SHA rather than the checked PR head.
+    if (
+      replacement.workflow_id === run.workflow_id &&
+      REVIVABLE_EVENTS.has(replacement.event) &&
+      replacement.event === run.event &&
+      replacement.head_branch === prHeadBranch &&
+      replacement.head_repository?.full_name === repoFullName &&
+      Number.isFinite(Date.parse(replacement.created_at)) &&
+      Date.parse(replacement.created_at) >= Date.parse(prCreatedAt)
+    ) {
+      return "superseded-workflow";
+    }
+  }
+
+  return null;
 }
 
 function isExpectedReviveSkip(error) {
@@ -245,6 +317,7 @@ export async function runPrCiSweeper({
   let revives = 0;
   const openPrs = await listRecentOpenPrs({ github, owner, repo, now });
   const seenRunIds = new Set();
+  const workflowRunsById = new Map();
   reviveLane: for (const listed of openPrs) {
     if (now - Date.parse(listed.created_at) > LOOKBACK_MS) {
       break;
@@ -278,12 +351,6 @@ export async function runPrCiSweeper({
         prHeadBranch: listed.head.ref,
         repoFullName: `${owner}/${repo}`,
       });
-      // Global suppression only once this run is actually handled: a
-      // PR-relative rejection (branch mismatch, predates-pr) must leave the
-      // run inspectable for the candidate that owns it.
-      if (verdict.action === "revive") {
-        seenRunIds.add(runId);
-      }
       if (verdict.action !== "revive") {
         if (verdict.reason === "revive-budget-exhausted") {
           core.info(
@@ -296,6 +363,8 @@ export async function runPrCiSweeper({
         core.info(`pr-ci-sweeper: per-sweep revive cap (${MAX_REVIVES_PER_SWEEP}) reached`);
         break reviveLane;
       }
+      let currentChecks = checks;
+      let currentRun = run;
       if (!dryRun) {
         // Revalidate immediately before mutating, mirroring the re-fire lane:
         // a fresh push, merge, close, or disarmed auto-merge in the scan gap
@@ -320,7 +389,7 @@ export async function runPrCiSweeper({
         // cancelled run would put stale checks back in flight (or cancel a
         // live replacement via workflow concurrency), so require the same
         // check to still be the head's latest cancelled entry.
-        const currentChecks = await listLatestChecksForHead({
+        currentChecks = await listLatestChecksForHead({
           github,
           owner,
           repo,
@@ -348,11 +417,12 @@ export async function runPrCiSweeper({
         // A concurrent rerun can advance the same run id to a fresh attempt in
         // the scan gap; reclassify the current attempt so the budget and
         // cancelled-state guards judge what the rerun would actually replay.
-        const { data: currentRun } = await github.rest.actions.getWorkflowRun({
+        const { data: freshRun } = await github.rest.actions.getWorkflowRun({
           owner,
           repo,
           run_id: runId,
         });
+        currentRun = freshRun;
         const currentVerdict = classifyRunForRevive({
           run: currentRun,
           prCreatedAt: listed.created_at,
@@ -366,6 +436,26 @@ export async function runPrCiSweeper({
           continue;
         }
       }
+      workflowRunsById.set(runId, Promise.resolve(currentRun));
+      const supersession = await resolveWorkflowSupersession({
+        github,
+        owner,
+        repo,
+        checks: currentChecks,
+        run: currentRun,
+        prCreatedAt: listed.created_at,
+        prHeadBranch: listed.head.ref,
+        repoFullName: `${owner}/${repo}`,
+        workflowRunsById,
+      });
+      if (supersession) {
+        core.info(
+          `pr-ci-sweeper: skip cancelled run ${runId} for #${listed.number} (${supersession})`,
+        );
+        continue;
+      }
+      // Rejected or stale candidates must remain inspectable by their actual PR.
+      seenRunIds.add(runId);
       // Count only real (or dry-run-logged) revive attempts: stale candidates
       // rejected by revalidation must not exhaust the sweep-wide cap.
       revives += 1;

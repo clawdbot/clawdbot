@@ -30,6 +30,7 @@ import {
   openOpenClawStateDatabase,
   OPENCLAW_STATE_SCHEMA_VERSION,
   repairOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseSchemaIfNeeded,
   runOpenClawStateWriteTransaction,
   withOpenClawStateStartupMigrationCheckpointDatabase,
 } from "./openclaw-state-db.js";
@@ -1066,6 +1067,32 @@ describe("openclaw state database", () => {
         .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
         .run("not-an-integer"),
     ).toThrow();
+  });
+
+  it("skips exclusive repair when the automatic schema gate is already current", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const databasePath = openOpenClawStateDatabase(options).path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const before = new DatabaseSync(databasePath);
+    before.prepare("UPDATE schema_meta SET updated_at = 123 WHERE meta_key = 'primary'").run();
+    before.close();
+
+    expect(repairOpenClawStateDatabaseSchemaIfNeeded(options)).toEqual({
+      changes: [],
+      warnings: [],
+    });
+
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expect(
+        after.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get(),
+      ).toEqual({ updated_at: 123 });
+    } finally {
+      after.close();
+    }
   });
 
   it("drops unreleased transient verification history on open", () => {
@@ -3959,6 +3986,37 @@ INSERT INTO macos_port_guardian_records VALUES (4242, 18789, '/usr/bin/ssh', 're
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
+  });
+
+  it("configures the busy timeout before a doctor schema repair transaction", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const { DatabaseSync } = requireNodeSqlite();
+    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
+      | undefined;
+    if (!originalExec) {
+      throw new Error("DatabaseSync.exec descriptor is unavailable");
+    }
+    const statements: string[] = [];
+    vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
+      this: import("node:sqlite").DatabaseSync,
+      sql: string,
+    ) {
+      statements.push(sql);
+      return originalExec.call(this, sql);
+    });
+
+    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+
+    const timeoutIndex = statements.findIndex((sql) =>
+      sql.includes(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}`),
+    );
+    const transactionIndex = statements.indexOf("BEGIN IMMEDIATE");
+    expect(timeoutIndex).toBeGreaterThanOrEqual(0);
+    expect(transactionIndex).toBeGreaterThan(timeoutIndex);
   });
 
   it("uses rollback journaling for shared state databases on NFS-backed volumes", () => {

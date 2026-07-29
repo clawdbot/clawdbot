@@ -42,17 +42,33 @@ function transportPayloadToolName(tool: unknown): string | undefined {
   return typeof fnName === "string" ? fnName : undefined;
 }
 
-export function enforceCodeModeResponsesToolSurface(payload: unknown): void {
+export function resolveCodeModeResponsesVisibleToolNames(
+  context: Pick<Context, "tools">,
+): ReadonlySet<string> {
+  return new Set(
+    (context.tools ?? [])
+      .map(transportPayloadToolName)
+      .filter((name): name is string => typeof name === "string"),
+  );
+}
+
+export function enforceCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
   if (!isRecord(payload) || !Array.isArray(payload.tools)) {
     return;
   }
   payload.tools = payload.tools.filter((tool) => {
     const name = transportPayloadToolName(tool);
-    return typeof name === "string" && isCodeModeModelVisibleToolName(name);
+    return typeof name === "string" && isCodeModeModelVisibleToolName(name, visibleToolNames);
   });
 }
 
-export function assertCodeModeResponsesToolSurface(payload: unknown): void {
+export function assertCodeModeResponsesToolSurface(
+  payload: unknown,
+  visibleToolNames: ReadonlySet<string>,
+): void {
   if (!isRecord(payload) || !Array.isArray(payload.tools)) {
     throw new Error("Code mode payload tool surface violation: expected exec,wait; got no tools");
   }
@@ -65,7 +81,7 @@ export function assertCodeModeResponsesToolSurface(payload: unknown): void {
     new Set(names).size === names.length &&
     names.filter((name) => name === "exec").length === 1 &&
     names.filter((name) => name === "wait").length === 1 &&
-    names.every(isCodeModeModelVisibleToolName)
+    names.every((name) => isCodeModeModelVisibleToolName(name, visibleToolNames))
   ) {
     return;
   }
@@ -225,8 +241,8 @@ export function buildOpenAIClientHeaders(
   return resolvedHeaders;
 }
 
-function resolveOpenAISdkTimeoutMs(model: Model): number | undefined {
-  return resolveModelRequestTimeoutMs(model, undefined);
+function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {
+  return resolveModelRequestTimeoutMs(model, timeoutMs);
 }
 
 export function buildOpenAISdkClientOptions(model: Model): { timeout?: number } {
@@ -237,20 +253,28 @@ export function buildOpenAISdkClientOptions(model: Model): { timeout?: number } 
 export function buildOpenAISdkRequestOptions(
   model: Model,
   signal?: AbortSignal,
-  options?: { stream?: boolean },
-): { signal?: AbortSignal; timeout?: number; headers?: Record<string, string> } | undefined {
-  const timeout = resolveOpenAISdkTimeoutMs(model);
+  options?: { stream?: boolean; timeoutMs?: number; maxRetries?: number },
+):
+  | {
+      signal?: AbortSignal;
+      timeout?: number;
+      maxRetries?: number;
+      headers?: Record<string, string>;
+    }
+  | undefined {
+  const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }
       : undefined;
-  if (timeout === undefined && !signal && !headers) {
+  if (timeout === undefined && options?.maxRetries === undefined && !signal && !headers) {
     return undefined;
   }
   return {
     ...(headers ? { headers } : {}),
     ...(signal ? { signal } : {}),
     ...(timeout !== undefined ? { timeout } : {}),
+    ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
   };
 }
 

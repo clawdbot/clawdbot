@@ -10,10 +10,9 @@ sidebarTitle: "Skill Workshop"
 ---
 
 Skill Workshop is OpenClaw's governed path for creating and updating workspace
-skills. Agents and operators never write `SKILL.md` directly through this
-path — they create a **proposal** (pending draft with content, target
-binding, scanner state, hashes, and rollback metadata) that becomes a live
-skill only when applied.
+skills. Through this path, agents and operators create a **proposal** (pending
+draft with content, target binding, scanner state, hashes, and rollback
+metadata) that becomes a live skill only when applied.
 
 Skill Workshop writes workspace skills only. It never touches bundled,
 plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
@@ -29,7 +28,9 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
-- **Scanner gated:** apply reruns the security scanner before writing.
+- **Scanner gated:** apply reruns the security scanner before writing. Only
+  critical findings block apply; warn-level findings remain visible but do not
+  block it.
 - **Recoverable:** apply writes rollback metadata before touching live files.
 - **Consistent surfaces:** chat, CLI, and Gateway all call the same service.
 
@@ -49,11 +50,11 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 ## Lifecycle curation
 
 The Gateway tracks aggregate skill usage in the shared state database. Once a
-day, it reviews skills created and applied by Skill Workshop. Skills unused for
-more than 30 days become `stale`; after 90 days they become `archived` and are
-left out of new agent skill snapshots. Archived skill files remain unchanged on
-disk. Manually authored skills are never curated; only skills created by Skill
-Workshop proposals enter lifecycle curation.
+day, it reviews applied skills created through agent autocapture. Skills unused
+for more than 30 days become `stale`; after 90 days they become `archived` and
+are left out of new agent skill snapshots. Archived skill files remain
+unchanged on disk. Operator-created skills, including proposals created through
+the CLI or Gateway/Control UI, are treated as manual and never curated.
 
 Pinned skills bypass lifecycle transitions. A stale skill returns to `active`
 after it is used and the next sweep runs. Archived skills return only through an
@@ -215,9 +216,9 @@ Other parameters apply depending on the action:
 | `reason`                   | `apply`, `reject`, `quarantine`                      | Optional                                                             |
 | `query`, `status`, `limit` | `list`                                               | Filter/paginate; `limit` max 50, default 20                          |
 
-Agents must use `skill_workshop` for generated skill work. They must not
-create or change proposal files through `write`, `edit`, `exec`, shell
-commands, or direct filesystem operations.
+Agents must use `skill_workshop` for generated skill work and must not create or
+change skill or proposal files directly. This rule is advisory and
+prompt-enforced. A hard guard is not currently possible at the tool-policy seam.
 
 <Note>
 `skill_workshop` is a built-in agent tool and is included in
@@ -350,12 +351,10 @@ proposals.
 ## Storage
 
 ```text
-<OPENCLAW_STATE_DIR>/skill-workshop/
-  proposals.json
-  proposals/<proposal-id>/
-    proposal.json
+<OPENCLAW_STATE_DIR>/
+  state/openclaw.sqlite
+  skill-workshop/proposals/<proposal-id>/
     PROPOSAL.md
-    rollback.json
     assets/
     examples/
     references/
@@ -365,20 +364,24 @@ proposals.
 
 Default state directory: `~/.openclaw`.
 
-- `proposal.json`: canonical proposal record.
-- `proposals.json`: fast listing index, rebuildable from proposal folders.
+- `state/openclaw.sqlite`: canonical proposal records, lifecycle status, origin attribution, and apply rollback metadata.
 - `PROPOSAL.md`: pending skill proposal.
-- `rollback.json`: recovery metadata written before apply changes live files.
+- Support files remain beside `PROPOSAL.md` so operators can review the proposed skill as a normal directory.
+
+`openclaw doctor --fix` imports the previous `proposals.json`, `proposal.json`, and
+`rollback.json` metadata into SQLite after verifying each proposal, then removes
+the migrated JSON files. If an agent's configured workspace changes, its earlier
+proposals remain listed with a previous-workspace marker instead of disappearing.
 
 ## Limits
 
-| Limit                           | Value                                                                |
-| ------------------------------- | -------------------------------------------------------------------- |
-| Description                     | 160 bytes                                                            |
-| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 1 MiB) |
-| Support files                   | 64 per proposal                                                      |
-| Support file size               | 256 KiB each, 2 MiB total                                            |
-| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)              |
+| Limit                           | Value                                                                        |
+| ------------------------------- | ---------------------------------------------------------------------------- |
+| Description                     | 160 bytes                                                                    |
+| Proposal body                   | `skills.workshop.maxSkillBytes` (default 40,000; hard ceiling 200,000 bytes) |
+| Support files                   | 64 per proposal                                                              |
+| Support file size               | 256 KiB each, 2 MiB total                                                    |
+| Pending + quarantined proposals | `skills.workshop.maxPending` per workspace (default 50)                      |
 
 ## Troubleshooting
 

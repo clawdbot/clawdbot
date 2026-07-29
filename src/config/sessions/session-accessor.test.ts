@@ -5,7 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  onInternalSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
@@ -16,6 +19,7 @@ import {
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryReplacements,
+  appendTranscriptEvent,
   appendTranscriptMessage,
   applySessionEntryLifecycleMutation,
   commitReplySessionInitialization,
@@ -1351,14 +1355,13 @@ describe("session accessor seam", () => {
       {
         sessionId: "existing-session",
         updatedAt: 10,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "durable reply",
-        pendingFinalDeliveryCreatedAt: 11,
-        pendingFinalDeliveryLastAttemptAt: 12,
-        pendingFinalDeliveryAttemptCount: 2,
-        pendingFinalDeliveryLastError: "previous failure",
-        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
-        pendingFinalDeliveryIntentId: "intent-1",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "durable reply",
+          createdAt: 11,
+          context: { channel: "discord", to: "channel-1" },
+          intentId: "intent-1",
+        },
       },
     );
 
@@ -1373,13 +1376,6 @@ describe("session accessor seam", () => {
     }
     const currentWithoutPendingDelivery = { ...current };
     delete currentWithoutPendingDelivery.pendingFinalDelivery;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryAttemptCount;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryContext;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryCreatedAt;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryIntentId;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryLastAttemptAt;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryLastError;
-    delete currentWithoutPendingDelivery.pendingFinalDeliveryText;
     await replaceSessionEntry({ sessionKey, storePath }, currentWithoutPendingDelivery);
 
     const committed = await commitReplySessionInitialization({
@@ -1400,23 +1396,9 @@ describe("session accessor seam", () => {
       throw new Error("expected reply session initialization to commit");
     }
     expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
 
     const persisted = loadSessionEntry({ sessionKey, storePath });
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryAttemptCount).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryLastError).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("does not merge old-session delivery metadata into a rotated session", async () => {
@@ -1439,11 +1421,13 @@ describe("session accessor seam", () => {
       { sessionKey, storePath },
       {
         ...current,
-        pendingFinalDelivery: true,
-        pendingFinalDeliveryText: "old reply",
-        pendingFinalDeliveryCreatedAt: 21,
-        pendingFinalDeliveryContext: { channel: "discord", to: "channel-1" },
-        pendingFinalDeliveryIntentId: "intent-old",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "old reply",
+          createdAt: 21,
+          context: { channel: "discord", to: "channel-1" },
+          intentId: "intent-old",
+        },
       },
     );
 
@@ -1466,18 +1450,10 @@ describe("session accessor seam", () => {
     }
     expect(committed.sessionEntry.sessionId).toBe("new-session");
     expect(committed.sessionEntry.pendingFinalDelivery).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryText).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryContext).toBeUndefined();
-    expect(committed.sessionEntry.pendingFinalDeliveryIntentId).toBeUndefined();
 
     const persisted = loadSessionEntry({ sessionKey, storePath });
     expect(persisted?.sessionId).toBe("new-session");
     expect(persisted?.pendingFinalDelivery).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryText).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryCreatedAt).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryContext).toBeUndefined();
-    expect(persisted?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("commits reply session initialization from a guarded legacy alias snapshot", async () => {
@@ -2625,6 +2601,407 @@ describe("session accessor seam", () => {
         },
         updatedAt: expect.any(Number),
       },
+    ]);
+  });
+
+  it.each([
+    { guarded: false, name: "ordinary" },
+    { guarded: true, name: "expected-session" },
+  ])(
+    "publishes each committed $name turn message with its active sequence",
+    async ({ guarded }) => {
+      const scope = {
+        agentId: "main",
+        sessionId: `session-ordered-turn-${guarded ? "guarded" : "ordinary"}`,
+        sessionKey: `agent:main:ordered-turn-${guarded ? "guarded" : "ordinary"}`,
+        storePath,
+      };
+      await upsertSessionEntry(scope, {
+        lifecycleRevision: "ordered-turn-revision",
+        sessionId: scope.sessionId,
+        updatedAt: 10,
+      });
+      await replaceSqliteTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        {
+          type: "message",
+          id: "existing-message",
+          parentId: null,
+          message: { role: "user", content: "existing message", timestamp: 1 },
+        },
+        {
+          type: "message",
+          id: "abandoned-message",
+          parentId: "existing-message",
+          message: { role: "assistant", content: "abandoned reply", timestamp: 2 },
+        },
+        {
+          type: "leaf",
+          id: "select-existing-message",
+          parentId: "abandoned-message",
+          targetId: "existing-message",
+          appendParentId: "existing-message",
+        },
+      ]);
+
+      const updates: Array<{
+        target: unknown;
+        message?: unknown;
+        messageId?: string;
+        messageSeq?: number;
+      }> = [];
+      const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+      const internalUpdates: Array<{ lifecycleRevision?: string; target?: unknown }> = [];
+      const unsubscribeInternal = onInternalSessionTranscriptUpdate((update) => {
+        if (update.message !== undefined) {
+          internalUpdates.push({
+            lifecycleRevision: update.lifecycleRevision,
+            target: update.target,
+          });
+        }
+      });
+      let result: Awaited<ReturnType<typeof persistSessionTranscriptTurn>>;
+      try {
+        result = await persistSessionTranscriptTurn(scope, {
+          ...(guarded ? { expectedSessionId: scope.sessionId } : {}),
+          messages: [
+            {
+              message: {
+                role: "user",
+                content: "first committed message",
+                idempotencyKey: "ordered-turn-first:user",
+                timestamp: 2,
+              },
+            },
+            {
+              message: {
+                role: "assistant",
+                content: "second committed message",
+                idempotencyKey: "ordered-turn-second",
+                timestamp: 3,
+              },
+            },
+          ],
+          updateMode: "inline",
+        });
+      } finally {
+        unsubscribe();
+        unsubscribeInternal();
+      }
+
+      expect(result.appendedCount).toBe(2);
+      expect(updates).toEqual([
+        {
+          target: {
+            agentId: scope.agentId,
+            sessionId: scope.sessionId,
+            sessionKey: scope.sessionKey,
+          },
+          sessionKey: scope.sessionKey,
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          message: {
+            role: "user",
+            content: "first committed message",
+            idempotencyKey: "ordered-turn-first:user",
+            timestamp: 2,
+          },
+          messageId: result.messages[0]?.messageId,
+          messageSeq: 2,
+        },
+        {
+          target: {
+            agentId: scope.agentId,
+            sessionId: scope.sessionId,
+            sessionKey: scope.sessionKey,
+          },
+          sessionKey: scope.sessionKey,
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          message: {
+            role: "assistant",
+            content: "second committed message",
+            idempotencyKey: "ordered-turn-second",
+            timestamp: 3,
+          },
+          messageId: result.messages[1]?.messageId,
+          messageSeq: 3,
+        },
+      ]);
+      expect(internalUpdates).toEqual([
+        {
+          lifecycleRevision: "ordered-turn-revision",
+          target: {
+            agentId: scope.agentId,
+            sessionId: scope.sessionId,
+            sessionKey: scope.sessionKey,
+            storePath,
+          },
+        },
+        {
+          lifecycleRevision: "ordered-turn-revision",
+          target: {
+            agentId: scope.agentId,
+            sessionId: scope.sessionId,
+            sessionKey: scope.sessionKey,
+            storePath,
+          },
+        },
+      ]);
+    },
+  );
+
+  it("invalidates a legacy multi-message turn when active cursors cannot be proven", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "session-legacy-unsequenced-turn",
+      sessionKey: "agent:main:legacy-unsequenced-turn",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      lifecycleRevision: "legacy-unsequenced-revision",
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "legacy-unsequenced-root",
+          parentId: null,
+          message: { role: "user", content: "canonical root" },
+        },
+      ],
+      updateMode: "none",
+    });
+    await appendTranscriptEvent(scope, {
+      id: "legacy-unsequenced-child",
+      parentId: "legacy-unsequenced-root",
+      message: { role: "assistant", content: "legacy raw event" },
+    });
+
+    const publicUpdates: Array<{ target: unknown; message?: unknown; messageSeq?: number }> = [];
+    const internalUpdates: Array<{
+      target?: unknown;
+      lifecycleRevision?: string;
+      message?: unknown;
+      messageSeq?: number;
+    }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => publicUpdates.push(update));
+    const unsubscribeInternal = onInternalSessionTranscriptUpdate((update) =>
+      internalUpdates.push(update),
+    );
+    let result: Awaited<ReturnType<typeof persistSessionTranscriptTurn>>;
+    try {
+      result = await persistSessionTranscriptTurn(scope, {
+        messages: [
+          {
+            eventId: "legacy-unsequenced-first",
+            message: {
+              role: "user",
+              content: "first unsequenced message",
+              idempotencyKey: "legacy-unsequenced-first:user",
+            },
+          },
+          {
+            eventId: "legacy-unsequenced-second",
+            message: {
+              role: "assistant",
+              content: "second unsequenced message",
+              idempotencyKey: "legacy-unsequenced-second",
+            },
+          },
+        ],
+        updateMode: "inline",
+      });
+    } finally {
+      unsubscribe();
+      unsubscribeInternal();
+    }
+
+    expect(result.appendedCount).toBe(2);
+    expect(publicUpdates).toEqual([
+      {
+        target: {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        },
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    ]);
+    expect(internalUpdates).toEqual([
+      {
+        target: {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+          storePath,
+        },
+        agentId: scope.agentId,
+        lifecycleRevision: "legacy-unsequenced-revision",
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    ]);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "legacy-unsequenced-first" }),
+        expect.objectContaining({ id: "legacy-unsequenced-second" }),
+      ]),
+    );
+  });
+
+  it.each([
+    { guarded: false, name: "ordinary" },
+    { guarded: true, name: "expected-session" },
+  ])("never publishes rows abandoned inside one $name turn", async ({ guarded }) => {
+    const scope = {
+      agentId: "main",
+      sessionId: `session-diverging-turn-${guarded ? "guarded" : "ordinary"}`,
+      sessionKey: `agent:main:diverging-turn-${guarded ? "guarded" : "ordinary"}`,
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      lifecycleRevision: "diverging-turn-revision",
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    const expectedSession = guarded ? { expectedSessionId: scope.sessionId } : {};
+    await persistSessionTranscriptTurn(scope, {
+      ...expectedSession,
+      messages: [
+        {
+          eventId: "diverging-turn-root",
+          parentId: null,
+          message: { role: "user", content: "common branch root" },
+        },
+      ],
+      updateMode: "none",
+    });
+
+    const updates: Array<{
+      target: unknown;
+      message?: unknown;
+      messageId?: string;
+      messageSeq?: number;
+    }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    let result: Awaited<ReturnType<typeof persistSessionTranscriptTurn>>;
+    try {
+      result = await persistSessionTranscriptTurn(scope, {
+        ...expectedSession,
+        messages: [
+          {
+            eventId: "diverging-turn-abandoned",
+            parentId: "diverging-turn-root",
+            message: {
+              role: "assistant",
+              content: "abandoned branch",
+              idempotencyKey: "diverging-turn-abandoned",
+            },
+          },
+          {
+            eventId: "diverging-turn-active",
+            parentId: "diverging-turn-root",
+            message: {
+              role: "assistant",
+              content: "final active branch",
+              idempotencyKey: "diverging-turn-active",
+            },
+          },
+        ],
+        updateMode: "inline",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(result.appendedCount).toBe(2);
+    expect(updates).toEqual([
+      {
+        target: {
+          agentId: scope.agentId,
+          sessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        },
+        agentId: scope.agentId,
+        sessionId: scope.sessionId,
+        sessionKey: scope.sessionKey,
+      },
+    ]);
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "diverging-turn-abandoned" }),
+        expect.objectContaining({ id: "diverging-turn-active" }),
+      ]),
+    );
+  });
+
+  it.each([
+    { guarded: false, name: "ordinary" },
+    { guarded: true, name: "expected-session" },
+  ])("does not republish replayed $name turn messages", async ({ guarded }) => {
+    const scope = {
+      agentId: "main",
+      sessionId: `session-replayed-turn-${guarded ? "guarded" : "ordinary"}`,
+      sessionKey: `agent:main:replayed-turn-${guarded ? "guarded" : "ordinary"}`,
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    const existing = {
+      role: "user",
+      content: "persisted once",
+      idempotencyKey: "replayed-turn-existing:user",
+      timestamp: 1,
+    };
+    const expectedSession = guarded ? { expectedSessionId: scope.sessionId } : {};
+    await persistSessionTranscriptTurn(scope, {
+      ...expectedSession,
+      messages: [{ idempotencyLookup: "scan", message: existing }],
+      updateMode: "none",
+    });
+
+    const updates: Array<{ message?: unknown; messageId?: string; messageSeq?: number }> = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
+    let result: Awaited<ReturnType<typeof persistSessionTranscriptTurn>>;
+    try {
+      result = await persistSessionTranscriptTurn(scope, {
+        ...expectedSession,
+        messages: [
+          { idempotencyLookup: "scan", message: existing },
+          {
+            message: {
+              role: "assistant",
+              content: "new committed reply",
+              idempotencyKey: "replayed-turn-new",
+              timestamp: 2,
+            },
+          },
+        ],
+        updateMode: "inline",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(result.appendedCount).toBe(1);
+    expect(result.messages.map((message) => message.appended)).toEqual([false, true]);
+    expect(updates).toEqual([
+      expect.objectContaining({
+        message: {
+          role: "assistant",
+          content: "new committed reply",
+          idempotencyKey: "replayed-turn-new",
+          timestamp: 2,
+        },
+        messageId: result.messages[1]?.messageId,
+        messageSeq: 2,
+      }),
     ]);
   });
 

@@ -11,6 +11,8 @@ import { getSkillsSnapshotVersion, shouldRefreshSnapshotForVersion } from "./ref
 import { ensureSkillsWatcher } from "./refresh.js";
 import { hydrateResolvedSkills } from "./snapshot-hydration.js";
 
+// The resolved index is gateway-process state. Mutation RPCs and watcher events
+// must bump that same process's version so a new-session key cannot reuse it.
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 

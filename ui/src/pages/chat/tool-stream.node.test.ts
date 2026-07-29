@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import {
   agentEvent,
   createHost,
@@ -312,7 +313,9 @@ describe("app-tool-stream result blocks", () => {
       data: { phase: "result", name: "bash", toolCallId: "call-1", result: "" },
     });
 
-    const entry = host.toolStreamById.get("call-1") as ToolStreamEntry;
+    const entry = host.toolStreamById.get(
+      buildToolStreamIdentity("run-1", "call-1"),
+    ) as ToolStreamEntry;
     expect(entry.resultReceived).toBe(true);
     expect(entry.receivedAt).toBe(TOOL_STREAM_TEST_NOW);
     expect(entry.message["__openclawToolStreamReceivedAt"]).toBe(TOOL_STREAM_TEST_NOW);
@@ -320,5 +323,113 @@ describe("app-tool-stream result blocks", () => {
     // The empty-output result block marks the call as finished so the UI does
     // not keep it in a running state for the rest of the run.
     expect(content.some((block) => block.type === "toolresult" && block.text === "")).toBe(true);
+  });
+
+  it("keeps interleaved sibling-run calls and results under independent identities", () => {
+    const host = createHost({ chatRunId: "run-foreground" });
+    const toolCallId = "call-shared";
+    const foregroundIdentity = buildToolStreamIdentity("run-foreground", toolCallId);
+    const backgroundIdentity = buildToolStreamIdentity("run-background", toolCallId);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-foreground", 1, "tool", {
+        phase: "start",
+        name: "read",
+        toolCallId,
+        args: { path: "foreground.txt" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-background", 1, "tool", {
+        phase: "start",
+        name: "exec",
+        toolCallId,
+        args: { command: "background command" },
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-foreground", 2, "tool", {
+        phase: "update",
+        name: "read",
+        toolCallId,
+        partialResult: "foreground partial",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-background", 2, "tool", {
+        phase: "update",
+        name: "exec",
+        toolCallId,
+        partialResult: "background partial",
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("run-background", 3, "tool", {
+        phase: "result",
+        name: "exec",
+        toolCallId,
+        isError: true,
+        result: "background failed",
+      }),
+    );
+
+    expect(host.toolStreamOrder).toEqual([foregroundIdentity, backgroundIdentity]);
+    expect(host.toolStreamById.get(foregroundIdentity)).toMatchObject({
+      runId: "run-foreground",
+      toolCallId,
+      name: "read",
+      args: { path: "foreground.txt" },
+      output: "foreground partial",
+      message: {
+        runId: "run-foreground",
+        toolCallId,
+        __openclawToolStreamResultReceived: false,
+      },
+    });
+    expect(host.toolStreamById.get(backgroundIdentity)).toMatchObject({
+      runId: "run-background",
+      toolCallId,
+      name: "exec",
+      args: { command: "background command" },
+      output: "background failed",
+      isError: true,
+      resultReceived: true,
+      message: {
+        runId: "run-background",
+        toolCallId,
+        __openclawToolStreamResultReceived: true,
+      },
+    });
+    expect(host.chatToolMessages.map((message) => message.runId)).toEqual([
+      "run-foreground",
+      "run-background",
+    ]);
+
+    handleAgentEvent(
+      host,
+      agentEvent("run-foreground", 3, "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId,
+        isError: false,
+        result: "foreground completed",
+      }),
+    );
+
+    expect(host.toolStreamById.get(foregroundIdentity)).toMatchObject({
+      output: "foreground completed",
+      isError: false,
+      resultReceived: true,
+    });
+    expect(host.toolStreamById.get(backgroundIdentity)).toMatchObject({
+      output: "background failed",
+      isError: true,
+      resultReceived: true,
+    });
   });
 });

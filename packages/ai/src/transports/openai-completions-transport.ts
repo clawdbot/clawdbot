@@ -63,6 +63,7 @@ import {
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   getCompat,
+  resolveCodeModeResponsesVisibleToolNames,
   resolveOpenAIStrictToolFlagWithDiagnostics,
 } from "./openai-transport-params.js";
 import {
@@ -321,8 +322,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           (options as { openclawCodeModeToolSurface?: unknown } | undefined)
             ?.openclawCodeModeToolSurface === true
         ) {
-          enforceCodeModeResponsesToolSurface(params);
-          assertCodeModeResponsesToolSurface(params);
+          const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(context);
+          enforceCodeModeResponsesToolSurface(params, visibleToolNames);
+          assertCodeModeResponsesToolSurface(params, visibleToolNames);
         }
         const compat = getCompat(model as OpenAIModeModel);
         if (compat.requiresNonEmptyUserOrAssistantMessage) {
@@ -335,7 +337,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         firstEventAbort = createFirstStreamEventAbortController(options?.signal);
         const responseStream = (await client.chat.completions.create(
           params as never,
-          buildOpenAISdkRequestOptions(model, firstEventAbort.signal),
+          buildOpenAISdkRequestOptions(model, firstEventAbort.signal, {
+            timeoutMs: options?.timeoutMs,
+            maxRetries: options?.maxRetries,
+          }),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
         await processOpenAICompletionsStream(responseStream, output, model, stream, {

@@ -8,7 +8,7 @@ title: "Security"
 <Warning>
   **Personal assistant trust model.** This guidance assumes one trusted
   operator boundary per gateway (single-user, personal-assistant model).
-  OpenClaw is **not** a hostile multi-tenant security boundary for multiple
+  OpenClaw is not a hostile multi-tenant security boundary for multiple
   adversarial users sharing one agent or gateway. For mixed-trust or
   adversarial-user operation, split trust boundaries: separate gateway +
   credentials, ideally separate OS users or hosts.

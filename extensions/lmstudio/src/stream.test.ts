@@ -490,6 +490,22 @@ describe("lmstudio stream wrapper", () => {
     expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start model preload for an already-aborted inference", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const controller = new AbortController();
+    const abortReason = new Error("inference already cancelled");
+    controller.abort(abortReason);
+    const options = { signal: controller.signal };
+    const stream = Promise.resolve().then(() =>
+      runWrappedLmstudioStream(wrapped, { contextWindow: 32_768 }, options),
+    );
+
+    await expect(stream).rejects.toBe(abortReason);
+    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+    expect(baseStream).not.toHaveBeenCalled();
+  });
+
   it("cancels one shared preload waiter without cancelling another inference", async () => {
     let resolvePreload: (() => void) | undefined;
     ensureLmstudioModelLoadedMock.mockImplementationOnce(

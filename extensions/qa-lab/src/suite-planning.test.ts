@@ -873,14 +873,15 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["live-selected"]);
   });
 
-  it("keeps implicit scenario membership identical across channel drivers", () => {
+  it("filters implicit scenarios that require another channel driver", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-only", {
+        channel: "telegram",
+        config: { requiredChannelDriver: "live" },
+      }),
       makeQaSuiteTestScenario("telegram", {
         channel: "telegram",
-      }),
-      makeQaSuiteTestScenario("matrix", {
-        channel: "matrix",
       }),
     ];
 
@@ -894,7 +895,7 @@ describe("qa suite planning helpers", () => {
       }).map((scenario) => scenario.id);
 
     expect(selectForDriver("crabline")).toEqual(["generic", "telegram"]);
-    expect(selectForDriver("live")).toEqual(selectForDriver("crabline"));
+    expect(selectForDriver("live")).toEqual(["generic", "live-only", "telegram"]);
   });
 
   it("rejects explicitly requested scenarios that do not match the current lane", () => {

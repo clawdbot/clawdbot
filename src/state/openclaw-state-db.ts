@@ -10,7 +10,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
+import {
+  repairCanonicalSqliteIndexes,
+  verifyAndRepairCanonicalSqliteIndexes,
+} from "../infra/sqlite-index-schema.js";
 import {
   assertSqliteIntegrity,
   confirmSqliteFileIntegrity,
@@ -61,6 +64,7 @@ import { ensureAdditiveStateColumns } from "./openclaw-state-db-schema-additive.
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalStateSchemaShape,
+  detectOpenClawStateDatabaseSchemaMigrationsFromDatabase,
   dropLegacyStateTables,
   markCurrentStateSchemaVersion,
   repairAgentDatabasesCompositePrimaryKey,
@@ -175,6 +179,7 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
   const db = openNodeSqliteDatabase(pathname);
   const rebuiltIndexNames = new Set<string>();
   try {
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     assertSupportedSchemaVersion(db, pathname);
     db.exec("PRAGMA foreign_keys = OFF;");
     const changes = runSqliteImmediateTransactionSync(
@@ -286,6 +291,41 @@ export function repairOpenClawStateDatabaseSchema(options: OpenClawStateDatabase
     db.close();
     ensureOpenClawStatePermissions(pathname, env);
   }
+}
+
+/** Skip the exclusive doctor repair when automatic migration sees a canonical current schema. */
+export function repairOpenClawStateDatabaseSchemaIfNeeded(
+  options: OpenClawStateDatabaseOptions = {},
+): {
+  changes: string[];
+  warnings: string[];
+} {
+  const pathname = resolveDatabasePath(options);
+  if (!existsSync(pathname)) {
+    return { changes: [], warnings: [] };
+  }
+
+  let needsRepair = true;
+  let database: DatabaseSync | undefined;
+  try {
+    database = openNodeSqliteDatabase(pathname, { readOnly: true });
+    assertSupportedSchemaVersion(database, pathname);
+    needsRepair =
+      readSqliteUserVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION ||
+      detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).length > 0;
+    if (!needsRepair) {
+      assertCurrentStateRuntimeSchema(database, pathname);
+    }
+  } catch {
+    // Preserve the repair path's existing diagnostics for unreadable or noncanonical databases.
+    needsRepair = true;
+  } finally {
+    if (database?.isOpen) {
+      database.close();
+    }
+  }
+
+  return needsRepair ? repairOpenClawStateDatabaseSchema(options) : { changes: [], warnings: [] };
 }
 
 function ensureSchema(db: DatabaseSync, pathname: string): void {
@@ -463,14 +503,12 @@ function assertStateDatabaseIntegrityBeforeMutation(
       toVersion: OPENCLAW_STATE_SCHEMA_VERSION,
     });
   }
-  const rebuiltIndexes =
-    userVersion === OPENCLAW_STATE_SCHEMA_VERSION
-      ? repairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
-          allowMissingColumns: true,
-          validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
-        })
-      : [];
-  if (rebuiltIndexes.length === 0) {
+  if (userVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+    verifyAndRepairCanonicalSqliteIndexes(database, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
+      allowMissingColumns: true,
+      validateAfterRepair: () => assertCurrentStateRuntimeSchema(database, pathname),
+    });
+  } else {
     // Every physical open proves the full file before schema mutation or exposure.
     assertSqliteIntegrity(database, pathname);
   }

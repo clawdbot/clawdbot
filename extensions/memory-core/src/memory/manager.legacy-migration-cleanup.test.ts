@@ -61,11 +61,15 @@ describe("memory legacy migration cleanup", () => {
           VALUES
             ('memory/deleted.md', 'memory', 'canonical-hash', 200, 20),
             ('sessions/excluded.jsonl', 'sessions', '', 200, 20);
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
           'fts-only', 'obsolete saffronquasar', '[]', 200
         );
-        INSERT INTO memory_index_chunks VALUES (
+        INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+        VALUES (
           'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
           'fts-only', 'obsolete ambercomet', '[]', 190
         );

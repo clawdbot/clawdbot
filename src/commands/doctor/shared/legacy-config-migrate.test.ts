@@ -2293,6 +2293,177 @@ describe("legacy migrate sandbox scope aliases", () => {
     expect(res.changes).toStrictEqual([]);
     expect(res.config).toBeNull();
   });
+
+  it("disables the default sandbox browser network without granting inherited egress", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              enabled: true,
+              network: " NONE ",
+              autoStart: false,
+            },
+          },
+        },
+        entries: {
+          main: { default: true },
+          inherited: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                headless: true,
+              },
+            },
+          },
+          isolated: {
+            sandbox: {
+              browser: {
+                network: "isolated-browser-net",
+              },
+            },
+          },
+          blankEnabled: {
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "   ",
+              },
+            },
+          },
+          blankInherited: {
+            sandbox: {
+              browser: {
+                network: "",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.sandbox.browser.network",
+    ]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.entries.inherited.sandbox.browser because it inherited unsupported browser network "none".',
+      "Set agents.entries.isolated.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      "Set agents.entries.blankInherited.sandbox.browser.enabled to true to preserve its explicit supported network while disabling the unsupported default browser network.",
+      'Disabled agents.defaults.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.defaults?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      autoStart: false,
+    });
+    expect(res.config?.agents?.entries?.inherited?.sandbox?.browser).toEqual({
+      enabled: false,
+      headless: true,
+    });
+    expect(res.config?.agents?.entries?.isolated?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "isolated-browser-net",
+    });
+    expect(res.config?.agents?.entries?.blankEnabled?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "   ",
+    });
+    expect(res.config?.agents?.entries?.blankInherited?.sandbox?.browser).toEqual({
+      enabled: true,
+      network: "",
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("disables explicit per-agent network none in keyed rosters", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "none",
+                headless: true,
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents.entries"]);
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.entries.main.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.entries?.main?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      headless: true,
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("disables explicit per-agent network none in legacy list rosters", () => {
+    const raw = {
+      agents: {
+        list: [
+          {
+            id: "legacy",
+            default: true,
+            sandbox: {
+              browser: {
+                network: "NONE",
+                autoStart: false,
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toContainEqual({
+      path: "agents.list",
+      message: expect.stringContaining('sandbox.browser.network = "none"'),
+    });
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.changes).toStrictEqual([
+      'Disabled agents.list.0.sandbox.browser and moved its unsupported network "none" → "openclaw-sandbox-browser".',
+    ]);
+    expect(res.config?.agents?.entries?.legacy?.sandbox?.browser).toEqual({
+      enabled: false,
+      network: "openclaw-sandbox-browser",
+      autoStart: false,
+    });
+    expect(migrateLegacyConfigForTest(res.config)).toEqual({ config: null, changes: [] });
+  });
+
+  it("leaves supported sandbox browser networks unchanged", () => {
+    const raw = {
+      agents: {
+        entries: {
+          main: {
+            default: true,
+            sandbox: {
+              browser: {
+                enabled: true,
+                network: "openclaw-sandbox-browser",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw)).toEqual([]);
+    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
+  });
 });
 
 describe("legacy migrate MCP server type aliases", () => {

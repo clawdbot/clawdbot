@@ -1,10 +1,9 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
+import { routePageSpec } from "../../app-route-paths.ts";
 
 export const page = definePage({
-  id: "worktrees",
-  path: "/worktrees",
-  aliases: ["/settings/worktrees"],
+  ...routePageSpec("worktrees"),
   component: () =>
     import("./worktrees-page.ts").then(() => ({
       header: true,

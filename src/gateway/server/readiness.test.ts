@@ -329,6 +329,60 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("keeps a dead-ingress channel ready while its restart backoff is still pending", () => {
+    // The next start re-proves ingress, so this window gets the same grace as any
+    // other restart handoff rather than flapping readiness on every retry.
+    withReadinessClock(() => {
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: false,
+            restartPending: true,
+            ingressUnavailable: true,
+            reconnectAttempts: 3,
+            lastStartAt: startedAt - 30_000,
+            lastStopAt: Date.now() - 5_000,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("fails readiness for dead ingress once the restart ladder stops retrying", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: false,
+            restartPending: false,
+            ingressUnavailable: true,
+            reconnectAttempts: 11,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
+  it("fails readiness for a running channel whose transport is up but ingress is dead", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        accounts: {
+          discord: managedAccount({
+            running: true,
+            connected: true,
+            restartPending: true,
+            ingressUnavailable: true,
+            lastStartAt: Date.now() - THIRTY_ONE_MIN_MS,
+          }),
+        },
+      });
+      expect(readiness()).toEqual(failingSnapshot(["discord"]));
+    });
+  });
+
   it("treats stale-socket channels as ready to avoid pulling healthy idle pods", () => {
     withReadinessClock(() => {
       const { readiness } = createLongRunningReadinessHarness({

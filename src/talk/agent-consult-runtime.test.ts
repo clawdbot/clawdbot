@@ -205,6 +205,30 @@ describe("realtime voice agent consult runtime", () => {
     expect(resolveRealtimeVoiceAgentConsultToolsAllow("none")).toStrictEqual([]);
   });
 
+  it("does not start a consult after its caller has closed", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const controller = new AbortController();
+    controller.abort(new Error("voice session closed"));
+
+    await expect(
+      consultRealtimeVoiceAgent({
+        cfg: {} as never,
+        agentRuntime: runtime as never,
+        logger: { warn: vi.fn() },
+        sessionKey: "voice:closed",
+        messageProvider: "voice",
+        lane: "voice",
+        runIdPrefix: "voice-realtime-consult:closed",
+        args: { question: "Do work" },
+        transcript: [],
+        surface: "a live voice session",
+        userLabel: "User",
+        abortSignal: controller.signal,
+      }),
+    ).rejects.toThrow("voice session closed");
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("runs an embedded agent using the shared session and prompt contract", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
 

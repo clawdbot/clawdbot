@@ -310,8 +310,7 @@ export async function recoverStore(params: {
     };
 
     if (
-      entry.pendingFinalDelivery === true &&
-      entry.pendingFinalDeliveryText &&
+      entry.pendingFinalDelivery?.kind === "replayable" &&
       entry.restartRecoveryForceSafeTools === true
     ) {
       if (await failBlockedResume()) {
@@ -325,7 +324,7 @@ export async function recoverStore(params: {
         recoveryAttempt: recoveryView.nextAttempt,
         storePath: params.storePath,
         sessionKey,
-        pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
         forceRestartSafeTools: true,
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         gatewayRuntime: params.gatewayRuntime,
@@ -351,7 +350,7 @@ export async function recoverStore(params: {
         },
       );
     } catch (err) {
-      if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+      if (entry.pendingFinalDelivery?.kind === "replayable") {
         if (await failBlockedResume()) {
           continue;
         }
@@ -366,7 +365,7 @@ export async function recoverStore(params: {
           recoveryAttempt: recoveryView.nextAttempt,
           storePath: params.storePath,
           sessionKey,
-          pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+          pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
           sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
           gatewayRuntime: params.gatewayRuntime,
         });
@@ -378,7 +377,7 @@ export async function recoverStore(params: {
       continue;
     }
 
-    if (entry.pendingFinalDelivery === true && entry.pendingFinalDeliveryText) {
+    if (entry.pendingFinalDelivery?.kind === "replayable") {
       if (await failBlockedResume()) {
         continue;
       }
@@ -390,7 +389,7 @@ export async function recoverStore(params: {
         recoveryAttempt: recoveryView.nextAttempt,
         storePath: params.storePath,
         sessionKey,
-        pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
+        pendingFinalDeliveryText: entry.pendingFinalDelivery.text,
         forceRestartSafeTools: hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
         sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,
         gatewayRuntime: params.gatewayRuntime,
@@ -496,7 +495,6 @@ export async function recoverStore(params: {
       recoveryAttempt: recoveryView.nextAttempt,
       storePath: params.storePath,
       sessionKey,
-      pendingFinalDeliveryText: entry.pendingFinalDeliveryText,
       forceRestartSafeTools:
         entry.restartRecoveryForceSafeTools === true || resumePolicy.forceRestartSafeTools,
       sessionWorkAdmissionHandoffId: params.sessionWorkAdmissionHandoffId,

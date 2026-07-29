@@ -681,6 +681,30 @@ describe("Code Mode", () => {
     expect(index).not.toContain("fake_099");
   });
 
+  it("keeps a thousand-tool catalog index deterministic and within its character budget", () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    const catalogTools = Array.from({ length: 1_024 }, (_, index) =>
+      pluginTool(`tool_${index.toString().padStart(4, "0")}`, "Deferred", "catalog-owner"),
+    );
+    const compacted = applyCodeModeCatalog({
+      tools: [...tools, ...catalogTools],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const description = compacted.tools[0]?.description ?? "";
+    const indexStart = description.indexOf("OpenClaw/plugin tool quick index");
+    const index = indexStart >= 0 ? description.slice(indexStart) : "";
+
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    expect(index).toContain('"openclaw:catalog-owner:tool_0000"');
+    expect(index).toContain("additional OpenClaw/plugin tools omitted");
+    expect(index).not.toContain('"openclaw:catalog-owner:tool_1023"');
+  });
+
   it("omits MCP and namespace guidance from the exec schema when the run catalog has neither", () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({
@@ -2177,10 +2201,93 @@ describe("Code Mode", () => {
 
     expect(resumed.status).toBe("completed");
     expect(resumed.value).toBe("done");
-    expect(resumed.output).toEqual([
-      { type: "text", text: "before" },
-      { type: "text", text: "after" },
-    ]);
+    expect(resumed.output).toEqual([{ type: "text", text: "after" }]);
+  });
+
+  it("delivers each yielded output block exactly once across repeated waits", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const execTool = expectDefined(codeModeTools[0], "Code Mode exec test invariant");
+    const waitTool = expectDefined(codeModeTools[1], "Code Mode wait test invariant");
+    const first = resultDetails(
+      await execTool.execute("code-call-incremental-output", {
+        code: `
+          text("phase 1");
+          await yield_control("first pause");
+          text("phase 2");
+          await yield_control("second pause");
+          text("phase 3");
+          return "done";
+        `,
+      }),
+    );
+
+    expect(first.status).toBe("waiting");
+    expect(first.output).toEqual([{ type: "text", text: "phase 1" }]);
+
+    const second = resultDetails(
+      await waitTool.execute("code-wait-incremental-output-1", { runId: first.runId }),
+    );
+
+    expect(second.status).toBe("waiting");
+    expect(second.output).toEqual([{ type: "text", text: "phase 2" }]);
+
+    const third = resultDetails(
+      await waitTool.execute("code-wait-incremental-output-2", { runId: second.runId }),
+    );
+
+    expect(third.status).toBe("completed");
+    expect(third.value).toBe("done");
+    expect(third.output).toEqual([{ type: "text", text: "phase 3" }]);
+  });
+
+  it("returns only newly emitted output when a resumed guest fails", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-incremental-failure",
+        {
+          code: `
+            text("before pause");
+            await yield_control("pause");
+            text("before failure");
+            throw new Error("resumed failure");
+          `,
+        },
+      ),
+    );
+
+    expect(first.status).toBe("waiting");
+    expect(first.output).toEqual([{ type: "text", text: "before pause" }]);
+
+    const second = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-incremental-failure",
+        { runId: first.runId },
+      ),
+    );
+
+    expect(second.status).toBe("failed");
+    expect(second.error).toContain("resumed failure");
+    expect(second.output).toEqual([{ type: "text", text: "before failure" }]);
+    expect(testing.activeRuns.has(first.runId as string)).toBe(false);
   });
 
   it("preserves the original exec identity for tool calls after yield and wait", async () => {
@@ -2660,6 +2767,69 @@ describe("Code Mode", () => {
     expect(stillWaiting.runId).toBe(first.runId);
   });
 
+  it("resumes and reparks a yielding run at the suspended-run capacity limit", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-at-capacity",
+        {
+          code: `
+            await yield_control("first");
+            await yield_control("second");
+            return "done";
+          `,
+        },
+      ),
+    );
+    expect(first.status).toBe("waiting");
+    const firstRunId = first.runId;
+    expect(typeof firstRunId).toBe("string");
+    if (typeof firstRunId !== "string") {
+      throw new Error("expected a parked Code Mode run");
+    }
+    const parked = testing.activeRuns.get(firstRunId);
+    expect(parked).toBeDefined();
+    if (!parked) {
+      throw new Error("expected a parked Code Mode snapshot");
+    }
+
+    // Inert snapshots occupy real capacity without starting 63 extra workers.
+    for (let index = 0; index < 63; index += 1) {
+      const runId = `cm_code_mode_capacity_${index}`;
+      testing.activeRuns.set(runId, { ...parked, runId, pending: [] });
+    }
+
+    const second = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-at-capacity",
+        { runId: firstRunId },
+      ),
+    );
+
+    expect(second.status).toBe("waiting");
+    expect(second.reason).toBe("yield");
+    expect(testing.activeRuns.size).toBe(64);
+
+    const completed = resultDetails(
+      await expectDefined(codeModeTools[1], "Code Mode wait test invariant").execute(
+        "code-wait-after-capacity",
+        { runId: second.runId },
+      ),
+    );
+
+    expect(completed).toMatchObject({ status: "completed", value: "done" });
+    expect(testing.activeRuns.size).toBe(63);
+  });
+
   it("reports only unsettled pending tool calls when wait times out", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
@@ -2701,6 +2871,7 @@ describe("Code Mode", () => {
         "code-call-timeout",
         {
           code: `
+          text("before timeout");
           const fast = tools.fake_fast({});
           const slow = tools.fake_slow({});
           await fast;
@@ -2711,6 +2882,7 @@ describe("Code Mode", () => {
       ),
     );
     expect(first.status).toBe("waiting");
+    expect(first.output).toEqual([{ type: "text", text: "before timeout" }]);
     expect(first.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
     const runId = first.runId;
     expect(typeof runId).toBe("string");
@@ -2730,7 +2902,19 @@ describe("Code Mode", () => {
     );
 
     expect(second.status).toBe("waiting");
+    expect(second.output).toEqual([]);
     expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+
+    const third = resultDetails(
+      await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
+        "code-wait-timeout-again",
+        { runId },
+      ),
+    );
+
+    expect(third.status).toBe("waiting");
+    expect(third.output).toEqual([]);
+    expect(third.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
   });
 
   it("does not load TypeScript for plain JavaScript code mode runs", async () => {
@@ -3153,6 +3337,67 @@ describe("Code Mode", () => {
     expect(testing.activeRuns.size).toBe(0);
   });
 
+  it("times out an unfinished TypeScript runtime load without starting a worker", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    (config as { tools: { codeMode: unknown } }).tools.codeMode = {
+      enabled: true,
+      timeoutMs: 100,
+    };
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+
+    const result = resultDetails(
+      await expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+        "code-call-typescript-load-timeout",
+        { code: "return 42;", language: "typescript" },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      status: "failed",
+      code: "timeout",
+      error: "code mode timeout exceeded",
+      output: [],
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
+  it("aborts an unfinished TypeScript runtime load without starting a worker", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    testing.setTypescriptRuntimeForTest(new Promise<typeof import("typescript")>(() => {}));
+    const controller = new AbortController();
+    const resultPromise = expectDefined(codeModeTools[0], "Code Mode exec test invariant").execute(
+      "code-call-typescript-load-abort",
+      { code: "return 42;", language: "typescript" },
+      controller.signal,
+    );
+
+    controller.abort();
+
+    expect(resultDetails(await resultPromise)).toMatchObject({
+      status: "failed",
+      code: "aborted",
+      error: "code mode execution aborted",
+      output: [],
+    });
+    expect(testing.activeRuns.size).toBe(0);
+  });
+
   it.each([
     "const fs = require('node:fs'); return fs;",
     String.raw`return r\u0065quire('node:fs');`,
@@ -3283,6 +3528,63 @@ describe("Code Mode", () => {
     expect(String(details.error)).toContain("output limit exceeded");
     expect(details.code).toBe("output_limit_exceeded");
     expect(testing.activeRuns.size).toBe(beforeRunCount);
+  });
+
+  it("enforces the cumulative output limit across yielded waits", async () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: true,
+          maxOutputBytes: 1024,
+        },
+      },
+    } as never;
+    const ctx = {
+      config,
+      runtimeConfig: config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    };
+    const tools = createCodeModeTools(ctx);
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const first = resultDetails(
+      await expectDefined(tools[0], "Code Mode exec test invariant").execute(
+        "code-call-cumulative-output",
+        {
+          code: `
+            text("a".repeat(600));
+            await yield_control("pause");
+            text("b".repeat(600));
+            return "done";
+          `,
+        },
+      ),
+    );
+
+    expect(first.status).toBe("waiting");
+    expect(first.output).toEqual([{ type: "text", text: "a".repeat(600) }]);
+
+    const second = resultDetails(
+      await expectDefined(tools[1], "Code Mode wait test invariant").execute(
+        "code-wait-cumulative-output",
+        { runId: first.runId },
+      ),
+    );
+
+    expect(second.status).toBe("failed");
+    expect(second.code).toBe("output_limit_exceeded");
+    expect(testing.activeRuns.has(first.runId as string)).toBe(false);
   });
 
   it("enforces output limits before auto-draining namespace calls", async () => {

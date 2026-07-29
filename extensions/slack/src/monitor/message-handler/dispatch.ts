@@ -46,6 +46,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     cfg,
     ctx,
     disableBlockStreaming,
+    hasSlackCustomIdentity,
     hasRepliedRef,
     message,
     messageSentHookContext,
@@ -195,6 +196,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       info.kind === "final" &&
       ttsSupplement &&
       draftStream &&
+      !hasSlackCustomIdentity &&
       !draftPreviewCommitted.value &&
       !delivery.observedFinalReplyDelivery &&
       previewStreamingEnabled &&
@@ -280,6 +282,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             : undefined,
         buildFinalEdit: () => {
           if (
+            hasSlackCustomIdentity ||
             !previewStreamingEnabled ||
             (reply.hasMedia && !ttsSupplement) ||
             payload.isError ||

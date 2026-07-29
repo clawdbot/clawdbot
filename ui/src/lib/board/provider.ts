@@ -12,13 +12,14 @@ import {
 } from "../sessions/session-key.ts";
 import { GatewayBoardProvider } from "./gateway-provider.ts";
 import { applyMockBoardOp, normalizeMockBoardSnapshot } from "./mock-ops.ts";
+import { emptyBoardSnapshot, normalizeBoardWidgetTitle } from "./provider-helpers.ts";
 import {
   EventStream,
   ValueSignal,
   type BoardEventStream,
   type BoardSnapshotSignal,
 } from "./provider-signals.ts";
-import type { BoardProvider } from "./provider-types.ts";
+import type { BoardPinMcpAppInput, BoardPinWidgetInput, BoardProvider } from "./provider-types.ts";
 import type { BoardWidgetAppViewState } from "./view-types.ts";
 import { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget-names.ts";
 export type { BoardCommandEvent };
@@ -28,26 +29,6 @@ export { canvasWidgetNameForDocument, mcpAppWidgetNameForViewId } from "./widget
 export { GatewayBoardProvider } from "./gateway-provider.ts";
 
 type BoardGatewayClient = Pick<GatewayBrowserClient, "request" | "addEventListener">;
-
-type BoardPinPlacement = {
-  title?: string;
-  name?: string;
-  tabId?: string;
-  size?: "sm" | "md" | "lg" | "xl" | "full";
-  after?: string;
-};
-
-type BoardPinWidgetInput = BoardPinPlacement & { docId: string };
-type BoardPinMcpAppInput = BoardPinPlacement & { viewId: string };
-
-function emptySnapshot(sessionKey: string): BoardSnapshot {
-  return { sessionKey, revision: 0, tabs: [], widgets: [] };
-}
-
-function boardWidgetTitle(title: string | undefined): string | undefined {
-  const normalized = title?.trim() ?? "";
-  return normalized ? Array.from(normalized).slice(0, 80).join("") : undefined;
-}
 
 function mockSnapshot(sessionKey: string): BoardSnapshot {
   return {
@@ -113,7 +94,7 @@ class NullProvider implements BoardProvider {
   readonly events: BoardEventStream<BoardCommandEvent> = new EventStream<BoardCommandEvent>();
 
   constructor(readonly sessionKey = "") {
-    this.snapshot$ = new ValueSignal(emptySnapshot(sessionKey));
+    this.snapshot$ = new ValueSignal(emptyBoardSnapshot(sessionKey));
   }
 
   async applyOps(_ops: BoardOp[]): Promise<void> {}
@@ -185,7 +166,7 @@ class MockBoardProvider implements BoardProvider {
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
     const snapshot = this.snapshotSignal.value;
     const name = input.name ?? canvasWidgetNameForDocument(input.docId);
-    const title = boardWidgetTitle(input.title);
+    const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
       ? snapshot.tabs
@@ -219,7 +200,7 @@ class MockBoardProvider implements BoardProvider {
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
     const snapshot = this.snapshotSignal.value;
     const name = input.name ?? mcpAppWidgetNameForViewId(input.viewId);
-    const title = boardWidgetTitle(input.title);
+    const title = normalizeBoardWidgetTitle(input.title);
     const tabId = input.tabId ?? snapshot.tabs[0]?.tabId ?? "main";
     const tabs = snapshot.tabs.length
       ? snapshot.tabs
@@ -274,6 +255,105 @@ class MockBoardProvider implements BoardProvider {
 
   emitCommand(command: BoardCommand): void {
     this.eventStream.emit({ sessionKey: this.sessionKey, command });
+  }
+}
+
+type BoardProviderCapabilities = Pick<
+  BoardProvider,
+  "canPinWidgets" | "canPinMcpApps" | "canMutate" | "canGrant"
+>;
+
+// Snapshots and gateway subscriptions are session-owned, but authority belongs
+// to each live consumer; sharing it would let another dashboard widen an action.
+class ScopedGatewayBoardProvider implements BoardProvider {
+  readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
+  readonly events: BoardEventStream<BoardCommandEvent>;
+  private active = true;
+
+  constructor(
+    private readonly transport: GatewayBoardProvider,
+    private capabilities: BoardProviderCapabilities,
+  ) {
+    this.snapshot$ = transport.snapshot$;
+    this.events = transport.events;
+  }
+
+  get sessionKey(): string {
+    return this.transport.sessionKey;
+  }
+
+  get canPinWidgets(): boolean {
+    return this.active && this.capabilities.canPinWidgets;
+  }
+
+  get canPinMcpApps(): boolean {
+    return this.active && this.capabilities.canPinMcpApps;
+  }
+
+  get canMutate(): boolean {
+    return this.active && this.capabilities.canMutate;
+  }
+
+  get canGrant(): boolean {
+    return this.active && this.capabilities.canGrant;
+  }
+
+  get hasLoadedSnapshot(): boolean {
+    return this.transport.hasLoadedSnapshot;
+  }
+
+  updateCapabilities(capabilities: BoardProviderCapabilities): void {
+    if (this.active) {
+      this.capabilities = capabilities;
+    }
+  }
+
+  deactivate(): void {
+    this.active = false;
+  }
+
+  async applyOps(ops: BoardOp[]): Promise<void> {
+    if (!this.canMutate) {
+      throw new Error("Session dashboard mutation unavailable");
+    }
+    await this.transport.applyOps(ops);
+  }
+
+  async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
+    if (!this.canGrant) {
+      throw new Error("Session dashboard approval unavailable");
+    }
+    await this.transport.grant(name, decision);
+  }
+
+  async pinWidget(input: BoardPinWidgetInput): Promise<void> {
+    if (!this.canMutate || !this.canPinWidgets) {
+      throw new Error("Session dashboard widget pinning unavailable");
+    }
+    await this.transport.pinWidget(input);
+  }
+
+  async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
+    if (!this.canMutate || !this.canPinMcpApps) {
+      throw new Error("Session dashboard MCP App pinning unavailable");
+    }
+    await this.transport.pinMcpApp(input);
+  }
+
+  widgetFrameUrl(name: string, revision: number): string {
+    return this.transport.widgetFrameUrl(name, revision);
+  }
+
+  refreshWidgetFrame(name: string): Promise<void> {
+    return this.transport.refreshWidgetFrame(name);
+  }
+
+  widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return this.transport.widgetAppView(name, revision);
+  }
+
+  refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
+    return this.transport.refreshWidgetAppView(name, revision);
   }
 }
 
@@ -351,14 +431,7 @@ export function boardProviderForSession(
       entry = { provider, consumers: 0 };
       gatewayProviders.set(key, entry);
     } else {
-      entry.provider.attachClient(
-        client,
-        connected,
-        canPinWidgets,
-        canPinMcpApps,
-        canMutate,
-        canGrant,
-      );
+      entry.provider.attachClient(client, connected);
     }
     return entry.provider;
   }
@@ -376,6 +449,11 @@ export function boardProviderForSession(
 
 export type BoardProviderLease = {
   provider: BoardProvider;
+  update: (
+    client: BoardGatewayClient,
+    connected: boolean,
+    capabilities: BoardProviderCapabilities,
+  ) => void;
   release: () => void;
 };
 
@@ -401,19 +479,33 @@ export function acquireBoardProviderForSession(
   );
   const entry = gatewayProviders.get(key);
   if (!entry || entry.provider !== provider) {
-    return { provider, release: () => undefined };
+    return { provider, update: () => undefined, release: () => undefined };
   }
+  const scopedProvider = new ScopedGatewayBoardProvider(entry.provider, {
+    canPinWidgets,
+    canPinMcpApps,
+    canMutate,
+    canGrant,
+  });
   entry.consumers += 1;
   let released = false;
   return {
-    provider,
+    provider: scopedProvider,
+    update: (nextClient, nextConnected, capabilities) => {
+      if (released || gatewayProviders.get(key)?.provider !== entry.provider) {
+        return;
+      }
+      scopedProvider.updateCapabilities(capabilities);
+      entry.provider.attachClient(nextClient, nextConnected);
+    },
     release: () => {
       if (released) {
         return;
       }
       released = true;
+      scopedProvider.deactivate();
       const current = gatewayProviders.get(key);
-      if (!current || current.provider !== provider) {
+      if (!current || current.provider !== entry.provider) {
         return;
       }
       current.consumers -= 1;
@@ -427,6 +519,13 @@ export function acquireBoardProviderForSession(
       current.provider.dispose();
     },
   };
+}
+
+export function hasLoadedBoardSnapshot(provider: BoardProvider): boolean {
+  if (provider instanceof GatewayBoardProvider || provider instanceof ScopedGatewayBoardProvider) {
+    return provider.hasLoadedSnapshot;
+  }
+  return true;
 }
 
 export function recordSessionBoardAvailability(sessionKey: string, available: boolean): boolean {

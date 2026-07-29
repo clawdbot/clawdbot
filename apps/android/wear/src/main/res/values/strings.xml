@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">OpenClaw</string>
     <string name="chat">Chat</string>
     <string name="session">Session</string>
@@ -12,10 +12,13 @@
     <string name="dictate">Dictate</string>
     <string name="live">Live</string>
     <string name="thread">Thread</string>
+    <!-- The serialized native-locale refresh owns translations for source-only changes. -->
+    <string name="open_thread" tools:ignore="MissingTranslation">Open thread</string>
     <string name="swipe_between_voice_modes">← Swipe →</string>
     <string name="hold">Hold</string>
     <string name="tap">Tap</string>
     <string name="double_tap">Double tap</string>
+    <string name="show_new_messages" tools:ignore="MissingTranslation">Show new messages</string>
     <string name="no_live_conversation">Start Live to see the conversation here.</string>
     <string name="new_messages">New</string>
     <string name="type">Type</string>

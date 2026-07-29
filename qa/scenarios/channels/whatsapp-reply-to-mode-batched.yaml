@@ -6,7 +6,6 @@ scenario:
     primary:
       - whatsapp.outbound-text-sends
   execution:
-    profiles: { "whatsapp:mock-default": 9 }
     kind: flow
     channel: whatsapp
     timeoutMs: 90000
