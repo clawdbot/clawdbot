@@ -119,6 +119,8 @@ async function resolveActiveRecallForRun(
       activeRecallRuns.delete(runId);
     }
   });
+  // Fulfilled results remain stable through agent_end, including `failed`;
+  // rerunning them would recreate the redundant same-turn recalls this registry prevents.
   return await entry.promise;
 }
 

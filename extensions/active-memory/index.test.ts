@@ -963,7 +963,7 @@ describe("active-memory plugin", () => {
     releaseCleanup();
     await expect(rejectedReplacement).rejects.toThrow("retry deadline expired");
 
-    const freshResult = { status: "failed" as const, elapsedMs: 2, summary: null };
+    const freshResult = { status: "ok" as const, elapsedMs: 2, summary: "recovered" };
     let freshStarts = 0;
     await expect(
       resolveActiveRecallForRun("run-rejected-replacement", async () => {
