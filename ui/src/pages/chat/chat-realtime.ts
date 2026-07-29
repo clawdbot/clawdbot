@@ -56,7 +56,7 @@ export function createInitialChatRealtimeState() {
   };
 }
 
-export function resetChatRealtimeConversation(state: ChatRealtimeState) {
+function resetChatRealtimeConversation(state: ChatRealtimeState) {
   state.realtimeTalkConversationState = createRealtimeTalkConversationState();
   state.realtimeTalkConversation = [];
 }
