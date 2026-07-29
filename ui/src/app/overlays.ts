@@ -42,6 +42,7 @@ import {
 import {
   isPendingUpdateHandoffSentinel,
   readUpdateAvailable,
+  requestUpdateRestartStatus,
   resolvePendingUpdateHandoffTimeoutBanner,
   resolvePostRestartUpdateBanner,
   resolveUpdateStatusBanner,
@@ -52,7 +53,6 @@ import {
   UPDATE_RESTART_VERIFICATION_POLL_MS,
   UPDATE_RESTART_VERIFICATION_TIMEOUT_MS,
   type ApplicationStatusBanner,
-  type UpdateRestartStatusResponse,
   type UpdateRunResponse,
 } from "./update-overlay-helpers.ts";
 
@@ -263,6 +263,7 @@ export function createApplicationOverlays(
       return;
     }
     const expectedVersion = reconciliation.expected?.trim() || null;
+    const startsAsHandoff = reconciliation.kind === "handoff";
     const isCurrentVerification = () =>
       generation === updateVerificationGeneration &&
       epoch === connectedEpoch &&
@@ -272,20 +273,10 @@ export function createApplicationOverlays(
       gateway.snapshot.phase === "connected";
     let deadline =
       Date.now() +
-      (reconciliation.kind === "handoff"
-        ? UPDATE_HANDOFF_TIMEOUT_MS
-        : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
-    let pollMs =
-      reconciliation.kind === "handoff"
-        ? UPDATE_HANDOFF_POLL_MS
-        : UPDATE_RESTART_VERIFICATION_POLL_MS;
+      (startsAsHandoff ? UPDATE_HANDOFF_TIMEOUT_MS : UPDATE_RESTART_VERIFICATION_TIMEOUT_MS);
+    let pollMs = startsAsHandoff ? UPDATE_HANDOFF_POLL_MS : UPDATE_RESTART_VERIFICATION_POLL_MS;
     while (isCurrentVerification() && Date.now() < deadline) {
-      let response: UpdateRestartStatusResponse | null;
-      try {
-        response = await client.request<UpdateRestartStatusResponse>("update.status", {});
-      } catch {
-        response = null;
-      }
+      const response = await requestUpdateRestartStatus(client, Math.max(0, deadline - Date.now()));
       if (!isCurrentVerification()) {
         return;
       }
@@ -302,7 +293,11 @@ export function createApplicationOverlays(
           pollMs = UPDATE_HANDOFF_POLL_MS;
           publish();
         }
-        if (!(await waitForUpdateVerification(pollMs, generation))) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          break;
+        }
+        if (!(await waitForUpdateVerification(Math.min(pollMs, remainingMs), generation))) {
           return;
         }
         continue;
@@ -332,7 +327,11 @@ export function createApplicationOverlays(
         );
         return;
       }
-      if (!(await waitForUpdateVerification(pollMs, generation))) {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        break;
+      }
+      if (!(await waitForUpdateVerification(Math.min(pollMs, remainingMs), generation))) {
         return;
       }
     }

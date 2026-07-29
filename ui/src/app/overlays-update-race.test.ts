@@ -28,6 +28,10 @@ function installUpdateTranslations() {
   });
 }
 
+function expectUpdateStatusRequested(request: ReturnType<typeof vi.fn<RequestFn>>) {
+  expect(request).toHaveBeenCalledWith("update.status", {}, { timeoutMs: expect.any(Number) });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -85,7 +89,7 @@ describe("application update reconciliation races", () => {
       harness.update({ phase: "connected" });
       await flushMicrotasks();
 
-      expect(request).toHaveBeenCalledWith("update.status", {});
+      expectUpdateStatusRequested(request);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
       expect(overlays.snapshot.updateStatusBanner).toEqual({
         tone: "danger",
@@ -163,6 +167,53 @@ describe("application update reconciliation races", () => {
     }
   });
 
+  it("times out a hung update status request at the reconciliation deadline", async () => {
+    vi.useFakeTimers();
+    installUpdateTranslations();
+    const updateRun = deferred();
+    const request = vi.fn<RequestFn>((method, _params, options) => {
+      if (method === "update.run") {
+        return updateRun.promise;
+      }
+      if (method === "update.status") {
+        return new Promise((_resolve, reject) => {
+          globalThis.setTimeout(
+            () => reject(new Error("request timed out")),
+            options?.timeoutMs ?? 0,
+          );
+        });
+      }
+      return Promise.resolve([]);
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    try {
+      const running = overlays.runUpdate();
+      await flushMicrotasks();
+      harness.update({ phase: "stopped" });
+      harness.update({ phase: "connected" });
+      await flushMicrotasks();
+
+      expect(request).toHaveBeenCalledWith("update.status", {}, { timeoutMs: 10_000 });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushMicrotasks();
+
+      expect(overlays.snapshot.updateReconciliationPending).toBe(false);
+      expect(overlays.snapshot.updateStatusBanner).toEqual({
+        tone: "danger",
+        text: UNKNOWN_OUTCOME_TEXT,
+      });
+
+      updateRun.resolve({});
+      await running;
+    } finally {
+      updateRun.resolve({});
+      overlays.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("releases ambiguous reconciliation when update status access is revoked", async () => {
     installUpdateTranslations();
     const updateRun = deferred();
@@ -192,7 +243,7 @@ describe("application update reconciliation races", () => {
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
-      expect(request).toHaveBeenCalledWith("update.status", {});
+      expectUpdateStatusRequested(request);
 
       harness.update({
         hello: {
@@ -268,12 +319,12 @@ describe("application update reconciliation races", () => {
       harness.update({ phase: "stopped" });
       harness.update({ phase: "connected" });
       await flushMicrotasks();
-      expect(firstRequest).toHaveBeenCalledWith("update.status", {});
+      expectUpdateStatusRequested(firstRequest);
 
       harness.update({ phase: "stopped" });
       harness.update({ client: client(replacementRequest), phase: "connected" });
       await flushMicrotasks();
-      expect(replacementRequest).toHaveBeenCalledWith("update.status", {});
+      expectUpdateStatusRequested(replacementRequest);
       expect(overlays.snapshot.updateReconciliationPending).toBe(false);
 
       retiredStatus.resolve({

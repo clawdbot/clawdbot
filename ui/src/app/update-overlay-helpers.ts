@@ -1,4 +1,4 @@
-import type { GatewayHelloOk } from "../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 
@@ -56,6 +56,17 @@ export type UpdateRunResponse = {
   handoff?: { status?: string };
   restart?: { coalesced?: boolean } | null;
 };
+
+export async function requestUpdateRestartStatus(
+  client: Pick<GatewayBrowserClient, "request">,
+  timeoutMs: number,
+): Promise<UpdateRestartStatusResponse | null> {
+  try {
+    return await client.request<UpdateRestartStatusResponse>("update.status", {}, { timeoutMs });
+  } catch {
+    return null;
+  }
+}
 
 export function readUpdateAvailable(hello: GatewayHelloOk | null): UpdateAvailable | null {
   const snapshot = hello?.snapshot;
