@@ -132,6 +132,7 @@ Skills own workflows; root owns hard policy and routing. Product direction and m
 - Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
 - Model-context budget: every injected prompt/tool-schema/context item is bounded with a hard cap; no unbounded items. New model-visible text that can cross ~1K tokens is a P0 review flag needing explicit justification. Context builds incrementally; only compaction rewrites history.
 - Tool/prompt descriptions never statically name tools from other toolsets/plugins; gating turns the reference into hallucination bait. Needed cross-references are injected at definition-build time from what is actually available. Descriptions state capability, not implementation; no marketing words.
+- Guidance the model must apply in full (skills, playbooks, prompt instructions) is served whole: no offset/limit or windowed-read parameters on those tools. Given a window, the model treats the first window as the whole document.
 - Prompt-state mutations (skills/tools/memory) default to deferred cache invalidation — effect next session; immediate invalidation is an explicit opt-in.
 - Agent tool schema cleanup: remove stale args cleanly; no hidden compat for model-facing params just to avoid churn.
 
