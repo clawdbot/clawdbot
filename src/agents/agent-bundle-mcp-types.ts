@@ -56,6 +56,7 @@ export type McpCatalogTool = {
   fallbackDescription: string;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  deniedBySession?: true;
 };
 
 /** Complete tool catalog for a session-scoped MCP runtime. */
@@ -64,6 +65,8 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  /** Listed tools hidden only by the session override, retained for read-only inventory. */
+  sessionDeniedTools?: McpCatalogTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
 };
 

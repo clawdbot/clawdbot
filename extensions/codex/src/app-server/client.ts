@@ -929,9 +929,13 @@ export class CodexAppServerClient {
 
   private handleNotification(notification: CodexServerNotification): void {
     for (const handler of this.notificationHandlers) {
-      Promise.resolve(handler(notification)).catch((error: unknown) => {
+      try {
+        Promise.resolve(handler(notification)).catch((error: unknown) => {
+          embeddedAgentLog.warn("codex app-server notification handler failed", { error });
+        });
+      } catch (error) {
         embeddedAgentLog.warn("codex app-server notification handler failed", { error });
-      });
+      }
     }
   }
 

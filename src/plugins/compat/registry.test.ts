@@ -166,6 +166,19 @@ describe("plugin compatibility registry", () => {
     );
   });
 
+  it("tracks the context-engine legacy host-param default through its two-week window", () => {
+    const record = listPluginCompatRecords().find(
+      (candidate) => candidate.code === "context-engine-legacy-host-param-default",
+    );
+
+    expect(record).toMatchObject({
+      status: "deprecated",
+      deprecated: "2026-07-29",
+      warningStarts: "2026-07-29",
+      removeAfter: "2026-08-12",
+    });
+  });
+
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
     expect(deprecatedTargetParserOffenders).toEqual([]);
   });
