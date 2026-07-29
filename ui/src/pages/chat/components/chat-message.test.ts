@@ -4,7 +4,6 @@ import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as markdown from "../../../components/markdown.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { setUiTimeFormatPreference } from "../../../lib/format.ts";
 import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar.ts";
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
@@ -606,7 +605,6 @@ afterEach(() => {
     element.remove();
   });
   clearDeleteConfirmSkip();
-  setUiTimeFormatPreference("auto");
   setAvatarGatewayOrigin(null);
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -1507,25 +1505,26 @@ describe("grouped chat rendering", () => {
     );
   });
 
-  it.each([
-    { preference: "12" as const, expected: /AM|PM/i },
-    { preference: "24" as const, expected: /^(?!.*(?:AM|PM))/i },
-  ])(
-    "honors the $preference-hour clock preference in timestamp tooltips",
-    ({ preference, expected }) => {
-      setUiTimeFormatPreference(preference);
-      const container = document.createElement("div");
-      renderAssistantMessage(container, {
-        role: "assistant",
-        content: "Done",
-        timestamp: Date.UTC(2026, 0, 15, 19, 30),
-      });
+  it("uses the browser locale for timestamp tooltips", () => {
+    const timestamp = Date.UTC(2026, 0, 15, 19, 30);
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: "Done",
+      timestamp,
+    });
 
-      expect(container.querySelector("openclaw-tooltip")?.getAttribute("content")).toMatch(
-        expected,
-      );
-    },
-  );
+    expect(container.querySelector("openclaw-tooltip")?.getAttribute("content")).toBe(
+      new Date(timestamp).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
+      }),
+    );
+  });
 
   it("omits streaming bubble class for completed stream segments", () => {
     const container = document.createElement("div");
