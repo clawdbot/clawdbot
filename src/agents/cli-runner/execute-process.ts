@@ -167,12 +167,15 @@ export async function executeCliProcess(params: {
     ? createCliJsonlStreamingParser({
         backend: params.backend,
         providerId: context.backendResolved.id,
+        parseJsonlEvent: context.backendResolved.parseJsonlEvent,
         onAssistantDelta: params.events.emitCliAssistantDelta,
         onThinkingDelta: params.events.emitCliThinkingDelta,
         onThinkingProgress: params.events.emitCliThinkingProgress,
         onPlanUpdate: params.events.emitCliPlanUpdate,
         onToolUseStart: params.events.emitParsedToolUseStart,
         onToolResult: params.events.emitParsedToolResult,
+        onDisplayToolUseStart: params.events.emitCliDisplayToolUseStart,
+        onDisplayToolResult: params.events.emitCliDisplayToolResult,
         onCommentaryText:
           params.events.emitLiveEvents && runParams.emitCommentaryText
             ? params.events.emitCliCommentaryText

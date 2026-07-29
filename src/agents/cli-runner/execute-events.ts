@@ -126,6 +126,50 @@ export function createCliEventHandlers(params: {
       });
     }
   };
+  // Plugin-parsed events describe native work already performed by the backend.
+  // Render and summarize them without host-tool correlation or delivery evidence.
+  const emitCliDisplayToolUseStart = (event: CliToolUseStartDelta) => {
+    observedCliActivity = true;
+    recordToolStart(event);
+    if (!signaledToolExecutionStarted) {
+      signaledToolExecutionStarted = true;
+      runParams.onExecutionPhase?.({
+        phase: "tool_execution_started",
+        provider: runParams.provider,
+        model: context.modelId,
+        backend: context.backendResolved.id,
+      });
+    }
+    if (emitLiveEvents) {
+      emitAgentEvent({
+        runId: runParams.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: event.name,
+          toolCallId: event.toolCallId,
+          args: sanitizeToolArgs(event.args),
+        },
+      });
+    }
+  };
+  const emitCliDisplayToolResult = (event: CliToolResult) => {
+    observedCliActivity = true;
+    recordToolResult(event);
+    if (emitLiveEvents) {
+      emitAgentEvent({
+        runId: runParams.runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: event.name,
+          toolCallId: event.toolCallId,
+          isError: event.isError,
+          result: sanitizeToolResult(event.result),
+        },
+      });
+    }
+  };
   const emitParsedToolUseStart = (event: CliToolUseStartDelta) => {
     const startedAt = Date.now();
     activeParsedTools.set(event.toolCallId, {
@@ -332,6 +376,8 @@ export function createCliEventHandlers(params: {
     emitLiveEvents,
     emitCliToolUseStart,
     emitCliToolResult,
+    emitCliDisplayToolUseStart,
+    emitCliDisplayToolResult,
     emitParsedToolUseStart,
     emitParsedToolResult,
     finalizeParsedTools,
