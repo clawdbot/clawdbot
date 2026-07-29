@@ -8,14 +8,30 @@ const buildMatrixQaConfig = vi.hoisted(() =>
 vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
 vi.mock("./scenario-runtime-room.js", () => ({ runMatrixQaCanary: vi.fn() }));
 
-import { createMatrixQaScenarioEnvironment } from "./scenario-environment.js";
+import {
+  createMatrixQaScenarioEnvironment,
+  resetMatrixQaScenarioObserverState,
+} from "./scenario-environment.js";
 
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("matrix scenario environment", () => {
-  it("waits for config restart settle before accepting Matrix readiness", async () => {
+  it("drops actor sync cursors and observers at a scenario boundary", () => {
+    const syncState = { driver: "s1", observer: "s2" };
+    const syncStreams = {
+      driver: { prime: vi.fn() },
+      observer: { prime: vi.fn() },
+    };
+
+    resetMatrixQaScenarioObserverState({ syncState, syncStreams: syncStreams as never });
+
+    expect(syncState).toEqual({});
+    expect(syncStreams).toEqual({});
+  });
+
+  it("waits for the changed Matrix account to restart before accepting readiness", async () => {
     vi.useFakeTimers();
     const callOrder: string[] = [];
     let configReadCount = 0;
@@ -45,7 +61,6 @@ describe("matrix scenario environment", () => {
           return {
             hash: "patched-config-hash",
             ok: true,
-            sentinel: { payload: { stats: { requiresRestart: true } } },
           };
         }
         if (method === "channels.status") {

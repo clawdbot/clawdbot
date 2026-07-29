@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements Matrix live transport adapter behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildQaTarget } from "openclaw/plugin-sdk/qa-channel-protocol";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -10,7 +11,11 @@ import { createMatrixQaClient, provisionMatrixQaRoom } from "./substrate/client.
 import { buildMatrixQaConfig } from "./substrate/config.js";
 import type { MatrixQaObservedEvent } from "./substrate/events.js";
 import { startMatrixQaHarness } from "./substrate/harness.runtime.js";
-import { createMatrixQaRoomObserver } from "./substrate/sync.js";
+import {
+  createMatrixQaRoomObserver,
+  type MatrixQaRoomEventWaitResult,
+  type MatrixQaRoomObserver,
+} from "./substrate/sync.js";
 import {
   mergeMatrixQaTopologySpecs,
   resolveMatrixQaRoomObserverRole,
@@ -53,6 +58,38 @@ const MATRIX_SHARED_FLOW_TOPOLOGY = {
     },
   ],
 } satisfies MatrixQaTopologySpec;
+
+const MATRIX_EXPECTED_INTERRUPTION_RETRY_MS = 250;
+
+export async function waitForMatrixQaObserverEvent(params: {
+  isExpectedInterruption: () => boolean;
+  observer: MatrixQaRoomObserver;
+  predicate: (event: MatrixQaObservedEvent) => boolean;
+  roomId: string;
+  sleepImpl?: (ms: number) => Promise<unknown>;
+  timeoutMs: number;
+}): Promise<MatrixQaRoomEventWaitResult> {
+  const sleepImpl = params.sleepImpl ?? sleep;
+  for (;;) {
+    const expectedInterruptionAtStart = params.isExpectedInterruption();
+    try {
+      return await params.observer.waitForOptionalRoomEvent({
+        predicate: params.predicate,
+        roomId: params.roomId,
+        timeoutMs: params.timeoutMs,
+      });
+    } catch (error) {
+      // The homeserver restart scenario owns this narrow recovery window. Retain
+      // ownership for a poll started during the outage even if readiness closes
+      // the flag before that request rejects. The observer clears its failed
+      // pollPromise in finally, so the same cursor can safely retry.
+      if (!expectedInterruptionAtStart && !params.isExpectedInterruption()) {
+        throw error;
+      }
+      await sleepImpl(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
+    }
+  }
+}
 
 function readMatrixQaScenarioTopology(scenarioId: string): MatrixQaTopologySpec | undefined {
   const value = readQaScenarioExecutionConfig(scenarioId)?.matrixTopology;
@@ -203,9 +240,13 @@ export async function createMatrixQaTransportAdapter(
   );
   const nativeEventIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
+  let expectedTransportInterruption = false;
   const scenarioEnvironment = createMatrixQaScenarioEnvironment({
     accountId,
     harness,
+    onTransportInterruptionStateChange: (active) => {
+      expectedTransportInterruption = active;
+    },
     observedEvents,
     provisioning,
   });
@@ -215,7 +256,9 @@ export async function createMatrixQaTransportAdapter(
         if (stopped) {
           return;
         }
-        const observed = await observer.waitForOptionalRoomEvent({
+        const observed = await waitForMatrixQaObserverEvent({
+          isExpectedInterruption: () => expectedTransportInterruption,
+          observer,
           predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
           roomId,
           timeoutMs: 1_000,
