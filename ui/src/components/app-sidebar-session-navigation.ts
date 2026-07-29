@@ -68,7 +68,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     getConnected: () => this.connected,
     getRows: () => this.visibleSessionPullRequestRows(),
     getSelectedAgentId: () => this.selectedAgentIdForSessions(),
-    getSnapshot: () => this.context?.gateway.snapshot,
+    getGateway: () => this.context?.gateway,
   });
 
   protected readonly compareSidebarSessionRows = (

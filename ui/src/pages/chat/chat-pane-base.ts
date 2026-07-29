@@ -66,10 +66,9 @@ import type { ChatSessionScrollPosition } from "./scroll.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 
 export abstract class ChatPaneBase extends OpenClawLightDomElement {
-  // One lifecycle-owned minute tick refreshes both relative labels and external PR state.
+  // Relative labels still need a minute tick; external PR state is server-pushed.
   readonly minutePoll = new PollController(this, 60_000, () => {
     this.requestUpdate();
-    void this.refreshSessionPullRequests();
   });
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ChatPageContext;
@@ -285,7 +284,6 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   protected sessionPullRequests: ControlUiSessionPullRequest[] = [];
   protected sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
   protected sessionPullRequestsRateLimited = false;
-  protected sessionPullRequestsRequestVersion = 0;
   protected sessionPullRequestsExpanded = false;
   protected dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
   protected readonly dismissedWorkspaceConflictRefs = new Map<string, string>();

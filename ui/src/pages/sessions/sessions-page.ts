@@ -24,6 +24,11 @@ import { openEditor } from "../../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import {
+  scopedSessionPullRequestKey,
+  SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+  sessionPullRequestsForGateway,
+} from "../../lib/session-pull-requests.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   DEFAULT_SESSION_LIST_QUERY,
@@ -1156,6 +1161,9 @@ class SessionsPage extends OpenClawLightDomElement {
   }
 
   private closeSessionMenu() {
+    if (this.context) {
+      sessionPullRequestsForGateway(this.context.gateway).unwatch(this);
+    }
     this.sessionMenu = null;
     this.sessionMenuTrigger = null;
     this.sessionMenuWorkVersion += 1;
@@ -1174,15 +1182,21 @@ class SessionsPage extends OpenClawLightDomElement {
       this.sessionMenuWork = { loading: false, pullRequestUrl: null, worktreePath: null };
       return;
     }
+    const store = sessionPullRequestsForGateway(scope.context.gateway);
+    const pullRequestKey = scopedSessionPullRequestKey(
+      row.key,
+      this.sessionAgentId(row.key, scope.context),
+    );
     void fetchSessionMenuWork({
       client: scope.client,
       pullRequestsAvailable:
         isGatewayMethodAdvertised(
           scope.context.gateway.snapshot,
-          "controlUi.sessionPullRequests",
+          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         ) === true,
       sessionKey: row.key,
       agentId: this.sessionAgentId(row.key, scope.context),
+      loadPullRequests: () => store.load(this, pullRequestKey),
       worktreeId: row.worktree.id,
     }).then((work) => {
       if (version === this.sessionMenuWorkVersion) {
