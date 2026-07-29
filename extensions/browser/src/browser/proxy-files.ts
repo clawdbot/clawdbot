@@ -17,8 +17,9 @@ import { saveMediaBuffer } from "../media/store.js";
 function decodeBrowserProxyFileBase64(file: BrowserProxyFile, totalBytes: number): Buffer {
   const estimatedBytes = estimateBase64DecodedBytes(file.base64);
   assertBrowserProxyFileBytesWithinLimits(estimatedBytes, totalBytes + estimatedBytes);
-  const canonicalBase64 = canonicalizeBase64(file.base64);
-  if (!canonicalBase64) {
+  // The shared validator rejects empty input, but zero-byte downloads are valid files.
+  const canonicalBase64 = file.base64 === "" ? "" : canonicalizeBase64(file.base64);
+  if (canonicalBase64 === undefined) {
     throw new Error("browser proxy file contains malformed base64 data");
   }
   const buffer = Buffer.from(canonicalBase64, "base64");
