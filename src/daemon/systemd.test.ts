@@ -95,6 +95,7 @@ import {
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
+  isSystemUnitActiveAndEnabled,
   uninstallUserSystemdGatewayUnit,
 } from "./systemd.js";
 
@@ -657,7 +658,9 @@ describe("system-scope gateway unit detection (openclaw#87577)", () => {
     expect(warning).toContain("/etc/systemd/system/openclaw-gateway.service");
     expect(warning).toContain("18789");
     expect(warning).toContain("openclaw doctor --fix");
-    expect(warning).toContain("systemctl --user disable --now");
+    // The unguarded startup path must not hand out a destructive command.
+    expect(warning).not.toContain("rm ");
+    expect(warning).not.toContain("disable --now");
   });
 
   it("formatDuelingScopesWarning returns null for single-scope installs", () => {
@@ -2332,6 +2335,69 @@ describe("systemd service install and uninstall", () => {
   });
 });
 
+describe("isSystemUnitActiveAndEnabled", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+  });
+
+  it("returns true only when the system unit is both running and boot-enabled", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["is-active", "--quiet", GATEWAY_SERVICE]);
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        expect(args).toEqual(["is-enabled", GATEWAY_SERVICE]);
+        cb(null, "enabled\n", "");
+      });
+    await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(true);
+  });
+
+  it("returns false for an enabled unit that is not running", async () => {
+    // Deleting the user unit here would leave no gateway until the next boot.
+    execFileMock.mockImplementationOnce((_cmd, _args, _opts, cb) => {
+      cb(createExecFileError("inactive", { code: 3 }), "", "");
+    });
+    await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false for a running unit that is not enabled at boot", async () => {
+    // Deleting the user unit here would leave no gateway after a reboot.
+    execFileMock
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+        cb(createExecFileError("disabled", { code: 1 }), "", "");
+      });
+    await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
+  });
+
+  it("returns false when systemctl is unavailable", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) =>
+      cb(createExecFileError("spawn systemctl ENOENT", { code: "ENOENT" }), "", ""),
+    );
+    await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
+  });
+
+  // systemctl(1) Table 3: these all exit 0 but none survive a reboot as an
+  // enabled unit, so none may authorize deleting the user-scope unit.
+  it.each(["enabled-runtime", "static", "indirect", "generated", "alias", "transient"])(
+    "returns false for the non-persistent is-enabled state %s",
+    async (state) => {
+      execFileMock
+        .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+          cb(null, "", "");
+        })
+        .mockImplementationOnce((_cmd, _args, _opts, cb) => {
+          cb(null, `${state}\n`, "");
+        });
+      await expect(isSystemUnitActiveAndEnabled({}, GATEWAY_SERVICE)).resolves.toBe(false);
+    },
+  );
+});
+
 describe("uninstallUserSystemdGatewayUnit", () => {
   async function withUserUnitFixture(
     run: (context: { env: Record<string, string>; unitPath: string }) => Promise<void>,
@@ -2364,12 +2430,18 @@ describe("uninstallUserSystemdGatewayUnit", () => {
         .mockImplementationOnce((_cmd, args, _opts, cb) => {
           assertUserSystemctlArgs(args, "disable", "--now", GATEWAY_SERVICE);
           cb(null, "", "");
+        })
+        // A deleted unit stays loaded until the manager reloads.
+        .mockImplementationOnce((_cmd, args, _opts, cb) => {
+          assertUserSystemctlArgs(args, "daemon-reload");
+          cb(null, "", "");
         });
 
       const { write, stdout } = createWritableStreamMock();
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
       expect(result.removed).toBe(true);
+      expect(result.disabled).toBe(true);
       expect(result.unitName).toBe(GATEWAY_SERVICE);
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(requireFirstWrite(write)).toContain("Removed user-scope systemd service");
@@ -2407,9 +2479,12 @@ describe("uninstallUserSystemdGatewayUnit", () => {
       const result = await uninstallUserSystemdGatewayUnit({ env, stdout });
 
       expect(result.removed).toBe(true);
+      // File-only removal cannot evict a loaded unit, so callers must not treat
+      // this as a resolved conflict.
+      expect(result.disabled).toBe(false);
       await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
       const writes = write.mock.calls.map((call) => String(call[0])).join("");
-      expect(writes).toContain("systemctl unavailable; removed unit file only");
+      expect(writes).toContain("systemctl unavailable; removing unit file only");
     });
   });
 });

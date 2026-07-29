@@ -51,9 +51,13 @@ const mocks = vi.hoisted(() => ({
   readWindowsStartupFallbackRuntimeForUpdate: vi.fn(),
   runExec: vi.fn(),
   findSystemdGatewayInstallation: vi.fn().mockResolvedValue({ kind: "none" }),
-  uninstallUserSystemdGatewayUnit: vi
-    .fn()
-    .mockResolvedValue({ unitName: "openclaw-gateway.service", unitPath: "", removed: true }),
+  isSystemUnitActiveAndEnabled: vi.fn().mockResolvedValue(false),
+  uninstallUserSystemdGatewayUnit: vi.fn().mockResolvedValue({
+    unitName: "openclaw-gateway.service",
+    unitPath: "",
+    removed: true,
+    disabled: true,
+  }),
   note: vi.fn(),
 }));
 
@@ -113,6 +117,7 @@ vi.mock("../daemon/systemd.js", () => ({
   isSystemdUnitActive: mocks.isSystemdUnitActive,
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
   findSystemdGatewayInstallation: mocks.findSystemdGatewayInstallation,
+  isSystemUnitActiveAndEnabled: mocks.isSystemUnitActiveAndEnabled,
   uninstallUserSystemdGatewayUnit: mocks.uninstallUserSystemdGatewayUnit,
 }));
 
@@ -2140,10 +2145,12 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
   it("removes the user-scope unit and keeps the system unit when confirmed", async () => {
     mockProcessPlatform("linux");
     mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
       unitName: "openclaw-gateway.service",
       unitPath: duelingInstallation.user.unitPath,
       removed: true,
+      disabled: true,
     });
     const runtime = makeDoctorIo();
     const prompter = makeDoctorPrompts();
@@ -2159,6 +2166,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
   it("emits cleanup hints and does not remove anything when declined", async () => {
     mockProcessPlatform("linux");
     mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     mocks.renderGatewayServiceCleanupHints.mockReturnValue([
       "systemctl --user disable --now openclaw-gateway.service",
       "rm ~/.config/systemd/user/openclaw-gateway.service",
@@ -2176,6 +2184,7 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
     mockProcessPlatform("linux");
     process.env.OPENCLAW_SERVICE_REPAIR_POLICY = "external";
     mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
     const prompter = makeDoctorPrompts();
 
     await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
@@ -2186,6 +2195,54 @@ describe("maybeResolveDuelingSystemdGatewayScopes", () => {
       EXTERNAL_SERVICE_REPAIR_NOTE,
       "Gateway cleanup skipped",
     );
+  });
+
+  it("keeps the user unit when the system unit is enabled but not running", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(false);
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("not both running and enabled at boot"),
+      "Gateway cleanup needs an owner decision",
+    );
+  });
+
+  it("tells the operator to stop the unit when systemctl could not disable it", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockResolvedValue(true);
+    mocks.uninstallUserSystemdGatewayUnit.mockResolvedValue({
+      unitName: "openclaw-gateway.service",
+      unitPath: duelingInstallation.user.unitPath,
+      removed: true,
+      disabled: false,
+    });
+    const runtime = makeDoctorIo();
+
+    await maybeResolveDuelingSystemdGatewayScopes(runtime, makeDoctorPrompts());
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("systemctl --user disable --now openclaw-gateway.service"),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("sole gateway manager"));
+  });
+
+  it("fails closed when the system unit ownership probe errors", async () => {
+    mockProcessPlatform("linux");
+    mocks.findSystemdGatewayInstallation.mockResolvedValue(duelingInstallation);
+    mocks.isSystemUnitActiveAndEnabled.mockRejectedValue(new Error("systemctl wedged"));
+    const prompter = makeDoctorPrompts();
+
+    await maybeResolveDuelingSystemdGatewayScopes(makeDoctorIo(), prompter);
+
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.uninstallUserSystemdGatewayUnit).not.toHaveBeenCalled();
   });
 
   it("does nothing for a single-scope (user-only) install", async () => {

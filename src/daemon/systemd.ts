@@ -152,7 +152,7 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
  * upgrade restart cascade in issue #79375: two supervisors bind the same
  * port and SIGTERM each other forever.
  */
-export type SystemdGatewayInstallation =
+type SystemdGatewayInstallation =
   | { kind: "none" }
   | { kind: "user"; user: InstalledSystemdGatewayScope }
   | { kind: "system"; system: InstalledSystemdGatewayScope }
@@ -252,6 +252,32 @@ export async function findInstalledSystemdGatewayScope(
 }
 
 /**
+ * True only when the system-scope unit is running now AND persistently enabled
+ * at boot. Doctor's dueling repair deletes the user unit behind this probe, so
+ * both halves are required: an enabled-but-failed unit would leave no gateway
+ * until the next boot, and an active-but-unenabled unit would leave none after
+ * it. Uncheckable (systemctl missing/erroring) reads as false so the repair
+ * fails closed to hints rather than removing a working user-scope gateway.
+ */
+export async function isSystemUnitActiveAndEnabled(
+  env: GatewayServiceEnv,
+  unitName: string,
+): Promise<boolean> {
+  if (!(await isSystemdUnitActive(env, unitName, "system"))) {
+    return false;
+  }
+  const res = await execSystemctl(["is-enabled", unitName], env);
+  if (res.code !== 0) {
+    return false;
+  }
+  // `is-enabled` also exits 0 for enabled-runtime, alias, static, indirect,
+  // generated, and transient (systemctl(1) Table 3). Only a plain `enabled`
+  // symlink survives a reboot, so anything else must not authorize deleting
+  // the user unit.
+  return normalizeLowercaseStringOrEmpty(res.stdout) === "enabled";
+}
+
+/**
  * Builds the operator-facing warning for a `dueling` installation, or null for
  * any other state. Pure (no I/O) so the startup guard's messaging is unit
  * testable without faking the whole service-mode boot path.
@@ -264,11 +290,13 @@ export function formatDuelingScopesWarning(
     return null;
   }
   const { user, system } = installation;
+  // Deliberately no copy-paste removal command: this formatter has no ownership
+  // evidence, and blindly deleting the user unit can remove the only working
+  // gateway. `doctor --fix` decides that behind the active+enabled probe.
   return (
     `detected BOTH a user-scope (${user.unitPath}) and a system-scope (${system.unitPath}) ` +
     `gateway unit bound to port ${port}; they will SIGTERM each other in a restart loop. ` +
-    `Run \`openclaw doctor --fix\` to remove the redundant user-scope unit, or run: ` +
-    `systemctl --user disable --now ${user.unitName} && rm ${user.unitPath}`
+    `Run \`openclaw doctor --fix\` to resolve which unit should own this gateway.`
   );
 }
 
@@ -1659,10 +1687,16 @@ export async function uninstallLegacySystemdUnits({
   return units;
 }
 
-export type UninstallUserSystemdGatewayUnitResult = {
+type UninstallUserSystemdGatewayUnitResult = {
   unitName: string;
   unitPath: string;
   removed: boolean;
+  /**
+   * False when systemctl could not disable/stop the unit. Deleting the unit
+   * file alone does not evict an already-loaded unit, so callers must not
+   * claim the conflict is resolved on a file-only removal.
+   */
+  disabled: boolean;
 };
 
 /**
@@ -1677,10 +1711,14 @@ export async function uninstallUserSystemdGatewayUnit({
 }: GatewayServiceManageArgs): Promise<UninstallUserSystemdGatewayUnitResult> {
   const unitName = `${resolveSystemdServiceName(env)}.service`;
   const unitPath = resolveSystemdUnitPath(env);
+  let disabled = false;
   if (await isSystemctlAvailable(env)) {
     await execSystemctlUser(env, ["disable", "--now", unitName]);
+    disabled = true;
   } else {
-    stdout.write(`systemctl unavailable; removed unit file only: ${unitName}\n`);
+    stdout.write(
+      `systemctl unavailable; removing unit file only: ${unitName}. A loaded unit keeps running until systemd reloads.\n`,
+    );
   }
   let removed = false;
   try {
@@ -1693,6 +1731,11 @@ export async function uninstallUserSystemdGatewayUnit({
     }
     stdout.write(`User-scope systemd unit not found at ${unitPath}\n`);
   }
-  return { unitName, unitPath, removed };
+  // The manager keeps a deleted unit's definition loaded until it reloads, so
+  // without this the unit stays startable while the detector reports it gone.
+  if (removed && disabled) {
+    await execSystemctlUser(env, ["daemon-reload"]);
+  }
+  return { unitName, unitPath, removed, disabled };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

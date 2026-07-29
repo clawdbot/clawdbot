@@ -32,6 +32,7 @@ import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { resolveGatewayService, type GatewayServiceCommandConfig } from "../daemon/service.js";
 import {
   findSystemdGatewayInstallation,
+  isSystemUnitActiveAndEnabled,
   isSystemdUnitActive,
   uninstallLegacySystemdUnits,
   uninstallUserSystemdGatewayUnit,
@@ -1053,10 +1054,38 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
       `- user:   ${user.unitPath}`,
       `- system: ${system.unitPath}`,
       "They bind the same port and will SIGTERM each other in a restart loop.",
-      "The system-scope unit required root to install and is treated as authoritative;",
-      "the user-scope unit is the redundant upgrade leftover.",
     ].join("\n"),
     "Dueling gateway services detected",
+  );
+
+  // Ownership guard: delete the user unit only when the system unit is the
+  // live or boot-configured supervisor. A staged/disabled/failed/uncheckable
+  // system unit file with a working user gateway must fail closed to hints,
+  // or doctor would take down the operator's only running gateway.
+  const systemOwnsGateway = await isSystemUnitActiveAndEnabled(process.env, system.unitName).catch(
+    () => false,
+  );
+  if (!systemOwnsGateway) {
+    note(
+      [
+        "The system-scope unit is not both running and enabled at boot, so the",
+        "user-scope unit may be your working gateway. Not removing anything",
+        "automatically.",
+        "If the system-scope unit is the one you want, activate it and re-run doctor:",
+        `- sudo systemctl enable --now ${system.unitName}`,
+        "If the user-scope unit is the one you want, remove the system unit:",
+        `- sudo systemctl disable --now ${system.unitName} && sudo rm ${system.unitPath}`,
+      ].join("\n"),
+      "Gateway cleanup needs an owner decision",
+    );
+    return;
+  }
+  note(
+    [
+      "The system-scope unit is the active or boot-enabled supervisor and is",
+      "treated as authoritative; the user-scope unit is the redundant leftover.",
+    ].join("\n"),
+    "System-scope unit owns the gateway",
   );
 
   const policy = resolveServiceRepairPolicy();
@@ -1092,8 +1121,12 @@ export async function maybeResolveDuelingSystemdGatewayScopes(
         : `User-scope unit already absent at ${result.unitPath}.`,
       "Redundant user gateway removed",
     );
+    // Only claim the conflict is resolved when systemd actually released the
+    // unit; a file-only removal can leave the loaded unit running.
     runtime.log(
-      "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager.",
+      result.disabled
+        ? "Removed the redundant user-scope gateway unit. The system-scope unit is now the sole gateway manager."
+        : `Removed the user-scope unit file, but systemctl was unavailable to stop it. Run: systemctl --user disable --now ${result.unitName} && systemctl --user daemon-reload`,
     );
   } catch (err) {
     runtime.error(`Failed to remove redundant user-scope gateway unit: ${String(err)}`);
