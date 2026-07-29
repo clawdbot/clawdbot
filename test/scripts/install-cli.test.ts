@@ -51,14 +51,13 @@ describe("install-cli.sh", () => {
       ensure_git() { :; }
       ensure_pnpm() { :; }
       ensure_pnpm_binary_for_scripts() { :; }
-      fail() { return 23; }
       git() {
         [[ "$1" == "-C" ]] && return 1
         return 99
       }
 
       set +e
-      install_openclaw_from_git "$repo"
+      (install_openclaw_from_git "$repo")
       status="$?"
       set -e
       [[ "$status" -eq 1 ]]

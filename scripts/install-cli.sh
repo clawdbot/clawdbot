@@ -1189,7 +1189,6 @@ install_openclaw_from_git() {
   if [[ -d "$repo_dir/.git" ]] &&
     ! git -C "$repo_dir" rev-parse --verify --quiet HEAD >/dev/null 2>&1; then
     fail "Git checkout has no commit: ${repo_dir}. Move or remove this incomplete checkout, then retry."
-    return 1
   fi
 
   if [[ -d "$repo_dir/.git" ]]; then
