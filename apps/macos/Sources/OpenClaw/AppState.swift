@@ -30,7 +30,6 @@ enum ExecApprovalsPolicyLoadState: Equatable {
 final class AppState {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "app-state")
     private static let execApprovalsReadRetryAttempts = 5
-    private static let execApprovalsReadUnavailableMessage = "Exec approvals unavailable. Retry to refresh."
 
     private let isPreview: Bool
     @ObservationIgnored private let execApprovalsDefaultsAsyncResolver:
@@ -966,7 +965,7 @@ extension AppState {
     private func performExecApprovalModeReadAttempts(maxAttempts: Int, generation: Int) async {
         guard self.execApprovalsReadGeneration == generation else { return }
         guard maxAttempts > 0 else {
-            self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+            self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
             return
         }
         self.execApprovalPolicyLoadState = .loading
@@ -986,12 +985,16 @@ extension AppState {
                 self.syncExecApprovalMode(
                     ExecApprovalQuickMode.from(security: defaults.security, ask: defaults.ask))
                 return
-            case .failure:
+            case let .failure(.migrationRequired(error)):
+                self.execApprovalPolicyLoadState = .unavailable(
+                    ExecApprovalsReadError.migrationRequired(error).message)
+                return
+            case .failure(.unavailable):
                 continue
             }
         }
         guard self.execApprovalsReadGeneration == generation else { return }
-        self.execApprovalPolicyLoadState = .unavailable(Self.execApprovalsReadUnavailableMessage)
+        self.execApprovalPolicyLoadState = .unavailable(ExecApprovalsReadError.unavailable.message)
     }
 
     private func scheduleExecApprovalModeReadRetry() {

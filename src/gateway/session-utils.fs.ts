@@ -1,7 +1,6 @@
 // Filesystem session history readers.
 // Parses transcript JSONL files for messages, previews, counts, and usage metadata.
 import fs from "node:fs";
-import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   resolveIntegerOption,
@@ -16,6 +15,7 @@ import {
 } from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
+import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -40,52 +40,6 @@ import {
   readNonBlankStringPreservingWhitespace,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
-
-const transcriptMessageCountCache = new Map<
-  string,
-  {
-    mtimeMs: number;
-    size: number;
-    count: number;
-  }
->();
-const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
-const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
-
-function getCachedTranscriptMessageCount(filePath: string, stat: fs.Stats): number | null {
-  const cached = transcriptMessageCountCache.get(filePath);
-  if (!cached) {
-    return null;
-  }
-  if (cached.mtimeMs !== stat.mtimeMs || cached.size !== stat.size) {
-    transcriptMessageCountCache.delete(filePath);
-    return null;
-  }
-  transcriptMessageCountCache.delete(filePath);
-  transcriptMessageCountCache.set(filePath, cached);
-  return cached.count;
-}
-
-function setCachedTranscriptMessageCount(filePath: string, stat: fs.Stats, count: number): void {
-  transcriptMessageCountCache.set(filePath, {
-    mtimeMs: stat.mtimeMs,
-    size: stat.size,
-    count,
-  });
-  while (transcriptMessageCountCache.size > MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES) {
-    const oldestKey = transcriptMessageCountCache.keys().next().value;
-    if (typeof oldestKey !== "string" || !oldestKey) {
-      break;
-    }
-    transcriptMessageCountCache.delete(oldestKey);
-  }
-}
-
-async function yieldTranscriptScan(): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
 
 /** Attach OpenClaw metadata to a transcript message without dropping existing metadata. */
 export function attachOpenClawTranscriptMeta(
@@ -344,37 +298,6 @@ function parseRecentTranscriptTailSnapshot(
   };
 }
 
-async function visitTranscriptLinesAsync(
-  filePath: string,
-  visit: (line: string) => void,
-): Promise<void> {
-  const handle = await fs.promises.open(filePath, "r");
-  try {
-    const decoder = new StringDecoder("utf8");
-    const buffer = Buffer.allocUnsafe(TRANSCRIPT_ASYNC_READ_CHUNK_BYTES);
-    let carry = "";
-    while (true) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead <= 0) {
-        break;
-      }
-      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
-      const lines = text.split(/\r?\n/);
-      carry = lines.pop() ?? "";
-      for (const line of lines) {
-        visit(line);
-      }
-      await yieldTranscriptScan();
-    }
-    const tail = carry + decoder.end();
-    if (tail) {
-      visit(tail);
-    }
-  } finally {
-    await handle.close();
-  }
-}
-
 export async function readSessionMessagesAsync(
   sessionId: string,
   storePath: string | undefined,
@@ -555,7 +478,8 @@ export async function readRecentSessionMessagesWithStatsAsync(
     findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId) !== filePath
       ? "reset-archive"
       : "active";
-  const totalMessages = await readSessionMessageCountFromPathAsync(filePath);
+  // The canonical index already caches and deduplicates scans by path, mtime, and size.
+  const totalMessages = (await readSessionTranscriptIndex(filePath))?.entries.length ?? 0;
   const snapshot = await readRecentSessionSnapshotFromPathAsync(
     filePath,
     normalizeRecentSessionReadOptions(opts),
@@ -745,25 +669,6 @@ export async function resolveSessionHistoryTranscriptPathAsync(
   return opts?.allowResetArchiveFallback === true
     ? findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, opts.agentId)
     : findExistingTranscriptPath(sessionId, storePath, sessionFile, opts?.agentId);
-}
-
-async function readSessionMessageCountFromPathAsync(filePath: string): Promise<number> {
-  let stat: fs.Stats | null = null;
-  try {
-    stat = await fs.promises.stat(filePath);
-    const cached = getCachedTranscriptMessageCount(filePath, stat);
-    if (typeof cached === "number") {
-      return cached;
-    }
-  } catch {
-    // Count from the transcript index below when stat metadata is unavailable.
-  }
-  const index = await readSessionTranscriptIndex(filePath);
-  const count = index?.entries.length ?? 0;
-  if (stat) {
-    setCachedTranscriptMessageCount(filePath, stat, count);
-  }
-  return count;
 }
 
 export type SessionTranscriptUsageSnapshot = {
@@ -1085,11 +990,9 @@ export async function readLatestSessionUsageFromTranscriptAsync(
       return null;
     }
     const lines: string[] = [];
-    await visitTranscriptLinesAsync(filePath, (line) => {
-      if (line.trim()) {
-        lines.push(line);
-      }
-    });
+    for await (const line of streamSessionTranscriptLines(filePath)) {
+      lines.push(line);
+    }
     return extractAggregateUsageFromTranscriptLines(lines);
   } catch {
     return null;

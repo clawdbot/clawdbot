@@ -1,5 +1,6 @@
 import type { ConfigUiHints } from "../../api/types.ts";
 import { settingsSearchTextMatches, type SettingsSearchBlock } from "../../app-navigation.ts";
+import { pathForMemoryTab } from "../../app-route-paths.ts";
 import { SECTION_META } from "../../components/config-form.meta.ts";
 import {
   matchesConfigSectionSearch,
@@ -69,10 +70,10 @@ function memoryDestination(params: {
   hints: ConfigUiHints;
   query: string;
   editorHash: string;
-}): { search: string; hash: string } {
+}): { hash: string } {
   const properties = params.schema.properties;
   if (!properties) {
-    return { search: "", hash: params.editorHash };
+    return { hash: params.editorHash };
   }
   const sliceMatches = (keys: readonly string[]) => {
     const sliced = Object.fromEntries(
@@ -96,9 +97,9 @@ function memoryDestination(params: {
   // memoryVisibleSchemaKeys drops `backend` when no engine renders the curated
   // row, so a match here always has the anchor on the page to scroll to.
   if (onlySliceMatches(MEMORY_CURATED_SCHEMA_KEYS)) {
-    return { search: "&tab=settings", hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
+    return { hash: `#${MEMORY_BACKEND_ANCHOR_ID}` };
   }
-  return { search: "&tab=settings", hash: params.editorHash };
+  return { hash: params.editorHash };
 }
 
 export function findSettingsSearchBlocks(params: {
@@ -107,6 +108,7 @@ export function findSettingsSearchBlocks(params: {
   value: Record<string, unknown> | null;
   uiHints: ConfigUiHints;
   identityAvailable?: boolean;
+  basePath?: string;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
     return [];
@@ -170,12 +172,21 @@ export function findSettingsSearchBlocks(params: {
             editorHash,
           })
         : { search: "", hash: editorHash };
-    matches.push({
-      routeId,
-      label: meta?.label ?? sectionSchema.title ?? key,
-      search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}${destination.search}`,
-      hash: destination.hash,
-    });
+    matches.push(
+      routeId === "memory"
+        ? {
+            routeId,
+            label: meta?.label ?? sectionSchema.title ?? key,
+            pathname: pathForMemoryTab("settings", params.basePath),
+            hash: destination.hash,
+          }
+        : {
+            routeId,
+            label: meta?.label ?? sectionSchema.title ?? key,
+            search: `?section=${encodedKey}${matchesAdvanced ? "&advanced=1" : ""}`,
+            hash: destination.hash,
+          },
+    );
   }
   return matches;
 }

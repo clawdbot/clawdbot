@@ -41,29 +41,62 @@ const SYSTEMD_REFERENCE_ONLY_KEYS = new Set([
   "wants",
 ]);
 
+function quotePosixCleanupArgument(value: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 export function renderGatewayServiceCleanupHints(
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  services: readonly ExtraGatewayService[] = [],
 ): string[] {
-  const profile = env.OPENCLAW_PROFILE;
-  switch (process.platform) {
-    case "darwin": {
-      const label = resolveGatewayLaunchAgentLabel(profile);
-      return [`launchctl bootout gui/$UID/${label}`, `rm ~/Library/LaunchAgents/${label}.plist`];
+  const hints: string[] = [];
+
+  for (const service of services) {
+    switch (service.platform) {
+      case "darwin": {
+        const plistPath = service.detail.startsWith("plist:")
+          ? service.detail.slice("plist:".length).trim()
+          : undefined;
+        // Global LaunchAgents still run in a GUI domain; only LaunchDaemons
+        // belong to the system domain regardless of their shared file scope.
+        const domain =
+          service.scope === "system" && plistPath?.startsWith("/Library/LaunchDaemons/")
+            ? "system"
+            : "gui/$UID";
+        const launchctlCommand = domain === "system" ? "sudo launchctl" : "launchctl";
+        hints.push(
+          `${launchctlCommand} bootout ${domain}/${quotePosixCleanupArgument(service.label)}`,
+        );
+        if (plistPath) {
+          const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
+          hints.push(`${removeCommand} ${quotePosixCleanupArgument(plistPath)}`);
+        }
+        break;
+      }
+      case "linux": {
+        const systemctlCommand = service.scope === "user" ? "systemctl --user" : "sudo systemctl";
+        hints.push(
+          `${systemctlCommand} disable --now -- ${quotePosixCleanupArgument(service.label)}`,
+        );
+        if (service.detail.startsWith("unit:")) {
+          const unitPath = service.detail.slice("unit:".length).trim();
+          if (unitPath) {
+            const removeCommand = service.scope === "system" ? "sudo rm" : "rm";
+            hints.push(`${removeCommand} ${quotePosixCleanupArgument(unitPath)}`);
+          }
+        }
+        break;
+      }
+      case "win32":
+        // The hint can be pasted into cmd.exe or PowerShell, so exclude names
+        // that either shell can expand rather than guessing a common escape.
+        if (/^[A-Za-z0-9_. ()\\/-]+$/.test(service.label)) {
+          hints.push(`schtasks /Delete /TN "${service.label}" /F`);
+        }
+        break;
     }
-    case "linux": {
-      const unit = resolveGatewaySystemdServiceName(profile);
-      return [
-        `systemctl --user disable --now ${unit}.service`,
-        `rm ~/.config/systemd/user/${unit}.service`,
-      ];
-    }
-    case "win32": {
-      const task = resolveGatewayWindowsTaskName(profile);
-      return [`schtasks /Delete /TN "${task}" /F`];
-    }
-    default:
-      return [];
   }
+
+  return hints;
 }
 
 type Marker = (typeof EXTRA_MARKERS)[number];

@@ -3,7 +3,9 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
+import { VERSION } from "../version.js";
 import {
   loadConfig,
   notifyGatewayPluginMetadataChanged,
@@ -1187,6 +1189,28 @@ describe("plugins cli update", () => {
     expect(updateParams.syncOfficialPluginInstalls).toBe(true);
     expect(updateParams.officialPluginUpdateChannel).toBe("beta");
     expect(updateParams.updateChannel).toBeUndefined();
+  });
+
+  it("infers the official catalog channel from the installed core for update --all", async () => {
+    const config = createTrackedPluginConfig({
+      pluginId: "codex",
+      spec: "@openclaw/codex",
+      resolvedName: "@openclaw/codex",
+    });
+    loadConfig.mockReturnValue(config);
+    setInstalledPluginIndexInstallRecords(config.plugins?.installs ?? {});
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config,
+      changed: false,
+      outcomes: [],
+    });
+
+    await runPluginsCommand(["plugins", "update", "--all"]);
+
+    const updateParams = expectSingleCallParams(updateNpmInstalledPlugins);
+    expect(updateParams.officialPluginUpdateChannel).toBe(
+      resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+    );
   });
 
   it("passes extended-stable channel and installed core version to update --all", async () => {

@@ -469,6 +469,7 @@ export function createMemorySearchTool(options: {
   sandboxed?: boolean;
   oneShotCliRun?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
+  activeProjectKeys?: readonly string[];
   acquireLocalService?: MemoryCoreAcquireLocalService;
   withLease?: PluginStateLeaseRunner;
 }) {
@@ -662,6 +663,9 @@ export function createMemorySearchTool(options: {
                     minScore,
                     sessionKey: options.agentSessionKey,
                     qmdSearchModeOverride,
+                    activeProjectKeys: options.activeProjectKeys
+                      ? [...options.activeProjectKeys]
+                      : undefined,
                     signal,
                     onDebug: (debug: MemorySearchRuntimeDebug) => {
                       runtimeDebug.push(debug);

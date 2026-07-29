@@ -67,7 +67,10 @@ function repairDoctorAgentMemorySchemas(
   const warnings: string[] = [];
   let registered: ReturnType<typeof listOpenClawRegisteredAgentDatabases>;
   try {
-    registered = listOpenClawRegisteredAgentDatabases({ env });
+    registered = listOpenClawRegisteredAgentDatabases({
+      env,
+      includeIncompatibleSchemaVersions: true,
+    });
   } catch (error) {
     return {
       repaired,

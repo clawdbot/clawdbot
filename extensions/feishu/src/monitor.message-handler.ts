@@ -83,8 +83,9 @@ function parseFeishuMessageEventPayload(value: unknown): FeishuMessageEvent | nu
   const chatId = readString(message.chat_id);
   const chatType = normalizeFeishuChatType(message.chat_type);
   const messageType = readString(message.message_type);
-  const content = readString(message.content);
-  if (!messageId || !chatId || !chatType || !messageType || !content) {
+  // Feishu can deliver a legitimately empty message body; keep absent or
+  // non-string bodies malformed instead of inventing fallback content.
+  if (!messageId || !chatId || !chatType || !messageType || typeof message.content !== "string") {
     return null;
   }
   return value as FeishuMessageEvent;

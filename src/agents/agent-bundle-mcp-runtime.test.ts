@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
@@ -71,6 +72,7 @@ async function writeListToolsMcpServer(params: {
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
+  callToolResult?: CallToolResult;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
   resourceListJsonRpcError?: boolean;
@@ -108,6 +110,7 @@ const tools = ${JSON.stringify(
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
+const callToolResult = ${JSON.stringify(params.callToolResult)};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
@@ -236,7 +239,9 @@ function handle(message) {
       id: message.id,
       result: {
         isError: callToolIsError,
-        content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+        ...(callToolResult ?? {
+          content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+        }),
       },
     });
   }
@@ -1182,6 +1187,67 @@ describe("session MCP runtime", () => {
       expect((await fs.readFile(retryLogPath, "utf8")).match(/recv tools\/list/g)).toHaveLength(2);
     } finally {
       nowSpy.mockRestore();
+      await runtime.dispose();
+    }
+  });
+
+  it("preserves non-text structured MCP results through a real stdio server", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-structured-content-");
+    const serverPath = path.join(tempDir, "structured-content.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const structuredContent = { description: "captured screenshot" };
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolResult: {
+        content: [
+          { type: "text", text: "captured screenshot" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+          {
+            type: "resource_link",
+            uri: "https://example.com/report",
+            name: "report",
+            title: "Report",
+          },
+          { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+          { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+        ],
+        structuredContent,
+      },
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-structured-content",
+      sessionKey: "agent:test:session-structured-content",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            capture: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      const result = await expectDefined(
+        materialized.tools[0],
+        "materialized MCP tool test invariant",
+      ).execute("call-structured-content", {}, undefined, undefined);
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+        },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        { type: "text", text: "[Report] https://example.com/report" },
+        { type: "text", text: "memo body" },
+        { type: "text", text: "[audio audio/mpeg]" },
+      ]);
+      await waitForFileText(logPath, "recv tools/call", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
       await runtime.dispose();
     }
   });

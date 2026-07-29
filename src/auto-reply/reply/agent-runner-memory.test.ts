@@ -2664,7 +2664,117 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.sessionFile).toContain("large-session.jsonl");
   });
 
-  it("skips OpenClaw maintenance when model policy routes a SQLite session to native-compacting claude-cli", async () => {
+  it("byte-guards a Codex runtime session through SQLite semantic compaction", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-byte-guard.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "x".repeat(256) }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeGreaterThan(10);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 10,
+      totalTokensFresh: true,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: "10b" },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      agentCfgContextTokens: 1_000_000,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry?.compactionCount).toBe(1);
+    expect(replyOperation.setPhase).toHaveBeenCalledWith("preflight_compacting");
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      agentHarnessId: "openclaw",
+      deferOwningContextEngineCompaction: false,
+      preflightCompactionTrigger: "transcript_bytes",
+      preflightRequired: true,
+      sessionId: "session",
+      sessionKey,
+      trigger: "budget",
+    });
+  });
+
+  it("leaves an under-limit SQLite Codex session to native token compaction", async () => {
+    const storePath = path.join(rootDir, "sqlite-codex-under-byte-guard.json");
+    const sessionKey = "agent:main:main";
+    const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
+    await upsertSessionEntry(scope, { sessionId: "session", updatedAt: 10 });
+    await replaceSqliteTranscriptEvents(scope, [
+      { message: { role: "user", content: "small" }, type: "message" },
+    ]);
+    expect(readTranscriptStatsSync(scope).sizeBytes).toBeLessThan(10 * 1024);
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
+      compactionCount: 0,
+      agentRuntimeOverride: "codex",
+      agentHarnessId: "openclaw",
+    };
+    const replyOperation = createReplyOperation();
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: { maxActiveTranscriptBytes: "10kb" },
+          },
+        },
+      },
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey,
+      }),
+      defaultModel: "gpt-5.5",
+      agentCfgContextTokens: 350_000,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      isHeartbeat: false,
+      replyOperation,
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(replyOperation.setPhase).not.toHaveBeenCalled();
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
+    expect(incrementCompactionCountMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps ownsNativeCompaction absolute over the SQLite transcript byte guard", async () => {
     registerClaudeCliBackend(true);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

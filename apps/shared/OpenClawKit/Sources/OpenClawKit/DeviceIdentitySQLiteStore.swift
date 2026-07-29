@@ -372,9 +372,81 @@ enum DeviceIdentitySQLiteStore {
                     "Device identity Doctor import is pending; run openclaw doctor --fix before starting the app")
             }
             if self.pathMayExist(nativeClaimURL) {
-                guard !self.pathMayExist(source.identityURL) else {
-                    throw DeviceIdentityStore.storageError(
-                        "Legacy device identity source and interrupted native claim both exist")
+                if self.pathMayExist(source.identityURL) {
+                    guard
+                        let sourceFile = try? self.readLegacyIdentity(
+                            source.identityURL,
+                            beneath: source.stateDirURL),
+                        let claimFile = try? self.readLegacyIdentity(
+                            nativeClaimURL,
+                            beneath: source.stateDirURL),
+                        sourceFile.material.identity.publicKey == claimFile.material.identity.publicKey,
+                        sourceFile.material.identity.privateKey == claimFile.material.identity.privateKey
+                    else {
+                        throw DeviceIdentityStore.storageError(
+                            "Legacy device identity source and interrupted native claim both exist")
+                    }
+                    // The acquired .stale-* identity stays parked: no online deletion point is race-free without
+                    // coupling it to the SQLite commit. One file in this pathological state beats a data-loss
+                    // window, and operators or Doctor can sweep it later.
+                    let quarantineURL = self.claimURL(
+                        nativeClaimURL,
+                        suffix: ".stale-\(UUID().uuidString)")
+                    let acquireResult = nativeClaimURL.path.withCString { claimPath in
+                        quarantineURL.path.withCString { quarantinePath in
+                            renamex_np(claimPath, quarantinePath, UInt32(RENAME_EXCL))
+                        }
+                    }
+                    if acquireResult != 0 {
+                        let acquireError = errno
+                        if acquireError == ENOENT { continue }
+                        throw DeviceIdentityStore.storageError(
+                            "Could not acquire stale native identity claim: " +
+                                String(cString: strerror(acquireError)))
+                    }
+
+                    /// RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
+                    func restoreOrParkQuarantine() {
+                        _ = quarantineURL.path.withCString { quarantinePath in
+                            nativeClaimURL.path.withCString { claimPath in
+                                renamex_np(quarantinePath, claimPath, UInt32(RENAME_EXCL))
+                            }
+                        }
+                    }
+                    // Validate the acquired bytes before any continue path: only a claim that
+                    // still parses and matches may be parked while startup proceeds.
+                    guard
+                        let acquiredClaim = try? self.readLegacyIdentity(
+                            quarantineURL,
+                            beneath: source.stateDirURL)
+                    else {
+                        restoreOrParkQuarantine()
+                        throw DeviceIdentityStore.storageError(
+                            "Legacy device identity source and interrupted native claim both exist")
+                    }
+                    let currentSource = try? self.readLegacyIdentity(
+                        source.identityURL,
+                        beneath: source.stateDirURL)
+                    if currentSource == nil, !self.pathMayExist(source.identityURL) {
+                        // Source vanished: put the validated claim back so the normal
+                        // claim-without-source path can still import it next iteration.
+                        restoreOrParkQuarantine()
+                        continue
+                    }
+                    guard
+                        let currentSource,
+                        currentSource.material.identity.publicKey == acquiredClaim.material.identity.publicKey,
+                        currentSource.material.identity.privateKey == acquiredClaim.material.identity.privateKey
+                    else {
+                        restoreOrParkQuarantine()
+                        throw DeviceIdentityStore.storageError(
+                            "Legacy device identity source and interrupted native claim both exist")
+                    }
+                    // Rescue imports nothing: it only vacates a stale duplicate whose bytes stay
+                    // parked. A source rewritten after this point flows through the standard
+                    // atomic claim-then-import path, whose last-writer-wins semantics predate
+                    // this rescue; serializing the source here would add no guarantee it lacks.
+                    continue
                 }
                 ownsNativeClaim = true
                 break
@@ -403,28 +475,15 @@ enum DeviceIdentitySQLiteStore {
         }
 
         do {
-            let before = try self.legacyFileSnapshot(
+            let claimed = try self.readLegacyIdentity(
                 nativeClaimURL,
-                beneath: source.stateDirURL,
-                maximumBytes: self.maximumLegacyIdentityBytes)
-            let data = try Data(contentsOf: nativeClaimURL, options: [.mappedIfSafe])
-            guard data.count <= self.maximumLegacyIdentityBytes else {
-                throw DeviceIdentityStore.storageError("Legacy device identity exceeds the maximum supported size")
-            }
-            let after = try self.legacyFileSnapshot(
-                nativeClaimURL,
-                beneath: source.stateDirURL,
-                maximumBytes: self.maximumLegacyIdentityBytes)
-            guard before == after, UInt64(data.count) == before.size else {
-                throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
-            }
-            let material = try DeviceIdentityStore.material(fromLegacyData: data)
+                beneath: source.stateDirURL)
             return LegacyClaim(
                 source: source,
                 identityURL: nativeClaimURL,
-                data: data,
-                snapshot: before,
-                material: material)
+                data: claimed.data,
+                snapshot: claimed.snapshot,
+                material: claimed.material)
         } catch {
             do {
                 try self.restoreClaimedLegacyIdentity(
@@ -437,6 +496,29 @@ enum DeviceIdentitySQLiteStore {
             }
             throw error
         }
+    }
+
+    private static func readLegacyIdentity(
+        _ url: URL,
+        beneath stateDirURL: URL) throws
+        -> (data: Data, snapshot: LegacyFileSnapshot, material: DeviceIdentityMaterial)
+    {
+        let before = try self.legacyFileSnapshot(
+            url,
+            beneath: stateDirURL,
+            maximumBytes: self.maximumLegacyIdentityBytes)
+        let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+        guard data.count <= self.maximumLegacyIdentityBytes else {
+            throw DeviceIdentityStore.storageError("Legacy device identity exceeds the maximum supported size")
+        }
+        let after = try self.legacyFileSnapshot(
+            url,
+            beneath: stateDirURL,
+            maximumBytes: self.maximumLegacyIdentityBytes)
+        guard before == after, UInt64(data.count) == before.size else {
+            throw DeviceIdentityStore.storageError("Legacy device identity changed while being claimed")
+        }
+        return try (data, before, DeviceIdentityStore.material(fromLegacyData: data))
     }
 
     private static func claimURL(_ sourceURL: URL, suffix: String) -> URL {

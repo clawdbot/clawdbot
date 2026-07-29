@@ -44,6 +44,7 @@ function isStreamCancelledError(err: unknown): boolean {
  *   block message. We bypass the controller in that case.
  */
 export function createTeamsReplyStreamController(params: {
+  allowProviderPreview: boolean;
   conversationType?: string;
   context: MSTeamsTurnContext;
   feedbackLoopEnabled: boolean;
@@ -59,7 +60,9 @@ export function createTeamsReplyStreamController(params: {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
   const streamMode = resolveChannelPreviewStreamMode(params.msteamsConfig, "partial");
   const shouldUseNativeStream =
-    isPersonal && (streamMode === "partial" || streamMode === "progress");
+    params.allowProviderPreview &&
+    isPersonal &&
+    (streamMode === "partial" || streamMode === "progress");
   const shouldStreamPreviewToolProgress =
     streamMode === "progress" && resolveChannelStreamingPreviewToolProgress(params.msteamsConfig);
 

@@ -3398,9 +3398,9 @@ openclaw-chat-page {
 
 .slash-menu-args {
   font-size: 0.75rem;
+  /* Full-opacity --muted keeps slash-arg hints at WCAG AA on dark surfaces. */
   color: var(--muted);
   font-family: var(--mono);
-  opacity: 0.65;
 }
 
 .slash-menu-desc {
@@ -4041,6 +4041,7 @@ openclaw-chat-page {
   min-width: 0;
   padding: 8px;
   overflow-y: auto;
+  overscroll-behavior: none;
 }
 
 .chat-controls__provider-model-group {

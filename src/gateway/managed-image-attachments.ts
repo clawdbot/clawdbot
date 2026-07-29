@@ -1026,8 +1026,12 @@ export async function createManagedOutgoingImageBlocks(params: {
   for (const [index, mediaUrl] of mediaUrls.entries()) {
     const fallbackAlt = `Generated image ${index + 1}`;
     const parsedDataUrl = parseImageDataUrl(mediaUrl, fallbackAlt, limits);
+    const localMediaPath =
+      parsedDataUrl.kind === "image-data-url" ? undefined : resolveLocalMediaPath(mediaUrl);
     const alt =
-      parsedDataUrl.kind === "image-data-url" ? fallbackAlt : deriveAltText(mediaUrl, index);
+      parsedDataUrl.kind === "image-data-url"
+        ? fallbackAlt
+        : deriveAltText(localMediaPath ?? mediaUrl, index);
     if (parsedDataUrl.kind === "non-image-data-url") {
       continue;
     }
@@ -1048,7 +1052,6 @@ export async function createManagedOutgoingImageBlocks(params: {
               `generated-image-${index + 1}`,
             )
           : await (async () => {
-              const localMediaPath = resolveLocalMediaPath(mediaUrl);
               if (localMediaPath) {
                 const localRoots = params.localRoots;
                 const localMediaOptions =
@@ -1062,8 +1065,11 @@ export async function createManagedOutgoingImageBlocks(params: {
                       };
                 await assertLocalMediaAllowed(localMediaPath, localRoots, localMediaOptions);
               }
+              // File URLs have already been normalized for display metadata and policy checks.
+              // Pass that path to the store instead of treating URI syntax as a filename.
+              const ingestSource = localMediaPath ?? mediaUrl;
               return await saveMediaSource(
-                mediaUrl,
+                ingestSource,
                 undefined,
                 "outgoing/originals",
                 Math.max(limits.maxBytes, MEDIA_MAX_BYTES),

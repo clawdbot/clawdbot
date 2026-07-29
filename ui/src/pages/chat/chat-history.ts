@@ -85,13 +85,30 @@ const SYNTHETIC_TRANSCRIPT_REPAIR_RESULT =
   "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 const CHAT_HISTORY_REQUEST_LIMIT = 100;
 const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
-const chatHistoryRequestVersions = new WeakMap<object, number>();
-const chatBranchRequestVersions = new WeakMap<object, number>();
-const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
-const pendingSessionMessageSubscriptionReleases = new WeakMap<
-  object,
-  Set<SessionMessageSubscription>
->();
+
+type ChatHistoryPaneRequests = {
+  historyVersion: number;
+  branchVersion: number;
+  subscriptionGeneration: number;
+  pendingSubscriptionReleases: Set<SessionMessageSubscription>;
+  inFlightHistory?: InFlightChatHistoryRequest;
+};
+
+const chatHistoryPaneRequests = new WeakMap<object, ChatHistoryPaneRequests>();
+
+function getChatHistoryPaneRequests(owner: object): ChatHistoryPaneRequests {
+  let requests = chatHistoryPaneRequests.get(owner);
+  if (!requests) {
+    requests = {
+      historyVersion: 0,
+      branchVersion: 0,
+      subscriptionGeneration: 0,
+      pendingSubscriptionReleases: new Set(),
+    };
+    chatHistoryPaneRequests.set(owner, requests);
+  }
+  return requests;
+}
 
 type ChatHistoryRequestOwnership = {
   version: number;
@@ -108,11 +125,8 @@ function beginChatHistoryRequest(
   sessionKey: string,
   agentId?: string,
 ): ChatHistoryRequestOwnership {
-  const key = state as object;
-  const nextVersion = (chatHistoryRequestVersions.get(key) ?? 0) + 1;
-  chatHistoryRequestVersions.set(key, nextVersion);
   return {
-    version: nextVersion,
+    version: ++getChatHistoryPaneRequests(state).historyVersion,
     client,
     connectionEpoch,
     sessionKey,
@@ -122,7 +136,7 @@ function beginChatHistoryRequest(
 
 function ownsChatHistoryRequest(state: ChatState, ownership: ChatHistoryRequestOwnership): boolean {
   return (
-    chatHistoryRequestVersions.get(state as object) === ownership.version &&
+    getChatHistoryPaneRequests(state).historyVersion === ownership.version &&
     state.client === ownership.client &&
     state.connected &&
     state.connectionEpoch === ownership.connectionEpoch
@@ -142,11 +156,11 @@ function shouldApplyChatHistoryResult(
 }
 
 function resetChatHistoryProjection(state: ChatState, agentId?: string): void {
-  const owner = state as object;
+  const requests = getChatHistoryPaneRequests(state);
   // A destructive reset keeps the session key, so invalidate both the old
   // snapshot owner and its coalesced request before creating the next epoch.
-  chatHistoryRequestVersions.set(owner, (chatHistoryRequestVersions.get(owner) ?? 0) + 1);
-  inFlightChatHistoryRequests.delete(state);
+  requests.historyVersion += 1;
+  requests.inFlightHistory = undefined;
   state.chatLoading = false;
   const scope = readChatSessionProjectionScope(state, { agentId });
   // Destructive operations keep the public session key, so only an explicit
@@ -534,15 +548,6 @@ function resolveSelectedSessionMessageSubscriptionAgentId(
   return resolveSelectedGlobalAliasAgentId(state, key);
 }
 
-function beginSelectedSessionMessageSubscriptionSync(
-  state: ChatSessionMessageSubscriptionState,
-): number {
-  const key = state as object;
-  const next = (selectedSessionMessageSubscriptionGenerations.get(key) ?? 0) + 1;
-  selectedSessionMessageSubscriptionGenerations.set(key, next);
-  return next;
-}
-
 function isCurrentSelectedSessionMessageSubscriptionSync(
   state: ChatSessionMessageSubscriptionState,
   params: {
@@ -553,7 +558,7 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
   },
 ): boolean {
   return (
-    selectedSessionMessageSubscriptionGenerations.get(state as object) === params.generation &&
+    getChatHistoryPaneRequests(state).subscriptionGeneration === params.generation &&
     state.client === params.client &&
     state.connected &&
     state.sessionKey.trim() === params.requestedKey &&
@@ -562,22 +567,11 @@ function isCurrentSelectedSessionMessageSubscriptionSync(
   );
 }
 
-function rememberPendingSessionMessageSubscriptionRelease(
-  state: ChatSessionMessageSubscriptionState,
-  subscription: SessionMessageSubscription,
-): void {
-  const key = state as object;
-  const pending = pendingSessionMessageSubscriptionReleases.get(key) ?? new Set();
-  pending.add(subscription);
-  pendingSessionMessageSubscriptionReleases.set(key, pending);
-}
-
 async function retryPendingSessionMessageSubscriptionReleases(
   state: ChatSessionMessageSubscriptionState,
 ): Promise<void> {
-  const key = state as object;
-  const pending = pendingSessionMessageSubscriptionReleases.get(key);
-  if (!pending) {
+  const pending = getChatHistoryPaneRequests(state).pendingSubscriptionReleases;
+  if (pending.size === 0) {
     return;
   }
   await Promise.all(
@@ -590,9 +584,6 @@ async function retryPendingSessionMessageSubscriptionReleases(
       }
     }),
   );
-  if (pending.size === 0) {
-    pendingSessionMessageSubscriptionReleases.delete(key);
-  }
 }
 
 export async function syncSelectedSessionMessageSubscription(
@@ -608,7 +599,8 @@ export async function syncSelectedSessionMessageSubscription(
     return;
   }
   await retryPendingSessionMessageSubscriptionReleases(state);
-  const generation = beginSelectedSessionMessageSubscriptionSync(state);
+  const paneRequests = getChatHistoryPaneRequests(state);
+  const generation = ++paneRequests.subscriptionGeneration;
   const previousRequestedKey = normalizeSubscriptionKey(
     state.chatSessionMessageSubscriptionRequestedKey,
   );
@@ -666,13 +658,13 @@ export async function syncSelectedSessionMessageSubscription(
             if (previousSubscription) {
               // Both live handles stay owned: the replacement becomes active while the
               // failed previous release remains queued until a later sync releases it.
-              rememberPendingSessionMessageSubscriptionRelease(state, previousSubscription);
+              paneRequests.pendingSubscriptionReleases.add(previousSubscription);
             }
             state.chatSessionMessageSubscriptionRequestedKey = nextKey;
             state.chatSessionMessageSubscription = subscribeResult.value;
             state.sessionsError = `${String(unsubscribeResult.reason)}; replacement release failed: ${String(replacementReleaseError)}`;
           } else {
-            rememberPendingSessionMessageSubscriptionRelease(state, subscribeResult.value);
+            paneRequests.pendingSubscriptionReleases.add(subscribeResult.value);
           }
           return;
         }
@@ -704,7 +696,7 @@ export async function syncSelectedSessionMessageSubscription(
       } catch {
         // A rejected release still owns its live Gateway observer; retain the
         // exact handle so the next sync can complete the original unsubscribe.
-        rememberPendingSessionMessageSubscriptionRelease(state, subscribed);
+        paneRequests.pendingSubscriptionReleases.add(subscribed);
       }
       return;
     }
@@ -728,8 +720,6 @@ type LoadChatHistoryOptions = {
   deferBranches?: boolean;
   startup?: boolean;
 };
-
-const inFlightChatHistoryRequests = new WeakMap<ChatState, InFlightChatHistoryRequest>();
 
 type SharedChatHistoryRequest = {
   consumers: Set<SharedChatHistoryConsumer>;
@@ -1112,15 +1102,15 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     state.chatBranchesConnectionEpoch = state.connectionEpoch;
     return;
   }
-  const version = (chatBranchRequestVersions.get(state as object) ?? 0) + 1;
-  chatBranchRequestVersions.set(state as object, version);
+  const requests = getChatHistoryPaneRequests(state);
+  const version = ++requests.branchVersion;
   const connectionEpoch = state.connectionEpoch;
   const agentParams = scopedAgentParamsForSession(state, sessionKey);
   state.chatBranchesLoading = true;
   try {
     const branches = await sessions.listBranches(sessionKey, agentParams);
     if (
-      chatBranchRequestVersions.get(state as object) !== version ||
+      requests.branchVersion !== version ||
       state.client !== client ||
       !state.connected ||
       state.connectionEpoch !== connectionEpoch ||
@@ -1133,7 +1123,7 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
     state.chatBranchesConnectionEpoch = connectionEpoch;
   } catch {
     if (
-      chatBranchRequestVersions.get(state as object) === version &&
+      requests.branchVersion === version &&
       state.client === client &&
       state.connectionEpoch === connectionEpoch &&
       visibleSessionMatches(state, sessionKey, agentParams.agentId)
@@ -1143,7 +1133,7 @@ export async function loadChatBranches(state: ChatState): Promise<void> {
       state.chatBranchesConnectionEpoch = connectionEpoch;
     }
   } finally {
-    if (chatBranchRequestVersions.get(state as object) === version) {
+    if (requests.branchVersion === version) {
       state.chatBranchesLoading = false;
       state.requestUpdate?.();
     }
@@ -1167,7 +1157,8 @@ export async function loadChatHistory(
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const requestKey = `${connectionEpoch}\0${method}\0${sessionKey}\0${requestAgentId ?? ""}\0${CHAT_HISTORY_REQUEST_LIMIT}`;
-  const inFlight = inFlightChatHistoryRequests.get(state);
+  const requests = getChatHistoryPaneRequests(state);
+  const inFlight = requests.inFlightHistory;
   // Live events replace the rendered array while their snapshot is pending;
   // only stable session and connection ownership may start another request.
   if (
@@ -1192,16 +1183,16 @@ export async function loadChatHistory(
     requestAgentId,
     method,
   ).finally(() => {
-    if (inFlightChatHistoryRequests.get(state)?.promise === promise) {
-      inFlightChatHistoryRequests.delete(state);
+    if (requests.inFlightHistory?.promise === promise) {
+      requests.inFlightHistory = undefined;
     }
   });
-  inFlightChatHistoryRequests.set(state, {
+  requests.inFlightHistory = {
     client,
     connectionEpoch,
     key: requestKey,
     promise,
-  });
+  };
   return promise;
 }
 

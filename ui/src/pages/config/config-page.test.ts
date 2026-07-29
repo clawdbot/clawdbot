@@ -104,6 +104,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "communications";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -113,7 +116,15 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "communications";
-    state.routeData = { section, advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/communications",
+      search: `?section=${section}`,
+      hash: "",
+      section,
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
@@ -127,6 +138,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "ai-agents";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string;
         advanced: boolean;
         tab: string | null;
@@ -136,7 +150,15 @@ describe("ConfigPage moved section routes", () => {
     };
     state.context = { navigate };
     state.pageId = "ai-agents";
-    state.routeData = { section: "models", advanced: false, tab: null, targetBlockId: null };
+    state.routeData = {
+      pathname: "/settings/ai-agents",
+      search: "?section=models",
+      hash: "",
+      section: "models",
+      advanced: false,
+      tab: null,
+      targetBlockId: null,
+    };
 
     state.syncRouteData();
 
@@ -150,6 +172,9 @@ describe("ConfigPage moved section routes", () => {
       context: { navigate: typeof navigate };
       pageId: "config";
       routeData: {
+        pathname: string;
+        search: string;
+        hash: string;
         section: string | null;
         advanced: boolean;
         tab: string | null;
@@ -160,6 +185,9 @@ describe("ConfigPage moved section routes", () => {
     state.context = { navigate };
     state.pageId = "config";
     state.routeData = {
+      pathname: "/settings/general",
+      search: "",
+      hash: "#settings-general-model",
       section: null,
       advanced: false,
       tab: null,

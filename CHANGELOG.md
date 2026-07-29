@@ -51,6 +51,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Shared state corruption recovery:** evict only the exact cached SQLite owner after proven read or write corruption so a repaired database recovers without a Gateway restart while caller-injected handles remain untouched. Fixes #114269. Thanks @rizquuula.
 - **Dev-channel updates:** finish package-to-git switches in a fresh CLI process even when source SHA and version metadata are unchanged, preventing stale hashed chunks from loading after the global package root changes.
 - **Parallels release smoke:** preserve Windows installer reboot results across Parallels, wait for WSL MSI/default-version readiness, force explicit test-owned gateway stops, and reset Linux package, config, and cache state before install lanes, preventing false prerequisite, safety-gate, and stale-config failures.
 - **OpenAI Realtime Talk auth:** remove the non-public Codex OAuth realtime fallback and require an OpenAI Platform API key for Talk, Voice Call, and Discord realtime voice, preventing OAuth-only gateways from advertising a browser session that the live service rejects. Fixes #115021.

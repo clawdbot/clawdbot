@@ -2264,6 +2264,72 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it.each([
+    { astral: "😀", boundary: 255 },
+    { astral: "𐐷", boundary: 511 },
+  ])(
+    "keeps streamed tool-call arguments well-formed ($astral at UTF-16 boundary $boundary)",
+    async ({ astral, boundary }) => {
+      const argumentPrefix = '{"value":"';
+      const value = `${"a".repeat(boundary - argumentPrefix.length)}${astral}tail`;
+      const expectedArguments = JSON.stringify({ value });
+      expect(expectedArguments.indexOf(astral)).toBe(boundary);
+
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({
+        payloads: [{ text: "Calling the tool." }],
+        meta: {
+          stopReason: "tool_calls",
+          pendingToolCalls: [
+            {
+              id: "call_1",
+              name: "read_value",
+              arguments: expectedArguments,
+            },
+          ],
+        },
+      } as never);
+
+      const res = await postChatCompletions(enabledPort, {
+        stream: true,
+        model: "openclaw",
+        messages: [{ role: "user", content: "read the value" }],
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toContain("text/event-stream");
+
+      const data = parseSseDataLines(await res.text());
+      expect(data.at(-1)).toBe("[DONE]");
+
+      const chunks = data
+        .filter((line) => line !== "[DONE]")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      const choices = chunks.flatMap(
+        (chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [],
+      );
+      const argumentDeltas = choices
+        .flatMap((choice) => {
+          const delta = choice.delta as Record<string, unknown> | undefined;
+          return (delta?.tool_calls as Array<Record<string, unknown>> | undefined) ?? [];
+        })
+        .map((toolCall) => {
+          const toolFunction = toolCall.function as Record<string, unknown> | undefined;
+          return toolFunction?.arguments;
+        })
+        .filter((argumentsDelta): argumentsDelta is string => typeof argumentsDelta === "string");
+
+      expect(argumentDeltas.length).toBeGreaterThan(1);
+      for (const argumentsDelta of argumentDeltas) {
+        expect(new TextDecoder().decode(new TextEncoder().encode(argumentsDelta))).toBe(
+          argumentsDelta,
+        );
+      }
+      expect(argumentDeltas.join("")).toBe(expectedArguments);
+      expect(JSON.parse(argumentDeltas.join(""))).toEqual({ value });
+      expect(choices.some((choice) => choice.finish_reason === "tool_calls")).toBe(true);
+    },
+  );
+
   it(
     "sends an initial SSE chunk before a streaming agent run settles",
     { timeout: 15_000 },

@@ -11,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
+  registerNodeSqliteKyselyQueryErrorHandler,
 } from "./kysely-sync.js";
 
 type SyncHelperTestDatabase = {
@@ -373,6 +374,26 @@ describe("kysely sync helpers", () => {
     expect(() => executeSqliteQuerySync(database!, jsonValue("{"))).toThrow(/malformed JSON/iu);
     expect(executeSqliteQuerySync(database, jsonValue("[]")).rows).toEqual([{ value: "[]" }]);
     expect(prepares.calls()).toBe(2);
+  });
+
+  it("reports query failures without replacing the original database error", () => {
+    database = new DatabaseSync(":memory:");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const malformedJson = db.selectNoFrom(
+      /* kysely-allow-raw: failure reporting needs a deterministic SQLite step error. */
+      sql<string>`json(${"{"})`.as("value"),
+    );
+    const observed: unknown[] = [];
+    registerNodeSqliteKyselyQueryErrorHandler(database, (error) => {
+      observed.push(error);
+      throw new Error("handler failure");
+    });
+
+    const thrown = captureError(() => executeSqliteQuerySync(database!, malformedJson));
+
+    expect(observed).toEqual([thrown]);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/malformed JSON/iu);
   });
 
   it("preserves close return values and double-close errors", () => {

@@ -19,6 +19,7 @@ import {
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
 } from "./memory-tool-manager.test-mocks.js";
+import { applyProjectRanking } from "./memory/project-ranking.js";
 import {
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemorySearchDeadlineAction,
@@ -1401,6 +1402,48 @@ describe("memory_search corpus labels", () => {
     await tool.execute("ordinary-search", { query: "favorite food" });
 
     expect(seenSources).toEqual(["memory"]);
+  });
+
+  it("applies active-project ranking through the production memory_search tool", async () => {
+    let activeProjectKeys: string[] | undefined;
+    setMemorySearchImpl(async (opts) => {
+      activeProjectKeys = opts?.activeProjectKeys;
+      return applyProjectRanking(
+        [
+          {
+            path: "MEMORY.md",
+            startLine: 2,
+            endLine: 2,
+            score: 0.9,
+            snippet: "foreign fact",
+            source: "memory" as const,
+            projectKey: "github.com/acme/Beta",
+          },
+          {
+            path: "MEMORY.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.8,
+            snippet: "active fact",
+            source: "memory" as const,
+            projectKey: "github.com/acme/Alpha",
+          },
+        ],
+        opts?.activeProjectKeys,
+      );
+    });
+    const tool = createMemorySearchToolOrThrow({
+      config: { memory: { citations: "off" } },
+      activeProjectKeys: ["github.com/acme/Alpha"],
+    });
+
+    const result = await tool.execute("project-ranked-search", { query: "fact" });
+    const details = result.details as { results: Array<{ snippet: string; score: number }> };
+
+    expect(details.results.map((entry) => entry.snippet)).toEqual(["active fact", "foreign fact"]);
+    expect(activeProjectKeys).toEqual(["github.com/acme/Alpha"]);
+    expect(details.results[0]?.score).toBeCloseTo(0.92);
+    expect(details.results[1]?.score).toBeCloseTo(0.81);
   });
 
   it.each(["sessions", "all"] as const)(
