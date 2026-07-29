@@ -2135,7 +2135,7 @@ export const en: TranslationMap = {
       rollbackConfirmDescription:
         "Remove diary entries and staged memories created by session backfill for this agent.",
       rollbackWarning:
-        "Tracked session cursors stay in place, so removed entries will not be staged again.",
+        "Session backfill cursors are rewound, so the same candidates can be staged again.",
       rollbackComplete: "Session backfill rolled back",
       rollbackCounts: "{diary} diary entries and {staged} staged entries removed",
       unavailable: "Session backfill is unavailable on this Gateway.",

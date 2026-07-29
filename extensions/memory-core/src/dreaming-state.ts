@@ -11,6 +11,7 @@ export const DREAMING_DAILY_INGESTION_NAMESPACE = "dreaming-daily-ingestion";
 export const DREAMING_DAILY_PROVENANCE_NAMESPACE = "dreaming-daily-provenance";
 export const DREAMING_SESSION_INGESTION_FILES_NAMESPACE = "dreaming-session-ingestion-files";
 export const DREAMING_SESSION_INGESTION_SEEN_NAMESPACE = "dreaming-session-ingestion-seen";
+export const SESSION_BACKFILL_REWIND_NAMESPACE = "session-backfill-rewind";
 export const DREAMING_MEMORY_BACKUP_NAMESPACE = "dreaming-memory-backups";
 export const SHORT_TERM_RECALL_NAMESPACE = "short-term-recall";
 export const SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "short-term-phase-signals";
