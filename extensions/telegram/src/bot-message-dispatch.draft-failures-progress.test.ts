@@ -72,7 +72,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expectDeliveredReply(
       0,
       {
-        text: "Something went wrong while processing your request. Please try again.",
+        text: "⚠️ dispatch failed after partial output\n\nPlease try again, or use /new to start a fresh session.",
       },
       1,
     );
@@ -101,7 +101,7 @@ describeTelegramDispatch("dispatchTelegramMessage draft-failures-progress", () =
     expectDeliveredReply(
       0,
       {
-        text: "Something went wrong while processing your request. Please try again.",
+        text: "⚠️ dispatch failed after partial output\n\nPlease try again, or use /new to start a fresh session.",
       },
       1,
     );

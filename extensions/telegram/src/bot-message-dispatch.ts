@@ -3,6 +3,7 @@ import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { createSubsystemLogger, danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -45,6 +46,20 @@ import {
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+
+/**
+ * Format a dispatch error into a user-visible fallback message.
+ *
+ * Instead of a generic "Something went wrong", extract the actual error
+ * detail (e.g. "502 Internal server error") so the user knows whether the
+ * provider is down, the request was malformed, etc.
+ */
+function formatDispatchErrorFallback(err: unknown): string {
+  const detail = formatErrorMessage(err).trim();
+  if (!detail) return "Something went wrong while processing your request. Please try again.";
+  const truncated = detail.length > 400 ? `${detail.slice(0, 400)}…` : detail;
+  return `⚠️ ${truncated}\n\nPlease try again, or use /new to start a fresh session.`;
+}
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
 
 async function resolveStickerVisionSupport(
@@ -493,7 +508,7 @@ export const dispatchTelegramMessage = async ({
       deliverySummary.failedNonSilent > 0);
   if (shouldSendFailureFallback) {
     const fallbackText = state.dispatchError
-      ? "Something went wrong while processing your request. Please try again."
+      ? formatDispatchErrorFallback(state.dispatchError)
       : EMPTY_RESPONSE_FALLBACK;
     const result = await delivery.deliverFallback(
       [{ text: fallbackText }],
