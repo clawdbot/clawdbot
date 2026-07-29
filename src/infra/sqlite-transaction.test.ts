@@ -312,6 +312,53 @@ describe("runSqliteImmediateTransactionSync", () => {
     );
   });
 
+  it("does not warn on a fast successful transaction when busyTimeoutMs is 0", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 1;
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      logger,
+    });
+
+    expect(logger.warn).not.toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.anything(),
+    );
+  });
+
+  it("still warns on a genuinely slow transaction when busyTimeoutMs is 0", () => {
+    const logger = { warn: vi.fn() };
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      const value = now;
+      now += 1_500;
+      return value;
+    });
+    const db = {
+      exec() {},
+    } as unknown as import("node:sqlite").DatabaseSync;
+
+    runSqliteImmediateTransactionSync(db, () => "committed", {
+      busyTimeoutMs: 0,
+      logger,
+      slowTransactionHoldMs: 0,
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      "slow SQLite transaction lock wait",
+      expect.objectContaining({ step: "begin" }),
+    );
+  });
+
   it("waits for a separate writer and exposes the synchronous event-loop cost", async () => {
     const holdMs = 200;
     const tempDir = tempDirs.make("openclaw-sqlite-contention-");
