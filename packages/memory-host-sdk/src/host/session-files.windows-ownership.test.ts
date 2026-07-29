@@ -156,6 +156,49 @@ describe("memory session directory ownership", () => {
     }
   });
 
+  it("isolates templated custom session stores outside the default agents directory", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const customRoot = path.join(tmpDir, "custom-stores");
+      const customDir = path.join(customRoot, "main");
+      const storePath = path.join(customDir, "sessions.json");
+      const otherSessionFile = path.join(customRoot, "ops", "private.jsonl");
+      const sessionKey = "agent:main:chat:external-custom-transcript";
+      const configPath = path.join(tmpDir, "openclaw.json");
+      fsSync.mkdirSync(customDir, { recursive: true });
+      fsSync.mkdirSync(path.dirname(otherSessionFile), { recursive: true });
+      fsSync.writeFileSync(otherSessionFile, "");
+      fsSync.writeFileSync(
+        configPath,
+        JSON.stringify({
+          session: { store: path.join(customRoot, "{agentId}", "sessions.json") },
+        }),
+      );
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionFile: otherSessionFile, sessionId: "private", updatedAt: 1 },
+      );
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          agentId: "main",
+          sessionFile: sessionKey,
+          sessionId: "private",
+          transcriptSource: "sqlite",
+        }),
+      );
+      expect(entries).not.toContainEqual(
+        expect.objectContaining({ sessionFile: otherSessionFile }),
+      );
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it.each(invalidWindowsAgentIds)(
     "never aliases an invalid Windows session owner into another agent: %s",
     (owner) => {

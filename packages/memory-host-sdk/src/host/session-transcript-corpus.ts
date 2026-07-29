@@ -193,6 +193,14 @@ function resolveSessionStoreTranscriptCorpusSource(
       path.dirname(path.dirname(resolveSessionTranscriptsDirForAgent(agentId))),
     );
     const canonicalSessionFile = normalizeRealComparablePath(sessionFile);
+    const relativeStorePath = path.relative(
+      normalizeRealComparablePath(sessionsDir),
+      canonicalSessionFile,
+    );
+    const isUnderConfiguredStoreRoot =
+      relativeStorePath !== ".." &&
+      !relativeStorePath.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relativeStorePath);
     const relativeAgentPath = path.relative(canonicalAgentsRoot, canonicalSessionFile);
     const isUnderCanonicalAgentsRoot =
       relativeAgentPath !== ".." &&
@@ -208,6 +216,7 @@ function resolveSessionStoreTranscriptCorpusSource(
     // Authorize real paths so a junction below one agent cannot redirect
     // indexing into a sibling agent's canonical or custom transcript store.
     if (
+      (!isUnderConfiguredStoreRoot && !isUnderCanonicalAgentsRoot) ||
       (isUnderCanonicalAgentsRoot &&
         (!rootAgentId || normalizeAgentId(rootAgentId) !== normalizeAgentId(agentId))) ||
       (pathAgentId && normalizeAgentId(pathAgentId) !== normalizeAgentId(agentId))
