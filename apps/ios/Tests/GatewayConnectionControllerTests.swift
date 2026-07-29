@@ -337,7 +337,10 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
         #expect(!withoutApprovalScope.scopes.contains("operator.questions"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
         #expect(!withoutApprovalScope.scopesAreExplicit)
-        #expect(withoutApprovalScope.caps == [OpenClawGatewayClientCapability.inlineWidgets])
+        #expect(withoutApprovalScope.caps == [
+            OpenClawGatewayClientCapability.agentKind,
+            OpenClawGatewayClientCapability.inlineWidgets,
+        ])
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
         #expect(withApprovalScope.scopes.contains("operator.questions"))
@@ -604,6 +607,29 @@ private func waitForActiveGateway(stableID: String, appModel: NodeAppModel) asyn
 
         fleet.reconcile(desiredStableIDs: [], configs: [])
         #expect(fleet.statuses.isEmpty)
+    }
+
+    @Test @MainActor func `operator fleet preserves auth pause across same-config reconciles`() {
+        let fleet = GatewayOperatorFleet()
+        let config = Self.makeGatewayConnectConfig(stableID: "bonjour|approval-required")
+        defer { fleet.stopAll() }
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Approval Required")])
+        fleet._test_pauseRuntimeForAttention(stableID: config.stableID)
+
+        fleet.reconcile(
+            desiredStableIDs: [config.stableID],
+            configs: [(config: config, name: "Renamed While Paused")])
+
+        #expect(fleet.statuses == [
+            GatewayOperatorFleet.Status(
+                stableID: config.stableID,
+                name: "Renamed While Paused",
+                state: .needsAttention,
+                detail: "Approval required"),
+        ])
     }
 
     @Test @MainActor func `same target retry unpauses retained pairing problem`() {

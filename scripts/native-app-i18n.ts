@@ -57,7 +57,12 @@ const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
-  android: [path.join(ROOT, "apps", "android", "app", "src", "main")],
+  android: [
+    path.join(ROOT, "apps", "android", "app", "src", "main"),
+    path.join(ROOT, "apps", "android", "app", "src", "play"),
+    path.join(ROOT, "apps", "android", "app", "src", "thirdParty"),
+    path.join(ROOT, "apps", "android", "wear", "src", "main", "res", "values"),
+  ],
   apple: [
     path.join(ROOT, "apps", "ios"),
     path.join(ROOT, "apps", "macos", "Sources"),
@@ -132,7 +137,7 @@ const ANDROID_WHEN_BRANCH_START = /(?:[^\n{}]+|\belse)\s*->\s*/gu;
 const ANDROID_RESOURCE_STRINGS = /<string\b([^>]*)>([\s\S]*?)<\/string>/gu;
 const ANDROID_RESOURCE_NAME = /\bname\s*=\s*"([^"]+)"/u;
 const ANDROID_RESOURCE_COLLECTIONS =
-  /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
+  /<(?:string-array|plurals)\b([^>]*)>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
 const APPLE_NAMED_LITERALS =
   /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
@@ -163,11 +168,45 @@ const APPLE_BUILTIN_UI_CALLS = new Set([
   "Toggle",
   "searchable",
 ]);
-const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
+const APPLE_PLIST_KEYED_STRINGS = /<key>([^<]+)<\/key>\s*<string>([\s\S]*?)<\/string>/gu;
+// macOS uses this legacy privacy key instead of the *UsageDescription suffix.
+const APPLE_LOCALIZABLE_DESCRIPTION_KEYS = new Set(["NSScreenCaptureDescription"]);
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 const GENERATED_FILE_RE = /(?:^|[\\/])NativeStringResources\.kt$/u;
+// These files emit mobile.ui protocol evidence, not UI copy. Keep their text verbatim so
+// developer-screen diagnostics match the agent-facing action results and snapshot refs.
+const ANDROID_NATIVE_I18N_EXCLUDED_FILES = new Set([
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilityActionExecutor.kt",
+  ),
+  path.join(
+    ROOT,
+    "apps",
+    "android",
+    "app",
+    "src",
+    "thirdParty",
+    "java",
+    "ai",
+    "openclaw",
+    "app",
+    "accessibility",
+    "AccessibilitySnapshotter.kt",
+  ),
+]);
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
 const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 const ANDROID_LANGUAGE_PICKER_PATH =
@@ -191,6 +230,19 @@ function isAsciiAlphaNumeric(character: string): boolean {
     isAsciiUppercaseLetter(character) ||
     (character >= "0" && character <= "9")
   );
+}
+
+function decodeXml(value: string): string {
+  return value
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+function isLocalizableApplePlistKey(key: string): boolean {
+  return key.endsWith("UsageDescription") || APPLE_LOCALIZABLE_DESCRIPTION_KEYS.has(key);
 }
 
 export function isConditionalBranchIdentifier(source: string): boolean {
@@ -1032,15 +1084,15 @@ export function extractNativeI18nCandidates(
       }
     }
     for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
-      const body = collection[1];
-      if (!body) {
+      const attributes = collection[1] ?? "";
+      const body = collection[2];
+      if (!body || /\btranslatable\s*=\s*"false"/u.test(attributes)) {
         continue;
       }
       const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
       for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
         const value = item[1]?.trim();
-        // Resource references inherit translatability from their target. Harvesting the
-        // reference name itself creates a fake user-facing string such as @string/foo.
+        // Resource references inherit translatability from their target.
         if (value && !value.startsWith("@")) {
           addCandidate(
             entries,
@@ -1055,15 +1107,18 @@ export function extractNativeI18nCandidates(
     }
   }
   if (surface === "apple" && repoPath.endsWith(".plist")) {
-    for (const match of source.matchAll(APPLE_PLIST_STRINGS)) {
-      if (match[1]) {
+    for (const match of source.matchAll(APPLE_PLIST_KEYED_STRINGS)) {
+      const key = match[1];
+      const value = match[2];
+      if (key && isLocalizableApplePlistKey(key) && value) {
+        const valueOffset = (match.index ?? 0) + match[0].indexOf(value);
         addCandidate(
           entries,
           surface,
           repoPath,
-          match[1],
+          decodeXml(value),
           "plist-string",
-          lineNumber(source, match.index ?? 0),
+          lineNumber(source, valueOffset),
         );
       }
     }
@@ -1094,6 +1149,7 @@ async function walkFiles(root: string, surface: NativeI18nSurface): Promise<stri
       const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
       return entry.isFile() &&
         (allowed.has(extension) || isAndroidValuesXml) &&
+        !ANDROID_NATIVE_I18N_EXCLUDED_FILES.has(fullPath) &&
         !EXCLUDED_FILE_RE.test(entry.name) &&
         !GENERATED_FILE_RE.test(fullPath)
         ? [fullPath]
@@ -1653,7 +1709,7 @@ async function main() {
     await syncAndroidAppI18n();
     const apple = await syncAppleAppI18n();
     process.stdout.write(
-      `native-app-i18n: synced derived artifacts (android, iOS catalog, ${apple.infoPlistFiles} InfoPlist files); contradictions=${apple.build.contradictions.length}\n`,
+      `native-app-i18n: synced derived artifacts (android, Apple catalogs, ${apple.infoPlistFiles} InfoPlist files); contradictions=${apple.build.contradictions.length + apple.macosBuild.contradictions.length}\n`,
     );
   }
 }

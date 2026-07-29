@@ -182,7 +182,9 @@ non-npm sources are not rewritten.
   <Accordion title="Config includes and invalid-config repair">
     If your `plugins` section is backed by a single-file `$include`, `plugins install/update/enable/disable/uninstall` write through to that included file and leave `openclaw.json` untouched. Root includes, include arrays, and includes with sibling overrides fail closed instead of flattening. See [Config includes](/gateway/configuration) for the supported shapes.
 
-    If config is invalid during install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only documented install-time exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+    If config is invalid before install, `plugins install` normally fails closed and tells you to run `openclaw doctor --fix` first. During Gateway startup and hot reload, invalid plugin config fails closed like any other invalid config; `openclaw doctor --fix` can quarantine the invalid plugin entry. The only pre-existing-config exception is a narrow bundled-plugin recovery path for plugins that explicitly opt into `openclaw.install.allowInvalidConfigRecovery`.
+
+    When the existing host config is valid but the newly installed plugin's own config is absent, OpenClaw records the install disabled instead of writing an invalid enabled entry. Configure `plugins.entries.<id>.config`, then run `openclaw plugins enable <id>`. If an existing plugin config entry is present but invalid, install fails without rewriting it.
 
   </Accordion>
   <Accordion title="--force confirmation and reinstall vs update">
@@ -399,7 +401,7 @@ For runtime hook debugging:
 
 - `openclaw plugins inspect <id> --runtime --json` shows registered hooks and diagnostics from a module-loaded inspection pass. Runtime inspection never installs dependencies; use `openclaw doctor --fix` to clean legacy dependency state or recover missing downloadable plugins that are referenced by config.
 - `openclaw gateway status --deep --require-rpc` confirms the reachable Gateway URL/profile, service/process hints, config path, and RPC health.
-- Non-bundled conversation hooks (`llm_input`, `llm_output`, `before_model_resolve`, `before_agent_reply`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
+- Non-bundled conversation hooks (`before_model_resolve`, `agent_turn_prepare`, `before_prompt_build`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_run`, `before_agent_finalize`, `agent_end`) require `plugins.entries.<id>.hooks.allowConversationAccess=true`.
 
 ### Plugin index
 
@@ -436,7 +438,7 @@ openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
-Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in `hooks.internal.installs`. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
+Updates apply to tracked plugin installs in the managed plugin index and tracked hook-pack installs in shared SQLite state. They reuse the source that the user already chose when installing the plugin, so they do not require a second source acknowledgement.
 
 <AccordionGroup>
   <Accordion title="Resolving plugin id vs npm spec">
@@ -452,7 +454,7 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the configured `update.channel` when it syncs trusted official plugin records to the official catalog target, so beta-channel installs can stay on the beta release line instead of being silently normalized to stable/latest.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the canonical registry-channel resolver when it syncs trusted official plugin records to the official catalog target. An installed beta core therefore keeps official plugins on the beta release line when `update.channel` is unset, matching the core updater instead of silently normalizing them to stable/latest. Explicit `beta`, `dev`, and `extended-stable` selections retain their existing precedence.
 
     `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
 
@@ -558,6 +560,25 @@ credentials, query strings, or fragments. Unpinned refreshes can report a
 hosted snapshot or bundled fallback result without failing the command. Pinned
 refreshes fail unless they accept a fresh hosted payload, and successful hosted
 refreshes fail if OpenClaw cannot persist the validated snapshot.
+
+The built-in `clawhub-public` profile expects payload identity
+`clawhub-official`. OpenClaw will bundle ClawHub's production public key after
+ClawHub generates and hands off that key. Until then, the built-in profile does
+not grant signed-feed install authority. Public keys must come from a trusted
+release or operator channel, not from a key endpoint on the feed host.
+
+OpenClaw verifies the DSSE envelope and, when a profile declares `feedId`,
+requires the decoded payload ID to match it. The built-in `clawhub-public`
+profile always declares its identity, preventing a valid document for another
+feed from being replayed through that profile.
+
+During the staged rollout, existing custom signed profiles that omit `feedId`
+retain signature verification without payload-identity binding. New custom
+profiles should declare `feedId`. The feed-profile configuration surface is
+landing separately with the presentation metadata needed by Control UI; its
+Doctor diagnostic must ask the operator to supply a missing identity and must
+not infer one from the feed URL. This trust binding does not restore the retired
+root `marketplaces` key.
 
 ## Related
 

@@ -1359,6 +1359,9 @@ describe("agentLoop tool termination", () => {
 
   it("marks argument validation failures with typed provenance", async () => {
     const executed: string[] = [];
+    const afterToolOutcome = vi.fn(async () => ({
+      details: { observed: "pre-execution" },
+    }));
     let turn = 0;
     const streamFn: StreamFn = () => {
       turn += 1;
@@ -1388,7 +1391,7 @@ describe("agentLoop tool termination", () => {
       agentLoop(
         [{ role: "user", content: "hello", timestamp: 1 }],
         { systemPrompt: "", messages: [], tools: [tool] },
-        config,
+        { ...config, afterToolOutcome },
         undefined,
         streamFn,
       ),
@@ -1402,10 +1405,78 @@ describe("agentLoop tool termination", () => {
     expect(endEvent).toMatchObject({
       executionStarted: false,
       errorKind: "argument-validation",
+      result: {
+        details: { observed: "pre-execution" },
+      },
     });
+    expect(afterToolOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: {},
+        executionStarted: false,
+        errorKind: "argument-validation",
+        isError: true,
+        toolCall: expect.objectContaining({ name: "edit" }),
+      }),
+      undefined,
+    );
   });
 
-  it("stops after a tool result only when the finalized result explicitly terminates", async () => {
+  it("runs the finalized-outcome hook after the executed-only hook", async () => {
+    const executed: string[] = [];
+    const order: string[] = [];
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                { type: "toolCall", id: "call-read", name: "read", arguments: {} },
+              ])
+            : makeAssistantMessage([{ type: "text", text: "done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const events = await collectEvents(
+      agentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [], tools: [makeTool("read", executed)] },
+        {
+          ...config,
+          afterToolCall: async () => {
+            order.push("afterToolCall");
+            return { details: { phase: "executed" } };
+          },
+          afterToolOutcome: async ({ result, executionStarted }) => {
+            order.push("afterToolOutcome");
+            expect(result.details).toEqual({ phase: "executed" });
+            expect(executionStarted).toBe(true);
+            return { details: { phase: "finalized" } };
+          },
+        },
+        undefined,
+        streamFn,
+      ),
+    );
+    const endEvent = events.find(
+      (event): event is Extract<AgentEvent, { type: "tool_execution_end" }> =>
+        event.type === "tool_execution_end",
+    );
+
+    expect(executed).toEqual(["read"]);
+    expect(order).toEqual(["afterToolCall", "afterToolOutcome"]);
+    expect(endEvent?.result).toMatchObject({ details: { phase: "finalized" } });
+  });
+
+  it("preserves a terminal result when the finalized-outcome hook throws", async () => {
     const executed: string[] = [];
     let turn = 0;
     const streamFn: StreamFn = () => {
@@ -1437,6 +1508,9 @@ describe("agentLoop tool termination", () => {
         ...config,
         afterToolCall: async ({ toolCall }) =>
           toolCall.name === "message" ? { terminate: true } : undefined,
+        afterToolOutcome: async () => {
+          throw new Error("finalized hook failed");
+        },
       },
       undefined,
       streamFn,
@@ -1447,6 +1521,10 @@ describe("agentLoop tool termination", () => {
     expect(turn).toBe(1);
     expect(executed).toEqual(["message"]);
     expect(events.filter((event) => event.type === "tool_execution_start")).toHaveLength(1);
+    expect(events.find((event) => event.type === "tool_execution_end")?.result).toMatchObject({
+      content: [{ type: "text", text: "finalized hook failed" }],
+      terminate: true,
+    });
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
 

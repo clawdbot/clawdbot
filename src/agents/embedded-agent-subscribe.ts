@@ -13,7 +13,8 @@ import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, emitAgentEventIfCurrent } from "../infra/agent-events.js";
+import { recordAgentRunOutputTokens } from "../infra/agent-run-usage.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { findFinalTagMatches } from "../shared/text/final-tags.js";
@@ -177,6 +178,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     itemActiveIds: new Set(),
     itemStartedCount: 0,
     itemCompletedCount: 0,
+    assistantTurnCount: 0,
     lastToolError: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
@@ -374,21 +376,23 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
+    const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
+    const taggedPayload =
+      options?.assistantMessageIndex !== undefined
+        ? setReplyPayloadMetadata(withToolMedia, {
+            assistantMessageIndex: options.assistantMessageIndex,
+            ...(assistantTranscriptMediaUrls.length > 0 ? { assistantTranscriptMediaUrls } : {}),
+          })
+        : withToolMedia;
     if (state.deferBlockReplyDelivery) {
-      const deferredPayload =
-        options?.assistantMessageIndex !== undefined
-          ? setReplyPayloadMetadata(withToolMedia, {
-              assistantMessageIndex: options.assistantMessageIndex,
-            })
-          : withToolMedia;
       if (consumesPendingToolMedia) {
-        deferredToolMediaReplies.add(deferredPayload);
+        deferredToolMediaReplies.add(taggedPayload);
       }
-      state.deferredBlockReplies.push(deferredPayload);
+      state.deferredBlockReplies.push(taggedPayload);
       return;
     }
-    const emitted = emitBlockReplySafely(withToolMedia, options);
-    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+    const emitted = emitBlockReplySafely(taggedPayload, options);
+    if (emitted && !taggedPayload.isReasoning && hasAssistantVisibleReply(taggedPayload)) {
       state.visibleBlockReplyCount += 1;
       if (consumesPendingToolMedia) {
         state.hasToolMediaBlockReply = true;
@@ -630,6 +634,32 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     }
     return undefined;
   };
+  const emitRunUsage = (outputTokens: number) => {
+    const lifecycleGeneration = params.lifecycleGeneration;
+    if (!lifecycleGeneration) {
+      return;
+    }
+    const data = recordAgentRunOutputTokens({
+      runId: params.runId,
+      lifecycleGeneration,
+      outputTokens,
+      emit: (usage) =>
+        emitAgentEventIfCurrent({
+          runId: params.runId,
+          lifecycleGeneration,
+          stream: "usage",
+          data: usage,
+        }),
+    });
+    if (!data || !params.onAgentEvent) {
+      return;
+    }
+    runBestEffortCallback({
+      label: "usage agent event",
+      log,
+      callback: () => params.onAgentEvent?.({ stream: "usage", data }),
+    });
+  };
   const commitAssistantUsage = () => {
     if (state.assistantUsageCommitted || !state.pendingAssistantUsage) {
       return;
@@ -648,6 +678,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Retain the latest committed nonzero call so context accounting stays exact.
     lastAssistantUsage = { ...usage };
     state.assistantUsageCommitted = true;
+    emitRunUsage(usage.output ?? 0);
   };
   const recordAssistantUsage = (usageLike: unknown) => {
     if (state.assistantUsageCommitted) {
@@ -1503,6 +1534,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getLastAssistantUsage,
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
+    getAssistantTurnCount: () => state.assistantTurnCount,
     waitForPendingEvents: () => state.pendingEventChain ?? Promise.resolve(),
     getItemLifecycle: () => ({
       startedCount: state.itemStartedCount,

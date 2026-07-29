@@ -75,6 +75,9 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--dev" type="boolean">
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
+<ParamField path="--dev-ambient-channels" type="boolean">
+  Allow a dev Gateway to auto-configure channels from ambient environment variables. Requires `--dev`.
+</ParamField>
 <ParamField path="--reset" type="boolean">
   Reset dev config, credentials, sessions, and workspace. Requires `--dev`.
 </ParamField>
@@ -425,6 +428,11 @@ openclaw gateway probe --ssh user@gateway-host
 <ParamField path="--ssh <target>" type="string">
   `user@host` or `user@host:port` (port defaults to `22`).
 </ParamField>
+
+OpenClaw launches only an SSH client found in OS-managed system directories. On native Windows,
+install the **OpenSSH Client** optional feature; Windows places it under
+`%SystemRoot%\System32\OpenSSH`.
+
 <ParamField path="--ssh-identity <path>" type="string">
   Identity file.
 </ParamField>

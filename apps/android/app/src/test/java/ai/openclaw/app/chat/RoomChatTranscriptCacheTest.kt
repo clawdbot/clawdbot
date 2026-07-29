@@ -40,10 +40,18 @@ class RoomChatTranscriptCacheTest {
     )
 
   @Test
-  fun transcriptRoundTripKeepsTextRowsOnly() =
+  fun transcriptRoundTripKeepsTextAndManagedReferencesWithoutBinaryParts() =
     runTest {
       val store = cache()
       val imagePart = ChatMessageContent(type = "image", mimeType = "image/png", fileName = "a.png", base64 = "AAAA")
+      val managedImage =
+        ChatMessageContent(
+          type = "image",
+          mimeType = "image/png",
+          artifactId = "artifact_managed_image_11111111-1111-4111-8111-111111111111",
+          url = "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
+          alt = "Managed image",
+        )
       store.saveTranscript(
         gatewayId = "gateway-a",
         agentId = "main",
@@ -51,19 +59,44 @@ class RoomChatTranscriptCacheTest {
         messages =
           listOf(
             message("hello", role = "user", timestampMs = 10, idempotencyKey = "run-1:user", extraParts = listOf(imagePart)),
-            // Attachment-only messages have no cacheable text and are skipped entirely.
+            // Inline binary-only messages remain disposable and are skipped entirely.
             ChatMessage(id = "img", role = "user", content = listOf(imagePart), timestampMs = 11),
+            ChatMessage(id = "managed", role = "assistant", content = listOf(managedImage), timestampMs = 11),
             message("world", role = "assistant", timestampMs = 12),
           ),
       )
 
       val loaded = store.loadTranscript("gateway-a", "main", "main")
 
-      assertEquals(listOf("hello", "world"), loaded.map { it.content.single().text })
-      assertTrue(loaded.all { message -> message.content.all { part -> part.type == "text" && part.base64 == null } })
-      assertEquals(listOf("user", "assistant"), loaded.map { it.role })
-      assertEquals(listOf(10L, 12L), loaded.map { it.timestampMs })
-      assertEquals(listOf("run-1:user", null), loaded.map { it.idempotencyKey })
+      assertEquals(listOf("hello", null, "world"), loaded.map { it.content.single().text })
+      assertTrue(loaded.all { message -> message.content.all { part -> part.base64 == null } })
+      assertEquals(managedImage.artifactId, loaded[1].content.single().artifactId)
+      assertEquals(listOf("user", "assistant", "assistant"), loaded.map { it.role })
+      assertEquals(listOf(10L, 11L, 12L), loaded.map { it.timestampMs })
+      assertEquals(listOf("run-1:user", null, null), loaded.map { it.idempotencyKey })
+    }
+
+  @Test
+  fun legacyStringArrayTranscriptRowsRemainReadable() =
+    runTest {
+      database.dao().insertMessages(
+        listOf(
+          CachedMessageEntity(
+            gatewayId = "gateway-a",
+            agentId = "main",
+            sessionKey = "main",
+            rowOrder = 0,
+            role = "assistant",
+            textPartsJson = """["legacy one","legacy two"]""",
+            timestampMs = 10,
+            idempotencyKey = null,
+          ),
+        ),
+      )
+
+      val loaded = cache().loadTranscript("gateway-a", "main", "main").single()
+
+      assertEquals(listOf("legacy one", "legacy two"), loaded.content.map { it.text })
     }
 
   @Test
@@ -146,6 +179,37 @@ class RoomChatTranscriptCacheTest {
       assertEquals("Session 0", sessions.first().displayName)
       assertEquals(listOf("kept"), store.loadTranscript("gateway-a", "main", "session-10").map { it.content.single().text })
       assertEquals(emptyList<ChatMessage>(), store.loadTranscript("gateway-a", "main", "session-55"))
+    }
+
+  @Test
+  fun sessionRoundTripKeepsRunMetadata() =
+    runTest {
+      val store = cache()
+      store.saveSessions(
+        gatewayId = "gateway-a",
+        agentId = "main",
+        sessions =
+          listOf(
+            ChatSessionEntry(
+              key = "main",
+              updatedAtMs = 20L,
+              status = "done",
+              startedAt = 1_000L,
+              endedAt = 5_000L,
+              runtimeMs = 4_000L,
+              outputTokens = 485L,
+            ),
+          ),
+      )
+
+      val loaded = store.loadSessions("gateway-a", "main").single()
+
+      assertEquals("done", loaded.status)
+      assertEquals(1_000L, loaded.startedAt)
+      assertEquals(5_000L, loaded.endedAt)
+      assertEquals(4_000L, loaded.runtimeMs)
+      assertEquals(485L, loaded.outputTokens)
+      assertTrue(loaded.hasRunMetadata)
     }
 
   @Test

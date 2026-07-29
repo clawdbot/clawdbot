@@ -88,7 +88,7 @@ function buildPruneConfig(): SandboxConfig {
       vncPort: 5900,
       noVncPort: 6080,
       headless: true,
-      enableNoVnc: false,
+      noVncEnabled: false,
       allowHostControl: false,
       autoStart: true,
       autoStartTimeoutMs: 1_000,

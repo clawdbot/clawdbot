@@ -56,6 +56,28 @@ describe("system-agent inference fallback", () => {
     expect(attempts).toEqual(["requester", "alpha", "beta"]);
   });
 
+  it("retains the implicit main fallback for a pre-roster config", async () => {
+    const attempts: string[] = [];
+    const result = await verifySystemAgentInferenceWithFallback({
+      requestingAgentId: "requester",
+      runtime,
+      deps: {
+        readConfig: async () => ({}),
+        resolveRoute: async (_cfg, agentId) => route(agentId, agentId),
+        hasAuth: async () => true,
+        verify: async ({ agentId }) => {
+          attempts.push(agentId);
+          return agentId === "main"
+            ? ({ ok: true, modelRef: "main/model", latencyMs: 1, binding: {} } as never)
+            : ({ ok: false, status: "unavailable", error: "down" } as const);
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toEqual(["requester", "main"]);
+  });
+
   it("skips unauthenticated fallback providers", async () => {
     const attempts: string[] = [];
     await verifySystemAgentInferenceWithFallback({

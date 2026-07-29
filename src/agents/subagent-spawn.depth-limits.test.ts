@@ -172,6 +172,7 @@ describe("subagent spawn depth + child limits", () => {
     }
     expect(childSession.inheritedToolAllow).toEqual(["sessions_spawn", "read"]);
     expect(childSession.inheritedToolDeny).toEqual(["exec", "read"]);
+    expect(childSession.inheritedToolPolicyVersion).toBe(1);
   });
 
   it("rejects callers when stored spawn depth is already at the configured max", async () => {

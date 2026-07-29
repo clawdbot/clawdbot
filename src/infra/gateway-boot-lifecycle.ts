@@ -22,6 +22,24 @@ const GATEWAY_BOOT_LOOP_WINDOW_MS = 5 * 60_000;
 const GATEWAY_BOOT_LIFECYCLE_RETENTION_MS = 24 * 60 * 60_000;
 export const GATEWAY_CRASH_LOOP_BREAKER_REASON = "gateway.crash_loop_breaker";
 export const GATEWAY_CRASH_LOOP_RECOVERED_REASON = "gateway.crash_loop_recovered";
+/**
+ * The breaker never self-clears within its window, so every operator-facing surface must name the
+ * manual override command instead of the internal RPC name. Account-scoped suppression must carry
+ * its accountId: `channels.start` resolves an omitted account to the channel default, so a hint
+ * without it would start a different account than the one the message named.
+ */
+export function formatGatewayCrashLoopManualChannelStartHint(target?: {
+  channelId: string;
+  accountId?: string;
+}): string {
+  const params = target
+    ? JSON.stringify({
+        channel: target.channelId,
+        ...(target.accountId ? { accountId: target.accountId } : {}),
+      })
+    : `{"channel":"<id>"}`;
+  return `Start a channel manually with: openclaw gateway call channels.start --params '${params}'`;
+}
 
 const gatewayLifecycleLog = createSubsystemLogger("gateway/lifecycle");
 

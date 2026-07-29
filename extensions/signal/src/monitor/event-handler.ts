@@ -26,11 +26,12 @@ import {
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
-  toInboundMediaFacts,
+  toInboundMediaFactsWithMetadata,
   toHistoryMediaEntries,
   type ChannelInboundMediaInput,
   type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelMessageReplyPipeline,
@@ -51,12 +52,7 @@ import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
-import {
-  danger,
-  logVerbose,
-  shouldLogVerbose,
-  sleep as delay,
-} from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -82,11 +78,7 @@ import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
-import {
-  removeReactionSignal,
-  sendReactionSignal,
-  type SignalReactionOpts,
-} from "../send-reactions.js";
+import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type { SignalIngressLifecycle } from "../signal-ingress.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
@@ -107,6 +99,11 @@ import { renderSignalMentions, resolveSignalMentionFacts } from "./mentions.js";
 
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 const RETRYABLE_FLUSH_RETRY_DELAYS_MS = [1_000, 2_000, 4_000] as const;
+type SignalInboundDebounceParams = Parameters<
+  typeof createChannelInboundDebouncer<SignalInboundEntry>
+>[0];
+type SignalInboundFlushFactory = Parameters<SignalInboundDebounceParams["onFlush"]>[1];
+type SignalInboundFlush = ReturnType<SignalInboundDebounceParams["onFlush"]>;
 function isSignalReplySessionInitConflictError(error: unknown): boolean {
   return collectErrorGraphCandidates(error, (current) => [current.cause, current.error]).some(
     (candidate) => REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(formatErrorMessage(candidate)),
@@ -172,33 +169,11 @@ function resolveSignalStatusReactionEmojis(
 async function finalizeSignalStatusReaction(params: {
   controller: StatusReactionController;
   outcome: "done" | "error";
-  hasFinalResponse: boolean;
-  removeAckAfterReply: boolean;
-  timing: typeof DEFAULT_TIMING;
 }): Promise<void> {
   if (params.outcome === "done") {
     await params.controller.setDone();
-    if (params.removeAckAfterReply) {
-      await delay(params.timing.doneHoldMs);
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-
-  await params.controller.setError();
-  if (params.hasFinalResponse) {
-    if (params.removeAckAfterReply) {
-      await delay(params.timing.errorHoldMs);
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-  if (params.removeAckAfterReply) {
-    await delay(params.timing.errorHoldMs);
+  } else {
+    await params.controller.setError();
   }
   await params.controller.restoreInitial();
 }
@@ -283,7 +258,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToMode,
       entry.isBatched === true,
     );
-    const media = toInboundMediaFacts(entry.media);
+    const media = await toInboundMediaFactsWithMetadata(entry.media);
     const ctxPayload = buildChannelInboundEventContext({
       channel: "signal",
       supplemental: {
@@ -326,6 +301,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         rawBody: entry.commandBody,
         commandBody: entry.commandBody,
       },
+      sessionTranscript: { historyLimit: entry.isGroup ? deps.historyLimit : 0 },
       access: {
         ...(entry.isGroup
           ? {
@@ -347,7 +323,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(body, 200).replace(/\\n/g, "\\\\n");
+      const preview = truncateUtf16Safe(body, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
@@ -389,7 +365,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : {}),
     };
     const statusReactionRecipient = entry.isGroup ? "" : entry.senderRecipient;
-    let currentStatusReactionEmoji = ackReaction;
     const statusReactionController =
       statusReactionsConfig?.enabled === true &&
       signalReactionLevel.level !== "off" &&
@@ -405,23 +380,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
                   emoji,
                   signalReactionOpts,
                 );
-                currentStatusReactionEmoji = emoji;
-              },
-              clearReaction: async () => {
-                if (!currentStatusReactionEmoji) {
-                  return;
-                }
-                await removeReactionSignal(
-                  statusReactionRecipient,
-                  statusReactionTimestamp,
-                  currentStatusReactionEmoji,
-                  signalReactionOpts,
-                );
-                currentStatusReactionEmoji = "";
               },
             },
             initialEmoji: ackReaction,
-            emojis: resolveSignalStatusReactionEmojis(statusReactionsConfig.emojis),
+            emojis: resolveSignalStatusReactionEmojis(undefined),
             timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
@@ -612,9 +574,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           void finalizeSignalStatusReaction({
             controller: statusReactionController,
             outcome: hasFinalResponse && !hasDeliveryFailure ? "done" : "error",
-            hasFinalResponse,
-            removeAckAfterReply: deps.cfg.messages?.removeAckAfterReply ?? false,
-            timing: statusReactionTiming,
           }).catch((err: unknown) => {
             logVerbose(`signal: status reaction finalize failed: ${String(err)}`);
           });
@@ -623,76 +582,17 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
   }
 
-  // Fan one settlement out to every constituent claim of a (possibly merged)
-  // flush, and track whether the reply lane took ownership. A merged turn owns
-  // ALL constituent queue claims: adoption must complete each of them or the
-  // unmerged events would stall and redeliver duplicates.
-  function buildFlushIngressLifecycle(entries: SignalInboundEntry[]): {
-    lifecycle: SignalIngressLifecycle | undefined;
-    settle: () => Promise<void>;
-  } {
-    const lifecycles = entries
-      .map((entry) => entry.turnAdoptionLifecycle)
-      .filter((lifecycle) => lifecycle !== undefined);
-    const [firstLifecycle] = lifecycles;
-    if (!firstLifecycle) {
-      return { lifecycle: undefined, settle: async () => {} };
-    }
-    let handedOff = false;
-    const adoptAll = async () => {
-      for (const lifecycle of lifecycles) {
-        await lifecycle.onAdopted();
-      }
-    };
-    return {
-      lifecycle: {
-        abortSignal:
-          lifecycles.length === 1
-            ? firstLifecycle.abortSignal
-            : AbortSignal.any(lifecycles.map((lifecycle) => lifecycle.abortSignal)),
-        onAdopted: async () => {
-          handedOff = true;
-          await adoptAll();
-        },
-        onDeferred: () => {
-          handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onDeferred();
-          }
-        },
-        onAdoptionFinalizing: () => {
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAdoptionFinalizing();
-          }
-        },
-        onAbandoned: async () => {
-          handedOff = true;
-          await Promise.all(
-            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
-          );
-        },
-      },
-      // Terminal no-dispatch (gated, whitespace-only, deliberate skip) must
-      // still tombstone the claims — mirrors the drain's skipped→completed
-      // mapping; leaving them deferred would watchdog-dead-letter live turns.
-      settle: async () => {
-        if (!handedOff) {
-          await adoptAll();
-        }
-      },
-    };
-  }
-
-  async function flushSignalInboundEntries(entries: SignalInboundEntry[]): Promise<void> {
+  async function flushSignalInboundEntries(
+    entries: SignalInboundEntry[],
+    lifecycle: SignalIngressLifecycle,
+    settle: () => Promise<void>,
+  ): Promise<void> {
     const last = entries.at(-1);
     if (!last) {
       return;
     }
-    const { lifecycle, settle } = buildFlushIngressLifecycle(entries);
     if (entries.length === 1) {
-      await handleSignalInboundMessage(
-        lifecycle ? { ...last, turnAdoptionLifecycle: lifecycle } : last,
-      );
+      await handleSignalInboundMessage({ ...last, turnAdoptionLifecycle: lifecycle });
       await settle();
       return;
     }
@@ -712,7 +612,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...last,
       bodyText: combinedText,
       commandBody: combinedCommandBody,
-      ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
+      turnAdoptionLifecycle: lifecycle,
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
       media: entries.flatMap((entry) => entry.media ?? []),
@@ -722,6 +622,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
   async function retrySignalInboundFlush(
     entries: SignalInboundEntry[],
+    lifecycle: SignalIngressLifecycle,
+    settle: () => Promise<void>,
     initialError: unknown,
   ): Promise<void> {
     let lastError = initialError;
@@ -742,7 +644,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
       try {
-        await flushSignalInboundEntries(entries);
+        await flushSignalInboundEntries(entries, lifecycle, settle);
         return;
       } catch (err) {
         if (deps.abortSignal?.aborted) {
@@ -757,45 +659,63 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     throw lastError;
   }
 
-  const flushDebouncedSignalInboundEntries = async (entries: SignalInboundEntry[]) => {
-    // enqueue() awaits inline and overflow flushes, but not timer-backed work.
-    // Drain tracked inline work on shutdown; stop delayed work with no owner.
-    const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
-    if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
-      return;
-    }
-    try {
-      await flushSignalInboundEntries(entries);
-    } catch (err) {
-      if (!isSignalReplySessionInitConflictError(err)) {
-        throw err;
-      }
-      if (deps.abortSignal?.aborted) {
-        return;
-      }
-      // Keep the current keyed debounce task reserved through backoff so a
-      // newer same-conversation flush cannot overtake this failed batch.
-      const retryTask = retrySignalInboundFlush(entries, err).catch(
-        async (terminalError: unknown) => {
-          // Exhausted retries: release the drain claims so queue retry policy
-          // owns redelivery instead of the stall watchdog dead-lettering them.
-          await Promise.all(
-            entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+  const flushDebouncedSignalInboundEntries = (
+    entries: SignalInboundEntry[],
+    createFlush: SignalInboundFlushFactory,
+  ): SignalInboundFlush => {
+    const { lifecycle, settle } = fanInChannelIngressLifecycles(
+      entries.map((entry) => entry.turnAdoptionLifecycle),
+    );
+    return createFlush({
+      lifecycle,
+      dispatch: async (admissionLifecycle) => {
+        // enqueue() awaits inline and overflow admission, but not timer-backed work.
+        // Drain tracked completion on shutdown; stop delayed work with no owner.
+        const hasActiveEnqueue = entries.some((entry) => activeEnqueueEntries.has(entry));
+        if (!hasActiveEnqueue && deps.abortSignal?.aborted) {
+          return;
+        }
+        try {
+          await flushSignalInboundEntries(entries, admissionLifecycle, settle);
+        } catch (err) {
+          if (!isSignalReplySessionInitConflictError(err)) {
+            throw err;
+          }
+          if (deps.abortSignal?.aborted) {
+            return;
+          }
+          // Retry only pre-admission session conflicts; admitted turns have already
+          // released the debounce lane and own their normal completion lifecycle.
+          await retrySignalInboundFlush(entries, admissionLifecycle, settle, err).catch(
+            async (terminalError: unknown) => {
+              // Exhausted retries: release the drain claims so queue retry policy
+              // owns redelivery instead of the stall watchdog dead-lettering them.
+              await Promise.all(
+                entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+              );
+              throw terminalError;
+            },
           );
-          throw terminalError;
-        },
-      );
-      deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
-      await retryTask;
-    }
+        }
+      },
+    });
   };
   const reportSignalInboundFlushError = (err: unknown) => {
     deps.runtime.error?.(`signal debounce flush failed: ${String(err)}`);
   };
   const pendingInboundRegistry = createSignalPendingInboundRegistry(deps.accountId);
-  const flushNormalSignalInboundEntries = pendingInboundRegistry.completeAfter(
-    flushDebouncedSignalInboundEntries,
-  );
+  const trackSignalInboundFlush = (flush: SignalInboundFlush): SignalInboundFlush => {
+    deps.runTrackedTask?.(() => flush.completion.catch(() => undefined));
+    return flush;
+  };
+  const flushNormalSignalInboundEntries = (
+    entries: SignalInboundEntry[],
+    createFlush: SignalInboundFlushFactory,
+  ) => {
+    const flush = flushDebouncedSignalInboundEntries(entries, createFlush);
+    const completion = flush.completion.finally(() => pendingInboundRegistry.complete(entries));
+    return trackSignalInboundFlush({ admission: flush.admission, completion });
+  };
 
   const { debouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
     cfg: deps.cfg,
@@ -818,7 +738,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     serializeImmediate: true,
     buildKey: (entry) => resolveSignalControlLaneKey(deps.accountId, entry),
     shouldDebounce: () => false,
-    onFlush: flushDebouncedSignalInboundEntries,
+    onFlush: (entries, createFlush) =>
+      trackSignalInboundFlush(flushDebouncedSignalInboundEntries(entries, createFlush)),
     onError: reportSignalInboundFlushError,
   });
 

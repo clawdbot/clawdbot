@@ -159,15 +159,5 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     }
   };
 
-  const completeAfter =
-    (flush: (entries: SignalInboundEntry[]) => Promise<void>) =>
-    async (entries: SignalInboundEntry[]) => {
-      try {
-        await flush(entries);
-      } finally {
-        complete(entries);
-      }
-    };
-
-  return { track, complete, completeAfter, cancelPendingOnAbort };
+  return { track, complete, cancelPendingOnAbort };
 }

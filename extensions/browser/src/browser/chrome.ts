@@ -762,8 +762,6 @@ export type RunningChrome = {
   headlessSource?: ManagedBrowserHeadlessSource;
   graphicsDiagnostics?: BrowserGraphicsDiagnostics;
   graphicsDiagnosticsPending?: Promise<BrowserGraphicsDiagnostics>;
-  /** @deprecated Scoped CDP bypasses now release with each request. */
-  releaseCdpProxyBypass?: () => void;
 };
 
 /** A managed child survived bounded cancellation and remains actor-owned for retry. */

@@ -15,7 +15,7 @@
  */
 
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-import { modelKey } from "./model-selection-normalize.js";
+import { modelKey } from "./model-ref-shared.js";
 
 /**
  * Default time-to-live for a skip marker. Disabled by default so existing

@@ -33,7 +33,7 @@ import {
 import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
-import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
+import { nostrSetupAdapter, nostrSetupContract, nostrSetupWizard } from "./setup-surface.js";
 import {
   listNostrAccountIds,
   resolveDefaultNostrAccountId,
@@ -140,6 +140,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
     reload: { configPrefixes: ["channels.nostr"] },
     configSchema: buildChannelConfigSchema(NostrConfigSchema),
     setup: nostrSetupAdapter,
+    setupContract: nostrSetupContract,
     setupWizard: nostrSetupWizard,
     config: {
       ...nostrConfigAdapter,

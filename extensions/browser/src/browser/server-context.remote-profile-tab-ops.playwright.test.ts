@@ -33,7 +33,6 @@ async function expectBlockedCdpEndpoint(promise: Promise<unknown>) {
 const permissiveRemoteCdpPolicy = {
   allowPrivateNetwork: true,
   allowedHostnames: ["1.1.1.1"],
-  hostnameAllowlist: ["1.1.1.1"],
 };
 
 describe("browser remote profile tab ops via Playwright", () => {
@@ -469,7 +468,7 @@ describe("browser remote profile tab ops via Playwright", () => {
     const state = deps.makeState("remote");
     state.resolved.ssrfPolicy = {
       dangerouslyAllowPrivateNetwork: false,
-      hostnameAllowlist: ["browserless.example.com"],
+      allowedHostnames: ["browserless.example.com"],
     };
     const remoteProfile = expectDefined(state.resolved.profiles.remote, "remote browser profile");
     state.resolved.profiles.remote = {

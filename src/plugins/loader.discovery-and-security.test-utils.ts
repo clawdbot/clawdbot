@@ -441,7 +441,11 @@ describe("loadOpenClawPlugins", () => {
           fs.writeFileSync(
             path.join(memoryLanceDir, "openclaw.plugin.json"),
             JSON.stringify(
-              { id: "memory-lancedb", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+              {
+                id: "memory-lancedb",
+                kind: "memory",
+                configSchema: { type: "object", additionalProperties: true },
+              },
               null,
               2,
             ),
@@ -457,7 +461,10 @@ describe("loadOpenClawPlugins", () => {
                 slots: { memory: "memory-lancedb" },
                 entries: {
                   "memory-core": { enabled: true },
-                  "memory-lancedb": { enabled: true },
+                  "memory-lancedb": {
+                    enabled: true,
+                    config: { dreaming: { enabled: false } },
+                  },
                 },
               },
             },
@@ -574,10 +581,13 @@ describe("loadOpenClawPlugins", () => {
         pluginId: "shadow",
         bundledFilename: "shadow.cjs",
         loadRegistry: () => {
-          writeBundledPlugin({
+          const bundled = writeBundledPlugin({
             id: "shadow",
             body: simplePluginBody("shadow"),
             filename: "shadow.cjs",
+          });
+          updatePluginManifest(bundled.plugin, {
+            contracts: { agentToolResultMiddleware: ["codex"] },
           });
 
           const override = writePlugin({
@@ -599,7 +609,13 @@ describe("loadOpenClawPlugins", () => {
         },
         expectedLoadedOrigin: "config",
         expectedDisabledOrigin: "bundled",
-        assert: expectPluginSourcePrecedence,
+        assert: (
+          registry: PluginRegistry,
+          scenario: Parameters<typeof expectPluginSourcePrecedence>[1],
+        ) => {
+          expectPluginSourcePrecedence(registry, scenario);
+          expect(registry.agentToolResultMiddlewareOwners).toEqual([]);
+        },
       },
       {
         label: "bundled beats auto-discovered global duplicate",
@@ -1039,7 +1055,7 @@ describe("loadOpenClawPlugins", () => {
     expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
   });
 
-  it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
+  it("distinguishes load permission from capability trust in the untracked-provenance warning", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
@@ -1066,21 +1082,31 @@ describe("loadOpenClawPlugins", () => {
       const untrackedWarning = warnings.find(
         (msg) =>
           msg.includes("warn-untracked-remediation") &&
-          msg.includes("loaded without install/load-path provenance"),
+          msg.includes("OpenClaw can't verify where this plugin came from"),
       );
       expect(untrackedWarning).toBeDefined();
-      expect(untrackedWarning).toContain('"warn-untracked-remediation"');
+      expect(untrackedWarning).toContain("OpenClaw can't verify where this plugin came from");
       expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(untrackedWarning).toContain("reinstall from a trusted source");
+      expect(untrackedWarning).toContain(
+        "plugins.allow lets it load, but does not make it trusted",
+      );
+      expect(untrackedWarning).toContain(
+        "reinstall it from its official npm package or its official ClawHub listing",
+      );
 
       const diagnostic = registry.diagnostics.find(
         (entry) =>
           entry.pluginId === "warn-untracked-remediation" &&
-          entry.message.includes("loaded without install/load-path provenance"),
+          entry.message.includes("OpenClaw can't verify where this plugin came from"),
       );
-      expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
+      expect(diagnostic?.message).toContain("OpenClaw can't verify where this plugin came from");
       expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(diagnostic?.message).toContain("reinstall from a trusted source");
+      expect(diagnostic?.message).toContain(
+        "plugins.allow lets it load, but does not make it trusted",
+      );
+      expect(diagnostic?.message).toContain(
+        "reinstall it from its official npm package or its official ClawHub listing",
+      );
     });
   });
 
@@ -1536,7 +1562,7 @@ describe("loadOpenClawPlugins", () => {
         warnings.filter(
           (message) =>
             message.includes("trusted-plugin") &&
-            message.includes("loaded without install/load-path provenance"),
+            message.includes("OpenClaw can't verify where this plugin came from"),
         ),
       ).toEqual([]);
     });
@@ -1684,7 +1710,7 @@ describe("loadOpenClawPlugins", () => {
         registry,
         level: "warn",
         pluginId: "rogue",
-        message: "loaded without install/load-path provenance",
+        message: "OpenClaw can't verify where this plugin came from",
       });
     });
   });

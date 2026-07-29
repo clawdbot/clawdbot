@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 // OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
+  buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
   ErrorCodes,
   errorShape,
@@ -18,6 +18,7 @@ import {
   SYSTEM_AGENT_APPROVAL_TIMEOUT_MS,
   type SystemAgentApprovalRequestPayload,
 } from "../../infra/system-agent-approvals.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -45,6 +46,7 @@ import {
   handlePendingApprovalRequest,
   listVisiblePendingApprovalRequests,
 } from "./approval-shared.js";
+import { sanitizeSystemAgentChatParams } from "./system-agent-chat-params.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -491,7 +493,8 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
       );
     }
   },
-  "openclaw.chat": async ({ params, respond, client, context }) => {
+  "openclaw.chat": async ({ params: rawParams, respond, client, context }) => {
+    const params = sanitizeSystemAgentChatParams(rawParams);
     if (!assertValidParams(params, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
@@ -557,6 +560,9 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               errorShape(
                 ErrorCodes.UNAVAILABLE,
                 `OpenClaw requires working inference: ${inference.error}`,
+                {
+                  details: buildSystemAgentInferenceUnavailableErrorDetails(),
+                },
               ),
             );
             return;
@@ -660,7 +666,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         const historyStart = session.engine.historyLength();
         let reply: Awaited<ReturnType<SystemAgentChatEngine["handle"]>>;
         try {
-          reply = await session.engine.handle(params.message);
+          reply =
+            params.delegation === undefined && params.context
+              ? await session.engine.handle(params.message, { uiContext: params.context })
+              : await session.engine.handle(params.message);
         } catch (error) {
           persistEngineHistory(session.engine, historyStart);
           if (!isSystemAgentInferenceUnavailableError(error)) {

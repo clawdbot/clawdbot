@@ -1,14 +1,62 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
   validateSystemAgentSetupVerifyParams,
 } from "../index.js";
 import {
+  SystemAgentChatQuestionSchema,
   SystemAgentChatHistoryResultSchema,
   SystemAgentSetupDetectResultSchema,
   SystemAgentSetupVerifyResultSchema,
 } from "./openclaw.js";
+
+describe("OpenClaw chat params protocol", () => {
+  const base = { sessionId: "session-1", message: "What about this page?" };
+
+  it("accepts the additive page context and remains backward compatible", () => {
+    expect(validateSystemAgentChatParams(base)).toBe(true);
+    expect(validateSystemAgentChatParams({ ...base, context: { page: "channels" } })).toBe(true);
+    expect(
+      validateSystemAgentChatParams({ ...base, context: { page: "/settings/channels" } }),
+    ).toBe(true);
+  });
+
+  it("rejects unsafe page ids and unknown context fields", () => {
+    expect(validateSystemAgentChatParams({ ...base, context: { page: "channels?tab=all" } })).toBe(
+      false,
+    );
+    expect(validateSystemAgentChatParams({ ...base, context: { page: "a".repeat(65) } })).toBe(
+      false,
+    );
+    expect(
+      validateSystemAgentChatParams({
+        ...base,
+        context: { page: "channels", source: "client" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("OpenClaw chat question protocol", () => {
+  const question = {
+    id: "onboarding-next-step",
+    header: "Next step",
+    question: "What would you like to do first?",
+    options: [{ label: "Talk to my agent" }, { label: "Connect a channel" }],
+  };
+
+  it("accepts the additive exit skip action and rejects unknown actions", () => {
+    expect(Value.Check(SystemAgentChatQuestionSchema, question)).toBe(true);
+    expect(Value.Check(SystemAgentChatQuestionSchema, { ...question, skipAction: "exit" })).toBe(
+      true,
+    );
+    expect(Value.Check(SystemAgentChatQuestionSchema, { ...question, skipAction: "dismiss" })).toBe(
+      false,
+    );
+  });
+});
 
 describe("OpenClaw chat history protocol", () => {
   it("accepts the default request and bounds explicit limits", () => {
@@ -42,6 +90,7 @@ describe("OpenClaw setup detection protocol", () => {
       candidates: [
         {
           kind: "provider-auto:ollama",
+          brandId: "ollama",
           label: "Ollama",
           detail: "available locally",
           modelRef: "ollama/qwen3",
@@ -53,6 +102,7 @@ describe("OpenClaw setup detection protocol", () => {
       manualProviders: [
         {
           id: "ollama",
+          brandId: "ollama",
           label: "Ollama",
           icon: "https://cdn.simpleicons.org/ollama",
           website: "https://ollama.com/download",
@@ -62,6 +112,7 @@ describe("OpenClaw setup detection protocol", () => {
       recommendedInstalls: [
         {
           id: "ollama",
+          brandId: "ollama",
           label: "Ollama",
           hint: "Run open models locally",
           website: "https://ollama.com/download",
@@ -73,6 +124,18 @@ describe("OpenClaw setup detection protocol", () => {
     };
 
     expect(Value.Check(SystemAgentSetupDetectResultSchema, result)).toBe(true);
+    expect(
+      Value.Check(SystemAgentSetupDetectResultSchema, {
+        ...result,
+        candidates: result.candidates.map(({ brandId: _brandId, ...candidate }) => candidate),
+        manualProviders: result.manualProviders.map(
+          ({ brandId: _brandId, ...provider }) => provider,
+        ),
+        recommendedInstalls: result.recommendedInstalls.map(
+          ({ brandId: _brandId, ...install }) => install,
+        ),
+      }),
+    ).toBe(true);
     expect(
       Value.Check(SystemAgentSetupDetectResultSchema, {
         ...result,

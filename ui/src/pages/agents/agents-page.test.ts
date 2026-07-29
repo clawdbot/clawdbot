@@ -8,7 +8,8 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { AgentsRouteData } from "./agents-page.ts";
+import type { AgentsPanel } from "../../lib/agents/panels.ts";
+import type { AgentsRouteData } from "./route.ts";
 import "./agents-page.ts";
 
 type TestAgentsPage = HTMLElement & {
@@ -20,9 +21,10 @@ type TestAgentsPage = HTMLElement & {
   routeData?: AgentsRouteData;
   agentFilesLoading: boolean;
   agentFilesList: AgentsFilesListResult | null;
+  agentFileActive: string | null;
   agentFileContents: Record<string, string>;
   agentIdentityLoading: boolean;
-  agentsPanel: string;
+  readonly agentsPanel: AgentsPanel;
   toolsEffectiveLoading: boolean;
   toolsEffectiveResult: ToolsEffectiveResult | null;
   requestGeneration: number;
@@ -53,8 +55,9 @@ function snapshot(
 ): ApplicationGatewaySnapshot {
   return {
     client,
-    connected,
-    reconnecting: false,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
     hello: null,
     assistantAgentId: null,
     sessionKey: "main",
@@ -144,6 +147,9 @@ describe("AgentsPage gateway lifecycle", () => {
     page.routeData = {
       gateway: currentGateway,
       gatewaySnapshot: currentGateway.snapshot,
+      location: { pathname: "/settings/agents/main", search: "", hash: "" },
+      requestedAgentId: "main",
+      panel: "files",
       agentsList: preloadedAgents,
       selectedAgentId: "main",
       error: null,
@@ -179,6 +185,9 @@ describe("AgentsPage gateway lifecycle", () => {
     page.routeData = {
       gateway: preloadedGateway,
       gatewaySnapshot: preloadedSnapshot,
+      location: { pathname: "/settings/agents/main", search: "", hash: "" },
+      requestedAgentId: "main",
+      panel: "files",
       agentsList,
       selectedAgentId: "main",
       error: null,
@@ -242,6 +251,52 @@ describe("AgentsPage gateway lifecycle", () => {
     await replacementLoad;
     expect(page.agentFilesList?.workspace).toBe("new");
     expect(page.agentFilesLoading).toBe(false);
+  });
+
+  it("selects and loads AGENTS.md when the file list opens", async () => {
+    const fileList: AgentsFilesListResult = {
+      agentId: "main",
+      workspace: "/tmp/workspace",
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/workspace/AGENTS.md",
+          missing: false,
+        },
+        {
+          name: "SOUL.md",
+          path: "/tmp/workspace/SOUL.md",
+          missing: false,
+        },
+      ],
+    };
+    const request = vi.fn(async () => ({
+      file: {
+        ...fileList.files[0],
+        content: "# Instructions",
+      },
+    }));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.client = client;
+    page.connected = true;
+    page.agentsSelectedId = "main";
+    page.context = {
+      agents: {
+        files: () => ({ list: null, loading: false, error: null }),
+        ensureFiles: vi.fn(async () => fileList),
+        refreshFiles: vi.fn(async () => fileList),
+      },
+    } as unknown as ApplicationContext;
+
+    await page.loadAgentFiles("main");
+
+    expect(page.agentFileActive).toBe("AGENTS.md");
+    expect(page.agentFileContents["AGENTS.md"]).toBe("# Instructions");
+    expect(request).toHaveBeenCalledWith("agents.files.get", {
+      agentId: "main",
+      name: "AGENTS.md",
+    });
   });
 
   it("retries an in-flight panel load after a same-client disconnect", async () => {
@@ -392,8 +447,6 @@ describe("AgentsPage gateway lifecycle", () => {
     const context = pageContext(currentGateway, agents, { sessions: oldSessions });
     page.context = context;
     page.subscriptions.hostConnected();
-    page.agentsPanel = "overview";
-
     page.loadEffectiveToolsForAgent("main");
     expect(page.toolsEffectiveLoading).toBe(true);
 
@@ -413,5 +466,34 @@ describe("AgentsPage gateway lifecycle", () => {
     await vi.waitFor(() => expect(page.toolsEffectiveResult?.profile).toBe("new"));
     expect(page.toolsEffectiveLoading).toBe(false);
     page.subscriptions.hostDisconnected();
+  });
+});
+
+describe("AgentsPage routing", () => {
+  it("derives the panel from route data", () => {
+    const currentGateway = gateway(snapshot(null, false));
+    const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+    page.context = {
+      basePath: "/ui",
+      gateway: currentGateway,
+    } as unknown as ApplicationContext;
+    page.agentsList = {
+      ...agentsList,
+      agents: [...agentsList.agents, { id: "research", name: "Research" }],
+    };
+    page.agentsSelectedId = "main";
+    page.routeData = {
+      gateway: currentGateway,
+      gatewaySnapshot: currentGateway.snapshot,
+      location: { pathname: "/ui/settings/agents/main/tools", search: "", hash: "" },
+      requestedAgentId: "main",
+      panel: "tools",
+      agentsList: page.agentsList as AgentsListResult,
+      selectedAgentId: "main",
+      error: null,
+    };
+
+    expect(page.agentsPanel).toBe("tools");
+    expect(page.agentsSelectedId).toBe("main");
   });
 });

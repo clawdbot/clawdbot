@@ -7,7 +7,7 @@ import type {
   MeetingManualAction,
   MeetingBrowserRequestCaller,
   MeetingPlatformAdapter,
-} from "./platform-adapter.js";
+} from "./platform-adapter-contract.js";
 import type {
   MeetingBrowserCandidateTab,
   MeetingBrowserHealth,
@@ -54,9 +54,7 @@ function applyMeetingManualAction<Health extends MeetingBrowserHealth>(
   return browser && manual
     ? {
         ...browser,
-        manualActionRequired: true,
-        manualActionReason: manual.reason,
-        manualActionMessage: manual.message,
+        manualAction: { reason: manual.reason, message: manual.message },
       }
     : browser;
 }
@@ -247,7 +245,9 @@ export async function openMeetingWithBrowser<
                 ...params.session,
                 allowSessionAdoption: adoptSession,
                 autoJoin: params.config.autoJoin,
-                captureCaptions: params.adapter.browser.captions.enabled(params.session.mode),
+                captureCaptions:
+                  params.session.captureCaptions ??
+                  params.adapter.browser.captions.enabled(params.session.mode),
                 guestName: params.config.guestName,
                 waitForInCallMs: params.config.waitForInCallMs,
               }),
@@ -271,12 +271,12 @@ export async function openMeetingWithBrowser<
       if (
         !shouldRetry &&
         browser?.inCall === true &&
-        browser.manualActionRequired !== true &&
+        browser.manualAction === undefined &&
         (!allowMicrophone || browser.micMuted !== true)
       ) {
         return { launched: true, browser, tab: tabIdentity };
       }
-      if (!shouldRetry && browser?.manualActionRequired === true) {
+      if (!shouldRetry && browser?.manualAction) {
         return { launched: true, browser, tab: tabIdentity };
       }
     } catch (error) {
@@ -289,9 +289,7 @@ export async function openMeetingWithBrowser<
         browser = {
           ...browser,
           inCall: false,
-          manualActionRequired: true,
-          manualActionReason: manual.reason,
-          manualActionMessage: manual.message,
+          manualAction: { reason: manual.reason, message: manual.message },
           notes: [
             ...permissionNotes,
             `Browser control could not inspect or auto-join ${params.adapter.browserLabel}: ${
@@ -361,6 +359,7 @@ async function inspectRecoverableTab<
   allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
+  captureCaptions?: boolean;
   config: MeetingBrowserControllerConfig;
   meetingSessionId?: string;
   mode: Mode;
@@ -393,9 +392,7 @@ async function inspectRecoverableTab<
         status: "browser-control",
         browserUrl: params.tab.url,
         browserTitle: params.tab.title,
-        manualActionRequired: true,
-        manualActionReason: localeAction.reason,
-        manualActionMessage: localeAction.message,
+        manualAction: { reason: localeAction.reason, message: localeAction.message },
       } as unknown as Health,
       message: localeAction.message,
     };
@@ -437,7 +434,8 @@ async function inspectRecoverableTab<
                 mode: params.mode,
                 url: params.requestedMeetingUrl ?? params.tab.url ?? "",
                 autoJoin: params.autoJoin ?? false,
-                captureCaptions: params.adapter.browser.captions.enabled(params.mode),
+                captureCaptions:
+                  params.captureCaptions ?? params.adapter.browser.captions.enabled(params.mode),
                 guestName: params.config.guestName,
                 readOnly: params.readOnly,
                 waitForInCallMs: params.config.waitForInCallMs,
@@ -504,6 +502,7 @@ export async function recoverMeetingBrowserTab<
   allowSessionAdoption?: boolean;
   autoJoin?: boolean;
   callBrowser: MeetingBrowserRequestCaller;
+  captureCaptions?: boolean;
   config: MeetingBrowserControllerConfig;
   locationLabel: string;
   meetingSessionId?: string;
@@ -580,6 +579,7 @@ export async function recoverMeetingBrowserTab<
     allowSessionAdoption: params.allowSessionAdoption,
     autoJoin: params.autoJoin,
     callBrowser: params.callBrowser,
+    captureCaptions: params.captureCaptions,
     config: params.config,
     ...(deadline === undefined ? {} : { deadline }),
     meetingSessionId: params.meetingSessionId,

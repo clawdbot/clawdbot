@@ -12,6 +12,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { CliOutput } from "./cli-output.js";
 import { cliBackendLog } from "./cli-runner/log.js";
 
@@ -163,6 +164,7 @@ beforeAll(async () => {
 });
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.clearAllMocks();
   resetDiagnosticEventsForTest();
 });
@@ -226,6 +228,21 @@ describe("runCliAgent before_agent_reply seam", () => {
 
     expect(result.diagnosticTrace).toBeUndefined();
     expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
+  });
+
+  it("projects CLI tool summaries onto terminal run metadata", async () => {
+    executePreparedCliRunMock.mockResolvedValue({
+      text: "done",
+      toolSummary: { calls: 1, tools: ["github.search"], failures: 0 },
+    });
+
+    const result = await runCliAgent(baseRunParams);
+
+    expect(result.meta.toolSummary).toEqual({
+      calls: 1,
+      tools: ["github.search"],
+      failures: 0,
+    });
   });
 
   it("preserves the send phase when execution fails before successful cleanup", async () => {
@@ -375,27 +392,29 @@ describe("runCliAgent before_agent_reply seam", () => {
   );
 
   it("clears stateless CLI bindings when before_agent_reply claims a cron turn", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "codex-cli",
+          pluginId: "test-codex-cli",
+          config: {
+            command: "codex",
+            args: ["exec"],
+            output: "text",
+            input: "arg",
+            sessionMode: "none",
+          },
+        },
+      ],
+    });
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     runBeforeAgentReplyMock.mockResolvedValue({ handled: true });
 
     const result = await runCliAgent({
       ...baseRunParams,
       trigger: "cron",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                args: ["exec"],
-                output: "text",
-                input: "arg",
-                sessionMode: "none",
-              },
-            },
-          },
-        },
-      },
+      config: {},
     });
 
     expect(result.meta.agentMeta?.sessionId).toBe("");

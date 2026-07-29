@@ -1,12 +1,15 @@
 // Zalouser plugin owns raw zca-js message admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getZalouserRuntime } from "./runtime.js";
 import type { ZaloInboundMessage } from "./types.js";
 import { normalizeZaloInboundMessage } from "./zalo-js.js";
@@ -43,20 +46,7 @@ type ZalouserIngressMonitor = {
   waitForIdle: () => Promise<void>;
 };
 
-class ZalouserIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "ZalouserIngressPayloadError";
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function nonEmptyString(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
+const ZalouserIngressPayloadError = createChannelIngressError("ZalouserIngressPayloadError");
 
 function inspectZalouserIngressMessage(message: unknown): {
   eventId: string;
@@ -146,8 +136,6 @@ export function createZalouserIngressMonitor(options: {
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
 }): ZalouserIngressMonitor {
-  const deferredClaims = new Map<string, Promise<void>>();
-
   const monitor = createChannelIngressMonitor<
     Message,
     { receivedAt: number; rawMessage: string },
@@ -187,57 +175,15 @@ export function createZalouserIngressMonitor(options: {
             : "Zalouser message identity changed after durable admission.",
         ),
     },
-    deliver: async (rawMessage, lifecycle, claim) => {
+    deliver: async (rawMessage, lifecycle) => {
       const message = normalizeZaloInboundMessage(rawMessage, options.ownUserId);
       if (!message) {
         throw new ZalouserIngressPayloadError("Zalouser message could not be normalized.");
       }
-      const bound = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-      let resolveDeferredClaim!: () => void;
-      const deferredClaim = new Promise<void>((resolve) => {
-        resolveDeferredClaim = resolve;
-      });
-      let deferredClaimSettled = false;
-      const settleDeferredClaim = () => {
-        if (deferredClaimSettled) {
-          return;
-        }
-        deferredClaimSettled = true;
-        lifecycle.abortSignal.removeEventListener("abort", settleDeferredClaim);
-        if (deferredClaims.get(claim.id) === deferredClaim) {
-          deferredClaims.delete(claim.id);
-        }
-        resolveDeferredClaim();
-      };
-      // The drain can guillotine or dispose a deferred claim without invoking
-      // the reply lifecycle again. Release local bookkeeping on that abort.
-      lifecycle.abortSignal.addEventListener("abort", settleDeferredClaim, { once: true });
-      if (lifecycle.abortSignal.aborted) {
-        settleDeferredClaim();
-      }
-      await options.dispatch(message, {
-        ...bound,
-        onAdopted: async () => {
-          try {
-            await bound.onAdopted();
-          } finally {
-            settleDeferredClaim();
-          }
-        },
-        onDeferred: () => {
-          if (!deferredClaimSettled) {
-            deferredClaims.set(claim.id, deferredClaim);
-          }
-          bound.onDeferred();
-        },
-        onAbandoned: async () => {
-          try {
-            await bound.onAbandoned();
-          } finally {
-            settleDeferredClaim();
-          }
-        },
-      });
+      await options.dispatch(
+        message,
+        bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+      );
     },
     pollIntervalMs: options.pollIntervalMs ?? ZALOUSER_INGRESS_POLL_INTERVAL_MS,
     retention: {
@@ -248,6 +194,8 @@ export function createZalouserIngressMonitor(options: {
       failedMaxEntries: ZALOUSER_INGRESS_FAILED_MAX_ENTRIES,
     },
     appendRetryDelaysMs: ZALOUSER_INGRESS_APPEND_RETRY_DELAYS_MS,
+    // Abort leaves the durable row replayable, so no reply bookkeeping remains owned here.
+    deferredClaims: "settle-on-abort",
     drain: {
       orderBy: "received",
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs ?? DEFAULT_INGRESS_ADOPTION_STALL_MS,
@@ -283,11 +231,7 @@ export function createZalouserIngressMonitor(options: {
         throw new Error("Zalouser durable ingress append failed.", { cause: error });
       }
     },
-    stop: async () => {
-      await monitor.stop();
-      // Abort settles deferred reply bookkeeping; the durable row remains replayable.
-      await Promise.allSettled(deferredClaims.values());
-    },
+    stop: monitor.stop,
     waitForIdle: monitor.waitForIdle,
   };
 }

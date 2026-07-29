@@ -20,6 +20,9 @@ export function createSessionsYieldTool(opts?: {
   return {
     label: "Yield",
     name: "sessions_yield",
+    // Turn-lifecycle contract: spawn flows instruct the model to yield, so the
+    // tool must stay visible even when tool search compacts the catalog.
+    catalogMode: "direct-only",
     description: "End turn after subagent spawn; results arrive next message.",
     parameters: SessionsYieldToolSchema,
     execute: async (_toolCallId, args) => {

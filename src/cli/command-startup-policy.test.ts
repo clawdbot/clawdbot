@@ -22,8 +22,11 @@ describe("command-startup-policy", () => {
   it("matches config guard bypass commands", () => {
     expect(shouldBypassConfigGuardForCommandPath(["backup", "create"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config", "file"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["docs"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["agent", "exec"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
@@ -112,6 +115,12 @@ describe("command-startup-policy", () => {
         jsonOutputMode: true,
       }).loadPlugins,
     ).toBe(true);
+    expect(
+      resolvePolicy({
+        argv: ["node", "openclaw", "agent", "exec", "fix it"],
+        commandPath: ["agent", "exec"],
+      }).loadPlugins,
+    ).toBe(false);
     expect(
       resolvePolicy({
         argv: ["node", "openclaw", "agent"],

@@ -12,7 +12,7 @@ import {
   normalizeOptionalAgentRuntimeId,
   resolveAgentScopedRuntimeOverride,
 } from "./agent-runtime-id.js";
-import { hasModelExtraParams } from "./model-extra-params.js";
+import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { canonicalizeProviderModelId } from "./provider-model-route.js";
@@ -53,14 +53,16 @@ export function resolveOpenAIImplicitAgentRuntime(params: {
   const agentId =
     params.agentId ??
     (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
-  const hasConfiguredParams = hasModelExtraParams({
+  const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
     provider: params.provider ?? OPENAI_PROVIDER_ID,
     modelId,
     agentId,
   });
   const requestTransportOverrides =
-    params.requestTransportOverrides === "present" || hasConfiguredParams ? "present" : "none";
+    params.requestTransportOverrides === "present" || hasConfiguredProviderRequestParams
+      ? "present"
+      : "none";
   const resolution = resolveOpenAIModelRoutes({
     provider: params.provider,
     modelId,

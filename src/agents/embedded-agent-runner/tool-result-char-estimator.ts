@@ -1,4 +1,3 @@
-import { CHARS_PER_TOKEN_ESTIMATE } from "../../utils/cjk-chars.js";
 /**
  * Estimates message and tool-result character costs for context guards.
  */
@@ -10,8 +9,8 @@ import {
   COMPACTION_SUMMARY_SUFFIX,
   bashExecutionToText,
 } from "../runtime/index.js";
+import { estimateToolResultTextChars } from "./tool-result-text-budget.js";
 
-export { CHARS_PER_TOKEN_ESTIMATE };
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
@@ -73,6 +72,22 @@ function estimateContentBlockChars(content: unknown[]): number {
       chars += IMAGE_CHAR_ESTIMATE;
     } else {
       chars += estimateUnknownChars(block);
+    }
+  }
+  return chars;
+}
+
+function estimateToolResultContentChars(content: unknown[]): number {
+  let chars = 0;
+  for (const block of content) {
+    if (isTextBlock(block)) {
+      chars += estimateToolResultTextChars(block.text, {
+        minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
+      });
+    } else if (isImageBlock(block)) {
+      chars += IMAGE_CHAR_ESTIMATE * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
+    } else {
+      chars += estimateUnknownChars(block) * TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE;
     }
   }
   return chars;
@@ -140,11 +155,7 @@ function estimateMessageChars(msg: AgentMessage): number {
   if (isToolResultMessage(msg)) {
     // `details` is stripped before provider conversion; estimate only visible content.
     const content = getToolResultContent(msg);
-    const chars = estimateContentBlockChars(content);
-    const weightedChars = Math.ceil(
-      chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
-    );
-    return Math.max(chars, weightedChars);
+    return estimateToolResultContentChars(content);
   }
 
   const record = msg as unknown as Record<string, unknown>;
@@ -195,13 +206,6 @@ export function estimateMessageCharsCached(
   const estimated = estimateMessageChars(msg);
   cache.set(msg, estimated);
   return estimated;
-}
-
-export function estimateContextChars(
-  messages: AgentMessage[],
-  cache: MessageCharEstimateCache,
-): number {
-  return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
 export function invalidateMessageCharsCacheEntry(
