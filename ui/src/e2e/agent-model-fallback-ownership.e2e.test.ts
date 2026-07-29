@@ -103,6 +103,7 @@ describeControlUiE2e("Control UI agent model fallback ownership", () => {
       await gateway.waitForRequest("config.get");
       const agentPicker = page.locator("openclaw-agents-page openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
+      // Switching agents is the user action under test; the Tools panel must survive it.
       await agentPicker
         .locator("wa-dropdown-item[data-agent-option]")
         .filter({ hasText: "Writer" })
