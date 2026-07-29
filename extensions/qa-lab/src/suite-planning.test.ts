@@ -544,10 +544,24 @@ describe("qa suite planning helpers", () => {
     ).toBe(true);
     expect(scenarioRequiresIsolatedQaSuiteWorker(makeQaSuiteTestScenario("plain"))).toBe(false);
     expect(
-      scenarioRequiresIsolatedQaSuiteWorker(
-        readQaScenarioById("matrix-dm-thread-reply-override"),
-      ),
+      scenarioRequiresIsolatedQaSuiteWorker(readQaScenarioById("matrix-dm-thread-reply-override")),
     ).toBe(true);
+  });
+
+  it("isolates Matrix reaction flows that require a fresh native canary", () => {
+    const scenarioIds = [
+      "matrix-reaction-notification",
+      "matrix-reaction-threaded",
+      "matrix-reaction-not-a-reply",
+      "matrix-reaction-redaction-observed",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.execution.suiteIsolation, scenarioId).toBe("isolated");
+      expect(scenario.execution.isolationReason, scenarioId).toContain("fresh canary reply");
+      expect(scenarioRequiresIsolatedQaSuiteWorker(scenario), scenarioId).toBe(true);
+    }
   });
 
   it("isolates and collects scenario-declared transport policy", () => {
