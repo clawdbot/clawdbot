@@ -72,6 +72,13 @@ function completedRun(
   };
 }
 
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -365,6 +372,65 @@ describe("skill experience review scheduler", () => {
     expect(runReview).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runReview).toHaveBeenCalledTimes(1);
+    scheduler.clear();
+  });
+
+  it("drops terminal auth-migration failures without re-arming", async () => {
+    const callbacks: Array<() => void> = [];
+    const setTimer = vi.fn((callback: () => void) => {
+      callbacks.push(callback);
+      return { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimer = vi.fn();
+    const runReview = vi.fn().mockRejectedValue(
+      Object.assign(new Error("Auth migration required; run openclaw doctor --fix."), {
+        code: "AUTH_PROFILE_MIGRATION_REQUIRED" as const,
+      }),
+    );
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+      setTimer,
+      clearTimer,
+    });
+
+    scheduler.schedule(completedRun());
+    callbacks[0]?.();
+    await flushMicrotasks();
+
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(setTimer).toHaveBeenCalledTimes(1);
+    expect(clearTimer).not.toHaveBeenCalled();
+
+    scheduler.schedule(completedRun());
+    expect(setTimer).toHaveBeenCalledTimes(2);
+    expect(clearTimer).not.toHaveBeenCalled();
+    scheduler.clear();
+  });
+
+  it("re-arms after a generic review failure", async () => {
+    const callbacks: Array<() => void> = [];
+    const setTimer = vi.fn((callback: () => void, _delayMs: number) => {
+      callbacks.push(callback);
+      return { unref: vi.fn() } as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimer = vi.fn();
+    const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+    const scheduler = createSkillExperienceReviewScheduler({
+      isSystemActive: () => false,
+      runReview,
+      setTimer,
+      clearTimer,
+    });
+
+    scheduler.schedule(completedRun());
+    callbacks[0]?.();
+    await flushMicrotasks();
+
+    expect(runReview).toHaveBeenCalledTimes(1);
+    expect(setTimer).toHaveBeenCalledTimes(2);
+    expect(setTimer).toHaveBeenLastCalledWith(expect.any(Function), 30_000);
+    expect(clearTimer).not.toHaveBeenCalled();
     scheduler.clear();
   });
 

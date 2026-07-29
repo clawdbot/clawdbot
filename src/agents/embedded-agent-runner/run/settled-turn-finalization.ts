@@ -10,7 +10,7 @@ import {
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
 import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
-import { EMBEDDED_RUN_LANE_HEARTBEAT_MS } from "./lane-runtime.js";
+import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
   type EmbeddedRunTerminalState,
@@ -167,10 +167,7 @@ async function runPreparedSettledTurnFinalization(input: {
   prompt: string;
   noteLaneTaskProgress: () => void;
 }): Promise<EmbeddedRunAttemptResult> {
-  input.noteLaneTaskProgress();
-  const progressInterval = setInterval(input.noteLaneTaskProgress, EMBEDDED_RUN_LANE_HEARTBEAT_MS);
-  progressInterval.unref?.();
-  try {
+  return await withEmbeddedRunLaneProgressHeartbeat(input.noteLaneTaskProgress, async () => {
     const result = await runEmbeddedSettledTurnFinalizationWithBackend(
       {
         ...input.attempt,
@@ -189,10 +186,7 @@ async function runPreparedSettledTurnFinalization(input: {
       prompt: input.prompt,
       agentHarnessId: input.attempt.agentHarnessId,
     });
-  } finally {
-    clearInterval(progressInterval);
-    input.noteLaneTaskProgress();
-  }
+  });
 }
 
 function buildSettledTurnFinalizationAttemptResult(input: {
