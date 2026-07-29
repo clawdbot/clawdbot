@@ -523,7 +523,7 @@ Query-string tokens are rejected.
 
   </Accordion>
   <Accordion title="POST /hooks/agent">
-    Run an isolated agent turn:
+    Run an agent turn. Sessions are isolated by default:
 
     ```bash
     curl -X POST http://127.0.0.1:18789/hooks/agent \
@@ -532,7 +532,9 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.6-sol"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId`, `sessionKey` (requires `hooks.allowRequestSessionKey=true`), `sessionMode` (`isolated` or `persistent`), `idempotencyKey`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `thinking`, `timeoutSeconds`.
+
+    Set `sessionMode: "persistent"` only when repeated deliveries should reuse prior context. Direct persistent hooks require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and a non-empty `hooks.allowedSessionKeyPrefixes` allowlist. Omit `sessionMode` or use `"isolated"` for a fresh run session.
 
     Hook delivery is bound before the isolated run is scheduled:
 
@@ -551,6 +553,9 @@ Query-string tokens are rejected.
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom hook names resolve via `hooks.mappings` in config. Mappings can transform arbitrary payloads into `wake` or `agent` actions with templates or code transforms. Mapped `agent` actions use the same 15-second admission and `200`/`409`/`502`/`503` response contract as `POST /hooks/agent`.
+
+    Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys retain the request-key opt-in and prefix policy above.
+
   </Accordion>
 </AccordionGroup>
 
