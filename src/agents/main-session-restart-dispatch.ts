@@ -196,6 +196,7 @@ async function settleRestartRecoveryDispatch(params: {
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
   sessionKeys: readonly string[];
+  shouldContinue?: () => boolean;
   storePath: string;
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
@@ -203,6 +204,9 @@ async function settleRestartRecoveryDispatch(params: {
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     update: (entries) => {
+      if (params.shouldContinue?.() === false) {
+        return { result: undefined };
+      }
       const current = entries
         .filter(
           ({ entry }) =>
@@ -357,6 +361,7 @@ export async function resumeMainSession(params: {
   if (params.shouldContinue?.() === false) {
     return "skipped";
   }
+  const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
   const sanitizedPendingText =
     typeof params.pendingFinalDeliveryText === "string"
       ? sanitizePendingFinalDeliveryText(params.pendingFinalDeliveryText)
@@ -386,7 +391,7 @@ export async function resumeMainSession(params: {
       command: {
         kind: "prepare_attempt",
         attempt: params.recoveryAttempt,
-        lifecycleGeneration: params.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
+        lifecycleGeneration,
         now: Date.now(),
         observation: params.observation,
         runId: recoveryRunId,
@@ -527,7 +532,9 @@ export async function resumeMainSession(params: {
         params.gatewayRuntime,
       );
     }
-    const lifecycleGeneration = params.lifecycleGeneration ?? getAgentEventLifecycleGeneration();
+    if (params.shouldContinue?.() === false) {
+      return "skipped";
+    }
     const admission = await commitMainSessionRecovery({
       command: {
         kind: "admit_recovery",
@@ -551,14 +558,21 @@ export async function resumeMainSession(params: {
     ) {
       throw new Error(`restart recovery admission changed before settlement: ${params.sessionKey}`);
     }
+    if (params.shouldContinue?.() === false) {
+      return "skipped";
+    }
     await settleRestartRecoveryDispatch({
       expectedRecoveryRunId: recoveryRunId,
       expectedRecoverySourceRunId: sourceRunId,
       expectedSessionId: params.entry.sessionId,
       sessionKeys: recoverySessionKeys,
+      shouldContinue: params.shouldContinue,
       storePath: params.storePath,
       terminalStatus,
     });
+    if (params.shouldContinue?.() === false) {
+      return "skipped";
+    }
     log.info(
       `resumed interrupted main session: ${params.sessionKey}${
         sanitizedPendingText ? " (with pending payload)" : ""
@@ -568,13 +582,12 @@ export async function resumeMainSession(params: {
   } catch (error) {
     const explicitlyRejected = error instanceof GatewayClientRequestError;
     try {
-      if (dispatchStarted && !explicitlyRejected) {
+      if (dispatchStarted && !explicitlyRejected && params.shouldContinue?.() !== false) {
         const terminalStatus = await probeRestartRecoveryTerminalStatus(
           recoveryRunId,
           params.gatewayRuntime,
         );
-        if (terminalStatus) {
-          const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        if (terminalStatus && params.shouldContinue?.() !== false) {
           const admission = await commitMainSessionRecovery({
             command: {
               kind: "admit_recovery",
@@ -583,6 +596,7 @@ export async function resumeMainSession(params: {
               runId: recoveryRunId,
               sessionId: params.entry.sessionId,
             },
+            shouldContinue: params.shouldContinue,
             target: { sessionKey: params.sessionKey, storePath: params.storePath },
           });
           const exactRunAlreadyAdmitted = isExactRestartRecoveryDispatchAdmission({
@@ -593,60 +607,79 @@ export async function resumeMainSession(params: {
             terminalStatus,
           });
           if (admission.transition.kind !== "admitted_recovery" && !exactRunAlreadyAdmitted) {
-            log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
-          } else {
+            if (params.shouldContinue?.() !== false) {
+              log.warn(`restart recovery admission changed before settlement: ${params.sessionKey}`);
+            }
+          } else if (params.shouldContinue?.() !== false) {
             if (reservation) {
               await commitMainSessionRecovery({
                 command: { kind: "abandon_reservation", reservation },
                 target: { sessionKey: params.sessionKey, storePath: params.storePath },
               });
             }
-            await settleRestartRecoveryDispatch({
-              expectedRecoveryRunId: recoveryRunId,
-              expectedRecoverySourceRunId: sourceRunId,
-              expectedSessionId: params.entry.sessionId,
-              sessionKeys: recoverySessionKeys,
-              storePath: params.storePath,
-              terminalStatus,
-            });
-            log.info(`settled completed restart recovery for ${params.sessionKey}`);
-            return "resumed";
+            if (params.shouldContinue?.() !== false) {
+              await settleRestartRecoveryDispatch({
+                expectedRecoveryRunId: recoveryRunId,
+                expectedRecoverySourceRunId: sourceRunId,
+                expectedSessionId: params.entry.sessionId,
+                sessionKeys: recoverySessionKeys,
+                shouldContinue: params.shouldContinue,
+                storePath: params.storePath,
+                terminalStatus,
+              });
+              if (params.shouldContinue?.() !== false) {
+                log.info(`settled completed restart recovery for ${params.sessionKey}`);
+                return "resumed";
+              }
+            }
           }
         }
       }
     } catch (settlementError) {
-      log.warn(
-        `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
-      );
-      const restoreAdmittedRecovery: RestoreAdmittedRecovery = async () => {
-        const restored = await commitMainSessionRecovery({
-          command: {
-            kind: "mark_admitted_recovery_interrupted",
-            lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            now: Date.now(),
-            runId: recoveryRunId,
-            sessionId: params.entry.sessionId,
-          },
-          requireWriteSuccess: true,
-          target: { sessionKey: params.sessionKey, storePath: params.storePath },
-        });
-        return restored.transition.kind === "applied" && restored.entry && restored.sessionKey
-          ? {
-              sessionId: restored.entry.sessionId,
-              sessionKey: restored.sessionKey,
-              storePath: params.storePath,
-            }
-          : undefined;
-      };
-      try {
-        scheduleMainSessionRecoveryPendingTarget(
-          await restoreAdmittedRecoveryWithRetries(restoreAdmittedRecovery),
-        );
-      } catch (restoreError) {
+      if (params.shouldContinue?.() !== false) {
         log.warn(
-          `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+          `failed to settle ambiguous restart recovery ${params.sessionKey}: ${String(settlementError)}`,
         );
-        scheduleAdmittedRecoveryRestore(restoreAdmittedRecovery);
+        const restoreAdmittedRecovery: RestoreAdmittedRecovery = async () => {
+          if (params.shouldContinue?.() === false) {
+            return undefined;
+          }
+          const restored = await commitMainSessionRecovery({
+            command: {
+              kind: "mark_admitted_recovery_interrupted",
+              lifecycleGeneration,
+              now: Date.now(),
+              runId: recoveryRunId,
+              sessionId: params.entry.sessionId,
+            },
+            requireWriteSuccess: true,
+            shouldContinue: params.shouldContinue,
+            target: { sessionKey: params.sessionKey, storePath: params.storePath },
+          });
+          return params.shouldContinue?.() !== false &&
+            restored.transition.kind === "applied" &&
+            restored.entry &&
+            restored.sessionKey
+            ? {
+                sessionId: restored.entry.sessionId,
+                sessionKey: restored.sessionKey,
+                storePath: params.storePath,
+              }
+            : undefined;
+        };
+        try {
+          const restored = await restoreAdmittedRecoveryWithRetries(restoreAdmittedRecovery);
+          if (params.shouldContinue?.() !== false) {
+            scheduleMainSessionRecoveryPendingTarget(restored);
+          }
+        } catch (restoreError) {
+          if (params.shouldContinue?.() !== false) {
+            log.warn(
+              `failed to restore ambiguous restart recovery ${params.sessionKey}: ${String(restoreError)}`,
+            );
+            scheduleAdmittedRecoveryRestore(restoreAdmittedRecovery);
+          }
+        }
       }
     }
     if (reservation) {
@@ -668,6 +701,9 @@ export async function resumeMainSession(params: {
           storePath: params.storePath,
         });
       });
+    }
+    if (params.shouldContinue?.() === false) {
+      return "skipped";
     }
     log.warn(
       `failed to resume interrupted main session ${params.sessionKey}: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`,

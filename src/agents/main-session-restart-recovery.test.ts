@@ -2318,6 +2318,82 @@ describe("main-session-restart-recovery", () => {
     }
   });
 
+  it("fences an ambiguous terminal probe when its startup recovery owner stops", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeMainSession({
+      sessionsDir,
+      pendingFinalDelivery: {
+        kind: "replayable",
+        text: "interrupted response",
+        createdAt: Date.now(),
+      },
+    });
+
+    const probeEntered = createDeferred();
+    const releaseProbe = createDeferred();
+    let recoveryRunId: string | undefined;
+    vi.mocked(callGateway).mockImplementation(async (request) => {
+      if (request.method === "agent") {
+        recoveryRunId = String(
+          (request.params as { idempotencyKey?: unknown }).idempotencyKey,
+        );
+        throw new Error("ambiguous recovery dispatch transport failure");
+      }
+      if (request.method === "agent.wait") {
+        probeEntered.resolve();
+        await releaseProbe.promise;
+        return { runId: recoveryRunId, status: "ok", endedAt: Date.now() };
+      }
+      return { runId: "run-resumed" };
+    });
+
+    const recovery = scheduleRestartAbortedMainSessionRecovery({
+      cfg: {},
+      delayMs: 0,
+      stateDir: tmpDir,
+    });
+    let stopping: Promise<void> | undefined;
+    try {
+      await probeEntered.promise;
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(recoveryRunId).toEqual(expect.any(String));
+
+      let stopSettled = false;
+      stopping = recovery.stop().then(() => {
+        stopSettled = true;
+      });
+      await Promise.resolve();
+
+      expect(stopSettled).toBe(false);
+      expect(callGateway).toHaveBeenCalledTimes(2);
+
+      releaseProbe.resolve();
+      await stopping;
+
+      const entry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
+      expect(entry).toMatchObject({
+        status: "running",
+        abortedLastRun: true,
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "interrupted response",
+        },
+        mainRestartRecovery: { chargedAttempts: 1 },
+      });
+      expect(entry?.mainRestartRecovery?.reservation).toBeUndefined();
+      expect(entry?.restartRecoveryTerminalRunIds ?? []).not.toContain(recoveryRunId);
+      expect(entry?.restartRecoveryRuns ?? []).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ runId: recoveryRunId })]),
+      );
+      expect(callGateway).toHaveBeenCalledTimes(2);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      releaseProbe.resolve();
+      await (stopping ?? recovery.stop());
+    }
+  });
+
   it("retains canonical retry backoff when startup recovery begins immediately", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeMainSession({
