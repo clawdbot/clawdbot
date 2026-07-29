@@ -440,14 +440,12 @@ export const PLUGIN_COMPAT_RECORDS = [
   },
   {
     code: "agent-harness-sdk-alias",
-    status: "removal-pending",
+    status: "deprecated",
     owner: "agent-runtime",
     introduced: "2026-04-24",
     deprecated: "2026-04-25",
     warningStarts: "2026-04-25",
-    removeAfter: "2026-07-25",
-    replacement:
-      "`openclaw/plugin-sdk/agent-runtime`; retain the public aliases until the shipped SDK contract has a replacement window backed by external-usage proof",
+    replacement: "none yet; retain until a harness subpath ships and external migration is proven",
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
     diagnostics: ["plugin SDK compatibility warning"],
