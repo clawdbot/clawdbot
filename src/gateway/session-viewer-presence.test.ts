@@ -6,10 +6,7 @@ describe("session viewer presence declarations", () => {
     const onReplace = vi.fn();
     const declarations = createSessionViewerPresenceDeclarations({ onReplace });
 
-    expect(declarations.replace("conn-a", [" beta ", "alpha", "beta"])).toEqual([
-      "alpha",
-      "beta",
-    ]);
+    expect(declarations.replace("conn-a", [" beta ", "alpha", "beta"])).toEqual(["alpha", "beta"]);
     expect(declarations.replace("conn-a", ["gamma"])).toEqual(["gamma"]);
     expect(onReplace.mock.calls).toEqual([
       ["conn-a", ["alpha", "beta"]],

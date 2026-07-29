@@ -34,7 +34,6 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js"
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { readSessionTitleFieldsFromTranscript as readScopedSessionTitleFieldsFromTranscript } from "./session-transcript-title-reader.js";
-import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 import type {
   SessionActorProfileIdentity,
   SessionListRowContext,
@@ -62,6 +61,7 @@ import {
 } from "./session-utils-projection.js";
 import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-store.js";
 import type { GatewaySessionRow } from "./session-utils.types.js";
+import { formatUserProfileAvatarPath } from "./user-profiles-http-path.js";
 
 /** Adds current durable human profile display data without persisting rename-prone metadata. */
 export function projectSessionActor(

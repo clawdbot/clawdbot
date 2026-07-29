@@ -28,11 +28,7 @@ export function listSessionCreators(
     const nextAvatarUrl = [existing?.avatarUrl, avatarUrl]
       .filter((value): value is string => Boolean(value))
       .toSorted()[0];
-    if (
-      !existing ||
-      nextLabel !== existing.label ||
-      nextAvatarUrl !== existing.avatarUrl
-    ) {
+    if (!existing || nextLabel !== existing.label || nextAvatarUrl !== existing.avatarUrl) {
       creators.set(id, {
         type: session.createdActor?.type ?? "human",
         id,

@@ -21,7 +21,6 @@ import {
 } from "../skills/runtime/remote.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
-import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { clearNodeWakeState } from "./node-wake-state.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
@@ -40,6 +39,7 @@ import {
   refreshGatewayHealthSnapshot,
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { createSessionViewerPresenceDeclarations } from "./session-viewer-presence.js";
 
 type GatewayRuntimePreparation = Awaited<ReturnType<typeof prepareGatewayRuntimeState>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
