@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,
@@ -163,17 +164,13 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   };
 }
 
-function isRecordLike(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
   agentDir: string;
   existingParsed: unknown;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
 }): Promise<unknown> {
-  const root = isRecordLike(params.existingParsed) ? params.existingParsed : {};
-  const providers = isRecordLike(root.providers) ? { ...root.providers } : {};
+  const root = isRecord(params.existingParsed) ? params.existingParsed : {};
+  const providers = isRecord(root.providers) ? { ...root.providers } : {};
   let changed = false;
   for (const { pluginId: catalogPluginId, contents } of listPreparedPluginModelCatalogs(
     params.agentDir,
@@ -186,8 +183,8 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
     }
     if (
       !isGeneratedPluginModelCatalog(catalog) ||
-      !isRecordLike(catalog) ||
-      !isRecordLike(catalog.providers)
+      !isRecord(catalog) ||
+      !isRecord(catalog.providers)
     ) {
       continue;
     }

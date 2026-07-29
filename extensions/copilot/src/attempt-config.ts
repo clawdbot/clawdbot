@@ -33,6 +33,7 @@ export function createResult(
     assistantTranscriptOwned?: boolean;
     assistantTranscriptIdempotencyKey?: string;
     assistantTexts?: string[];
+    codeModeEngaged?: boolean;
     currentAttemptAssistant?: AssistantMessage;
     currentAttemptCompletedAssistant?: AssistantMessage;
     downgradedFromResume?: boolean;
@@ -104,6 +105,7 @@ export function createResult(
       : {}),
     ...(state.sdkSessionId ? { sdkSessionId: state.sdkSessionId } : {}),
     ...(state.journalValidated !== undefined ? { journalValidated: state.journalValidated } : {}),
+    ...(state.codeModeEngaged !== undefined ? { codeModeEngaged: state.codeModeEngaged } : {}),
     assistantTexts: state.assistantTexts ?? [],
     attemptUsage: state.usage,
     cloudCodeAssistFormatError: false,

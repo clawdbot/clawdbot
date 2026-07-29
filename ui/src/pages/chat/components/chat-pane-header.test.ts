@@ -120,6 +120,7 @@ describe("chat pane header", () => {
     const { container } = mount({ nativeGateways: nativeGateways(gatewaySnapshot) });
     const rows = container.querySelectorAll(".chat-pane__gateway-item");
     expect(rows).toHaveLength(2);
+    expect(container.querySelectorAll(".chat-pane__gateway-menu-item")).toHaveLength(4);
     expect(rows[0]?.textContent).toContain("Local Gateway");
     expect(rows[0]?.textContent).toContain("primary");
     expect(rows[0]?.querySelector(".chat-pane__gateway-check")).not.toBeNull();

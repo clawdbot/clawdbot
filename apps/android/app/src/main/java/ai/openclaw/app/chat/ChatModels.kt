@@ -79,6 +79,7 @@ data class ChatMessageContent(
   val sizeBytes: Long? = null,
   val base64: String? = null,
   val durationMs: Long? = null,
+  val playback: String? = null,
   val widget: ChatWidgetPreview? = null,
 )
 

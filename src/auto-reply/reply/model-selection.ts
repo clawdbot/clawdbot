@@ -9,6 +9,7 @@ import { isStoredCredentialCompatibleWithAuthProvider } from "../../agents/auth-
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../agents/model-fallback.types.js";
 import {
   type ModelAliasIndex,
@@ -166,6 +167,7 @@ export async function createModelSelectionState(params: {
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
   hasResolvedHeartbeatModelOverride?: boolean;
   isHeartbeat?: boolean;
+  preparedModelCatalog?: ModelCatalogSnapshot;
 }): Promise<ModelSelectionState> {
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", params.cfg);
   const startMs = timingEnabled ? Date.now() : 0;
@@ -195,6 +197,11 @@ export async function createModelSelectionState(params: {
     agentId: catalogAgentId,
     agentDir: resolveAgentDir(cfg, catalogAgentId),
   };
+  const loadRuntimeCatalogSnapshot = async (): Promise<ModelCatalogSnapshot> =>
+    params.preparedModelCatalog ??
+    (await (
+      await loadPreparedModelCatalogRuntime()
+    ).loadPreparedModelCatalogSnapshot(catalogScope));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
   const { manifestPlugins } = runtimeModelNormalization;
 
@@ -295,9 +302,7 @@ export async function createModelSelectionState(params: {
     staleLegacyAutoFallbackWithoutOrigin;
 
   if (needsModelCatalog) {
-    const catalogSnapshot = await (
-      await loadPreparedModelCatalogRuntime()
-    ).loadPreparedModelCatalogSnapshot(catalogScope);
+    const catalogSnapshot = await loadRuntimeCatalogSnapshot();
     modelCatalog = catalogSnapshot.entries;
     // Only an explicit false is degraded; absent means authoritative.
     catalogAuthoritative = catalogSnapshot.authoritative !== false;
@@ -594,9 +599,7 @@ export async function createModelSelectionState(params: {
     const shouldHydrateRuntimeCatalog =
       !modelCatalog && (!selectedCatalogEntry || selectedCatalogEntry.reasoning === undefined);
     if (shouldHydrateRuntimeCatalog) {
-      modelCatalog = await (
-        await loadPreparedModelCatalogRuntime()
-      ).loadPreparedModelCatalog(catalogScope);
+      modelCatalog = (await loadRuntimeCatalogSnapshot()).entries;
       logStage("catalog-loaded-for-thinking", `entries=${modelCatalog.length}`);
       const runtimeCatalog = buildThinkingCatalog(modelCatalog);
       const runtimeSelectedEntry = findSelectedCatalogEntry({
@@ -691,9 +694,7 @@ export async function createModelSelectionState(params: {
       (!catalogForReasoning || catalogForReasoning.length === 0) &&
       selectedReasoningEntry?.reasoning === undefined
     ) {
-      modelCatalog = await (
-        await loadPreparedModelCatalogRuntime()
-      ).loadPreparedModelCatalog(catalogScope);
+      modelCatalog = (await loadRuntimeCatalogSnapshot()).entries;
       logStage("catalog-loaded-for-reasoning", `entries=${modelCatalog.length}`);
       catalogForReasoning = modelCatalog;
     }

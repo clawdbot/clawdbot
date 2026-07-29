@@ -7,6 +7,14 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import {
+  attachToolAllowlistIntersection,
+  expandToolGroups,
+  normalizeToolList,
+  normalizeToolName,
+  readToolAllowlistIntersection,
+} from "../agents/tool-policy.js";
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -364,29 +372,96 @@ export function createHookRunner(
     providerOverride: firstDefined(acc?.providerOverride, next.providerOverride),
   });
 
+  const normalizeHookToolsAllow = (value: unknown): string[] | undefined => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    if (value.some((entry) => typeof entry !== "string")) {
+      return [];
+    }
+    return value as string[];
+  };
+
+  const readHookToolsAllowRestrictions = (value: unknown): string[][] => {
+    const normalized = normalizeHookToolsAllow(value);
+    if (normalized === undefined) {
+      return [];
+    }
+    const attached = Array.isArray(value) ? readToolAllowlistIntersection(value) : undefined;
+    return attached
+      ? attached.map((restriction) => normalizeHookToolsAllow(restriction) ?? [])
+      : [normalized];
+  };
+
+  const intersectToolsAllow = (left: string[] | undefined, right: string[]): string[] => {
+    if (left === undefined) {
+      return right;
+    }
+    if (left.length === 0 || right.length === 0) {
+      return [];
+    }
+    const normalizedLeft = normalizeToolList(expandToolGroups(left));
+    const normalizedRight = normalizeToolList(expandToolGroups(right));
+    if (normalizedLeft.includes("*")) {
+      return normalizedRight;
+    }
+    if (normalizedRight.includes("*")) {
+      return normalizedLeft;
+    }
+    return [...new Set(normalizeToolList([...normalizedLeft, ...normalizedRight]))].filter(
+      (name) => {
+        const normalized = normalizeToolName(name);
+        return (
+          isToolAllowedByPolicyName(normalized, { allow: normalizedLeft }) &&
+          isToolAllowedByPolicyName(normalized, { allow: normalizedRight })
+        );
+      },
+    );
+  };
+
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
-  ): PluginHookBeforePromptBuildResult => ({
-    // Keep the first defined system prompt so higher-priority hooks win.
-    systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
-    prependContext: concatOptionalTextSegments({
-      left: acc?.prependContext,
-      right: next.prependContext,
-    }),
-    appendContext: concatOptionalTextSegments({
-      left: acc?.appendContext,
-      right: next.appendContext,
-    }),
-    prependSystemContext: concatOptionalTextSegments({
-      left: acc?.prependSystemContext,
-      right: next.prependSystemContext,
-    }),
-    appendSystemContext: concatOptionalTextSegments({
-      left: acc?.appendSystemContext,
-      right: next.appendSystemContext,
-    }),
-  });
+  ): PluginHookBeforePromptBuildResult => {
+    const toolRestrictions = [
+      ...readHookToolsAllowRestrictions(acc?.toolsAllow),
+      ...readHookToolsAllowRestrictions(next.toolsAllow),
+    ];
+    const toolsAllow =
+      toolRestrictions.length === 0
+        ? undefined
+        : attachToolAllowlistIntersection(
+            [
+              ...(toolRestrictions.reduce<string[] | undefined>(intersectToolsAllow, undefined) ??
+                []),
+            ],
+            toolRestrictions,
+          );
+    return {
+      // Keep the first defined system prompt so higher-priority hooks win.
+      systemPrompt: firstDefined(acc?.systemPrompt, next.systemPrompt),
+      prependContext: concatOptionalTextSegments({
+        left: acc?.prependContext,
+        right: next.prependContext,
+      }),
+      appendContext: concatOptionalTextSegments({
+        left: acc?.appendContext,
+        right: next.appendContext,
+      }),
+      ...(toolsAllow !== undefined ? { toolsAllow } : {}),
+      prependSystemContext: concatOptionalTextSegments({
+        left: acc?.prependSystemContext,
+        right: next.prependSystemContext,
+      }),
+      appendSystemContext: concatOptionalTextSegments({
+        left: acc?.appendSystemContext,
+        right: next.appendSystemContext,
+      }),
+    };
+  };
 
   const mergeAgentTurnPrepare = <
     TResult extends { prependContext?: string; appendContext?: string },

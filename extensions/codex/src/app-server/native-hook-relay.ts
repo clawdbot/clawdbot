@@ -42,7 +42,7 @@ const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 
-const CODEX_HOOK_MATCHER_NAMES_BY_OPENCLAW_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
+const CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID: Readonly<Record<string, readonly string[]>> = {
   exec: ["Bash", "exec", "exec_command"],
   apply_patch: ["apply_patch", "Write", "Edit"],
   spawn_agent: ["spawn_agent", "Agent"],
@@ -376,7 +376,7 @@ function buildCodexNativeToolMatcher(toolNames: readonly string[] | undefined): 
     if (!canonicalToolName || canonicalToolName === "*") {
       throw new TypeError("Codex native hook matcher requires canonical OpenClaw tool ids");
     }
-    const nativeAliases = CODEX_HOOK_MATCHER_NAMES_BY_OPENCLAW_TOOL_ID[canonicalToolName];
+    const nativeAliases = CODEX_HOOK_MATCHER_NAMES_BY_TOOL_ID[canonicalToolName];
     if (!nativeAliases) {
       hasCustomToolName = true;
     }

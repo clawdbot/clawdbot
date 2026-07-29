@@ -24,12 +24,19 @@ let playback: typeof import("./playback-transcode.js");
 let tempHome: TempHomeEnv;
 
 beforeAll(async () => {
+  vi.resetModules();
   tempHome = await createTempHomeEnv("openclaw-playback-transcode-");
   playback = await import("./playback-transcode.js");
 });
 
 afterAll(async () => {
-  await tempHome.restore();
+  try {
+    await tempHome.restore();
+  } finally {
+    vi.doUnmock("./ffmpeg-exec.js");
+    vi.doUnmock("./media-probe.js");
+    vi.resetModules();
+  }
 });
 
 beforeEach(() => {
@@ -786,6 +793,15 @@ describe("resolvePlaybackTranscode", () => {
       expect(runFfmpeg).toHaveBeenCalledTimes(3);
     });
     await Promise.all(finishers.slice(1).map(async (finish) => await finish()));
+    await vi.waitFor(async () => {
+      await expect(
+        Promise.all(params.map(async (param) => await playback.resolvePlaybackTranscode(param))),
+      ).resolves.toEqual([
+        expect.objectContaining({ kind: "transcoded" }),
+        expect.objectContaining({ kind: "transcoded" }),
+        expect.objectContaining({ kind: "transcoded" }),
+      ]);
+    });
   });
 
   it("passes already portable media through without invoking ffmpeg", async () => {

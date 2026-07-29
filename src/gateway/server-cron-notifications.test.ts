@@ -560,6 +560,39 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     );
   });
 
+  it("rejects credential-bearing completion webhook targets before fetch", () => {
+    const logger = {
+      warn: vi.fn(),
+    };
+    const credentialUrl = new URL("https://example.invalid/hook?token=placeholder");
+    credentialUrl.username = "user";
+    credentialUrl.password = "password";
+    const job = createWebhookJob({
+      mode: "announce",
+      completionDestination: {
+        mode: "webhook",
+        to: credentialUrl.href,
+      },
+    });
+
+    dispatchGatewayCronFinishedNotifications({
+      evt: { jobId: job.id, action: "finished", status: "ok" },
+      job,
+      deps: {} as CliDeps,
+      logger,
+      resolveCronAgent: () => ({ agentId: "main", cfg: {} }),
+    });
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      {
+        jobId: job.id,
+        deliveryTo: "https://example.invalid/hook",
+      },
+      "cron: skipped completion webhook delivery, delivery.completionDestination.to must be a valid http(s) URL",
+    );
+    expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+  });
+
   it("keeps configured failure destinations from inheriting the primary delivery thread", () => {
     const logger = {
       warn: vi.fn(),

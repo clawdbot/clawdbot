@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSkillWorkshopTool } from "../../agents/tools/skill-workshop-tool.js";
 import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../process/gateway-work-admission.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
@@ -85,6 +89,43 @@ describe("experience review auto apply", () => {
         toolsAllow: ["skill_workshop"],
       }),
     );
+  });
+
+  it("re-enters gateway admission when fired from a released request root", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-experience-admission-workspace-");
+    let subordinateClosedInsideRun: boolean | undefined;
+    runEmbeddedAgent.mockImplementation(async () => {
+      subordinateClosedInsideRun = isGatewaySubordinateWorkAdmissionClosed();
+      return {};
+    });
+    const candidate: ExperienceReviewCandidate = {
+      ctx: {
+        agentId: "main",
+        runId: "foreground-run",
+        sessionKey: "agent:main:main",
+        workspaceDir,
+        modelProviderId: "openai",
+        modelId: "gpt-test",
+      },
+      config: { skills: { workshop: { autonomous: { mode: "propose" } } } },
+      transcript: "[user]\nRecover the deployment workflow.",
+      modelIterations: 10,
+    };
+
+    // The scheduler's idle timer inherits the foreground run's root-work ALS
+    // context, which is already released when the timer fires. The review must
+    // re-enter admission instead of being refused as GatewayDrainingError.
+    const admission = tryBeginGatewayRootWorkAdmission();
+    expect(admission).not.toBeNull();
+    await admission?.run(async () => {
+      admission.release();
+      await runSkillExperienceReview(candidate, {
+        getCurrentConfig: () => candidate.config ?? {},
+      });
+    });
+
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(subordinateClosedInsideRun).toBe(false);
   });
 
   it("leaves the capture pending when auto mode is disabled during review", async () => {
