@@ -336,6 +336,23 @@ export type DiagnosticsConfig = {
   flags?: string[];
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
+  /** Memory pressure thresholds for resident-set and heap-warning diagnostics. */
+  memory?: DiagnosticsMemoryConfig;
+};
+
+type DiagnosticsMemoryConfig = {
+  /** Resident-set warning threshold in bytes. Default: 1536 MiB. */
+  rssWarningBytes?: number;
+  /** Resident-set critical threshold in bytes. Default: 3072 MiB. */
+  rssCriticalBytes?: number;
+  /** V8 heap-used warning threshold in bytes. Default: 1024 MiB. */
+  heapUsedWarningBytes?: number;
+  /** V8 heap-used critical threshold in bytes. Default: 2048 MiB. */
+  heapUsedCriticalBytes?: number;
+  /** RSS growth warning threshold in bytes. Default: 512 MiB. */
+  rssGrowthWarningBytes?: number;
+  /** RSS growth critical threshold in bytes. Default: 1024 MiB. */
+  rssGrowthCriticalBytes?: number;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

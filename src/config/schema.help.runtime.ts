@@ -344,6 +344,20 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Opt-in OTEL span content capture. Defaults to off; true captures non-system message and tool content.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
+  "diagnostics.memory":
+    "Controls the memory pressure warning and critical thresholds for RSS, V8 heap, and RSS growth checks. Set lower thresholds on constrained machines with less total RAM and use the defaults on large hosts to keep alerts meaningful.",
+  "diagnostics.memory.rssWarningBytes":
+    "Controls the resident-set memory warning threshold in bytes. Default: 1610612736 (1536 MiB). Set this lower on constrained machines to get earlier pressure warnings.",
+  "diagnostics.memory.rssCriticalBytes":
+    "Controls the resident-set memory critical threshold in bytes. Default: 3221225472 (3072 MiB). Keep the default unless your workload demands a different threshold for early pressure detection.",
+  "diagnostics.memory.heapUsedWarningBytes":
+    "Controls the V8 heap-used warning threshold in bytes. Default: 1073741824 (1024 MiB). Set this higher if your workload routinely holds large in-memory objects that inflate heap usage.",
+  "diagnostics.memory.heapUsedCriticalBytes":
+    "Controls the V8 heap-used critical threshold in bytes. Default: 2147483648 (2048 MiB). Exceeding this selects a critical pressure event and may indicate a memory leak.",
+  "diagnostics.memory.rssGrowthWarningBytes":
+    "Controls the RSS growth warning threshold in bytes measured over the default 10-minute window. Default: 536870912 (512 MiB). Use a higher value for workloads with known periodic memory spikes.",
+  "diagnostics.memory.rssGrowthCriticalBytes":
+    "Controls the RSS growth critical threshold in bytes measured over the default 10-minute window. Default: 1073741824 (1024 MiB). Sets the critical level for sustained RSS growth detection.",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":

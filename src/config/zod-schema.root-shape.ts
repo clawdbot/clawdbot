@@ -95,6 +95,16 @@ export const OpenClawSchemaShape = {
         })
         .optional(),
       cacheTrace: z.strictObject({ enabled: z.boolean().optional() }).optional(),
+      memory: z
+        .strictObject({
+          rssWarningBytes: z.number().int().nonnegative().optional(),
+          rssCriticalBytes: z.number().int().nonnegative().optional(),
+          heapUsedWarningBytes: z.number().int().nonnegative().optional(),
+          heapUsedCriticalBytes: z.number().int().nonnegative().optional(),
+          rssGrowthWarningBytes: z.number().int().nonnegative().optional(),
+          rssGrowthCriticalBytes: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
     })
     .optional(),
   logging: z
