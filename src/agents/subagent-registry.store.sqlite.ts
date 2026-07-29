@@ -90,8 +90,8 @@ function createDeliveryFromTypedColumns(
   row: SubagentRunSqliteRow,
   fallback: SubagentCompletionDeliveryState | undefined,
 ): SubagentCompletionDeliveryState | undefined {
-  // Typed delivery columns are authoritative for retry/delivered state while
-  // payload_json keeps compatibility with older fields during migration.
+  // Typed delivery columns own retry/delivered state; payload_json supplies
+  // canonical delivery fields without dedicated columns.
   const delivery = fallback ? { ...fallback } : undefined;
   const payload = parseJson(row.pending_final_delivery_payload_json) as
     | PendingFinalDeliveryPayload
