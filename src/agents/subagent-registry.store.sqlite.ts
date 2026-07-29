@@ -172,8 +172,7 @@ function createRequesterSettleWakeFromTypedColumns(
 /** Rehydrates one sqlite row into the normalized subagent run record shape. */
 function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | null {
   const parsedPayload = parseJson(row.payload_json);
-  // SQLite shipped after these nested state groups became canonical. Rows
-  // without them cannot be owned safely and are discarded as transient state.
+  // SQLite shipped after nested state became canonical; unowned rows are transient.
   if (!isCanonicalSubagentRunRecord(parsedPayload)) {
     return null;
   }

@@ -1,4 +1,3 @@
-/** Subagent delivery state helpers. */
 import type {
   SubagentCompletionDeliveryState,
   SubagentCompletionState,
