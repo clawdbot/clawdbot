@@ -44,7 +44,7 @@ type MatrixQaConfigApplyStatus = {
   hash?: string;
 };
 
-export function resetMatrixQaScenarioObserverState(params: {
+function resetMatrixQaScenarioObserverState(params: {
   syncState: MatrixQaScenarioContext["syncState"];
   syncStreams: NonNullable<MatrixQaScenarioContext["syncStreams"]>;
 }) {

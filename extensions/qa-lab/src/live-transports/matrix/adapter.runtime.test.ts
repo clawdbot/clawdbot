@@ -28,6 +28,7 @@ describe("Matrix QA adapter observer recovery", () => {
         isExpectedInterruption: () => interrupted,
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
+        readInterruptionGeneration: () => 1,
         roomId: "!room:matrix.test",
         sleepImpl,
         timeoutMs: 1_000,
@@ -49,6 +50,7 @@ describe("Matrix QA adapter observer recovery", () => {
         isExpectedInterruption: () => false,
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
+        readInterruptionGeneration: () => 0,
         roomId: "!room:matrix.test",
         sleepImpl,
         timeoutMs: 1_000,
@@ -73,11 +75,37 @@ describe("Matrix QA adapter observer recovery", () => {
         isExpectedInterruption: () => interrupted,
         observer: makeObserver(waitForOptionalRoomEvent),
         predicate: () => true,
+        readInterruptionGeneration: () => 1,
         roomId: "!room:matrix.test",
         sleepImpl: vi.fn(async () => undefined),
         timeoutMs: 1_000,
       }),
     ).resolves.toEqual({ matched: false, since: "s2" });
+    expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a poll that spans the complete interruption window", async () => {
+    let interruptionGeneration = 0;
+    const waitForOptionalRoomEvent = vi
+      .fn<MatrixQaRoomObserver["waitForOptionalRoomEvent"]>()
+      .mockImplementationOnce(async () => {
+        // The poll began before restart and rejected only after begin/end both ran.
+        interruptionGeneration = 2;
+        throw new Error("pre-restart poll rejected after recovery");
+      })
+      .mockResolvedValueOnce({ matched: false, since: "s3" });
+
+    await expect(
+      waitForMatrixQaObserverEvent({
+        isExpectedInterruption: () => false,
+        observer: makeObserver(waitForOptionalRoomEvent),
+        predicate: () => true,
+        readInterruptionGeneration: () => interruptionGeneration,
+        roomId: "!room:matrix.test",
+        sleepImpl: vi.fn(async () => undefined),
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toEqual({ matched: false, since: "s3" });
     expect(waitForOptionalRoomEvent).toHaveBeenCalledTimes(2);
   });
 });

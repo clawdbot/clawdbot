@@ -65,6 +65,7 @@ export async function waitForMatrixQaObserverEvent(params: {
   isExpectedInterruption: () => boolean;
   observer: MatrixQaRoomObserver;
   predicate: (event: MatrixQaObservedEvent) => boolean;
+  readInterruptionGeneration: () => number;
   roomId: string;
   sleepImpl?: (ms: number) => Promise<unknown>;
   timeoutMs: number;
@@ -72,6 +73,7 @@ export async function waitForMatrixQaObserverEvent(params: {
   const sleepImpl = params.sleepImpl ?? sleep;
   for (;;) {
     const expectedInterruptionAtStart = params.isExpectedInterruption();
+    const interruptionGenerationAtStart = params.readInterruptionGeneration();
     try {
       return await params.observer.waitForOptionalRoomEvent({
         predicate: params.predicate,
@@ -79,11 +81,15 @@ export async function waitForMatrixQaObserverEvent(params: {
         timeoutMs: params.timeoutMs,
       });
     } catch (error) {
-      // The homeserver restart scenario owns this narrow recovery window. Retain
-      // ownership for a poll started during the outage even if readiness closes
-      // the flag before that request rejects. The observer clears its failed
-      // pollPromise in finally, so the same cursor can safely retry.
-      if (!expectedInterruptionAtStart && !params.isExpectedInterruption()) {
+      // The homeserver restart scenario owns this narrow recovery window. The
+      // generation also catches a poll that spans the complete interruption
+      // before rejecting. The observer clears its failed pollPromise in finally,
+      // so the same cursor can safely retry.
+      if (
+        !expectedInterruptionAtStart &&
+        !params.isExpectedInterruption() &&
+        interruptionGenerationAtStart === params.readInterruptionGeneration()
+      ) {
         throw error;
       }
       await sleepImpl(MATRIX_EXPECTED_INTERRUPTION_RETRY_MS);
@@ -241,10 +247,14 @@ export async function createMatrixQaTransportAdapter(
   const nativeEventIds = new Map<string, string>();
   const busMessageIds = new Map<string, string>();
   let expectedTransportInterruption = false;
+  let transportInterruptionGeneration = 0;
   const scenarioEnvironment = createMatrixQaScenarioEnvironment({
     accountId,
     harness,
     onTransportInterruptionStateChange: (active) => {
+      if (expectedTransportInterruption !== active) {
+        transportInterruptionGeneration += 1;
+      }
       expectedTransportInterruption = active;
     },
     observedEvents,
@@ -260,6 +270,7 @@ export async function createMatrixQaTransportAdapter(
           isExpectedInterruption: () => expectedTransportInterruption,
           observer,
           predicate: (event) => event.sender === provisioning.sut.userId && Boolean(event.body),
+          readInterruptionGeneration: () => transportInterruptionGeneration,
           roomId,
           timeoutMs: 1_000,
         });

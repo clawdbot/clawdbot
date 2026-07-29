@@ -161,7 +161,7 @@ describe("matrix harness runtime", () => {
           async runCommand(_command, args) {
             const rendered = args.join(" ");
             if (rendered.includes("restart matrix-qa-homeserver")) {
-              return await new Promise<never>(() => undefined);
+              return await new Promise<never>(() => {});
             }
             if (rendered.includes("ps --format json")) {
               return { stdout: '[{"State":"running"}]\n', stderr: "" };
