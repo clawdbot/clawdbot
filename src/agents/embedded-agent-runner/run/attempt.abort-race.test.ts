@@ -69,9 +69,12 @@ describe("runEmbeddedAttempt abort races", () => {
     const pendingEvents = new Promise<void>((resolve) => {
       releasePendingEvents = resolve;
     });
-    const baseSubscription = hoisted.subscribeEmbeddedAgentSessionMock();
-    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(() => ({
-      ...baseSubscription,
+    const baseSubscribe = hoisted.subscribeEmbeddedAgentSessionMock.getMockImplementation();
+    if (!baseSubscribe) {
+      throw new Error("missing embedded subscription mock");
+    }
+    hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation((params) => ({
+      ...baseSubscribe(params),
       waitForPendingEvents: async () => await pendingEvents,
     }));
 
