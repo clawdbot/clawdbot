@@ -1,25 +1,30 @@
-/**
- * Containers whose value is a map of property name to schema.
- * Mirrors the keyword sets the caller uses in `agent-tools-parameter-schema.ts`.
- */
+// This helper accepts draft-07 through 2020-12 schemas. Keep the union of
+// schema-bearing keys aligned with the package's dialect-specific walkers.
 const SCHEMA_MAP_KEYS = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",
+  // Draft-07 dependencies mix schemas with property-name arrays. Recursive
+  // stripping leaves the string entries in those arrays unchanged.
+  "dependencies",
   "patternProperties",
   "properties",
 ]);
 
 /** Containers whose value is a single nested schema. */
 const SCHEMA_OBJECT_KEYS = new Set([
+  "additionalItems",
   "additionalProperties",
   "contains",
+  "contentSchema",
   "else",
   "if",
   "items",
   "not",
   "propertyNames",
   "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
 ]);
 
 /** Containers whose value is a list of nested schemas. */
