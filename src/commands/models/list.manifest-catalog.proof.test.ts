@@ -63,8 +63,8 @@ describe("proof: planManifestModelCatalogRows", () => {
   it("selection static includes both static and refreshable rows, excludes runtime", () => {
     const plan = planManifestModelCatalogRows({ registry, selection: "static" });
 
-    const providers = [...new Set(plan.rows.map((r) => r.provider))].sort();
-    const rowRefs = plan.rows.map((r) => r.ref).sort();
+    const providers = [...new Set(plan.rows.map((r) => r.provider))].toSorted();
+    const rowRefs = plan.rows.map((r) => r.ref).toSorted();
 
     console.log("=== planManifestModelCatalogRows(selection: 'static') ===");
     console.log(`  entries: ${plan.entries.length}`);
@@ -92,19 +92,19 @@ describe("proof: planManifestModelCatalogRows", () => {
 
   it("selection undefined includes all three provider types", () => {
     const plan = planManifestModelCatalogRows({ registry });
-    const providers = [...new Set(plan.rows.map((r) => r.provider))].sort();
+    const providers = [...new Set(plan.rows.map((r) => r.provider))].toSorted();
 
     console.log("\n=== planManifestModelCatalogRows(no selection) ===");
     console.log(`  rows: ${plan.rows.length}`);
     console.log(`  providers: ${providers.join(", ")}`);
 
     expect(providers).toHaveLength(3);
-    expect(providers).toEqual(["moonshot", "novita", "openai"].sort());
+    expect(providers).toEqual(["moonshot", "novita", "openai"].toSorted());
   });
 
   it("selection supplemental excludes runtime-only manifest rows, keeps runtime-refresh overlay rows", () => {
     const plan = planManifestModelCatalogRows({ registry, selection: "supplemental" });
-    const providers = [...new Set(plan.rows.map((r) => r.provider))].sort();
+    const providers = [...new Set(plan.rows.map((r) => r.provider))].toSorted();
 
     console.log("\n=== planManifestModelCatalogRows(selection: 'supplemental') ===");
     console.log(`  rows: ${plan.rows.length}`);
@@ -156,7 +156,7 @@ describe("proof: contract invariants", () => {
 
     console.log("\n=== Contract Trace Summary ===");
     console.log("  1. planManifestModelCatalogRows(selection: 'static')");
-    console.log(`     → providers: ${staticProviders.sort().join(", ")}`);
+    console.log(`     → providers: ${staticProviders.toSorted().join(", ")}`);
     console.log("     → static + refreshable rows surfaced, runtime excluded ✓");
     console.log("  2. loadStaticManifestCatalogRowsForList (model-list gate)");
     console.log("     → delegates to planEffectiveModelCatalogRows(selection: 'static')");
