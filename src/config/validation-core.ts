@@ -3,7 +3,6 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
-  listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -22,6 +21,7 @@ import {
 } from "../shared/gateway-tailscale-auth-policy.js";
 import { isRecord } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
+import { attachAgentListProjection } from "./agent-list-projection.js";
 import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import {
@@ -241,19 +241,6 @@ function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidation
     );
   }
   return issues;
-}
-
-function attachAgentListProjection(config: OpenClawConfig): OpenClawConfig {
-  if (!config.agents) {
-    return config;
-  }
-  Object.defineProperty(config.agents, "list", {
-    configurable: true,
-    enumerable: false,
-    value: listAgentEntries(config),
-    writable: false,
-  });
-  return config;
 }
 
 /**

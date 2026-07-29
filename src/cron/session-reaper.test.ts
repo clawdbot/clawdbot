@@ -524,6 +524,35 @@ describe("sweepCronRunSessions", () => {
     expect(r2.swept).toBe(false);
   });
 
+  it("resumes retention cleanup after the wall clock moves backward", async () => {
+    const now = Date.now();
+    const rolledBackNow = now - 3_600_000;
+    const sessionKey = "agent:main:cron:job1:run:clock-rollback";
+
+    await expect(
+      sweepCronRunSessions({ sessionStorePath: storePath, nowMs: now, log }),
+    ).resolves.toEqual({ swept: true, pruned: 0 });
+
+    await seedSessionEntries(storePath, {
+      [sessionKey]: {
+        sessionId: "clock-rollback",
+        updatedAt: rolledBackNow - 25 * 3_600_000,
+      },
+    });
+
+    await expect(
+      sweepCronRunSessions({ sessionStorePath: storePath, nowMs: rolledBackNow, log }),
+    ).resolves.toEqual({ swept: true, pruned: 1 });
+    expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
+    await expect(
+      sweepCronRunSessions({
+        sessionStorePath: storePath,
+        nowMs: rolledBackNow + 1_000,
+        log,
+      }),
+    ).resolves.toEqual({ swept: false, pruned: 0 });
+  });
+
   it("shares one throttle for canonical agent and session-store aliases", async () => {
     const now = Date.now();
 

@@ -2367,6 +2367,54 @@ describe("Anthropic provider", () => {
     expect(onPayload).not.toHaveBeenCalled();
   });
 
+  it("keeps Anthropic wire tool bytes and their cache breakpoint stable across discovery orders", async () => {
+    const tools = [
+      {
+        name: "zeta_lookup",
+        description: "Look up the last value",
+        parameters: { type: "object", properties: { value: { type: "string" } } },
+      },
+      {
+        name: "alpha_lookup",
+        description: "Look up the first value",
+        parameters: { type: "object", properties: { query: { type: "string" } } },
+      },
+    ] as Tool[];
+    const captureTools = async (orderedTools: Tool[]) => {
+      let capturedPayload: unknown;
+      const stream = streamSimpleAnthropic(
+        makeAnthropicModel(),
+        {
+          systemPrompt: "stable system",
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: orderedTools,
+        },
+        {
+          apiKey: "sk-ant-provider",
+          onPayload: (payload) => {
+            capturedPayload = payload;
+            throw new Error("stop before network");
+          },
+        },
+      );
+      await stream.result();
+      return (capturedPayload as { tools: unknown[] }).tools;
+    };
+
+    const first = await captureTools(tools);
+    const reversed = await captureTools(tools.toReversed());
+
+    expect(reversed).toEqual(first);
+    expect(first).toEqual([
+      expect.objectContaining({ name: "alpha_lookup" }),
+      expect.objectContaining({
+        name: "zeta_lookup",
+        cache_control: { type: "ephemeral" },
+      }),
+    ]);
+    expect(first[0]).not.toHaveProperty("cache_control");
+  });
+
   it("splits the system prompt cache boundary into cached and uncached Anthropic blocks", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(

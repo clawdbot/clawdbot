@@ -4,7 +4,7 @@ import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
-import { applyOutcomeToStoredJob } from "./timer-outcomes.js";
+import { applyOutcomeToStoredJob, applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
@@ -86,7 +86,10 @@ describe("applyJobResult dynamic cadence", () => {
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
   });
 
-  it("preserves an edited pacing override after a stale quiet trigger", () => {
+  it.each([
+    ["without a force marker", undefined],
+    ["with an existing force marker", ENDED_AT + 15 * 60_000],
+  ] as const)("preserves an edited pacing override after a stale quiet trigger %s", (_, marker) => {
     const state = makeState();
     const job = makePacedJob({ min: "15m", max: "4h" });
     const admittedJob = structuredClone(job);
@@ -94,6 +97,7 @@ describe("applyJobResult dynamic cadence", () => {
     job.schedule = { kind: "every", everyMs: 2 * 60 * 60_000, anchorMs: STARTED_AT };
     job.state.nextRunAtMs = editedNextRunAtMs;
     job.state.pacedNextRunAtMs = editedNextRunAtMs;
+    job.state.forcePreservedNextRunAtMs = marker;
     state.store = { version: 1, jobs: [job] };
 
     applyOutcomeToStoredJob(state, {
@@ -107,6 +111,33 @@ describe("applyJobResult dynamic cadence", () => {
 
     expect(job.state.nextRunAtMs).toBe(editedNextRunAtMs);
     expect(job.state.pacedNextRunAtMs).toBe(editedNextRunAtMs);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(marker);
+  });
+
+  it.each([
+    ["without a previous marker", undefined],
+    ["with a previous marker", ENDED_AT + 15 * 60_000],
+  ] as const)("marks the exact paced slot after a forced quiet trigger %s", (_, previousMarker) => {
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    const pendingSlot = ENDED_AT + 45 * 60_000;
+    job.state.nextRunAtMs = pendingSlot;
+    job.state.pacedNextRunAtMs = pendingSlot;
+    job.state.forcePreservedNextRunAtMs = previousMarker;
+
+    applyTriggerNoFireResult(
+      makeState(),
+      job,
+      {
+        startedAt: STARTED_AT,
+        endedAt: ENDED_AT,
+        triggerEval: { fired: false, stateChanged: false },
+      },
+      { scheduleMode: "force-preserve" },
+    );
+
+    expect(job.state.nextRunAtMs).toBe(pendingSlot);
+    expect(job.state.pacedNextRunAtMs).toBe(pendingSlot);
+    expect(job.state.forcePreservedNextRunAtMs).toBe(pendingSlot);
   });
 
   it.each([

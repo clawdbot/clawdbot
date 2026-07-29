@@ -8,6 +8,8 @@ import {
   promoteDeliveryQueueEntryPlatformSend,
 } from "./delivery-queue-sqlite-claim.js";
 import {
+  commitStagedDeliveryQueueEntry,
+  commitStagedDeliveryQueueEntryOnce,
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
@@ -138,6 +140,156 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       const loaded = loadDeliveryQueueEntry(QUEUE, "rt-1", stateDir);
       expect(loaded).toMatchObject({ id: "rt-1", enqueuedAt: 1000, retryCount: 0 });
+    });
+
+    it.each([
+      {
+        name: "outbound delivery",
+        queueName: "outbound",
+        entry: {
+          id: "metadata-outbound",
+          channel: "discord",
+          to: "channel:123",
+          accountId: "bot-a",
+          session: { key: "agent:main:discord:channel:123" },
+        },
+        expected: {
+          entry_kind: "outbound",
+          session_key: "agent:main:discord:channel:123",
+          channel: "discord",
+          target: "channel:123",
+          account_id: "bot-a",
+        },
+      },
+      {
+        name: "routed session delivery",
+        queueName: "session",
+        entry: {
+          id: "metadata-session-route",
+          kind: "agentTurn",
+          sessionKey: "agent:main:discord:channel:123",
+          route: { channel: "discord", to: "channel:123", accountId: "bot-a" },
+          deliveryContext: { channel: "telegram", to: "999", accountId: "bot-b" },
+        },
+        expected: {
+          entry_kind: "agentTurn",
+          session_key: "agent:main:discord:channel:123",
+          channel: "discord",
+          target: "channel:123",
+          account_id: "bot-a",
+        },
+      },
+      {
+        name: "context-only session delivery",
+        queueName: "session",
+        entry: {
+          id: "metadata-session-context",
+          kind: "systemEvent",
+          sessionKey: "agent:main:telegram:direct:123",
+          deliveryContext: { channel: "telegram", to: "123", accountId: "bot-a" },
+        },
+        expected: {
+          entry_kind: "systemEvent",
+          session_key: "agent:main:telegram:direct:123",
+          channel: "telegram",
+          target: "123",
+          account_id: "bot-a",
+        },
+      },
+    ])("indexes canonical $name metadata", ({ queueName, entry, expected }) => {
+      upsertDeliveryQueueEntry({
+        queueName,
+        entry: { ...entry, enqueuedAt: 1000, retryCount: 0 },
+        stateDir,
+      });
+
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const readMetadata = () =>
+        db
+          .prepare(
+            `SELECT entry_kind, session_key, channel, target, account_id
+             FROM delivery_queue_entries WHERE queue_name = ? AND id = ?`,
+          )
+          .get(queueName, entry.id);
+      expect(readMetadata()).toEqual(expected);
+
+      updateDeliveryQueueEntry(queueName, entry.id, stateDir, (current) => ({
+        ...current,
+        retryCount: current.retryCount + 1,
+      }));
+      expect(readMetadata()).toEqual(expected);
+    });
+
+    it("preserves explicit queue metadata ownership", () => {
+      upsertDeliveryQueueEntry({
+        queueName: "outbound-media-staging",
+        entry: { id: "metadata-media-stage", enqueuedAt: 1000, retryCount: 0 },
+        metadata: { entryKind: "outbound-media-stage" },
+        stateDir,
+      });
+
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(
+        db
+          .prepare("SELECT entry_kind FROM delivery_queue_entries WHERE queue_name = ? AND id = ?")
+          .get("outbound-media-staging", "metadata-media-stage"),
+      ).toEqual({ entry_kind: "outbound-media-stage" });
+    });
+
+    it.each([
+      { name: "ordinary", commit: commitStagedDeliveryQueueEntry, expected: true },
+      { name: "insert-only", commit: commitStagedDeliveryQueueEntryOnce, expected: "created" },
+    ])("indexes $name staged outbound commits", ({ commit, expected }) => {
+      const stagingQueueName = "outbound-media-staging";
+      const stagingId = "metadata-staged-media";
+      const outboundEntry = {
+        id: "metadata-staged-outbound",
+        enqueuedAt: 1000,
+        retryCount: 0,
+        channel: "discord",
+        to: "channel:123",
+        accountId: "bot-a",
+        session: { key: "agent:main:discord:channel:123" },
+      };
+      upsertDeliveryQueueEntry({
+        queueName: stagingQueueName,
+        entry: { id: stagingId, enqueuedAt: 1000, retryCount: 0 },
+        metadata: { entryKind: "outbound-media-stage" },
+        stateDir,
+      });
+
+      expect(
+        commit({
+          queueName: "outbound",
+          entry: outboundEntry,
+          stagingId,
+          stagingQueueName,
+          stateDir,
+        }),
+      ).toBe(expected);
+
+      const { db } = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      expect(
+        db
+          .prepare(
+            `SELECT entry_kind, session_key, channel, target, account_id
+             FROM delivery_queue_entries WHERE queue_name = ? AND id = ?`,
+          )
+          .get("outbound", "metadata-staged-outbound"),
+      ).toEqual({
+        entry_kind: "outbound",
+        session_key: "agent:main:discord:channel:123",
+        channel: "discord",
+        target: "channel:123",
+        account_id: "bot-a",
+      });
+      expect(loadDeliveryQueueEntry(stagingQueueName, stagingId, stateDir)).toBeNull();
     });
 
     it("update increments retry count", () => {

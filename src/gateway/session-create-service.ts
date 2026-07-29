@@ -606,6 +606,23 @@ export async function createGatewaySession(params: {
     key: targetSessionKey,
     agentId,
   });
+  if (explicitTargetKey && !params.initialEntry) {
+    // A trusted initializer holds the lifecycle fence through afterCreate. Waiting
+    // on that fence would deadlock callers that must reject its visible pending row.
+    const pendingEntry = resolveSessionEntryAccessTarget({
+      cfg: params.cfg,
+      sessionKey: creationTarget.canonicalKey,
+    }).entry;
+    if (pendingEntry?.initializationPending === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `Session ${creationTarget.canonicalKey} is still initializing; retry creation later.`,
+        ),
+      };
+    }
+  }
   const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
   // Durable dashboard sessions parent to main for flow-up notices and sidebar threads.
   // Incognito roots omit durable lineage so notices cannot cross the storage boundary.
@@ -1125,7 +1142,7 @@ export async function createGatewaySession(params: {
           sessionKey: canonicalParentSessionKey,
           sessionId: parentEntry?.sessionId,
           storePath: parentSessionTarget.storePath,
-          sessionFile: parentEntry?.sessionFile,
+          sessionFile: canonicalParentSessionKey,
           agentId: parentSessionTarget.agentId,
           reason: "new",
           nextSessionId: created.entry.sessionId,
@@ -1138,7 +1155,7 @@ export async function createGatewaySession(params: {
         sessionId: created.entry.sessionId,
         resumedFrom: parentEntry?.sessionId,
         storePath: target.storePath,
-        sessionFile: created.entry.sessionFile,
+        sessionFile: target.canonicalKey,
         agentId: target.agentId,
       });
     }

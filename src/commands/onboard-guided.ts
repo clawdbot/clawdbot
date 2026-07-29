@@ -240,6 +240,7 @@ async function runGuidedOnboardingFlow(
         t("wizard.guided.detectedCandidate", {
           label: candidate.label,
           detail: candidate.detail,
+          recommended: "",
         }),
       );
       await prompter.note(candidates.join("\n"), t("wizard.guided.detectedTitle"));

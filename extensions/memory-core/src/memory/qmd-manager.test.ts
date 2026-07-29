@@ -230,10 +230,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { PluginStateLeaseError } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  formatSqliteSessionFileMarker,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { formatSessionTranscriptMemoryHitKey } from "openclaw/plugin-sdk/session-transcript-hit";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -252,6 +249,14 @@ const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 const originalWindowsPath = process.env.Path;
 const originalQmdStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function expectedQmdProvenance(originClass: "agent" | "untrusted") {
+  return {
+    originClass,
+    sessionKind: "unknown",
+    observedAt: expect.any(Number),
+  };
+}
 
 function setQmdStateDir(stateDir: string): void {
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
@@ -281,11 +286,6 @@ async function seedQmdSessionTranscript(params: {
     storePath,
     entry: {
       sessionId: params.sessionId,
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        storePath,
-      }),
       updatedAt: timestamp,
     },
   });
@@ -2679,6 +2679,7 @@ describe("QmdMemoryManager", () => {
         score: 0.93,
         snippet: "@@ -7,1\nrouter glacier backup",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
     expectMockMessageContains(
@@ -2813,6 +2814,7 @@ describe("QmdMemoryManager", () => {
         score: 1,
         snippet: "@@ -1,1\nremember this",
         source: "memory",
+        provenance: expectedQmdProvenance("agent"),
       },
     ]);
     expect(addCallsAfterMissing).toBeGreaterThan(0);
@@ -3662,7 +3664,8 @@ describe("QmdMemoryManager", () => {
                 collection: "workspace-main",
                 start_line: 8,
                 end_line: 10,
-                snippet: "@@ -20,3\nline one\nline two\nline three",
+                snippet:
+                  "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
               },
             ],
           }),
@@ -3697,8 +3700,9 @@ describe("QmdMemoryManager", () => {
         startLine: 8,
         endLine: 10,
         score: 0.91,
-        snippet: "@@ -20,3\nline one\nline two\nline three",
+        snippet: "@@ -20,3\nline one\nline two\nline three <!-- project: github.com/acme/Alpha -->",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
 
@@ -3832,6 +3836,7 @@ describe("QmdMemoryManager", () => {
         score: 0.73,
         snippet: "@@ -20,3\nline one\nline two\nline three",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
 
@@ -5643,7 +5648,13 @@ describe("QmdMemoryManager", () => {
             }
             if (query.includes("hash LIKE ?")) {
               expect(arg).toBe(`${exactDocid}%`);
-              return [{ collection: "workspace-main", path: "notes/welcome.md" }];
+              return [
+                {
+                  collection: "workspace-main",
+                  path: "notes/welcome.md",
+                  modified_at: "2026-07-01T10:00:00.000Z",
+                },
+              ];
             }
             throw new Error(`unexpected sqlite query: ${query}`);
           },
@@ -5661,12 +5672,14 @@ describe("QmdMemoryManager", () => {
         score: 1,
         snippet: "@@ -5,2\nremember this\nnext line",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
 
     expect(prepareCalls).toHaveLength(2);
     expect(prepareCalls[0]).toContain("hash = ?");
     expect(prepareCalls[1]).toContain("hash LIKE ?");
+    expect(results[0]?.provenance?.observedAt).toBe(Date.parse("2026-07-01T10:00:00.000Z"));
     await manager.close();
   });
 
@@ -5727,6 +5740,7 @@ describe("QmdMemoryManager", () => {
         score: 0.9,
         snippet: "@@ -3,1\nworkspace hit",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
     await manager.close();
@@ -5767,6 +5781,7 @@ describe("QmdMemoryManager", () => {
         score: 0.71,
         snippet: "@@ -4,1\ntoken unlock",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
     await manager.close();
@@ -5822,6 +5837,7 @@ describe("QmdMemoryManager", () => {
         score: 0.84,
         snippet: "@@ -2,1\nsession canary",
         source: "sessions",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
 
@@ -5913,6 +5929,7 @@ describe("QmdMemoryManager", () => {
         score: 0.8,
         snippet: "@@ -2,1\nsession hit",
         source: "sessions",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
 
@@ -5981,6 +5998,7 @@ describe("QmdMemoryManager", () => {
         score: 0.8,
         snippet: "@@ -2,1\nworkspace fact",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
       {
         path: "notes/guide.md",
@@ -5989,6 +6007,7 @@ describe("QmdMemoryManager", () => {
         score: 0.7,
         snippet: "@@ -1,1\nnotes guide",
         source: "memory",
+        provenance: expectedQmdProvenance("untrusted"),
       },
     ]);
     await manager.close();

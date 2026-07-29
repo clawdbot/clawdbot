@@ -65,6 +65,8 @@ type GatewayCliDependencies = {
     now: () => number;
     sleep: (ms: number) => Promise<void>;
   };
+  loadGatewayHealthModule?: typeof loadGatewayHealthModule;
+  loadHealthStyleModule?: typeof loadHealthStyleModule;
 };
 
 function loadConfigModule() {
@@ -678,15 +680,15 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
         await runGatewayCommand(
           async () => {
             const rpcOpts = await resolveGatewayRpcOptionsWithLocalPort(opts, command);
-            const [
-              { emitReachableGatewayAuthDiagnostic, formatHealthChannelLines },
-              { styleHealthChannelLine },
-            ] = await Promise.all([loadGatewayHealthModule(), loadHealthStyleModule()]);
             let result: unknown;
             try {
               result = await callGatewayCli("health", rpcOpts);
             } catch (error) {
-              const { readBestEffortConfig } = await loadConfigModule();
+              const [{ emitReachableGatewayAuthDiagnostic }, { readBestEffortConfig }] =
+                await Promise.all([
+                  (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
+                  loadConfigModule(),
+                ]);
               const handled = await emitReachableGatewayAuthDiagnostic({
                 error,
                 config: rpcOpts.config ?? (await readBestEffortConfig()),
@@ -706,6 +708,10 @@ export function registerGatewayCli(program: Command, deps: GatewayCliDependencie
               defaultRuntime.writeJson(result);
               return;
             }
+            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
+              (deps.loadGatewayHealthModule ?? loadGatewayHealthModule)(),
+              (deps.loadHealthStyleModule ?? loadHealthStyleModule)(),
+            ]);
             const rich = isRich();
             const obj: Record<string, unknown> =
               result && typeof result === "object" ? (result as Record<string, unknown>) : {};

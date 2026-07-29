@@ -20,7 +20,14 @@ import {
 } from "./gateway-log-sentinel.js";
 import { discardIgnoredResponseBody } from "./ignored-response-body.js";
 import * as parity from "./parity-shared.js";
+import {
+  buildRuntimeParityCacheDiagnostics,
+  type RuntimeParityCacheDiagnostics,
+} from "./runtime-parity-cache-diagnostics.js";
+import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
+
+export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
 
 // These are the canonical QA comparison cells, not the extensible product
 // AgentHarness registry. Broader harness coverage needs its own explicit lane.
@@ -37,14 +44,6 @@ export type RuntimeParityToolCall = {
   errorClass?: string;
 };
 
-export type RuntimeParityUsage = {
-  inputTokens: number;
-  outputTokens: number;
-  totalTokens: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-};
-
 export type RuntimeParityUsagePolicy =
   | { expectation: "assistant-message-required" }
   | { expectation: "not-applicable"; reason: string };
@@ -56,7 +55,9 @@ export type RuntimeParityCell = {
   providerPlanToolCalls?: RuntimeParityToolCall[];
   finalText: string;
   usage: RuntimeParityUsage;
+  cacheDiagnostics?: RuntimeParityCacheDiagnostics;
   wallClockMs: number;
+  bootstrapWallClockMs?: number;
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
@@ -67,6 +68,19 @@ type RuntimeParityResultCell = RuntimeParityCell & {
   status: RuntimeParityStatus;
   details?: string;
 };
+
+// Runtime-tool fixtures reserve this prefix for tracked harness limitations.
+// Matching only that explicit skip keeps unexpected coverage loss blocking.
+const KNOWN_HARNESS_GAP_DETAILS_PREFIX = "known-harness-gap ";
+
+function isKnownHarnessGapSkip(
+  cell: Pick<RuntimeParityResultCell, "details" | "status"> | undefined,
+) {
+  return (
+    cell?.status === "skip" &&
+    cell.details?.trimStart().startsWith(KNOWN_HARNESS_GAP_DETAILS_PREFIX) === true
+  );
+}
 
 export type RuntimeParityDrift =
   | "none"
@@ -116,12 +130,18 @@ export function runtimeParityCellStatus(
 }
 
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
+  if (result.drift === "failure-mode") {
+    return false;
+  }
+  const cells = CANONICAL_RUNTIME_IDS.map((runtime) => result.cells[runtime]);
+  const knownHarnessGapSkips = cells.filter((cell) => isKnownHarnessGapSkip(cell));
   return (
-    result.drift !== "failure-mode" &&
-    CANONICAL_RUNTIME_IDS.every((runtime) => {
-      const cell = result.cells[runtime];
-      return cell?.status === "pass" && isRuntimeParityCellPassable(cell);
-    })
+    knownHarnessGapSkips.length <= 1 &&
+    cells.every(
+      (cell) =>
+        isRuntimeParityCellPassable(cell) &&
+        (cell.status === "pass" || isKnownHarnessGapSkip(cell)),
+    )
   );
 }
 
@@ -141,6 +161,7 @@ type RuntimeParityCaptureParams = {
   gateway: QaGatewayLike;
   scenarioResult: QaSuiteScenarioLike;
   wallClockMs: number;
+  bootstrapWallClockMs?: number;
   agentId?: string;
   mockBaseUrl?: string;
 };
@@ -1111,6 +1132,8 @@ function classifyRuntimeParityCells(params: {
   codex: RuntimeParityCell;
   openclawStatus: RuntimeParityStatus;
   codexStatus: RuntimeParityStatus;
+  openclawDetails?: string;
+  codexDetails?: string;
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
     isHardFailureRuntimeError(params.openclaw.runtimeErrorClass) ||
@@ -1134,6 +1157,27 @@ function classifyRuntimeParityCells(params: {
     return {
       drift: "failure-mode",
       driftDetails: "at least one runtime planned a tool call without a tool result",
+    };
+  }
+
+  const openclawKnownHarnessGap = isKnownHarnessGapSkip({
+    status: params.openclawStatus,
+    details: params.openclawDetails,
+  });
+  const codexKnownHarnessGap = isKnownHarnessGapSkip({
+    status: params.codexStatus,
+    details: params.codexDetails,
+  });
+  if (
+    openclawKnownHarnessGap !== codexKnownHarnessGap &&
+    (openclawKnownHarnessGap ? params.codexStatus : params.openclawStatus) === "pass" &&
+    isRuntimeParityCellPassable(params.openclaw) &&
+    isRuntimeParityCellPassable(params.codex)
+  ) {
+    const skippedRuntime = openclawKnownHarnessGap ? "openclaw" : "codex";
+    return {
+      drift: "structural",
+      driftDetails: `known harness gap in ${skippedRuntime} runtime; paired runtime passed`,
     };
   }
 
@@ -1427,7 +1471,15 @@ export async function captureRuntimeParityCell(
     ...(mockToolCalls ? { providerPlanToolCalls: mockToolCalls } : {}),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
+    cacheDiagnostics: buildRuntimeParityCacheDiagnostics(
+      transcriptRecords
+        .filter((record) => record.role === "assistant")
+        .map((record) => readUsageTotals(record.message.usage ?? null)),
+    ),
     wallClockMs: params.wallClockMs,
+    ...(params.bootstrapWallClockMs === undefined
+      ? {}
+      : { bootstrapWallClockMs: params.bootstrapWallClockMs }),
     ...(scenarioErrorClass || sentinelErrorClass
       ? { runtimeErrorClass: scenarioErrorClass ?? sentinelErrorClass }
       : {}),
@@ -1448,6 +1500,8 @@ export async function runRuntimeParityScenario(params: {
     codex: codex.cell,
     openclawStatus: openclaw.status,
     codexStatus: codex.status,
+    openclawDetails: openclaw.details,
+    codexDetails: codex.details,
   });
   return {
     scenarioId: params.scenarioId,

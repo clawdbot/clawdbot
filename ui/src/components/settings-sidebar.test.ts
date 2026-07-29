@@ -66,9 +66,9 @@ describe("settings sidebar search", () => {
         searchQuery: "cp",
         searchBlockMatches: [
           {
-            routeId: "config",
+            routeId: "connection",
             label: "Gateway Host",
-            hash: "#settings-general-system",
+            hash: "#settings-connection-host",
           },
         ],
         onExit: vi.fn(),
@@ -85,7 +85,7 @@ describe("settings sidebar search", () => {
         ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
       ),
     ].map((item) => item.textContent?.trim());
-    expect(resultLabels).toEqual(["General", "Gateway Host"]);
+    expect(resultLabels).toEqual(["Gateway", "Gateway Host"]);
   });
 
   it("ranks matching pages before matching blocks and navigates to the block", () => {
@@ -188,6 +188,50 @@ describe("settings sidebar search", () => {
     });
   });
 
+  it("keeps Memory search results on the canonical Settings tab path", () => {
+    const onNavigate = vi.fn();
+    render(
+      renderSettingsSidebar({
+        basePath: "/ui",
+        activeRouteId: "memory",
+        activePathname: "/ui/settings/memory/settings",
+        activeHash: "#memory-backend",
+        offline: false,
+        lastError: null,
+        version: "",
+        updateAvailable: null,
+        updateRunning: false,
+        onUpdate: vi.fn(),
+        searchQuery: "backend",
+        searchBlockMatches: [
+          {
+            routeId: "memory",
+            label: "Memory",
+            pathname: "/ui/settings/memory/settings",
+            hash: "#memory-backend",
+          },
+        ],
+        onExit: vi.fn(),
+        onRetryConnect: vi.fn(),
+        onNavigate,
+        onSearchQueryChange: vi.fn(),
+        preloadTimers: new Map(),
+      }),
+      container,
+    );
+
+    const link = container.querySelector<HTMLAnchorElement>(
+      '.settings-sidebar__subitem[href="/ui/settings/memory/settings#memory-backend"]',
+    );
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("aria-current")).toBe("location");
+    link?.click();
+    expect(onNavigate).toHaveBeenCalledWith("memory", {
+      pathname: "/ui/settings/memory/settings",
+      hash: "#memory-backend",
+    });
+  });
+
   it("filters localized routes and groups while preserving navigation", () => {
     let searchQuery = "";
     const onNavigate = vi.fn();
@@ -243,7 +287,7 @@ describe("settings sidebar search", () => {
     expect(labels()).toEqual(["Appearance"]);
 
     enterQuery("connections");
-    expect(labels()).toEqual(["Connection", "Channels", "Communications", "Devices"]);
+    expect(labels()).toEqual(["Gateway", "Channels", "Communications", "Talk", "Devices"]);
 
     enterQuery("does-not-exist");
     expect(labels()).toEqual([]);

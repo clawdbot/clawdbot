@@ -532,7 +532,6 @@ describe("runDoctorSessionSqlite", () => {
       agentHarnessId: "codex",
       lifecycleRevision: "rev-1",
       sessionId: "session-1",
-      sessionFile: expect.stringMatching(/^sqlite:/),
     });
   });
 
@@ -614,8 +613,8 @@ describe("runDoctorSessionSqlite", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
-      })?.entry.sessionFile,
-    ).toContain("sqlite:main:session-1:");
+      })?.entry,
+    ).not.toHaveProperty("sessionFile");
     expect(
       loadSqliteTranscriptEventsSync({
         agentId: "main",
@@ -1015,8 +1014,8 @@ describe("runDoctorSessionSqlite", () => {
         agentId: "main",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
-      })?.entry.sessionFile,
-    ).toContain("sqlite:main:session-1:");
+      })?.entry,
+    ).not.toHaveProperty("sessionFile");
   });
 
   it("validates missing SQLite rows without creating the agent database", async () => {
@@ -1849,7 +1848,9 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(recover.mode).toBe("recover");
-    expect(recover.totals.issues).toBe(0);
+    expect(recover.targets[0]?.issues).toMatchObject([
+      { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
+    ]);
     expect(recover.migrationRun?.manifestPath).toBe(manifestPath);
     expect(recover.targets[0]?.restore?.manifestPaths).toEqual([manifestPath]);
     expect(recover.targets[0]?.restore?.restoredFiles).toEqual(
@@ -2191,8 +2192,11 @@ describe("runDoctorSessionSqlite", () => {
         archivedLegacyStoreFiles: 0,
         archivedTranscriptFiles: 0,
         importedEntries: 1,
-        issues: 0,
+        issues: 1,
       });
+      expect(report.targets[0]?.issues).toMatchObject([
+        { code: "active_sqlite_transcript_jsonl", sessionKey: "agent:main:main" },
+      ]);
       expect(fs.existsSync(storePath)).toBe(true);
       expect(fs.existsSync(mainTranscriptPath)).toBe(true);
       expect(fs.existsSync(workTranscriptPath)).toBe(true);

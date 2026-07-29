@@ -1248,6 +1248,9 @@
                     "group": "Memory",
                     "pages": [
                       "concepts/memory",
+                      "concepts/memory-architecture",
+                      "concepts/user-model",
+                      "concepts/standing-intents",
                       "concepts/memory-builtin",
                       "concepts/memory-qmd",
                       "concepts/memory-honcho",
@@ -1316,6 +1319,7 @@
                   "plugins/workboard",
                   "plugins/webhooks",
                   "plugins/admin-http-rpc",
+                  "plugins/beam",
                   "plugins/voice-call",
                   "plugins/vault",
                   "plugins/onepassword",

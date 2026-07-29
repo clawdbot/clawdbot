@@ -142,16 +142,20 @@ User-home mode supports a local managed stdio process or the shared Unix-socket
 transport. It uses `$CODEX_HOME` when set and `~/.codex` otherwise, including
 that home's native Codex auth, config, plugins, and thread store. OpenClaw does
 not inject an OpenClaw auth profile into this app-server, even when the agent's
-model route has a stored OpenAI profile: a subscription route is verified
-against the native account instead. Log in with Codex itself if a turn reports
-missing subscription credentials.
+model route has a stored OpenAI profile. The native account is verified against
+the route instead, in both directions:
 
-Because user-home mode refuses a prepared OpenClaw auth profile outright
-(`Prepared Codex auth requires an isolated app-server home.`), a stored OpenAI
-profile plus `homeScope: "user"` stops the agent from starting. Check with
-`openclaw models auth list --provider openai` and remove the stored profile with
-`openclaw models auth logout <profileId> --yes`, or switch back to
-`homeScope: "agent"` if you want OpenClaw to keep managing that credential.
+- A subscription route requires the native home to be signed in to ChatGPT. Run
+  `codex login` in that home if a turn reports missing subscription credentials.
+- A Platform (API-key) route refuses a native home signed in with a ChatGPT
+  subscription, so an API-billed route never silently spends the plan. Sign that
+  home in with `codex login --with-api-key`, or switch to `homeScope: "agent"`
+  and let OpenClaw inject the key it already holds.
+
+A stored OpenAI profile is fine alongside `homeScope: "user"`; OpenClaw keeps it
+for agent-scoped connections and simply does not hand it to the native home. Use
+`openclaw models auth list --provider openai` to inspect stored profiles and
+`openclaw models auth logout <profileId> --yes` to remove one you no longer want.
 
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
@@ -762,6 +766,15 @@ process. OpenClaw removes `CODEX_HOME` and `HOME` from this list during
 local launch normalization: `CODEX_HOME` stays pointed at the selected
 agent or user scope, and `HOME` stays inherited so subprocesses can use
 normal user-home state.
+
+Verified local setup turns also attest the selected Codex launcher and package.
+Inherited `NODE_OPTIONS` may contain bounded resource, warning, DNS result order,
+network-family autoselection, environment-proxy, and CA-source options because
+those settings cannot preload code or change module resolution. For example,
+`--dns-result-order=ipv4first --no-network-family-autoselection` is allowed.
+Malformed or unknown options and code-loading options such as `--require` or
+`--import` fail closed. If an inherited option is not needed by Codex, remove
+`NODE_OPTIONS` with `appServer.clearEnv`.
 
 ### Dynamic tools and web search
 

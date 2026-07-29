@@ -105,6 +105,12 @@ describe("LabsPage", () => {
     expect(codeModeToggle(page).checked).toBe(true);
   });
 
+  it("reads the per-model auto tier as enabled", async () => {
+    const { page } = await mountPage({ tools: { codeMode: { enabled: "auto" } } });
+
+    expect(codeModeToggle(page).checked).toBe(true);
+  });
+
   it("writes an explicit false in the RFC 7396 merge patch when disabling", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: true } },
@@ -124,10 +130,12 @@ describe("LabsPage", () => {
 
   it.each([
     {
+      // The on position restores the shipped "auto" tier, never `true`: Labs
+      // offers Auto/Off, and force-on stays a config-only power-user state.
       label: "Code Mode",
       index: 0,
       sourceConfig: { tools: { codeMode: { enabled: false } } },
-      expectedPatch: { tools: { codeMode: { enabled: true } } },
+      expectedPatch: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     },
     {
@@ -163,7 +171,7 @@ describe("LabsPage", () => {
       expectedPatch: { logging: { audit: { messages: "direct" } } },
       note: "labs: update auditMessages",
     },
-  ])("writes true at the registered config path when enabling $label", async (testCase) => {
+  ])("writes the on value at the registered config path when enabling $label", async (testCase) => {
     const { page, runtimeConfig } = await mountPage(testCase.sourceConfig);
     const toggle = labToggle(page, testCase.index, testCase.label);
 
@@ -219,6 +227,47 @@ describe("LabsPage", () => {
     const restartRows = rows.filter((row) => row.textContent?.includes("restart"));
     expect(restartRows).toHaveLength(1);
     expect(restartRows[0]?.textContent).toContain("Message audit metadata");
+  });
+});
+
+describe("LabsPage code mode enablement", () => {
+  // Mirrors resolveCodeModeConfig: the shipped default is "auto", so the row
+  // reads as on until an explicit `false` opts out. `true` stays a valid
+  // config-only force-on and must also read as on.
+  it.each([
+    { label: "unset", config: {}, expected: true },
+    {
+      label: "object without enabled",
+      config: { tools: { codeMode: { timeoutMs: 5000 } } },
+      expected: true,
+    },
+    { label: "explicit true", config: { tools: { codeMode: { enabled: true } } }, expected: true },
+    {
+      label: "explicit disabled",
+      config: { tools: { codeMode: { enabled: false } } },
+      expected: false,
+    },
+    { label: "boolean shorthand false", config: { tools: { codeMode: false } }, expected: false },
+    { label: "auto shorthand", config: { tools: { codeMode: "auto" } }, expected: true },
+  ])("reads $label as $expected", async ({ config, expected }) => {
+    const { page, provider } = await mountPage(config);
+
+    expect(codeModeToggle(page).checked).toBe(expected);
+    provider.remove();
+  });
+
+  it("writes an explicit false when disabling the shipped default", async () => {
+    const { page, runtimeConfig } = await mountPage({});
+    const toggle = codeModeToggle(page);
+
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+
+    await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    expect(runtimeConfig.patch).toHaveBeenCalledWith({
+      raw: { tools: { codeMode: { enabled: false } } },
+      note: "labs: update codeMode",
+    });
   });
 });
 

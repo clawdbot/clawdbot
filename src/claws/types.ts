@@ -179,6 +179,7 @@ export type ClawReadResult =
   | {
       ok: true;
       manifest: ClawManifest;
+      clawMarkdownBody?: Buffer;
       openClawProfile?: ClawOpenClawProfile;
       source: ClawSourceIdentity;
       snapshot: ClawSourceSnapshot;
@@ -195,6 +196,7 @@ export type ClawAddPlanAction = {
   action: "create" | "write" | "install" | "configure" | "schedule";
   target: string;
   source?: string;
+  sourceKind?: "clawMarkdownBody";
   digest?: string;
   details?: Record<string, unknown>;
   blocked: boolean;

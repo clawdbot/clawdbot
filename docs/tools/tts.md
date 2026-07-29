@@ -350,6 +350,149 @@ For Xiaomi `mimo-v2.5-tts-voicedesign`, omit `speakerVoice` and set `style` to
 the voice-design prompt. OpenClaw sends that prompt as the TTS `user` message
 and does not send `audio.voice` for the voicedesign model.
 
+### Local Speech Swift and speech-core
+
+[Speech Swift](https://github.com/soniqo/speech-swift) and
+[speech-core](https://github.com/soniqo/speech-core) provide local speech
+inference across macOS, Linux, and Windows. Use the OpenAI-compatible HTTP
+provider when Speech Swift and OpenClaw run on the same Mac. Use Local CLI for
+direct executable integration on any supported host.
+
+Install `ffmpeg` when a channel needs OpenClaw to convert WAV output to Opus or
+raw PCM.
+
+<Tabs>
+  <Tab title="macOS HTTP">
+<Warning>
+This HTTP setup requires Speech Swift v0.0.23 or later. If Homebrew already
+installed an older version, run `brew update && brew upgrade speech` first.
+</Warning>
+
+Start Speech Swift's local server:
+
+```bash
+brew install speech
+speech-server --port 8080
+```
+
+Point the OpenAI speech provider at its loopback endpoint. `responseFormat`
+must be `wav` because the local endpoint does not emit compressed audio:
+
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "openai",
+    providers: {
+      openai: {
+        apiKey: "local",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        model: "tts-1",
+        speakerVoice: "alloy",
+        responseFormat: "wav",
+      },
+    },
+  },
+}
+```
+
+`tts-1` selects Kokoro. Speech Swift registry aliases such as `qwen3-tts`,
+`cosyvoice`, and `voxcpm2` select other local engines. The placeholder API key
+is required by OpenClaw's provider configuration but is not validated by the
+loopback server.
+</Tab>
+<Tab title="macOS CLI">
+The Homebrew `speech` executable can write directly to OpenClaw's temporary
+output path:
+
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "speech",
+        args: ["speak", "{{Text}}", "--output", "{{OutputPath}}"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
+      },
+    },
+  },
+}
+```
+
+  </Tab>
+  <Tab title="Linux CLI">
+Install a speech-core Linux release package, download the ONNX model set once,
+and verify synthesis before starting OpenClaw:
+
+```bash
+speech download-models
+speech speak "Hello from OpenClaw" hello.wav
+```
+
+Then configure the packaged Kokoro command:
+
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "speech",
+        args: ["speak", "{{Text}}", "{{OutputPath}}"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
+      },
+    },
+  },
+}
+```
+
+See the [speech-core Linux CLI reference](https://github.com/soniqo/speech-core/blob/main/docs/cli.md)
+for release packages and model-directory settings.
+</Tab>
+<Tab title="Windows CLI">
+Download the speech-core Windows release, extract it, and install the ONNX
+models once:
+
+```powershell
+$Version = "0.0.11"
+$Url = "https://github.com/soniqo/speech-core/releases/download/v$Version/speech-$Version-windows-x64.zip"
+Invoke-WebRequest $Url -OutFile speech.zip
+Expand-Archive speech.zip
+Set-Location "speech\speech-$Version-windows-x64\bin"
+Set-ExecutionPolicy -Scope Process Bypass
+.\speech_download_models.ps1
+```
+
+Then point Local CLI at the packaged Kokoro executable:
+
+```json5
+{
+  tts: {
+    auto: "always",
+    provider: "tts-local-cli",
+    providers: {
+      "tts-local-cli": {
+        command: "C:\\path\\to\\speech-0.0.11-windows-x64\\bin\\speech_synthesize.exe",
+        args: ["{{OutputPath}}", "{{Text}}", "en"],
+        outputFormat: "wav",
+        timeoutMs: 120000,
+      },
+    },
+  },
+}
+```
+
+See the [speech-core Windows CLI reference](https://github.com/soniqo/speech-core/blob/main/docs/cli.md)
+for the packaged server, model cache, and standalone command syntax.
+
+  </Tab>
+</Tabs>
+
 ### Per-agent voice overrides
 
 Use `agents.entries.*.tts` when one agent should speak with a different provider,
@@ -673,7 +816,10 @@ Per-provider notes:
   - If the configured Microsoft output format fails, OpenClaw retries with MP3.
   - When no explicit voice override is set and the default English voice is used, OpenClaw auto-switches to a Chinese neural voice (`zh-CN-XiaoxiaoNeural`, `zh-CN` locale) if the reply text is CJK-dominant.
 
-OpenAI and ElevenLabs output formats are fixed per channel as listed above.
+OpenAI and ElevenLabs choose output formats per channel as listed above. An
+explicit OpenAI `responseFormat` overrides that selection; a format that is not
+voice-note compatible may be delivered as an audio file or transcoded by a
+channel that supports conversion.
 
 ## Auto-TTS behavior
 
@@ -849,6 +995,7 @@ and resolved values still fail startup or reject the update.
     <ParamField path="model" type="string">OpenAI TTS model id. Default `gpt-4o-mini-tts`.</ParamField>
     <ParamField path="speakerVoice" type="string">Voice name (e.g. `alloy`, `cedar`). Default `coral`. Legacy alias: `voice`.</ParamField>
     <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
+    <ParamField path="responseFormat" type='"mp3" | "opus" | "wav"'>Explicit response format. When omitted, OpenClaw selects Opus for voice-note targets and MP3 otherwise. Use `wav` for compatible local endpoints that do not encode compressed audio.</ParamField>
     <ParamField path="extraBody / extra_body" type="Record<string, unknown>">Extra JSON fields merged into `/audio/speech` request bodies after generated OpenAI TTS fields. Use this for OpenAI-compatible endpoints such as Kokoro that require provider-specific keys like `lang`; unsafe prototype keys are ignored.</ParamField>
     <ParamField path="baseUrl" type="string">
       Override the OpenAI TTS endpoint. Resolution order: config → `OPENAI_TTS_BASE_URL` → `https://api.openai.com/v1`. Non-default values are treated as OpenAI-compatible TTS endpoints, so custom model and voice names are accepted, and `speed` loses its `0.25..4.0` range check.
@@ -926,20 +1073,22 @@ provider default.
 
 ## Service links
 
-- [OpenAI text-to-speech guide](https://platform.openai.com/docs/guides/text-to-speech)
-- [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
-- [Azure Speech REST text-to-speech](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech)
 - [Azure Speech provider](/providers/azure-speech)
-- [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
+- [Azure Speech REST text-to-speech](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech)
 - [ElevenLabs Authentication](https://elevenlabs.io/docs/api-reference/authentication)
+- [ElevenLabs Text to Speech](https://elevenlabs.io/docs/api-reference/text-to-speech)
 - [Gradium](/providers/gradium)
 - [Inworld TTS API](https://docs.inworld.ai/tts/tts)
-- [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
-- [Volcengine TTS HTTP API](/providers/volcengine#text-to-speech)
-- [Xiaomi MiMo speech synthesis](/providers/xiaomi#text-to-speech)
-- [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
 - [Microsoft Speech output formats](https://learn.microsoft.com/azure/ai-services/speech-service/rest-text-to-speech#audio-outputs)
+- [MiniMax T2A v2 API](https://platform.minimaxi.com/document/T2A%20V2)
+- [node-edge-tts](https://github.com/SchneeHertz/node-edge-tts)
+- [OpenAI Audio API reference](https://platform.openai.com/docs/api-reference/audio)
+- [OpenAI text-to-speech guide](https://platform.openai.com/docs/guides/text-to-speech)
+- [speech-core](https://github.com/soniqo/speech-core)
+- [Speech Swift](https://github.com/soniqo/speech-swift)
+- [Volcengine TTS HTTP API](/providers/volcengine#text-to-speech)
 - [xAI text to speech](https://docs.x.ai/developers/rest-api-reference/inference/voice#text-to-speech-rest)
+- [Xiaomi MiMo speech synthesis](/providers/xiaomi#text-to-speech)
 
 ## Related
 

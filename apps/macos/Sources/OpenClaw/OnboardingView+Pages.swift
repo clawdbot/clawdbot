@@ -184,11 +184,14 @@ extension OnboardingView {
     }
 
     private var remoteChoiceSubtitle: String {
-        let count = gatewayDiscovery.gateways.count
+        Self.remoteChoiceSubtitle(discoveredGatewayCount: gatewayDiscovery.gateways.count)
+    }
+
+    static func remoteChoiceSubtitle(discoveredGatewayCount count: Int) -> String {
         if count > 0 {
             return count == 1
-                ? "1 gateway found on your network — click to choose it."
-                : "\(count) gateways found on your network — click to choose one."
+                ? String(localized: "1 gateway found on your network — click to choose it.")
+                : String(localized: "\(count) gateways found on your network — click to choose one.")
         }
         return "For advanced setups — use a gateway that runs elsewhere."
     }
@@ -334,9 +337,7 @@ extension OnboardingView {
                 return "Select a nearby gateway or open Advanced to enter a gateway URL."
             }
             if GatewayRemoteConfig.normalizeGatewayUrl(trimmedUrl) == nil {
-                return """
-                Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, or Tailnet hosts.
-                """
+                return GatewayRemoteConfig.directGatewayUrlValidationMessage
             }
             return nil
         case .ssh:

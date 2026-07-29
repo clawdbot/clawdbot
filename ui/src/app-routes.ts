@@ -2,6 +2,8 @@ import { createRouter } from "@openclaw/uirouter";
 import type { PageDefinition, Router, RouterHistory } from "@openclaw/uirouter";
 import {
   INTERNAL_SESSION_PATH_PARAM,
+  INTERNAL_MEMORY_PATH_PARAM,
+  memoryTabFromPath,
   pathForRoute,
   routeIdFromPath,
   sessionRouteNamespaceFromPath,
@@ -23,6 +25,7 @@ import { page as custodianPage } from "./pages/custodian/route.ts";
 import { page as dashboardsPage } from "./pages/dashboards/route.ts";
 import { page as debugPage } from "./pages/debug/route.ts";
 import { page as labsPage } from "./pages/labs/route.ts";
+import { page as lobsterdexPage } from "./pages/lobsterdex/route.ts";
 import { page as logsPage } from "./pages/logs/route.ts";
 import { page as memoryImportPage } from "./pages/memory-import/route.ts";
 import { page as modelProvidersPage } from "./pages/model-providers/route.ts";
@@ -65,6 +68,7 @@ const APP_ROUTE_TREE = [
   connectionPage,
   labsPage,
   aboutPage,
+  lobsterdexPage,
   ...configPages,
   modelSetupPage,
   modelProvidersPage,
@@ -105,6 +109,10 @@ function dynamicRouteFromPath(pathname: string, basePath: string): DynamicRoute 
   const boardId = workboardBoardIdFromPath(pathname, basePath);
   if (boardId) {
     return ["workboard", "board", boardId];
+  }
+  const memoryTab = memoryTabFromPath(pathname, basePath);
+  if (memoryTab && memoryTab !== "overview") {
+    return ["memory", INTERNAL_MEMORY_PATH_PARAM, pathname];
   }
   const sessionNamespace = sessionRouteNamespaceFromPath(pathname, basePath);
   return sessionNamespace ? [sessionNamespace, INTERNAL_SESSION_PATH_PARAM, pathname] : null;

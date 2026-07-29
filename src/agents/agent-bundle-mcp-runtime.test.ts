@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
@@ -71,6 +72,7 @@ async function writeListToolsMcpServer(params: {
   callToolIsError?: boolean;
   callToolJsonRpcError?: boolean;
   callToolJsonRpcErrorCode?: number;
+  callToolResult?: CallToolResult;
   resourcePageDelayMs?: number;
   resourcePageCount?: number;
   resourceListJsonRpcError?: boolean;
@@ -108,6 +110,7 @@ const tools = ${JSON.stringify(
 const callToolIsError = ${params.callToolIsError === true};
 const callToolJsonRpcError = ${params.callToolJsonRpcError === true};
 const callToolJsonRpcErrorCode = ${params.callToolJsonRpcErrorCode ?? -32000};
+const callToolResult = ${JSON.stringify(params.callToolResult)};
 const resourcePageDelayMs = ${params.resourcePageDelayMs ?? 0};
 const resourcePageCount = ${params.resourcePageCount ?? 1};
 const resourceListJsonRpcError = ${params.resourceListJsonRpcError === true};
@@ -236,7 +239,9 @@ function handle(message) {
       id: message.id,
       result: {
         isError: callToolIsError,
-        content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+        ...(callToolResult ?? {
+          content: [{ type: "text", text: callToolIsError ? "tool failed" : "tool ok" }],
+        }),
       },
     });
   }
@@ -1186,6 +1191,67 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("preserves non-text structured MCP results through a real stdio server", async () => {
+    const tempDir = tempDirTracker.make("bundle-mcp-structured-content-");
+    const serverPath = path.join(tempDir, "structured-content.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const structuredContent = { description: "captured screenshot" };
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      callToolResult: {
+        content: [
+          { type: "text", text: "captured screenshot" },
+          { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+          {
+            type: "resource_link",
+            uri: "https://example.com/report",
+            name: "report",
+            title: "Report",
+          },
+          { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+          { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+        ],
+        structuredContent,
+      },
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-structured-content",
+      sessionKey: "agent:test:session-structured-content",
+      workspaceDir: tempDir,
+      cfg: {
+        mcp: {
+          servers: {
+            capture: { command: process.execPath, args: [serverPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      const result = await expectDefined(
+        materialized.tools[0],
+        "materialized MCP tool test invariant",
+      ).execute("call-structured-content", {}, undefined, undefined);
+
+      expect(result.content).toEqual([
+        {
+          type: "text",
+          text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
+        },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        { type: "text", text: "[Report] https://example.com/report" },
+        { type: "text", text: "memo body" },
+        { type: "text", text: "[audio audio/mpeg]" },
+      ]);
+      await waitForFileText(logPath, "recv tools/call", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("filters listed MCP tools with per-server include and exclude rules", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tool-filter-"));
     const serverPath = path.join(tempDir, "tool-filter.mjs");
@@ -1728,15 +1794,35 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
-  it("keeps resource-only MCP servers available for utility tools", async () => {
+  it.each([
+    {
+      name: "resource-only servers reporting method not found",
+      capabilities: { resources: { listChanged: true } },
+      listToolsMethodNotFound: true,
+      listToolsJsonRpcErrorMessage: undefined,
+    },
+    {
+      name: "resource-only servers reporting unknown method",
+      capabilities: { resources: { listChanged: true } },
+      listToolsMethodNotFound: false,
+      listToolsJsonRpcErrorMessage: "Unknown method",
+    },
+    {
+      name: "prompt-only servers reporting unknown method",
+      capabilities: { prompts: { listChanged: true } },
+      listToolsMethodNotFound: false,
+      listToolsJsonRpcErrorMessage: "Unknown method",
+    },
+  ])("keeps $name available for utility tools", async (testCase) => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-resource-only-"));
     const serverPath = path.join(tempDir, "resource-only.mjs");
     const logPath = path.join(tempDir, "server.log");
     await writeListToolsMcpServer({
       filePath: serverPath,
       logPath,
-      capabilities: { resources: { listChanged: true } },
-      listToolsMethodNotFound: true,
+      capabilities: testCase.capabilities,
+      listToolsMethodNotFound: testCase.listToolsMethodNotFound,
+      listToolsJsonRpcErrorMessage: testCase.listToolsJsonRpcErrorMessage,
     });
 
     const runtime = await getOrCreateSessionMcpRuntime({
@@ -1762,9 +1848,53 @@ process.on("SIGINT", shutdown);`,
       expect(catalog.servers.notes).toMatchObject({
         serverName: "notes",
         toolCount: 0,
-        resources: { listChanged: true },
+        ...testCase.capabilities,
       });
+      expect(catalog.diagnostics ?? []).toEqual([]);
       await waitForFileText(logPath, "recv initialize", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not suppress unknown tools/list methods from tools-capable MCP servers", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tools-unknown-method-"));
+    const serverPath = path.join(tempDir, "tools-unknown-method.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      capabilities: { tools: {}, resources: { listChanged: true } },
+      listToolsJsonRpcErrorMessage: "Unknown method",
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tools-unknown-method",
+      sessionKey: "agent:test:session-tools-unknown-method",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            notes: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.servers).toEqual({});
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.diagnostics?.[0]).toMatchObject({
+        serverName: "notes",
+        message: expect.stringContaining("Unknown method"),
+      });
+      await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
     } finally {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });

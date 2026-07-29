@@ -122,14 +122,14 @@
 .channels-pairing-filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
-  padding: var(--space-3);
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--border);
 }
 
 .channels-pairing-filters label {
   display: grid;
-  flex: 1 1 180px;
+  flex: 0 1 220px;
   gap: var(--space-1);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
@@ -137,6 +137,14 @@
 
 .channels-pairing-filters select {
   width: 100%;
+}
+
+.channels-pairing-feedback {
+  min-height: 0;
+}
+
+.channels-pairing-feedback + .channels-pairing-feedback {
+  border-top: 0;
 }
 
 .channels-pairing-request {
@@ -171,7 +179,7 @@
 }
 
 .channels-pairing-help {
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-4) var(--space-3);
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
   line-height: 1.5;

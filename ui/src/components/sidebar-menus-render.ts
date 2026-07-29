@@ -19,6 +19,7 @@ import {
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
+import { resolveSessionOwnerUser } from "./session-owner-identity.ts";
 import type {
   SidebarMenusController,
   SidebarMenusControllerHost,
@@ -291,6 +292,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showCron: host.sessionsShowCron,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    resolveCreatorUser: (creatorId) => resolveSessionOwnerUser(host, creatorId),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -330,6 +332,7 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     grouping: host.catalogProjectGrouping,
     creators: host.sessionOwnershipVisible ? host.sessionCreatorOptions : [],
     creatorFilterId: host.sessionCreatorFilterActive ? host.sessionCreatorFilterId : null,
+    resolveCreatorUser: (creatorId) => resolveSessionOwnerUser(host, creatorId),
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

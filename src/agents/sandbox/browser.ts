@@ -235,6 +235,11 @@ export async function ensureSandboxBrowser(params: {
   if (!isToolAllowed(params.cfg.tools, "browser")) {
     return null;
   }
+  if (normalizeOptionalLowercaseString(params.cfg.browser.network) === "none") {
+    throw new Error(
+      'Sandbox browser network mode "none" is unsupported because browser control requires a host-reachable published CDP port. Use "bridge", a custom bridge network, or disable the sandbox browser.',
+    );
+  }
 
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;

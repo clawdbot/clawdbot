@@ -22,7 +22,7 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
-import type { ChatPageHost } from "./chat-state.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";

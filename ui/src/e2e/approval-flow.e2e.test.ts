@@ -59,7 +59,7 @@ describeControlUiE2e("Control UI approval flow", () => {
     await server?.close();
   });
 
-  it("keeps an older resolve failure off the newly active approval", async () => {
+  it("keeps a resolve failure scoped to its approval when a newer one arrives", async () => {
     const context = await browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
@@ -85,6 +85,18 @@ describeControlUiE2e("Control UI approval flow", () => {
       message: "gateway unavailable",
     });
 
+    await expect
+      .poll(() =>
+        currentPage
+          .locator('[data-approval-id="approval-active"] .exec-approval-error')
+          .textContent(),
+      )
+      .toBe("Approval failed: gateway unavailable");
+
+    await currentPage.getByText("echo newer", { exact: true }).click();
+    await expect
+      .poll(() => currentPage.locator(".exec-approval-card").getAttribute("data-approval-id"))
+      .toBe("approval-newer");
     await expect.poll(() => currentPage.locator(".exec-approval-error").count()).toBe(0);
     await expect
       .poll(() => currentPage.getByRole("button", { name: "Deny" }).isEnabled())

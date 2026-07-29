@@ -53,7 +53,8 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
-              "supportsTemperature": false
+              "supportsTemperature": false,
+              "codeMode": "preferred"
             }
           },
           {
@@ -69,7 +70,8 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
-              "supportsTemperature": false
+              "supportsTemperature": false,
+              "codeMode": "preferred"
             }
           },
           {
@@ -85,7 +87,8 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
-              "supportsTemperature": false
+              "supportsTemperature": false,
+              "codeMode": "preferred"
             }
           },
           {
@@ -101,7 +104,8 @@
             "compat": {
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["none", "low", "medium", "high", "xhigh", "max"],
-              "supportsTemperature": false
+              "supportsTemperature": false,
+              "codeMode": "preferred"
             }
           },
           {
@@ -117,7 +121,8 @@
             "contextWindow": 1050000,
             "contextTokens": 272000,
             "maxTokens": 128000,
-            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 }
+            "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 },
+            "compat": { "codeMode": "preferred" }
           },
           {
             "id": "gpt-5.5-pro",
@@ -132,7 +137,8 @@
             "contextWindow": 1050000,
             "contextTokens": 272000,
             "maxTokens": 128000,
-            "cost": { "input": 30, "output": 180, "cacheRead": 0, "cacheWrite": 0 }
+            "cost": { "input": 30, "output": 180, "cacheRead": 0, "cacheWrite": 0 },
+            "compat": { "codeMode": "preferred" }
           }
         ]
       }

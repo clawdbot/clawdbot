@@ -20,7 +20,7 @@ npm may return `E404` until the first package-bearing release is published.
 - [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
   publishes the schemas, validators, TypeScript types, lightweight frame and error
   helpers, and version constants. Its tarball includes the generated
-  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol@beta/protocol.schema.json)
   machine-readable contract.
 - [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
   publishes the reference Node client and a browser-safe entry at
@@ -45,9 +45,18 @@ that supervise the Gateway as a child process, see
 
 Frame shapes:
 
-- Request: `{type:"req", id, method, params}`
+- Request: `{type:"req", id, method, params, traceparent?}`
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?}`
+
+After authentication, a client may include a W3C `traceparent` string on each
+request frame. The Gateway continues a valid value as a child trace context for
+that request. Missing or syntactically malformed values within the
+128-character field limit keep the default fresh request trace and do not fail
+the RPC; longer values make the request frame invalid. The initial `connect`
+request never establishes trace context for later frames. Use a separate
+`traceparent` for each logical request on a long-lived connection; do not treat
+the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Clients should branch on `code` and `details.code`; `message` remains human-readable
@@ -523,7 +532,7 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call.
     - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
     - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
-    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact action and the next consult supplies the `confirmationId`.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact final execution action and the next consult supplies the `confirmationId`; policy or hook rewrites require confirmation again.
     - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
@@ -671,6 +680,11 @@ methods. Treat this as feature discovery, not a full enumeration of
 - `config.changed`: a config write persisted (payload carries the config path,
   the new snapshot hash, and a timestamp — never config content). Operator-read
   scoped; clients refresh via `config.get`.
+- `skills.changed`: connectivity, the skill catalog, config, or eligibility
+  changed after the gateway invalidated its skills snapshot. The payload's
+  `reason` is `watch`, `watch-targets`, `manual`, `remote-node`,
+  `config-change`, or `workshop`. Operator-read scoped; clients refresh via
+  `skills.status`.
 - `exec.approval.requested` / `exec.approval.resolved`: exec approval
   lifecycle.
 - `plugin.approval.requested` / `plugin.approval.resolved`: plugin approval

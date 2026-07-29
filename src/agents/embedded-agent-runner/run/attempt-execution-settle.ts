@@ -123,10 +123,7 @@ export async function runEmbeddedAttemptSettledPhase(
   const preparedStreamRuntime = input.preparedStreamRuntime;
   const {
     abortable,
-    cache: {
-      observabilityEnabled: cacheObservabilityEnabled,
-      promptToolNames: promptCacheToolNames,
-    },
+    cache: { observabilityEnabled: cacheObservabilityEnabled, promptTools: promptCacheTools },
     history: {
       contextEnginePromptAuthority,
       contextEngineAssemblySucceeded,
@@ -195,7 +192,7 @@ export async function runEmbeddedAttemptSettledPhase(
           retention: effectivePromptCacheRetention,
           streamStrategy,
           transport: effectiveAgentTransport,
-          toolNames: promptCacheToolNames,
+          tools: promptCacheTools,
           trace: cacheTrace,
         },
       },

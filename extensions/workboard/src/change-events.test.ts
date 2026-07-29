@@ -28,7 +28,7 @@ describe("createWorkboardChangeEventService", () => {
     const context = {
       config: {},
       stateDir: "/tmp/workboard-change-events-test",
-      gatewayEvents: { emit },
+      gatewayEvents: { emit, onSessionsChanged: () => () => undefined },
       logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } satisfies Parameters<typeof service.start>[0];
 
@@ -75,7 +75,7 @@ describe("createWorkboardChangeEventService", () => {
     const context = {
       config: {},
       stateDir: "/tmp/workboard-change-events-test",
-      gatewayEvents: { emit },
+      gatewayEvents: { emit, onSessionsChanged: () => () => undefined },
       logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     } satisfies Parameters<typeof service.start>[0];
 
@@ -110,7 +110,7 @@ describe("createWorkboardChangeEventService", () => {
     const context = {
       config: {},
       stateDir: "/tmp/workboard-change-events-test",
-      gatewayEvents: { emit: vi.fn() },
+      gatewayEvents: { emit: vi.fn(), onSessionsChanged: () => () => undefined },
       logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
     } satisfies Parameters<typeof service.start>[0];
 

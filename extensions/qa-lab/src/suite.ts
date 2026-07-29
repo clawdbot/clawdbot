@@ -50,7 +50,6 @@ import {
   appendNodeOption,
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
-  buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   remapModelRefForForcedRuntime,
 } from "./suite-support.js";
@@ -551,7 +550,6 @@ export const qaSuiteProgressTesting = {
   createQaSuiteTransportAdapter,
   createScenarioStepRunner: createQaSuiteScenarioStepRunner,
   formatQaSuiteRunStartProgress,
-  buildQaRuntimeEnvPatch,
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,

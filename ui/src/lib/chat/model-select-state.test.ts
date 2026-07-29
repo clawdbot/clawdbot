@@ -586,6 +586,22 @@ describe("chat-model-select-state", () => {
     expect(resolved.defaultLabel).toBe("Default (Claude Opus 4.5)");
   });
 
+  it("keeps a canonical agent default as one named picker option", () => {
+    const state = createChatModelState({
+      agentDefaultModel: "openai/gpt-5.6-sol",
+      chatModelCatalog: createModelCatalog({
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
+    expect(resolved.options).toEqual([{ value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol" }]);
+  });
+
   it("disambiguates duplicate friendly names in picker options and default labels", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(

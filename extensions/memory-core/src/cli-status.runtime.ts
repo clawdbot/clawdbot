@@ -131,6 +131,9 @@ function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): s
     const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
     const details = [
       repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+      (repair.removedDanglingEntries ?? 0) > 0
+        ? `-${repair.removedDanglingEntries} dangling`
+        : null,
       removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
     ]
       .filter(Boolean)

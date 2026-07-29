@@ -97,6 +97,46 @@ describe("Workboard dispatcher ownership", () => {
     ]);
   });
 
+  it("does not spend worker attempts on cards that fail workspace preflight", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const inaccessible = [];
+    for (const [index, priority] of (["urgent", "high"] as const).entries()) {
+      inaccessible.push(
+        await store.create({
+          title: `Inaccessible worker ${index + 1}`,
+          status: "ready",
+          priority,
+          agentId: `inaccessible-worker-${index + 1}`,
+          workspace: { kind: "worktree", path: "/repo" },
+        }),
+      );
+    }
+    const healthy = await store.create({
+      title: "Healthy worker",
+      status: "ready",
+      agentId: "healthy-worker",
+      workspaceAccess: { unrestricted: true },
+    });
+    const run = vi.fn().mockResolvedValue({ runId: "run-healthy-worker" });
+
+    const result = await dispatchAndStartWorkboardCards({
+      store,
+      subagent: { run },
+      options: { now: 10, maxStarts: 1 },
+    });
+
+    expect(result.startFailures.map((failure) => failure.cardId)).toEqual(
+      inaccessible.map((card) => card.id),
+    );
+    expect(result.started).toEqual([
+      expect.objectContaining({ cardId: healthy.id, runId: "run-healthy-worker" }),
+    ]);
+    expect(run).toHaveBeenCalledOnce();
+    for (const card of inaccessible) {
+      await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
+    }
+  });
+
   it("tries a healthy owner before retrying a failed owner's queued cards", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const failed = await store.create({
@@ -188,76 +228,82 @@ describe("Workboard dispatcher ownership", () => {
     await expect(store.get(normal.id)).resolves.toMatchObject({ status: "ready" });
   });
 
-  it("keeps a cross-board running worker slot until its heartbeat grace expires", async () => {
-    const store = new WorkboardStore(createMemoryStore());
-    const stale = await store.create({
-      title: "Abandoned product worker",
-      status: "running",
-      agentId: "shared-worker",
-      boardId: "product",
-      execution: {
-        id: "stale-execution",
-        kind: "agent-session",
-        mode: "autonomous",
+  it.each([
+    { name: "matching", agentId: "shared-worker" },
+    { name: "different", agentId: "assigned-worker" },
+  ])(
+    "keeps a cross-board running worker slot for a $name assigned agent until its heartbeat grace expires",
+    async ({ agentId }) => {
+      const store = new WorkboardStore(createMemoryStore());
+      const stale = await store.create({
+        title: "Abandoned product worker",
         status: "running",
-        startedAt: 1,
-        updatedAt: 1,
-      },
-    });
-    const claimed = await store.claim(stale.id, {
-      ownerId: "shared-worker",
-      token: "stale-token",
-      ttlSeconds: 1,
-    });
-    const ready = await store.create({
-      title: "Ready operations recovery",
-      status: "ready",
-      agentId: "shared-worker",
-      boardId: "ops",
-      workspaceAccess: { unrestricted: true },
-    });
-    const run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
-    const expiresAt = claimed.card.metadata?.claim?.expiresAt;
-    expect(expiresAt).toBeDefined();
-
-    const withinGrace = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: {
-        now: expiresAt! + CLAIM_RECLAIM_MS,
-        maxStarts: 1,
+        agentId,
+        boardId: "product",
+        execution: {
+          id: "stale-execution",
+          kind: "agent-session",
+          mode: "autonomous",
+          status: "running",
+          startedAt: 1,
+          updatedAt: 1,
+        },
+      });
+      const claimed = await store.claim(stale.id, {
+        ownerId: "shared-worker",
+        token: "stale-token",
+        ttlSeconds: 1,
+      });
+      const ready = await store.create({
+        title: "Ready operations recovery",
+        status: "ready",
+        agentId: "shared-worker",
         boardId: "ops",
-      },
-    });
+        workspaceAccess: { unrestricted: true },
+      });
+      const run = vi.fn().mockResolvedValue({ runId: "run-after-grace" });
+      const expiresAt = claimed.card.metadata?.claim?.expiresAt;
+      expect(expiresAt).toBeDefined();
 
-    expect(withinGrace.started).toEqual([]);
-    expect(run).not.toHaveBeenCalled();
-    await expect(store.get(stale.id)).resolves.toMatchObject({
-      status: "running",
-      execution: { status: "running" },
-      metadata: { claim: { ownerId: "shared-worker" } },
-    });
+      const withinGrace = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: {
+          now: expiresAt! + CLAIM_RECLAIM_MS,
+          maxStarts: 1,
+          boardId: "ops",
+        },
+      });
 
-    const reclaimed = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: {
-        now: expiresAt! + CLAIM_RECLAIM_MS + 1,
-        maxStarts: 1,
-        boardId: "ops",
-      },
-    });
+      expect(withinGrace.started).toEqual([]);
+      expect(run).not.toHaveBeenCalled();
+      await expect(store.get(stale.id)).resolves.toMatchObject({
+        status: "running",
+        execution: { status: "running" },
+        metadata: { claim: { ownerId: "shared-worker" } },
+      });
 
-    expect(reclaimed.started).toEqual([
-      expect.objectContaining({ cardId: ready.id, runId: "run-after-grace" }),
-    ]);
-    expect(run).toHaveBeenCalledOnce();
-    await expect(store.get(stale.id)).resolves.toMatchObject({
-      status: "running",
-      execution: { status: "running" },
-      metadata: { claim: { ownerId: "shared-worker" } },
-    });
-  });
+      const reclaimed = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: {
+          now: expiresAt! + CLAIM_RECLAIM_MS + 1,
+          maxStarts: 1,
+          boardId: "ops",
+        },
+      });
+
+      expect(reclaimed.started).toEqual([
+        expect.objectContaining({ cardId: ready.id, runId: "run-after-grace" }),
+      ]);
+      expect(run).toHaveBeenCalledOnce();
+      await expect(store.get(stale.id)).resolves.toMatchObject({
+        status: "running",
+        execution: { status: "running" },
+        metadata: { claim: { ownerId: "shared-worker" } },
+      });
+    },
+  );
 
   it("does not let an expired review claim consume worker capacity", async () => {
     const store = new WorkboardStore(createMemoryStore());

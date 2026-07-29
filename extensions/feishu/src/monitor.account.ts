@@ -561,8 +561,8 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
 
-    durableIngress?.start();
     try {
+      durableIngress?.start();
       if (connectionMode === "webhook") {
         return await monitorWebhook({
           account,

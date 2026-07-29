@@ -102,7 +102,7 @@ import {
   loadSessionUsageTimeSeries,
 } from "../../infra/session-cost-usage.js";
 import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
-import { usageHandlers } from "./usage.js";
+import { testApi, usageHandlers } from "./usage.js";
 
 const TEST_RUNTIME_CONFIG = {
   agents: {
@@ -205,6 +205,7 @@ async function withUsageState(
 
 describe("sessions.usage", () => {
   beforeEach(() => {
+    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

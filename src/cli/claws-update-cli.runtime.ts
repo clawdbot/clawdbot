@@ -169,6 +169,7 @@ export async function runClawsUpdateCommand(
   const plan = await buildClawUpdatePlan({
     agentId: target,
     targetManifest: loaded.manifest,
+    targetClawMarkdownBody: loaded.clawMarkdownBody,
     targetOpenClawProfile: loaded.openClawProfile,
     targetSource: loaded.source,
     config,
@@ -198,6 +199,7 @@ export async function runClawsUpdateCommand(
       plan,
       {
         targetManifest: loaded.manifest,
+        targetClawMarkdownBody: loaded.clawMarkdownBody,
         targetOpenClawProfile: loaded.openClawProfile,
         targetSource: loaded.source,
       },
