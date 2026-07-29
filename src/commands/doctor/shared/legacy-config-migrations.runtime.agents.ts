@@ -457,6 +457,27 @@ function hasAgentListModelTimeout(value: unknown): boolean {
   });
 }
 
+function migrateAgentDefaultsAndList(
+  raw: Record<string, unknown>,
+  changes: string[],
+  migrateAgent: (agent: Record<string, unknown>, pathLabel: string, changes: string[]) => void,
+): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  if (defaults) {
+    migrateAgent(defaults, "agents.defaults", changes);
+  }
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
+    const agentRecord = getRecord(agent);
+    if (agentRecord) {
+      migrateAgent(agentRecord, `agents.list.${index}`, changes);
+    }
+  }
+}
+
 function migrateLegacyEmbeddedAgentKey(
   container: Record<string, unknown>,
   pathLabel: string,
@@ -562,6 +583,30 @@ function rewriteLegacyMemorySearchAutoProvider(
   }
   memorySearch.provider = "openai";
   changes.push(`Moved ${pathLabel}.provider from legacy "auto" to "openai".`);
+}
+
+function migrateCanonicalMemorySearches(
+  raw: Record<string, unknown>,
+  changes: string[],
+  migrateMemorySearch: (
+    memorySearch: Record<string, unknown> | null,
+    pathLabel: string,
+    changes: string[],
+  ) => void,
+  agentPathStyle: "dot" | "brackets" = "dot",
+): void {
+  migrateMemorySearch(getRecord(getRecord(raw.memory)?.search), "memory.search", changes);
+  const agents = getRecord(raw.agents);
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
+    const pathLabel =
+      agentPathStyle === "brackets"
+        ? `agents.list[${index}].memory.search`
+        : `agents.list.${index}.memory.search`;
+    migrateMemorySearch(getRecord(getRecord(getRecord(agent)?.memory)?.search), pathLabel, changes);
+  }
 }
 
 function migrateLegacySandboxPerSession(
@@ -841,17 +886,24 @@ function preserveLegacyWholeAgentRuntimePolicy(
   );
 }
 
-function removeIgnoredAgentModelTimeout(
-  model: unknown,
+function removeIgnoredAgentModelTimeouts(
+  agent: Record<string, unknown>,
   pathLabel: string,
   changes: string[],
 ): void {
-  const modelRecord = getRecord(model);
-  if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
-    return;
+  for (const [suffix, model] of [
+    ["model", agent.model],
+    ["subagents.model", getRecord(agent.subagents)?.model],
+  ] as const) {
+    const modelRecord = getRecord(model);
+    if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
+      continue;
+    }
+    delete modelRecord.timeoutMs;
+    changes.push(
+      `Removed ${pathLabel}.${suffix}.timeoutMs; agent model config only selects models.`,
+    );
   }
-  delete modelRecord.timeoutMs;
-  changes.push(`Removed ${pathLabel}.timeoutMs; agent model config only selects models.`);
 }
 
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
@@ -1016,12 +1068,12 @@ function toolProfileConfiguredSectionsNeedExplicitRepair(
   }
   const configuredGrants = configuredGrantsOverride ?? collectConfiguredToolSectionGrants(tools);
   return (
-    scopeToolProfileConfiguredSectionsNeedMigration({
+    collectProfileConfiguredSectionRepairGrants({
       value,
       inheritedProfile,
       inheritedAlsoAllow,
       configuredGrants,
-    }) ||
+    }).length > 0 ||
     byProviderToolProfilesNeedConfiguredSectionMigration(
       tools,
       configuredGrants,
@@ -1054,15 +1106,6 @@ function collectEffectiveConfiguredToolSectionGrants(
   ]);
 }
 
-function toolProfileAllowRequiresFull(params: {
-  value: unknown;
-  inheritedProfile?: string;
-  inheritedAlsoAllow?: string[];
-  configuredGrants: string[];
-}): boolean {
-  return collectProfileConfiguredSectionRepairGrants(params).length > 0;
-}
-
 function resolveProfileBoundAllowGrants(params: {
   tools: Record<string, unknown>;
   profile: string;
@@ -1092,15 +1135,6 @@ function resolveProfileBoundAllowGrants(params: {
   return uniqueStrings([...coreAllow, ...pluginAllow, ...params.configuredGrants]);
 }
 
-function scopeToolProfileConfiguredSectionsNeedMigration(params: {
-  value: unknown;
-  inheritedProfile?: string;
-  inheritedAlsoAllow?: string[];
-  configuredGrants: string[];
-}): boolean {
-  return toolProfileAllowRequiresFull(params);
-}
-
 function byProviderToolProfilesNeedConfiguredSectionMigration(
   tools: Record<string, unknown>,
   configuredGrants: string[],
@@ -1124,13 +1158,15 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
       if (!hasProviderProfile) {
         return false;
       }
-      return scopeToolProfileConfiguredSectionsNeedMigration({
-        value: policy,
-        inheritedProfile: inheritedProviderProfile,
-        inheritedAlsoAllow:
-          readOwnToolPolicyGrantList(inheritedProviderPolicy, "alsoAllow") ?? inheritedAlsoAllow,
-        configuredGrants,
-      });
+      return (
+        collectProfileConfiguredSectionRepairGrants({
+          value: policy,
+          inheritedProfile: inheritedProviderProfile,
+          inheritedAlsoAllow:
+            readOwnToolPolicyGrantList(inheritedProviderPolicy, "alsoAllow") ?? inheritedAlsoAllow,
+          configuredGrants,
+        }).length > 0
+      );
     }),
   );
   if (ownProviderNeedsMigration) {
@@ -1146,12 +1182,12 @@ function byProviderToolProfilesNeedConfiguredSectionMigration(
   return listInheritedProviderPoliciesWithProfiles(inheritedByProvider).some(
     (inheritedProvider) =>
       !handledProviders.has(inheritedProvider.normalizedKey) &&
-      scopeToolProfileConfiguredSectionsNeedMigration({
+      collectProfileConfiguredSectionRepairGrants({
         value: {},
         inheritedProfile: inheritedProvider.profile,
         inheritedAlsoAllow: readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
         configuredGrants: localConfiguredGrants,
-      }),
+      }).length > 0,
   );
 }
 
@@ -1162,9 +1198,10 @@ function addProfileConfiguredSectionGrants(
   inheritedProfile?: string,
   inheritedAlsoAllow?: string[],
   configuredGrantsOverride?: string[],
+  materializeProfile = true,
 ): void {
   const tools = getRecord(value);
-  if (!tools) {
+  if (!tools || !materializeProfile) {
     return;
   }
   const profile = resolveToolProfileForMigration(tools, inheritedProfile);
@@ -1240,13 +1277,13 @@ function addByProviderProfileConfiguredSectionGrants(
       inheritedProviderPolicy,
       "alsoAllow",
     );
-    addProfileConfiguredSectionGrantsWithConfiguredGrants(
+    addProfileConfiguredSectionGrants(
       providerPolicy,
       `${pathLabel}.byProvider.${providerKey}`,
       changes,
-      configuredGrants,
       providerInheritedProfile,
       providerInheritedAlsoAllow,
+      configuredGrants,
       ownsProviderProfile || Boolean(inheritedProviderProfile),
     );
   }
@@ -1260,13 +1297,13 @@ function addByProviderProfileConfiguredSectionGrants(
     }
     const providerPolicy: Record<string, unknown> = {};
     const changeCount = changes.length;
-    addProfileConfiguredSectionGrantsWithConfiguredGrants(
+    addProfileConfiguredSectionGrants(
       providerPolicy,
       `${pathLabel}.byProvider.${inheritedProvider.key}`,
       changes,
-      localConfiguredGrants,
       inheritedProvider.profile,
       readOwnToolPolicyGrantList(inheritedProvider.policy, "alsoAllow"),
+      localConfiguredGrants,
     );
     if (changes.length > changeCount) {
       if (!getRecord(tools.byProvider)) {
@@ -1366,59 +1403,6 @@ function listInheritedProviderPoliciesWithProfiles(
   return entries;
 }
 
-function addProfileConfiguredSectionGrantsWithConfiguredGrants(
-  value: unknown,
-  pathLabel: string,
-  changes: string[],
-  configuredGrants: string[],
-  inheritedProfile?: string,
-  inheritedAlsoAllow?: string[],
-  materializeProfile = true,
-): void {
-  const tools = getRecord(value);
-  if (!tools) {
-    return;
-  }
-  const profile = resolveToolProfileForMigration(tools, inheritedProfile);
-  if (!profile) {
-    return;
-  }
-  if (!materializeProfile) {
-    return;
-  }
-  const repairGrants = collectProfileConfiguredSectionRepairGrants({
-    value: tools,
-    inheritedProfile,
-    inheritedAlsoAllow,
-    configuredGrants,
-  });
-  const allow = readToolPolicyGrantList(tools, "allow");
-  if (repairGrants.length === 0 || allow.length === 0 || profile === "full") {
-    return;
-  }
-  const ownAlsoAllow = readOwnToolPolicyGrantList(tools, "alsoAllow");
-  tools.allow = resolveProfileBoundAllowGrants({
-    tools,
-    profile,
-    allow: uniqueStrings([...allow, ...(ownAlsoAllow ?? [])]),
-    inheritedAlsoAllow,
-    configuredGrants: repairGrants,
-  });
-  changes.push(
-    `Replaced ${pathLabel}.allow entries with profile "${profile}" grants plus explicit configured-section grants.`,
-  );
-  if (ownAlsoAllow) {
-    delete tools.alsoAllow;
-    changes.push(`Merged ${pathLabel}.alsoAllow into ${pathLabel}.allow.`);
-  }
-  if (materializeProfile) {
-    tools.profile = "full";
-    changes.push(
-      `Set ${pathLabel}.profile to "full" so ${pathLabel}.allow controls explicit configured-section grants directly.`,
-    );
-  }
-}
-
 /** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
@@ -1498,104 +1482,34 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     id: "agents.model.timeoutMs-ignored",
     describe: "Remove ignored timeoutMs keys from agent model selection config",
     legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      if (defaults) {
-        removeIgnoredAgentModelTimeout(defaults.model, "agents.defaults.model", changes);
-        removeIgnoredAgentModelTimeout(
-          getRecord(defaults.subagents)?.model,
-          "agents.defaults.subagents.model",
-          changes,
-        );
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const agentRecord = getRecord(agent);
-        if (!agentRecord) {
-          continue;
-        }
-        removeIgnoredAgentModelTimeout(agentRecord.model, `agents.list.${index}.model`, changes);
-        removeIgnoredAgentModelTimeout(
-          getRecord(agentRecord.subagents)?.model,
-          `agents.list.${index}.subagents.model`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, removeIgnoredAgentModelTimeouts),
   }),
   defineLegacyConfigMigration({
     id: "agents.embeddedPi->embeddedAgent",
     describe: "Move legacy embedded agent config key to embeddedAgent",
     legacyRules: DEPRECATED_EMBEDDED_AGENT_KEY_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      if (defaults) {
-        migrateLegacyEmbeddedAgentKey(defaults, "agents.defaults", changes);
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const agentRecord = getRecord(agent);
-        if (!agentRecord) {
-          continue;
-        }
-        migrateLegacyEmbeddedAgentKey(agentRecord, `agents.list.${index}`, changes);
-      }
-    },
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, migrateLegacyEmbeddedAgentKey),
   }),
   defineLegacyConfigMigration({
     id: "agents.agentRuntime-ignored",
     describe: "Remove ignored agent-wide runtime policy",
     legacyRules: LEGACY_AGENT_RUNTIME_POLICY_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      if (defaults) {
-        removeLegacyAgentRuntimePolicy(defaults, "agents.defaults", changes);
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const agentRecord = getRecord(agent);
-        if (!agentRecord) {
-          continue;
-        }
-        removeLegacyAgentRuntimePolicy(agentRecord, `agents.list.${index}`, changes);
-      }
-    },
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, removeLegacyAgentRuntimePolicy),
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.perSession->scope",
     describe: "Move legacy agent sandbox perSession aliases to sandbox.scope",
     legacyRules: LEGACY_SANDBOX_SCOPE_RULES,
-    apply: (raw, changes) => {
-      const agents = getRecord(raw.agents);
-      const defaults = getRecord(agents?.defaults);
-      const defaultSandbox = getRecord(defaults?.sandbox);
-      if (defaultSandbox) {
-        migrateLegacySandboxPerSession(defaultSandbox, "agents.defaults.sandbox", changes);
-      }
-
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        const sandbox = getRecord(getRecord(agent)?.sandbox);
-        if (!sandbox) {
-          continue;
+    apply: (raw, changes) =>
+      migrateAgentDefaultsAndList(raw, changes, (agent, pathLabel, agentChanges) => {
+        const sandbox = getRecord(agent.sandbox);
+        if (sandbox) {
+          migrateLegacySandboxPerSession(sandbox, `${pathLabel}.sandbox`, agentChanges);
         }
-        migrateLegacySandboxPerSession(sandbox, `agents.list.${index}.sandbox`, changes);
-      }
-    },
+      }),
   }),
   defineLegacyConfigMigration({
     id: "agents.sandbox.browser.network-none",
@@ -1660,73 +1574,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     id: "memorySearch.flat-fields->nested-fields",
     describe: "Move legacy flat memory search fields to canonical nested fields",
     legacyRules: LEGACY_MEMORY_SEARCH_FLAT_KEY_RULES,
-    apply: (raw, changes) => {
-      migrateLegacyMemorySearchFlatKeys(
-        getRecord(getRecord(raw.memory)?.search),
-        "memory.search",
-        changes,
-      );
-
-      const agents = getRecord(raw.agents);
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        migrateLegacyMemorySearchFlatKeys(
-          getRecord(getRecord(getRecord(agent)?.memory)?.search),
-          `agents.list.${index}.memory.search`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateCanonicalMemorySearches(raw, changes, migrateLegacyMemorySearchFlatKeys),
   }),
   defineLegacyConfigMigration({
     id: "memorySearch.provider-auto->openai",
     describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
-    apply: (raw, changes) => {
-      rewriteLegacyMemorySearchAutoProvider(
-        getRecord(getRecord(raw.memory)?.search),
-        "memory.search",
-        changes,
-      );
-
-      const agents = getRecord(raw.agents);
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        rewriteLegacyMemorySearchAutoProvider(
-          getRecord(getRecord(getRecord(agent)?.memory)?.search),
-          `agents.list.${index}.memory.search`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateCanonicalMemorySearches(raw, changes, rewriteLegacyMemorySearchAutoProvider),
   }),
   defineLegacyConfigMigration({
     id: "memorySearch.store.path->agent-database",
     describe: "Remove legacy memory search sidecar index paths",
     legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
-    apply: (raw, changes) => {
-      removeLegacyMemorySearchStorePath(
-        getRecord(getRecord(raw.memory)?.search),
-        "memory.search",
-        changes,
-      );
-
-      const agents = getRecord(raw.agents);
-      if (!Array.isArray(agents?.list)) {
-        return;
-      }
-      for (const [index, agent] of agents.list.entries()) {
-        removeLegacyMemorySearchStorePath(
-          getRecord(getRecord(getRecord(agent)?.memory)?.search),
-          `agents.list[${index}].memory.search`,
-          changes,
-        );
-      }
-    },
+    apply: (raw, changes) =>
+      migrateCanonicalMemorySearches(raw, changes, removeLegacyMemorySearchStorePath, "brackets"),
   }),
   defineLegacyConfigMigration({
     id: "session.typingMode->agents.defaults.typingMode",
