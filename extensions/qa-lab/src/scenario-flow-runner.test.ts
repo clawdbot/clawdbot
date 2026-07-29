@@ -402,6 +402,65 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .map(createPlanningEvidenceFixture);
 
 describe("scenario-flow-runner", () => {
+  it("keeps live goal followthrough inside the active-goal context limit", async () => {
+    const state = createQaBusState();
+    const artifactFile = "goal-continuance-live-00000000.txt";
+    const artifactText = "Goal continuance advanced the concrete next step.";
+    const conversation = "dm:goal-followthrough-live-00000000";
+
+    const result = await runLoadedScenarioFlow("goal-followthrough-live", {
+      state,
+      api: {
+        env: {
+          providerMode: "live-frontier",
+          gateway: { workspaceDir: "/qa-goal" },
+        },
+        path: { join: (...parts: string[]) => parts.join("/") },
+        fs: {
+          readFile: async (file: string) => {
+            const continued = state
+              .getSnapshot()
+              .messages.some(
+                (message) => message.direction === "inbound" && message.text === "continue",
+              );
+            if (file === `/qa-goal/${artifactFile}` && continued) {
+              return artifactText;
+            }
+            throw new Error("goal artifact has not been written");
+          },
+        },
+        normalizeLowercaseStringOrEmpty: (value: unknown) =>
+          typeof value === "string" ? value.trim().toLowerCase() : "",
+      },
+      onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
+        currentState.addOutboundMessage({
+          accountId: "qa-channel",
+          to: conversation,
+          text: waitCount === 1 ? "GOAL-CONTINUANCE-READY" : "GOAL-CONTINUANCE-DONE",
+        });
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    const start = state
+      .getSnapshot()
+      .messages.find(
+        (message) => message.direction === "inbound" && message.text.startsWith("/goal start "),
+      );
+    expect(start).toBeDefined();
+    const objective = start?.text.slice("/goal start ".length) ?? "";
+    expect(objective.length).toBeLessThanOrEqual(200);
+    expect(objective).toContain("GOAL-CONTINUANCE-READY");
+    expect(objective).toContain("GOAL-CONTINUANCE-DONE");
+    expect(objective).toContain(artifactFile);
+    expect(objective).toContain(artifactText);
+    expect(
+      state
+        .getSnapshot()
+        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
+    ).toBe(true);
+  });
+
   it.each(["runtime-first-hour-20-turn", "runtime-soak-100-turn"])(
     "fails %s when no requested outbound marker is delivered",
     async (scenarioId) => {

@@ -135,7 +135,6 @@ function projectCodexUserItemText(item: Record<string, unknown>): string | undef
     }
     if (input.type === "audio" || input.type === "localAudio" || input.type === "local_audio") {
       parts.push("[Audio attachment]");
-      continue;
     }
     if (input.type === "skill" || input.type === "mention") {
       const name = normalizeOptionalString(input.name);

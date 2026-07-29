@@ -26,6 +26,9 @@ scenario:
     - src/agents/tools/goal-tools.ts
   execution:
     kind: flow
+    suiteIsolation: isolated
+    isolationReason: Creates and resumes an active goal and writes a live-model workspace artifact.
+    retryCount: 0
     summary: Stage a two-step active goal, then require a bare continue turn to write the next artifact without replanning.
     channel: qa-channel
     config:
@@ -80,7 +83,7 @@ flow:
               ref: config.senderId
             senderName: QA Goal Operator
             text:
-              expr: "`/goal start Two-step goal. Step 1: reply exactly ${config.readyMarker} without creating ${artifactFile}. Step 2, only on a later bare continue turn: create ${artifactFile} containing exactly '${config.artifactText}', then reply with ${config.doneMarker}.`"
+              expr: "`/goal start Reply ${config.readyMarker}; write nothing. On bare continue only, create ${artifactFile} with '${config.artifactText}'; reply ${config.doneMarker}.`"
         - waitForOutbound:
             conversation:
               id:
