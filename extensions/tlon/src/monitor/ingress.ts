@@ -1,5 +1,6 @@
 // Tlon plugin module owns raw Urbit firehose durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -42,16 +43,10 @@ type TlonIngressDispatch = (
   lifecycle: TlonIngressLifecycle,
 ) => Promise<TlonIngressDispatchResult | void> | TlonIngressDispatchResult | void;
 
-class TlonIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "tlon-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "TlonIngressPermanentError";
-  }
-}
+const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "tlon-auth">(
+  "TlonIngressPermanentError",
+  { withReason: true },
+);
 
 class TlonIngressShutdownError extends Error {
   constructor() {

@@ -1,5 +1,6 @@
 // Synology Chat plugin owns raw webhook durable admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -39,16 +40,10 @@ type SynologyIngressDispatch = (
   lifecycle: SynologyIngressLifecycle,
 ) => Promise<SynologyIngressDispatchResult | void> | SynologyIngressDispatchResult | void;
 
-export class SynologyIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "synology-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SynologyIngressPermanentError";
-  }
-}
+export const SynologyIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "synology-auth"
+>("SynologyIngressPermanentError", { withReason: true });
+export type SynologyIngressPermanentError = InstanceType<typeof SynologyIngressPermanentError>;
 
 function firstNonEmptyString(value: unknown): string | undefined {
   if (Array.isArray(value)) {

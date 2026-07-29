@@ -1,5 +1,6 @@
 // Googlechat plugin module owns raw webhook durable admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -39,16 +40,9 @@ type GoogleChatIngressDispatch = (
   lifecycle: GoogleChatIngressLifecycle,
 ) => Promise<GoogleChatIngressDispatchResult | void> | GoogleChatIngressDispatchResult | void;
 
-class GoogleChatIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "googlechat-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "GoogleChatIngressPermanentError";
-  }
-}
+const GoogleChatIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "googlechat-auth"
+>("GoogleChatIngressPermanentError", { withReason: true });
 
 function requiredString(value: unknown, field: string): string {
   if (typeof value === "string" && value.trim()) {

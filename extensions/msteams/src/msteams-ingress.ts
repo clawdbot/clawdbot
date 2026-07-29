@@ -1,5 +1,6 @@
 // Microsoft Teams plugin owns durable Bot Framework activity admission and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -49,16 +50,9 @@ type MSTeamsIngress = {
   stop: () => Promise<void>;
 };
 
-class MSTeamsIngressPayloadError extends Error {
-  constructor(
-    readonly reason: "invalid-activity" | "invalid-json" | "unsupported-activity",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MSTeamsIngressPayloadError";
-  }
-}
+const MSTeamsIngressPayloadError = createChannelIngressError<
+  "invalid-activity" | "invalid-json" | "unsupported-activity"
+>("MSTeamsIngressPayloadError", { withReason: true });
 
 function isDispatchableActivity(activity: MSTeamsIngressActivity): boolean {
   return (

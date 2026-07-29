@@ -1,6 +1,7 @@
 // Zalo plugin owns raw webhook durable admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
@@ -32,12 +33,8 @@ export type ZaloWebhookIngressLifecycle = ReturnType<
   typeof bindIngressLifecycleToReplyOptions
 >["turnAdoptionLifecycle"];
 
-export class ZaloWebhookPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "ZaloWebhookPayloadError";
-  }
-}
+export const ZaloWebhookPayloadError = createChannelIngressError("ZaloWebhookPayloadError");
+export type ZaloWebhookPayloadError = InstanceType<typeof ZaloWebhookPayloadError>;
 
 type ZaloWebhookIngress = {
   accept: (rawEvent: string) => Promise<void>;
@@ -161,7 +158,6 @@ function createZaloWebhookIngress(options: {
     getZaloRuntime().state.openChannelIngressQueue<ZaloWebhookSpoolPayload>({
       accountId: options.accountId,
     });
-  const deferredClaims = new Map<string, Promise<void>>();
   const monitor = createChannelIngressMonitor<string, string, ZaloWebhookSpoolPayload>({
     queue,
     inspect: (rawEvent) => inspectZaloWebhookEvent(rawEvent),
@@ -179,42 +175,10 @@ function createZaloWebhookIngress(options: {
     },
     deliver: async (_rawEvent, lifecycle, claim) => {
       const update = parseClaimedUpdate(claim.payload, claim.id);
-      const boundLifecycle = bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle;
-      let resolveDeferredClaim!: () => void;
-      const deferredClaim = new Promise<void>((resolve) => {
-        resolveDeferredClaim = resolve;
-      });
-      let deferredClaimSettled = false;
-      const settleDeferredClaim = () => {
-        if (deferredClaimSettled) {
-          return;
-        }
-        deferredClaimSettled = true;
-        if (deferredClaims.get(claim.id) === deferredClaim) {
-          deferredClaims.delete(claim.id);
-        }
-        resolveDeferredClaim();
-      };
-      await options.deliver(update, {
-        ...boundLifecycle,
-        onAdopted: async () => {
-          try {
-            await boundLifecycle.onAdopted();
-          } finally {
-            settleDeferredClaim();
-          }
-        },
-        onDeferred: () => {
-          if (!deferredClaimSettled) {
-            deferredClaims.set(claim.id, deferredClaim);
-          }
-          boundLifecycle.onDeferred();
-        },
-        onAbandoned: () => {
-          void Promise.resolve(boundLifecycle.onAbandoned()).finally(settleDeferredClaim);
-        },
-      });
-      return deferredClaims.has(claim.id) ? { kind: "deferred" } : { kind: "completed" };
+      await options.deliver(
+        update,
+        bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+      );
     },
     pollIntervalMs: ZALO_WEBHOOK_DRAIN_INTERVAL_MS,
     retention: {
@@ -226,6 +190,7 @@ function createZaloWebhookIngress(options: {
     },
     waitForDeliveryIdleBeforeRepump: false,
     runPumpTask: runDetachedWebhookWork,
+    deferredClaims: "wait-on-stop",
     drain: {
       adoptionStallTimeoutMs: DEFAULT_INGRESS_ADOPTION_STALL_MS,
       startLimit: ZALO_WEBHOOK_MAX_CONCURRENT_DELIVERIES,
@@ -253,12 +218,7 @@ function createZaloWebhookIngress(options: {
       await monitor.admit(rawEvent);
     },
     start: monitor.start,
-    stop: async () => {
-      await monitor.stop();
-      // Deferred adoption can outlive dispatch, so its channel-owned settlement
-      // remains outside the generic delivery lifetime.
-      await Promise.allSettled(deferredClaims.values());
-    },
+    stop: monitor.stop,
   };
 }
 

@@ -1,6 +1,7 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
 import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -43,12 +44,7 @@ type DiscordIngressMonitor = {
   stop: () => Promise<void>;
 };
 
-class DiscordIngressPayloadError extends Error {
-  constructor(message: string, options?: ErrorOptions) {
-    super(message, options);
-    this.name = "DiscordIngressPayloadError";
-  }
-}
+const DiscordIngressPayloadError = createChannelIngressError("DiscordIngressPayloadError");
 
 function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey: string } {
   if (!rawMessage || typeof rawMessage !== "object" || Array.isArray(rawMessage)) {

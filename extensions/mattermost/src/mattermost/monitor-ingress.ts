@@ -1,5 +1,6 @@
 // Mattermost plugin module owns raw WebSocket durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -45,16 +46,9 @@ type MattermostIngressDispatch = (
   lifecycle: MattermostIngressLifecycle,
 ) => Promise<MattermostIngressDispatchResult | void> | MattermostIngressDispatchResult | void;
 
-class MattermostIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "invalid-event" | "mattermost-auth",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "MattermostIngressPermanentError";
-  }
-}
+const MattermostIngressPermanentError = createChannelIngressError<
+  "invalid-event" | "mattermost-auth"
+>("MattermostIngressPermanentError", { withReason: true });
 
 function parseRawObject(raw: string, subject: string): Record<string, unknown> {
   let parsed: unknown;

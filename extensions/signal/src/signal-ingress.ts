@@ -1,5 +1,6 @@
 // Signal plugin module owns raw-envelope durable ingress mapping and draining.
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
@@ -49,16 +50,9 @@ type SignalIngressDispatch = (
   lifecycle: SignalIngressLifecycle,
 ) => Promise<SignalIngressDispatchResult | void> | SignalIngressDispatchResult | void;
 
-class SignalIngressPermanentError extends Error {
-  constructor(
-    readonly reason: "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event",
-    message: string,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = "SignalIngressPermanentError";
-  }
-}
+const SignalIngressPermanentError = createChannelIngressError<
+  "parse-error" | "missing-sender" | "missing-timestamp" | "unsupported-event"
+>("SignalIngressPermanentError", { withReason: true });
 
 function normalizeTimestamp(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;

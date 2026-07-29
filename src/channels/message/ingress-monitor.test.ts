@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { sleep } from "../../utils/sleep.js";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
@@ -44,6 +45,7 @@ function createMonitor(
     | ((active: boolean) => void)
     | {
         admissionMode?: "durable-after-stop";
+        deferredClaims?: "wait-on-stop" | "settle-on-abort" | "manual";
         waitForDeliveryIdleBeforeRepump?: boolean;
         waitForDeliveryIdleOnStop?: boolean;
       },
@@ -92,6 +94,27 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("channel ingress monitor", () => {
+  it("creates named plain and reasoned ingress errors", () => {
+    const PayloadError = createChannelIngressError("TestIngressPayloadError");
+    const PermanentError = createChannelIngressError<"invalid-event">("TestIngressPermanentError", {
+      withReason: true,
+    });
+
+    expect(PayloadError.name).toBe("TestIngressPayloadError");
+    const payloadError = new PayloadError("invalid");
+    expect(payloadError).toMatchObject({
+      name: "TestIngressPayloadError",
+      message: "invalid",
+    });
+    expect(payloadError).toBeInstanceOf(PayloadError);
+    expect("reason" in payloadError).toBe(false);
+    expect(new PermanentError("invalid-event", "invalid")).toMatchObject({
+      name: "TestIngressPermanentError",
+      reason: "invalid-event",
+      message: "invalid",
+    });
+  });
+
   it("adopts terminal no-dispatch events", async () => {
     await withQueue(async (queue) => {
       const monitor = createMonitor(queue, vi.fn());
@@ -476,6 +499,51 @@ describe("channel ingress monitor", () => {
 
       expect(deferredSignal?.aborted).toBe(true);
       await expect(queue.listClaims()).resolves.toHaveLength(1);
+    });
+  });
+
+  it("waits for tracked deferred claims to settle after drain disposal", async () => {
+    await withQueue(async (queue) => {
+      let deferredLifecycle: ChannelIngressMonitorLifecycle | undefined;
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          deferredLifecycle = lifecycle;
+          lifecycle.onDeferred();
+        },
+        { deferredClaims: "wait-on-stop" },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-tracked-deferred", lane: "a", text: "hello" });
+      await vi.waitFor(() => expect(deferredLifecycle).toBeDefined());
+
+      let stopped = false;
+      const stopping = monitor.stop().then(() => {
+        stopped = true;
+      });
+      await vi.waitFor(() => expect(deferredLifecycle?.abortSignal.aborted).toBe(true));
+      expect(stopped).toBe(false);
+
+      await deferredLifecycle?.onAbandoned();
+      await stopping;
+      expect(stopped).toBe(true);
+    });
+  });
+
+  it("can settle tracked deferred bookkeeping on abort", async () => {
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(
+        queue,
+        async (_raw, lifecycle) => {
+          lifecycle.onDeferred();
+        },
+        { deferredClaims: "settle-on-abort" },
+      );
+      monitor.start();
+      await monitor.admit({ id: "event-abort-deferred", lane: "a", text: "hello" });
+
+      await expect(monitor.stop()).resolves.toBeUndefined();
+      await expect(monitor.waitForDeferredClaims()).resolves.toBeUndefined();
     });
   });
   it("keeps append-only admission available after stop when explicitly requested", async () => {

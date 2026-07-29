@@ -1,6 +1,7 @@
 // Nostr plugin module owns durable relay-event admission and replay draining.
 import type { Event } from "nostr-tools";
 import {
+  createChannelIngressError,
   createChannelIngressMonitor,
   DEFAULT_INGRESS_ADOPTION_STALL_MS,
   type ChannelIngressMonitorLifecycle,
@@ -41,15 +42,12 @@ type NostrIngressMonitor = {
   waitForIdle: () => Promise<void>;
 };
 
-export class NostrIngressAdmissionRejectedError extends Error {
-  readonly reason: "backpressure" | "oversized-event" | "rate-limited";
-
-  constructor(reason: "backpressure" | "oversized-event" | "rate-limited", message: string) {
-    super(message);
-    this.name = "NostrIngressAdmissionRejectedError";
-    this.reason = reason;
-  }
-}
+export const NostrIngressAdmissionRejectedError = createChannelIngressError<
+  "backpressure" | "oversized-event" | "rate-limited"
+>("NostrIngressAdmissionRejectedError", { withReason: true });
+export type NostrIngressAdmissionRejectedError = InstanceType<
+  typeof NostrIngressAdmissionRejectedError
+>;
 
 function deserializeNostrIngressEvent(rawEvent: string, claimedId: string): Event {
   let parsed: unknown;
