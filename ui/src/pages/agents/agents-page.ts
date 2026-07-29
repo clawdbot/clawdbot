@@ -41,6 +41,7 @@ import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { normalizeStringEntries } from "../../lib/string-coerce.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { loadModels } from "../chat/models.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
 import {
   resetIdentityDraft,
@@ -115,6 +116,12 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
   private agentIdentitySource: ApplicationContext["agentIdentity"] | null = null;
   private hasBoundSessions = false;
   private sessionsSource: ApplicationContext["sessions"] | null = null;
+  private chatModelCatalogClient: GatewayBrowserClient | null = null;
+  private chatModelCatalogRefreshRequired = false;
+  private chatModelCatalogRequest: {
+    client: GatewayBrowserClient;
+    generation: number;
+  } | null = null;
   private normalizedLocation = "";
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
@@ -279,8 +286,12 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.syncGatewayState(snapshot);
     if (forceReset || (!initialBind && clientChanged)) {
       this.resetForClientChange();
+      this.chatModelCatalogRefreshRequired = forceReset && !clientChanged;
     } else if (!initialBind && connectionChanged) {
       this.invalidateTransientRequests();
+      this.chatModelCatalog = [];
+      this.chatModelCatalogClient = null;
+      this.chatModelCatalogRefreshRequired = true;
     }
     this.ensureInitialData();
   }
@@ -343,6 +354,9 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     this.agentsError = null;
     this.agentsList = null;
     this.agentsSelectedId = null;
+    this.chatModelCatalog = [];
+    this.chatModelCatalogClient = null;
+    this.chatModelCatalogRefreshRequired = false;
     this.resetSelectionState();
     this.cron = createInitialCronState({
       client: this.client,
@@ -512,6 +526,10 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     if (!agentId) {
       return;
     }
+    if (this.agentsPanel === "overview") {
+      this.ensureModelCatalog();
+      return;
+    }
     if (this.agentsPanel === "files" && this.agentFilesList?.agentId !== agentId) {
       void this.loadAgentFiles(agentId);
       return;
@@ -534,6 +552,43 @@ class AgentsPage extends OpenClawLightDomElement implements AgentsState {
     if (this.agentsPanel === "cron" && !this.cron.cronLoading && !this.cron.cronStatus) {
       void this.refreshCron();
     }
+  }
+
+  private ensureModelCatalog() {
+    const client = this.client;
+    if (!client || !this.connected || this.chatModelCatalogClient === client) {
+      return;
+    }
+    const generation = this.requestGeneration;
+    const previousRequest = this.chatModelCatalogRequest;
+    if (previousRequest?.client === client && previousRequest.generation === generation) {
+      return;
+    }
+    const request = { client, generation };
+    this.chatModelCatalogRequest = request;
+    const refresh = this.chatModelCatalogRefreshRequired || previousRequest?.client === client;
+    this.chatModelCatalogRefreshRequired = false;
+    // A direct overview has no chat metadata. Refresh after reconnect so neither
+    // an in-flight request nor a settled cache can restore stale Gateway models.
+    void loadModels(client, refresh ? { refresh: true } : undefined)
+      .then((models) => {
+        if (this.isCurrentRequest(client, generation)) {
+          this.chatModelCatalog = models;
+          this.chatModelCatalogClient = client;
+        }
+      })
+      .catch(() => {
+        if (this.isCurrentRequest(client, generation)) {
+          this.chatModelCatalog = [];
+          this.chatModelCatalogClient = null;
+          this.chatModelCatalogRefreshRequired = true;
+        }
+      })
+      .finally(() => {
+        if (this.chatModelCatalogRequest === request) {
+          this.chatModelCatalogRequest = null;
+        }
+      });
   }
 
   private async loadAgentsAndCommit() {

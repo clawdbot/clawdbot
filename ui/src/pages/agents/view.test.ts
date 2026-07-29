@@ -272,6 +272,73 @@ describe("renderAgents", () => {
     );
   });
 
+  it("shows canonical model names alongside configured aliases in agent options", async () => {
+    const container = document.createElement("div");
+    const configForm = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-8" },
+          models: {
+            "anthropic/claude-opus-4-8": { alias: "opus" },
+            "anthropic/claude-sonnet-5": { alias: "sonnet" },
+            "nvidia/moonshotai/kimi-k2.5": { alias: "Kimi K2.5 (NVIDIA)" },
+            "local/unlisted-model": { alias: "My local model" },
+          },
+        },
+        list: [{ id: "alpha" }, { id: "beta" }],
+      },
+    };
+
+    render(
+      renderAgents(
+        createProps({
+          selectedAgentId: "alpha",
+          config: {
+            form: configForm,
+            loading: false,
+            saving: false,
+            dirty: false,
+          },
+          modelCatalog: [
+            {
+              id: "claude-opus-4-8",
+              alias: "opus",
+              name: "Opus 4.8",
+              provider: "anthropic",
+            },
+            {
+              id: "claude-sonnet-5",
+              alias: "sonnet",
+              name: "Sonnet 5",
+              provider: "anthropic",
+            },
+            {
+              id: "moonshotai/kimi-k2.5",
+              alias: "Kimi K2.5 (NVIDIA)",
+              name: "Kimi K2.5",
+              provider: "nvidia",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const select = await vi.waitFor(() => {
+      const candidate = container.querySelector<HTMLSelectElement>("select.settings-select");
+      expect(candidate?.value).toBe("anthropic/claude-opus-4-8");
+      return candidate;
+    });
+    const options = new Map(
+      Array.from(select?.options ?? []).map((option) => [option.value, option.textContent?.trim()]),
+    );
+
+    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
+    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
+    expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
+    expect(options.get("local/unlisted-model")).toBe("My local model (local/unlisted-model)");
+  });
+
   it.each([
     { name: "a string primary", model: "openai/gpt-5.4" },
     { name: "an object primary", model: { primary: "openai/gpt-5.4" } },
