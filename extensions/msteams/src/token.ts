@@ -48,11 +48,9 @@ function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
   return "secret";
 }
 
-function resolveFederatedString(configValue: unknown, envValue: unknown): string | undefined {
-  return normalizeOptionalString(configValue) ?? normalizeOptionalString(envValue);
-}
-
 function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
+  // Reject blank settings without trimming a real path: surrounding whitespace
+  // can be part of the certificate filename on the filesystem.
   if (normalizeOptionalString(configValue)) {
     return configValue;
   }
@@ -117,18 +115,14 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
       process.env.MSTEAMS_CERTIFICATE_PATH,
     );
 
-    const certificateThumbprint = resolveFederatedString(
-      cfg?.certificateThumbprint,
-      process.env.MSTEAMS_CERTIFICATE_THUMBPRINT,
-    );
+    const certificateThumbprint =
+      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
 
     const useManagedIdentity =
       cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
 
-    const managedIdentityClientId = resolveFederatedString(
-      cfg?.managedIdentityClientId,
-      process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID,
-    );
+    const managedIdentityClientId =
+      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
 
     // At least one federated mechanism must be configured.
     if (!certificatePath && !useManagedIdentity) {
