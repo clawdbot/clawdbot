@@ -3718,12 +3718,12 @@ export const en: TranslationMap = {
       loadingPage: "Loading wiki page…",
       dreamsTab: "Dreams",
       insightsTab: "Imported Insights",
-      palaceTab: "Memory Palace",
+      wikiTab: "Memory Wiki",
       dreamsExplainer:
         "This is the raw dream diary the system writes while replaying and consolidating memory; use it to inspect what the memory system is noticing, and where it still looks noisy or thin.",
       insightsExplainer:
         "These are imported insights clustered from external history; use them to review what imports surfaced before any of it graduates into durable memory.",
-      palaceExplainer:
+      wikiExplainer:
         "This is the compiled memory wiki surface the system can search and reason over; use it to inspect actual memory pages, claims, open questions, and contradictions rather than raw imported source chats.",
       copyArchivePath: "Copy archive path",
       loadingInsights: "Loading imported insights…",
@@ -3739,9 +3739,9 @@ export const en: TranslationMap = {
       riskReasons: "Risk reasons:",
       labels: "Labels:",
       openSourcePage: "Open source page",
-      loadingPalace: "Loading memory palace…",
-      emptyPalace: "Memory palace is not populated yet",
-      emptyPalaceHint:
+      loadingWiki: "Loading memory wiki…",
+      emptyWiki: "Memory wiki is not populated yet",
+      emptyWikiHint:
         "Right now the wiki mostly has raw source imports and operational reports. This tab becomes useful once syntheses, entities, or concepts start getting written.",
       claims: "Claims",
       openQuestions: "Open questions",
@@ -3751,7 +3751,7 @@ export const en: TranslationMap = {
       id: "Id:",
       openWikiPage: "Open wiki page",
       unavailable: "Memory Wiki is not enabled",
-      unavailablePluginPrefix: "Imported Insights and Memory Palace are provided by the bundled",
+      unavailablePluginPrefix: "Imported Insights and Memory Wiki are provided by the bundled",
       unavailablePluginSuffix: "plugin.",
       enablePrefix: "Enable",
       enableSuffix: ", then reload this tab.",
@@ -3817,7 +3817,7 @@ export const en: TranslationMap = {
       tidyingKnowledgeGraph: "tidying the knowledge graph…",
       replayingConversations: "replaying today's conversations…",
       weavingShortTerm: "weaving short-term into long-term…",
-      defragmentingMindPalace: "defragmenting the mind palace…",
+      defragmentingMemoryLane: "defragmenting memory lane…",
       filingLooseThoughts: "filing away loose thoughts…",
       connectingDots: "connecting distant dots…",
       compostingContext: "composting old context windows…",

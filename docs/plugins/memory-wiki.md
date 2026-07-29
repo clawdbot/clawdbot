@@ -283,6 +283,21 @@ The plugin also registers a non-exclusive memory corpus supplement, so shared
 `memory_search` and `memory_get` can reach the wiki when the active memory
 plugin supports corpus selection.
 
+## Browsing the wiki in the Control UI
+
+The [Control UI](/web/control-ui) can browse the compiled wiki directly: open
+the Memory page, then **Dreams → Diary → Memory Wiki**. The tab shows the
+vault clustered by page kind (syntheses, entities, concepts, sources,
+reports) with per-page claim, open-question, and contradiction counts, and
+opens full page content inline. The neighboring **Imported Insights** sub-tab
+reviews what external-history imports surfaced before promotion.
+
+Both sub-tabs appear once the plugin is enabled; in agent-scoped vault setups
+they show the selected agent's own vault. The UI reads through the plugin's
+gateway methods (`wiki.overview`, `wiki.get`, `wiki.importInsights`), so what
+you browse is exactly the corpus agents reach through `wiki_search` and
+`wiki_get`.
+
 ## Prompt and context behavior
 
 When `context.includeCompiledDigestPrompt` is enabled, memory prompt sections
