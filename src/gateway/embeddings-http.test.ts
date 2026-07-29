@@ -1,13 +1,22 @@
 // Embeddings HTTP tests cover OpenAI-compatible embedding routes, provider
 // adapters, agent-scoped config, auth scopes, and disabled-surface behavior.
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  request as httpRequest,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { createConfigIO, resetConfigRuntimeState } from "../config/config.js";
-import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
+import type {
+  MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
+} from "../plugins/memory-embedding-providers.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
 import { getFreePort, installGatewayTestHooks, testState } from "./test-helpers.js";
 
@@ -34,7 +43,11 @@ let createEmbeddingProviderMock: ReturnType<
     }>
   >
 >;
-let embedBatchMock: ReturnType<typeof vi.fn<(texts: string[]) => Promise<number[][]>>>;
+let embedBatchMock: ReturnType<
+  typeof vi.fn<
+    (texts: string[], options?: MemoryEmbeddingProviderCallOptions) => Promise<number[][]>
+  >
+>;
 let closeEmbeddingProviderMock: ReturnType<typeof vi.fn<() => Promise<void> | void>>;
 let clearMemoryEmbeddingProviders: typeof import("../plugins/memory-embedding-providers.js").clearMemoryEmbeddingProviders;
 let registerMemoryEmbeddingProvider: typeof import("../plugins/memory-embedding-providers.js").registerMemoryEmbeddingProvider;
@@ -598,6 +611,53 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
 
     expect(res.status).toBe(500);
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1);
+  });
+
+  it("aborts provider work when the HTTP client disconnects", async () => {
+    const closesBefore = closeEmbeddingProviderMock.mock.calls.length;
+    let receivedSignal: AbortSignal | undefined;
+    const embedStarted = createDeferred();
+    const releaseEmbed = createDeferred();
+    embedBatchMock.mockImplementationOnce(async (_texts, options) => {
+      const signal = options?.signal;
+      receivedSignal = signal;
+      embedStarted.resolve();
+      await (signal
+        ? new Promise<void>((resolve) => signal.addEventListener("abort", resolve, { once: true }))
+        : releaseEmbed.promise);
+      return [[0.1, 0.2]];
+    });
+
+    const body = JSON.stringify({ model: "openclaw/default", input: "hello" });
+    const clientRequest = httpRequest({
+      host: "127.0.0.1",
+      port: enabledPort,
+      path: "/v1/embeddings",
+      method: "POST",
+      headers: {
+        authorization: "Bearer secret",
+        "content-type": "application/json",
+        "content-length": Buffer.byteLength(body),
+        ...WRITE_SCOPE_HEADER,
+      },
+    });
+    clientRequest.on("error", () => {});
+    clientRequest.end(body);
+
+    await embedStarted.promise;
+    clientRequest.destroy();
+
+    try {
+      await vi.waitFor(() => {
+        expect(receivedSignal).toBeDefined();
+        expect(receivedSignal?.aborted).toBe(true);
+      });
+    } finally {
+      releaseEmbed.resolve();
+    }
+    await vi.waitFor(() =>
+      expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 1),
+    );
   });
 
   it("supports synchronous provider cleanup", async () => {

@@ -25,7 +25,7 @@ import type {
 } from "../plugins/memory-embedding-providers.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
-import { sendJson, sendMissingScopeForbidden } from "./http-common.js";
+import { sendJson, sendMissingScopeForbidden, watchClientDisconnect } from "./http-common.js";
 import { handleGatewayPostJsonEndpoint } from "./http-endpoint-helpers.js";
 import {
   OPENCLAW_MODEL_ID,
@@ -449,6 +449,11 @@ export async function handleOpenAiEmbeddingsHttpRequest(
     cfg,
     provider: target.provider,
   });
+  if (req.socket.destroyed || res.destroyed || res.socket?.destroyed) {
+    return true;
+  }
+  const abortController = new AbortController();
+  const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
     const { provider, release } = await acquireEmbeddingProviderLease(
@@ -474,7 +479,10 @@ export async function handleOpenAiEmbeddingsHttpRequest(
         isLocalEmbeddingProvider({ cfg, provider: createdProvider.id }),
     );
     try {
-      const embeddings = await provider.embedBatch(texts);
+      const embeddings = await provider.embedBatch(texts, { signal: abortController.signal });
+      if (abortController.signal.aborted) {
+        return true;
+      }
       const encodingFormat = payload.encoding_format === "base64" ? "base64" : "float";
 
       sendJson(res, 200, {
@@ -503,13 +511,17 @@ export async function handleOpenAiEmbeddingsHttpRequest(
       }
     }
   } catch (err) {
-    logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-    sendJson(res, 500, {
-      error: {
-        message: "internal error",
-        type: "api_error",
-      },
-    });
+    if (!abortController.signal.aborted) {
+      logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
+      sendJson(res, 500, {
+        error: {
+          message: "internal error",
+          type: "api_error",
+        },
+      });
+    }
+  } finally {
+    stopWatchingDisconnect();
   }
 
   return true;
