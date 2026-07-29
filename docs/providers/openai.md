@@ -819,9 +819,10 @@ compatibility fallback when the shared
     Set `OPENAI_TTS_BASE_URL` to override the TTS base URL without affecting
     the chat API endpoint. OpenAI TTS and GA Realtime voice are configured
     through an OpenAI Platform API key. OAuth-only installs can use
-    Codex-backed chat models and GPT-Live browser Talk (which works over the
-    ChatGPT subscription — see the Realtime accordion), but not TTS or GA
-    realtime talk-back.
+    Codex-backed chat models plus GPT-Live and GA Realtime browser Talk over a
+    ChatGPT subscription (see the Realtime accordion). They cannot use OpenAI
+    TTS, iOS Realtime WebRTC, Voice Call, Gateway relay, or Discord realtime
+    voice without a Platform API key.
     </Note>
 
   </Accordion>
@@ -899,7 +900,7 @@ compatibility fallback when the shared
     | Silence duration                       | `...openai.silenceDurationMs`                                           | `500`                |
     | Prefix padding                         | `...openai.prefixPaddingMs`                                             | `300`                |
     | Reasoning effort                       | `...openai.reasoningEffort`                                             | (unset)              |
-    | Auth                                   | `openai` API-key profile, `...openai.apiKey`, or `OPENAI_API_KEY` | OpenAI Platform API key required |
+    | Auth                                   | `openai` auth profile, `...openai.apiKey`, or `OPENAI_API_KEY` | Platform API key; ChatGPT OAuth fallback for browser Talk only |
 
     Available built-in Realtime voices for `gpt-realtime-2.1`: `alloy`, `ash`,
     `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, `cedar`.
@@ -908,6 +909,30 @@ compatibility fallback when the shared
     such as `fable`, `nova`, or `onyx` is not valid for Realtime sessions.
     Set the model explicitly to `gpt-realtime-2.1-mini` when you prefer the
     smaller, lower-cost Realtime 2.1 variant.
+
+    #### GA Realtime browser Talk over ChatGPT OAuth
+
+    Browser Talk can use `gpt-realtime-2.1`, `gpt-realtime-2.1-mini`, or
+    `gpt-realtime-2` with either Platform API-key auth or an OpenClaw ChatGPT
+    OAuth subscription profile. Platform auth keeps precedence in this order:
+    the configured realtime key, an `openai` API-key profile, then
+    `OPENAI_API_KEY`. When none is configured, the Gateway falls back to the
+    ChatGPT OAuth profile created by
+    `openclaw models auth login --provider openai`.
+
+    The two browser paths expose the same Talk session contract but keep
+    credentials on different sides of the trust boundary. Platform auth mints
+    an ephemeral client secret and the browser exchanges SDP directly with
+    OpenAI. OAuth auth stays in the Gateway: the existing single-use offer
+    broker sends raw `application/sdp` to
+    `/v1/realtime/calls?model=<model>` and returns only the answer SDP. The
+    OAuth token never reaches the browser. A configured Platform credential
+    that cannot be resolved still fails closed; repair or remove that source
+    before OAuth fallback can apply.
+
+    This OAuth fallback is browser-only. iOS client-owned WebRTC, Voice Call,
+    Gateway relay, provider WebSocket transports, Discord realtime voice, and
+    other backend Realtime bridges remain Platform-key-only.
 
     #### GPT-Live browser Talk
 
@@ -981,7 +1006,7 @@ compatibility fallback when the shared
     never prints token material:
 
     ```bash
-    OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.live.config.ts extensions/openai/realtime-quicksilver.live.test.ts
+    OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_GPT_LIVE=1 node scripts/test-live.mjs -- extensions/openai/realtime-quicksilver.live.test.ts
     ```
 
     <Note>
@@ -1004,11 +1029,11 @@ compatibility fallback when the shared
     `gpt-realtime-*` models use a Gateway-minted ephemeral client secret and a
     direct browser SDP exchange when Platform credentials are available.
     Configured realtime keys, API-key profiles, and `OPENAI_API_KEY` use that
-    path in that order. ChatGPT OAuth is not a Platform Realtime credential and
-    is not used for GA models. GPT-Live instead uses the native Gateway offer
-    broker described above, prefers ChatGPT OAuth when both auth modes are
-    configured, and falls back to Platform API-key access when the account has
-    waitlist-gated `/v1/live` access.
+    path in that order. With no Platform credential, GA browser Talk uses the
+    same Gateway offer broker as GPT-Live so ChatGPT OAuth remains server-side.
+    GPT-Live prefers ChatGPT OAuth when both auth modes are configured and
+    falls back to Platform API-key access when the account has waitlist-gated
+    `/v1/live` access.
     Gateway relay and Voice Call backend realtime WebSocket bridges continue to
     require Platform credentials and a GA model.
     Maintainer live verification is available with

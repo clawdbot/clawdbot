@@ -5416,6 +5416,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/linux
 - Headings:
   - H2: Desktop companion
+  - H3: Media codecs
   - H3: Quick Chat
   - H3: Canvas
   - H2: CLI and SSH alternative
@@ -10486,19 +10487,20 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /tools/self-learning
 - Headings:
-  - H2: Enable self-learning
-  - H2: Review past sessions manually
-  - H2: What OpenClaw can learn
-  - H2: When experience review runs
+  - H2: Capture paths
+  - H3: Deterministic correction capture
+  - H3: Experience review
+  - H2: Mode policy
+  - H2: Why auto is safe to default
   - H2: Runtime support
-  - H2: What the reviewer receives
-  - H2: Proposal safety
-  - H2: Review learned proposals
-  - H2: Configuration
+  - H2: Cost and privacy
+  - H2: Review and revert learning
+  - H2: Configuration reference
   - H2: Troubleshooting
-  - H3: No proposal appears after a long turn
-  - H3: Doctor reports that the Workshop tool is hidden
-  - H3: Too many low-value proposals appear
+  - H3: No capture appears
+  - H3: Doctor reports that Workshop is hidden
+  - H3: A proposal remains pending in auto mode
+  - H3: Too many low-value captures appear
   - H2: Related
 
 ## tools/show-widget.md

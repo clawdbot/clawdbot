@@ -363,6 +363,55 @@ describe("ensureSandboxBrowser create args", () => {
     expect(createArgs).toContain(`openclaw.createArgsEpoch=${SANDBOX_DOCKER_CREATE_ARGS_EPOCH}`);
   });
 
+  it("serializes concurrent provisioning for the same browser container", async () => {
+    let created = false;
+    let cdpAuthToken: string | undefined;
+    let configHash: string | undefined;
+    dockerMocks.dockerContainerState.mockImplementation(async () => ({
+      exists: created,
+      running: created,
+    }));
+    dockerMocks.readDockerContainerEnvVar.mockImplementation(async (_containerName, key) =>
+      key === "OPENCLAW_BROWSER_CDP_AUTH_TOKEN" ? (cdpAuthToken ?? null) : null,
+    );
+    dockerMocks.readDockerContainerLabel.mockImplementation(async () => configHash ?? null);
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+      if (args[0] === "image" && args[1] === "inspect") {
+        return { stdout: `${SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH}\n`, stderr: "", code: 0 };
+      }
+      if (args[0] === "create") {
+        if (created) {
+          throw new Error("docker name conflict");
+        }
+        created = true;
+        cdpAuthToken = collectDockerFlagValues(args, "-e")
+          .find((entry) => entry.startsWith("OPENCLAW_BROWSER_CDP_AUTH_TOKEN="))
+          ?.slice("OPENCLAW_BROWSER_CDP_AUTH_TOKEN=".length);
+        configHash = collectDockerFlagValues(args, "--label")
+          .find((entry) => entry.startsWith("openclaw.configHash="))
+          ?.slice("openclaw.configHash=".length);
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    const params = {
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: buildConfig(false),
+    };
+    await expect(
+      Promise.all([ensureTestSandboxBrowser(params), ensureTestSandboxBrowser(params)]),
+    ).resolves.toHaveLength(2);
+
+    expect(dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "create")).toHaveLength(
+      1,
+    );
+    expect(dockerMocks.execDocker.mock.calls.filter(([args]) => args[0] === "start")).toHaveLength(
+      1,
+    );
+  });
+
   it("recreates a cold browser container when the shared args epoch changes", async () => {
     const cfg = buildConfig(false);
     const oldHash = computeTestBrowserHash({

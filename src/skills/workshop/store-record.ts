@@ -35,6 +35,7 @@ export function parseSkillProposalRecord(raw: unknown): SkillProposalRecord | nu
     typeof record.description !== "string" ||
     typeof record.createdAt !== "string" ||
     typeof record.updatedAt !== "string" ||
+    (record.autonomousCapture !== undefined && !record.autonomousCapture) ||
     typeof record.draftHash !== "string" ||
     record.draftFile !== PROPOSAL_DRAFT_FILE ||
     !hasValidProposalOriginProvenance(record) ||

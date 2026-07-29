@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -22,6 +23,8 @@ export type AgentExecCliOptions = {
   model?: string;
   thinking?: string;
   fallback?: string[];
+  codeMode?: "direct" | "auto" | "code";
+  localModelLean?: boolean;
   authEnvOnly?: boolean;
   timeout?: string;
   json?: boolean;
@@ -55,6 +58,7 @@ export type AgentExecEnvelope = {
   codeModeEngaged?: boolean;
   assistantTurns?: number;
   bridgeCalls?: NonNullable<NonNullable<EmbeddedAgentRunMeta["agentMeta"]>["bridgeCalls"]>;
+  toolSummary?: NonNullable<EmbeddedAgentRunMeta["toolSummary"]>;
   model: string | null;
   provider: string | null;
   sessionId: string;
@@ -239,6 +243,7 @@ export function classifyAgentExecResult(
       ? { assistantTurns: agentMeta.assistantTurns }
       : {}),
     ...(agentMeta?.bridgeCalls ? { bridgeCalls: agentMeta.bridgeCalls } : {}),
+    ...(meta.toolSummary ? { toolSummary: meta.toolSummary } : {}),
     model: agentMeta?.model ?? null,
     provider: agentMeta?.provider ?? null,
     sessionId: agentMeta?.sessionId ?? "",
@@ -250,7 +255,26 @@ function exitCodeForEnvelope(envelope: AgentExecEnvelope): 0 | 1 | 2 {
   return envelope.status === "ok" ? 0 : envelope.status === "timeout" ? 2 : 1;
 }
 
-function buildImplicitConfig(cwd: string): OpenClawConfig {
+function normalizeCodeMode(
+  value: AgentExecCliOptions["codeMode"],
+): false | "auto" | true | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "direct") {
+    return false;
+  }
+  if (value === "auto") {
+    return "auto";
+  }
+  if (value === "code") {
+    return true;
+  }
+  throw new Error("--code-mode must be one of direct, auto, code.");
+}
+
+function buildImplicitConfig(cwd: string, opts: AgentExecCliOptions): OpenClawConfig {
+  const codeMode = normalizeCodeMode(opts.codeMode);
   return {
     env: { shellEnv: { enabled: false } },
     agents: {
@@ -258,12 +282,14 @@ function buildImplicitConfig(cwd: string): OpenClawConfig {
         workspace: cwd,
         skipBootstrap: true,
         sandbox: { mode: "off" },
+        ...(opts.localModelLean ? { experimental: { localModelLean: true } } : {}),
       },
     },
     tools: {
       profile: "coding",
       fs: { workspaceOnly: true },
       exec: { host: "gateway", mode: "full" },
+      ...(codeMode !== undefined ? { codeMode } : {}),
     },
   };
 }
@@ -329,6 +355,9 @@ function setAgentExecEnvironment(params: {
 }
 
 function isStructuredTimeoutError(error: unknown): boolean {
+  if (findAgentRunTerminalOutcome(error)?.status === "timeout") {
+    return true;
+  }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
     if (!candidate || typeof candidate !== "object") {
@@ -411,7 +440,7 @@ export async function agentExecCommand(
       ? await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-config-"))
       : stateDir;
     const configPath = path.join(cleanupRoot, "openclaw.json");
-    await fs.writeFile(configPath, `${JSON.stringify(buildImplicitConfig(cwd), null, 2)}\n`, {
+    await fs.writeFile(configPath, `${JSON.stringify(buildImplicitConfig(cwd, opts), null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,

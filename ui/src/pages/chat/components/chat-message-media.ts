@@ -59,16 +59,39 @@ export type ChatMediaResource<Value> = {
   refresh: { at: number; timer: ReturnType<typeof setTimeout> } | undefined;
 };
 
+type ChatMediaSubscriber = {
+  resources: Map<string, ChatMediaResource<unknown>>;
+  children: Set<() => void>;
+  owner?: () => void;
+};
+
+type ManagedImageBlobUrl = {
+  url: string;
+  retainCount: number;
+};
+
 const chatMediaResources = new Map<string, ChatMediaResource<unknown>>();
-const chatMediaSubscriberResources = new Map<() => void, Map<string, ChatMediaResource<unknown>>>();
-const chatMediaSubscriberChildren = new Map<() => void, Set<() => void>>();
-const chatMediaSubscriberOwners = new Map<() => void, () => void>();
-const managedImageBlobUrlResolvedCache = new Map<string, string>();
-const managedImageBlobUrlRetainCounts = new Map<string, number>();
+const chatMediaSubscribers = new Map<() => void, ChatMediaSubscriber>();
+const managedImageBlobUrls = new Map<string, ManagedImageBlobUrl>();
 const MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES = 64;
 
 function chatMediaResourceKey(kind: ChatMediaResourceKind, cacheKey: string): string {
   return `${kind}\0${cacheKey}`;
+}
+
+function getChatMediaSubscriber(subscriber: () => void): ChatMediaSubscriber {
+  let state = chatMediaSubscribers.get(subscriber);
+  if (!state) {
+    state = { resources: new Map(), children: new Set() };
+    chatMediaSubscribers.set(subscriber, state);
+  }
+  return state;
+}
+
+function pruneChatMediaSubscriber(subscriber: () => void, state: ChatMediaSubscriber): void {
+  if (!state.owner && state.children.size === 0 && state.resources.size === 0) {
+    chatMediaSubscribers.delete(subscriber);
+  }
 }
 
 function detachChatMediaResourceSubscriber(
@@ -114,11 +137,7 @@ export function observeChatMediaResource<Value>(
     chatMediaResources.set(resourceKey, resource as ChatMediaResource<unknown>);
   }
   if (subscriber) {
-    let subscriptions = chatMediaSubscriberResources.get(subscriber);
-    if (!subscriptions) {
-      subscriptions = new Map();
-      chatMediaSubscriberResources.set(subscriber, subscriptions);
-    }
+    const subscriptions = getChatMediaSubscriber(subscriber).resources;
     const subscriptionKey = chatMediaResourceKey(kind, subscriberScope);
     const previous = subscriptions.get(subscriptionKey);
     if (previous && previous !== resource) {
@@ -181,52 +200,39 @@ export function scheduleChatMediaResourceRefresh<Value>(
 }
 
 export function observeChatMediaResourceSubscriber(owner: () => void, subscriber: () => void) {
-  const previousOwner = chatMediaSubscriberOwners.get(subscriber);
-  if (previousOwner === owner) {
+  const state = getChatMediaSubscriber(subscriber);
+  if (state.owner === owner) {
     return;
   }
-  if (previousOwner) {
-    const previousChildren = chatMediaSubscriberChildren.get(previousOwner);
-    previousChildren?.delete(subscriber);
-    if (previousChildren?.size === 0) {
-      chatMediaSubscriberChildren.delete(previousOwner);
+  if (state.owner) {
+    const previousOwner = state.owner;
+    const previous = chatMediaSubscribers.get(previousOwner);
+    if (previous) {
+      previous.children.delete(subscriber);
+      pruneChatMediaSubscriber(previousOwner, previous);
     }
   }
-  let children = chatMediaSubscriberChildren.get(owner);
-  if (!children) {
-    children = new Set();
-    chatMediaSubscriberChildren.set(owner, children);
-  }
-  children.add(subscriber);
-  chatMediaSubscriberOwners.set(subscriber, owner);
+  getChatMediaSubscriber(owner).children.add(subscriber);
+  state.owner = owner;
 }
 
 export function releaseChatMediaResourceSubscriber(subscriber: (() => void) | undefined) {
-  if (!subscriber) {
+  const state = subscriber && chatMediaSubscribers.get(subscriber);
+  if (!subscriber || !state) {
     return;
   }
-  const children = chatMediaSubscriberChildren.get(subscriber);
-  if (children) {
-    chatMediaSubscriberChildren.delete(subscriber);
-    for (const child of children) {
-      releaseChatMediaResourceSubscriber(child);
+  chatMediaSubscribers.delete(subscriber);
+  for (const child of state.children) {
+    releaseChatMediaResourceSubscriber(child);
+  }
+  if (state.owner) {
+    const owner = chatMediaSubscribers.get(state.owner);
+    if (owner) {
+      owner.children.delete(subscriber);
+      pruneChatMediaSubscriber(state.owner, owner);
     }
   }
-  const owner = chatMediaSubscriberOwners.get(subscriber);
-  if (owner) {
-    chatMediaSubscriberOwners.delete(subscriber);
-    const ownerChildren = chatMediaSubscriberChildren.get(owner);
-    ownerChildren?.delete(subscriber);
-    if (ownerChildren?.size === 0) {
-      chatMediaSubscriberChildren.delete(owner);
-    }
-  }
-  const subscriptions = chatMediaSubscriberResources.get(subscriber);
-  if (!subscriptions) {
-    return;
-  }
-  chatMediaSubscriberResources.delete(subscriber);
-  for (const resource of new Set(subscriptions.values())) {
+  for (const resource of new Set(state.resources.values())) {
     detachChatMediaResourceSubscriber(resource, subscriber);
   }
 }
@@ -245,68 +251,60 @@ export function trimManagedImageMissResources() {
 }
 
 export function readManagedImageBlobUrl(cacheKey: string): string | undefined {
-  const cached = managedImageBlobUrlResolvedCache.get(cacheKey);
+  const cached = managedImageBlobUrls.get(cacheKey);
   if (!cached) {
     return undefined;
   }
-  managedImageBlobUrlResolvedCache.delete(cacheKey);
-  managedImageBlobUrlResolvedCache.set(cacheKey, cached);
-  return cached;
+  managedImageBlobUrls.delete(cacheKey);
+  managedImageBlobUrls.set(cacheKey, cached);
+  return cached.url;
 }
 
 function trimManagedImageBlobUrlCache() {
-  while (managedImageBlobUrlResolvedCache.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
-    const evictable = [...managedImageBlobUrlResolvedCache.keys()].find(
-      (cacheKey) => (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) === 0,
-    );
+  while (managedImageBlobUrls.size > MANAGED_IMAGE_BLOB_URL_CACHE_MAX_ENTRIES) {
+    const evictable = [...managedImageBlobUrls].find(([, cached]) => cached.retainCount === 0);
     if (!evictable) {
       return;
     }
-    const evicted = managedImageBlobUrlResolvedCache.get(evictable);
-    managedImageBlobUrlResolvedCache.delete(evictable);
-    if (evicted) {
-      const resourceKey = chatMediaResourceKey("managed-image", evictable);
-      const resource = chatMediaResources.get(resourceKey);
-      // Subscriber-free successful resources share their blob's LRU lifetime.
-      // The promise finalizer may still be queued, but a matching value is settled.
-      if (resource?.value === evicted && resource.subscribers.size === 0) {
-        chatMediaResources.delete(resourceKey);
-      }
-      URL.revokeObjectURL(evicted);
+    const [cacheKey, cached] = evictable;
+    managedImageBlobUrls.delete(cacheKey);
+    const resourceKey = chatMediaResourceKey("managed-image", cacheKey);
+    const resource = chatMediaResources.get(resourceKey);
+    // Subscriber-free successful resources share their blob's LRU lifetime.
+    // The promise finalizer may still be queued, but a matching value is settled.
+    if (resource?.value === cached.url && resource.subscribers.size === 0) {
+      chatMediaResources.delete(resourceKey);
     }
+    URL.revokeObjectURL(cached.url);
   }
 }
 
 export function retainManagedImageBlobUrl(cacheKey: string): (() => void) | undefined {
-  if (!managedImageBlobUrlResolvedCache.has(cacheKey)) {
+  const cached = managedImageBlobUrls.get(cacheKey);
+  if (!cached) {
     return undefined;
   }
-  managedImageBlobUrlRetainCounts.set(
-    cacheKey,
-    (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 0) + 1,
-  );
+  cached.retainCount += 1;
   let released = false;
   return () => {
     if (released) {
       return;
     }
     released = true;
-    const remaining = (managedImageBlobUrlRetainCounts.get(cacheKey) ?? 1) - 1;
-    if (remaining <= 0) {
-      managedImageBlobUrlRetainCounts.delete(cacheKey);
-    } else {
-      managedImageBlobUrlRetainCounts.set(cacheKey, remaining);
+    const current = managedImageBlobUrls.get(cacheKey);
+    if (current && current.retainCount > 0) {
+      current.retainCount -= 1;
     }
     trimManagedImageBlobUrlCache();
   };
 }
 
 export function cacheManagedImageBlobUrl(cacheKey: string, blobUrl: string) {
-  const previous = managedImageBlobUrlResolvedCache.get(cacheKey);
-  managedImageBlobUrlResolvedCache.delete(cacheKey);
-  managedImageBlobUrlResolvedCache.set(cacheKey, blobUrl);
-  if (previous && previous !== blobUrl) {
-    URL.revokeObjectURL(previous);
+  const previous = managedImageBlobUrls.get(cacheKey);
+  managedImageBlobUrls.delete(cacheKey);
+  managedImageBlobUrls.set(cacheKey, { url: blobUrl, retainCount: previous?.retainCount ?? 0 });
+  if (previous && previous.url !== blobUrl) {
+    URL.revokeObjectURL(previous.url);
   }
 
   // Blob URLs retain browser-managed image data. Keep recent previews reusable,

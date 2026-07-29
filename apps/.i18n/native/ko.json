@@ -8399,6 +8399,11 @@
       "translated": "$count개 더 많은 워커"
     },
     {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "$duration 만에 완료"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "토큰 1개"
@@ -8407,11 +8412,6 @@
       "id": "native.android.e7059e3a756908c4",
       "source": "$count tokens",
       "translated": "토큰 $count개"
-    },
-    {
-      "id": "native.android.c32ff602fa622e4b",
-      "source": "Done in $duration",
-      "translated": "$duration 만에 완료"
     },
     {
       "id": "native.android.d2797e7488fe5021",
@@ -8759,11 +8759,6 @@
       "translated": "듣는 중"
     },
     {
-      "id": "native.android.1f198e7aceb8411f",
-      "source": "Speech recognizer unavailable",
-      "translated": "음성 인식기를 사용할 수 없습니다"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "시작 실패: $message"
@@ -8772,6 +8767,11 @@
       "id": "native.android.a9216e087452b75b",
       "source": "Connecting…",
       "translated": "연결 중…"
+    },
+    {
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "음성 인식기를 사용할 수 없습니다"
     },
     {
       "id": "native.android.24bc808758b925ca",
@@ -20374,6 +20374,16 @@
       "translated": "실행 승인을 저장할 수 없습니다. 마지막으로 알려진 설정이 표시되어 있으니 변경을 다시 시도하세요."
     },
     {
+      "id": "native.apple.b28538e2e444510f",
+      "source": "Exec approvals need migration — run openclaw doctor --fix with OPENCLAW_STATE_DIR set to \\(error.stateDirectoryURL.path).",
+      "translated": "실행 승인을 마이그레이션해야 합니다 — OPENCLAW_STATE_DIR을 \\(error.stateDirectoryURL.path)(으)로 설정하여 openclaw doctor --fix를 실행하세요."
+    },
+    {
+      "id": "native.apple.49e886ab7a093e63",
+      "source": "Exec approvals unavailable. Retry to refresh.",
+      "translated": "실행 승인을 사용할 수 없습니다. 새로 고치려면 다시 시도하세요."
+    },
+    {
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
@@ -26422,6 +26432,11 @@
       "id": "native.apple.6fbcf8a03da3315a",
       "source": "Surfacing",
       "translated": "수면 위로 떠오르는 중"
+    },
+    {
+      "id": "native.apple.286932b5ea17b3f8",
+      "source": "1 second",
+      "translated": "1초"
     },
     {
       "id": "native.apple.578503dfeef25502",

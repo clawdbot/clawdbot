@@ -1189,17 +1189,19 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
+  let streamedAssistantText = "";
   let bufferedAssistantContent = "";
   let bufferedReplaceableAssistantContent = "";
   let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
+  let finalizeScheduled = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;
   let closed = false;
   let stopWatchingDisconnect = () => {};
 
   const maybeFinalize = () => {
-    if (closed || !finalizeRequested) {
+    if (closed || finalizeScheduled || !finalizeRequested) {
       return;
     }
     if (!resultResolved) {
@@ -1208,22 +1210,32 @@ export async function handleOpenAiHttpRequest(
     if (streamIncludeUsage && !finalUsage) {
       return;
     }
-    closed = true;
-    stopWatchingDisconnect();
-    unsubscribe();
-    if (!wroteStopChunk) {
-      writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
-      wroteStopChunk = true;
-    }
-    if (streamIncludeUsage && finalUsage) {
-      writeUsageChunk(res, { runId, model, usage: finalUsage });
-    }
-    writeDone(res);
-    res.end();
+    // Agent text_end flushes run in a microtask. Keep the stream subscribed
+    // until those same-turn deltas arrive, then emit exactly one terminal frame.
+    finalizeScheduled = true;
+    queueMicrotask(() => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      stopWatchingDisconnect();
+      unsubscribe();
+      if (!wroteStopChunk) {
+        writeAssistantFinishChunk(res, { runId, model, finishReason: finalizeFinishReason });
+        wroteStopChunk = true;
+      }
+      if (streamIncludeUsage && finalUsage) {
+        writeUsageChunk(res, { runId, model, usage: finalUsage });
+      }
+      writeDone(res);
+      res.end();
+    });
   };
 
   const requestFinalize = (finishReason: "stop" | "tool_calls" = "stop") => {
-    finalizeFinishReason = finishReason;
+    if (!finalizeRequested || finishReason === "tool_calls") {
+      finalizeFinishReason = finishReason;
+    }
     finalizeRequested = true;
     maybeFinalize();
   };
@@ -1251,10 +1263,16 @@ export async function handleOpenAiHttpRequest(
         return;
       }
 
-      const content = resolveAssistantStreamDeltaText(evt) ?? "";
+      // Snapshots include prefixes held during tag-boundary filtering; the raw
+      // delta alone can omit a literal leading less-than.
+      const content =
+        typeof text === "string" && text.startsWith(streamedAssistantText)
+          ? text.slice(streamedAssistantText.length)
+          : resolveAssistantStreamDeltaText(evt);
       if (!content) {
         return;
       }
+      streamedAssistantText += content;
 
       // Hold prose until the run proves the requested client-tool call exists.
       // If the provider ignores `tool_choice`, no partial text should leak

@@ -121,7 +121,7 @@ function emitTalkPttNodeEvent(params: {
 }
 
 export const nodeInvokeHandlers: GatewayRequestHandlers = {
-  "node.invoke": async ({ params, respond, context, client, req }) => {
+  "node.invoke": async ({ params, respond, context, client, req, signal }) => {
     if (!validateNodeInvokeParams(params)) {
       respondInvalidParams({
         respond,
@@ -233,6 +233,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         return;
       }
       const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
+      // Wake helpers identify their owner by the original signal. Compose the
+      // caller only for dispatched node work; never replace that owner signal.
+      const invocationLifecycle = signal ? AbortSignal.any([wakeLifecycle, signal]) : wakeLifecycle;
       try {
         const continuePairingWork = async (): Promise<boolean> => {
           const pairingCurrent = await awaitNodeInvokeWithinDeadline(
@@ -476,7 +479,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 threadId: p.turnSourceThreadId,
               },
               timeoutMs: p.timeoutMs,
-              signal: wakeLifecycle,
+              signal: invocationLifecycle,
               resolveRemainingTimeoutMs: resolveRemainingInvokeTimeoutMs,
               onNodeCommandDispatched: () => {
                 // Deadline races must retain transport ownership so a command
@@ -590,7 +593,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           command,
           params: forwardedParams.params,
           timeoutMs: dispatchTimeoutMs,
-          signal: wakeLifecycle,
+          signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
           ...(sessionKey ? { sessionKey } : {}),
         });

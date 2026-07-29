@@ -8399,6 +8399,11 @@
       "translated": "Thêm $count worker"
     },
     {
+      "id": "native.android.c32ff602fa622e4b",
+      "source": "Done in $duration",
+      "translated": "Hoàn tất sau $duration"
+    },
+    {
       "id": "native.android.c2dc3a65302976c0",
       "source": "1 token",
       "translated": "1 token"
@@ -8407,11 +8412,6 @@
       "id": "native.android.e7059e3a756908c4",
       "source": "$count tokens",
       "translated": "$count token"
-    },
-    {
-      "id": "native.android.c32ff602fa622e4b",
-      "source": "Done in $duration",
-      "translated": "Hoàn tất sau $duration"
     },
     {
       "id": "native.android.d2797e7488fe5021",
@@ -8759,11 +8759,6 @@
       "translated": "Đang nghe"
     },
     {
-      "id": "native.android.1f198e7aceb8411f",
-      "source": "Speech recognizer unavailable",
-      "translated": "Trình nhận dạng giọng nói không khả dụng"
-    },
-    {
       "id": "native.android.8532cc9537b69224",
       "source": "Start failed: $message",
       "translated": "Khởi động không thành công: $message"
@@ -8772,6 +8767,11 @@
       "id": "native.android.a9216e087452b75b",
       "source": "Connecting…",
       "translated": "Đang kết nối…"
+    },
+    {
+      "id": "native.android.1f198e7aceb8411f",
+      "source": "Speech recognizer unavailable",
+      "translated": "Trình nhận dạng giọng nói không khả dụng"
     },
     {
       "id": "native.android.24bc808758b925ca",
@@ -20374,6 +20374,16 @@
       "translated": "Không thể lưu phê duyệt thực thi. Hiển thị các cài đặt đã biết gần nhất; hãy thử lại thay đổi."
     },
     {
+      "id": "native.apple.b28538e2e444510f",
+      "source": "Exec approvals need migration — run openclaw doctor --fix with OPENCLAW_STATE_DIR set to \\(error.stateDirectoryURL.path).",
+      "translated": "Các phê duyệt thực thi cần được di chuyển — chạy openclaw doctor --fix với OPENCLAW_STATE_DIR được đặt thành \\(error.stateDirectoryURL.path)."
+    },
+    {
+      "id": "native.apple.49e886ab7a093e63",
+      "source": "Exec approvals unavailable. Retry to refresh.",
+      "translated": "Các phê duyệt thực thi không khả dụng. Thử lại để làm mới."
+    },
+    {
       "id": "native.apple.1b8ba1cf6f9dfdc9",
       "source": "missing:\\(hash)",
       "translated": "missing:\\(hash)"
@@ -26422,6 +26432,11 @@
       "id": "native.apple.6fbcf8a03da3315a",
       "source": "Surfacing",
       "translated": "Đang nổi lên"
+    },
+    {
+      "id": "native.apple.286932b5ea17b3f8",
+      "source": "1 second",
+      "translated": "1 giây"
     },
     {
       "id": "native.apple.578503dfeef25502",
