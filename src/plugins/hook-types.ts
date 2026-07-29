@@ -997,6 +997,7 @@ type PluginHookGatewayCronJobState = {
 
 export type PluginHookGatewayCronJob = {
   id: string;
+  declarationKey?: string;
   /** Agent id that owns this cron job. */
   agentId?: string;
   name?: string;
@@ -1068,6 +1069,7 @@ export type PluginHookCronChangedEvent = {
 };
 
 type PluginHookGatewayCronCreateInput = {
+  declarationKey?: string;
   name: string;
   description: string;
   enabled: boolean;
@@ -1095,6 +1097,11 @@ export type PluginHookGatewayCronService = {
   add: (input: PluginHookGatewayCronCreateInput) => Promise<unknown>;
   update: (id: string, patch: PluginHookGatewayCronUpdateInput) => Promise<unknown>;
   remove: (id: string) => Promise<PluginHookGatewayCronRemoveResult>;
+  removeStaleJobFamily: (family: {
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }) => Promise<number>;
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";

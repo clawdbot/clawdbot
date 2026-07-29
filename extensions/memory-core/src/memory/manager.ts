@@ -1498,27 +1498,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     activeProjectKeys?: string[];
   }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts?.limit ?? 512)));
-    return readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys).map(
-      (row) => {
-        const result: MemorySearchResult = {
-          path: row.path,
-          startLine: row.start_line,
-          endLine: row.end_line,
-          score: 0,
-          snippet: row.text,
-          source: "memory",
-        };
-        if (typeof row.importance === "number") {
-          result.importance = row.importance;
-        }
-        if (typeof row.triggers === "string" && row.triggers.trim()) {
-          result.triggers = row.triggers.trim();
-        }
-        if (typeof row.project_key === "string" && row.project_key.trim()) {
-          result.projectKey = row.project_key.trim();
-        }
-        return result;
-      },
+    return this.toCuratedMemorySearchResults(
+      readCuratedMemoryTriggerCandidates(this.db, limit, opts?.activeProjectKeys),
     );
   }
 
@@ -1527,7 +1508,15 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     limit?: number;
   }): Promise<MemorySearchResult[]> {
     const limit = Math.max(1, Math.min(512, Math.floor(opts.limit ?? 48)));
-    return readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys).map((row) => {
+    return this.toCuratedMemorySearchResults(
+      readCuratedProjectMemoryCandidates(this.db, limit, opts.activeProjectKeys),
+    );
+  }
+
+  private toCuratedMemorySearchResults(
+    rows: ReturnType<typeof readCuratedMemoryTriggerCandidates>,
+  ): MemorySearchResult[] {
+    return rows.map((row) => {
       const result: MemorySearchResult = {
         path: row.path,
         startLine: row.start_line,

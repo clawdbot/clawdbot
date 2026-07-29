@@ -251,6 +251,7 @@ export async function authorizeGatewayConnectDevice(
       const allowSilentLocalPairing =
         allowSilentExistingNonOperatorPairing &&
         shouldAllowSilentLocalPairing({
+          autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
           locality: pairingLocality,
           hasBrowserOriginHeader,
           isControlUi,

@@ -96,6 +96,11 @@ type CronParam = {
   add: (input: CronAddInput) => Promise<unknown>;
   update: (id: string, patch: CronPatch) => Promise<unknown>;
   remove: (id: string) => Promise<{ removed?: boolean }>;
+  removeStaleJobFamily: (family: {
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }) => Promise<number>;
 };
 type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
 type DreamingPluginApiTestDouble = {
@@ -121,14 +126,21 @@ function createCronHarness(
     listThrowsForFirstCalls?: number;
     removeResult?: "boolean" | "unknown";
     removeThrowsForIds?: string[];
+    staleJobs?: CronJobLike[];
   },
 ) {
   const jobs: CronJobLike[] = [...initialJobs];
+  const staleJobs: CronJobLike[] = [...(opts?.staleJobs ?? [])];
   let listCalls = 0;
   const addCalls: CronAddInput[] = [];
   const updateCalls: Array<{ id: string; patch: CronPatch }> = [];
   const removeCalls: string[] = [];
   const mutationCalls: string[] = [];
+  const staleFamilyCalls: Array<{
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }> = [];
 
   const cron: CronParam = {
     async list() {
@@ -197,15 +209,28 @@ function createCronHarness(
       }
       return { removed: index >= 0 };
     },
+    async removeStaleJobFamily(family) {
+      staleFamilyCalls.push(family);
+      const retained = staleJobs.filter(
+        (job) =>
+          job.declarationKey !== family.declarationKey &&
+          !(job.name === family.name && job.description?.includes(family.ownerPluginTag) === true),
+      );
+      const removed = staleJobs.length - retained.length;
+      staleJobs.splice(0, staleJobs.length, ...retained);
+      return removed;
+    },
   };
 
   return {
     cron,
     jobs,
+    staleJobs,
     addCalls,
     updateCalls,
     removeCalls,
     mutationCalls,
+    staleFamilyCalls,
     get listCalls() {
       return listCalls;
     },
@@ -783,6 +808,9 @@ describe("gateway startup reconciliation", () => {
       async remove() {
         return { removed: false };
       },
+      async removeStaleJobFamily() {
+        return 0;
+      },
     };
     const onMock = vi.fn();
     const api: DreamingPluginApiTestDouble = {
@@ -1143,6 +1171,85 @@ describe("gateway startup reconciliation", () => {
       expectCronSchedule(requireAddCall(harness, 0).schedule, "*/3 * * * *");
       expect(harness.jobs).toHaveLength(1);
       expect(harness.jobs[0]?.declarationKey).toBe("memory-core:memory-dreaming-promotion");
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      clearInternalHooks();
+    }
+  });
+
+  it("adopts the exact legacy row from an obsolete store beside the declaration job", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const legacyRow: CronJobLike = {
+      id: "75e182e6-8728-43ae-832b-01f50702feed",
+      name: "Memory Dreaming Promotion",
+      description:
+        "[managed-by=memory-core.short-term-promotion] Promote weighted short-term recalls into MEMORY.md (limit=10, minScore=0.800, minRecallCount=3, minUniqueQueries=3, recencyHalfLifeDays=14, maxAgeDays=30).",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: constants.DREAMING_SYSTEM_EVENT_TEXT,
+        lightContext: true,
+      },
+      createdAtMs: 1_785_240_959_377,
+    };
+    const declaredRow: CronJobLike = {
+      id: "job-declared",
+      declarationKey: "memory-core:memory-dreaming-promotion",
+      name: "Memory Dreaming Promotion",
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} current managed dreaming job`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "*/3 * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: constants.DREAMING_SYSTEM_EVENT_TEXT,
+        lightContext: true,
+      },
+      delivery: { mode: "none" },
+      createdAtMs: 1_785_338_313_079,
+    };
+    const harness = createCronHarness([declaredRow], { staleJobs: [legacyRow] });
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: { dreaming: { enabled: true, frequency: "*/3 * * * *" } },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, { config: api.config, getCron: () => harness.cron });
+
+      expect(harness.staleJobs).toEqual([]);
+      expect(harness.jobs).toHaveLength(1);
+      expect(harness.jobs[0]).toMatchObject({
+        declarationKey: "memory-core:memory-dreaming-promotion",
+        name: "Memory Dreaming Promotion",
+        enabled: true,
+        schedule: { kind: "cron", expr: "*/3 * * * *" },
+      });
+      expect(harness.staleFamilyCalls).toEqual([
+        {
+          declarationKey: "memory-core:memory-dreaming-promotion",
+          name: "Memory Dreaming Promotion",
+          ownerPluginTag: constants.MANAGED_DREAMING_CRON_TAG,
+        },
+      ]);
     } finally {
       await triggerGatewayStop(onMock).catch(() => undefined);
       clearInternalHooks();

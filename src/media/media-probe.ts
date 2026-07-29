@@ -11,6 +11,16 @@ export type MediaProbeResult = {
   height?: number;
 };
 
+/** Codec and duration facts used to decide and validate portable playback renditions. */
+export type PlaybackMediaProbeResult = MediaProbeResult & {
+  audioCodec?: string;
+  audioStreamIndex?: number;
+  videoCodec?: string;
+  videoPixelFormat?: string;
+  videoProfile?: string;
+  videoStreamIndex?: number;
+};
+
 type MediaProbeOptions = {
   timeoutMs?: number;
 };
@@ -49,43 +59,89 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
-function parseFfprobeMediaMetadata(stdout: string, kind: MediaProbeKind): MediaProbeResult {
+function normalizeCodecName(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function parseStreamIndex(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function selectPlaybackStream(
+  streams: readonly Record<string, unknown>[],
+  codecType: "audio" | "video",
+): Record<string, unknown> | undefined {
+  const candidates = streams.filter((stream) => {
+    if (stream.codec_type !== codecType) {
+      return false;
+    }
+    const disposition = readRecord(stream.disposition);
+    return codecType !== "video" || disposition?.attached_pic !== 1;
+  });
+  return (
+    candidates.find((stream) => readRecord(stream.disposition)?.default === 1) ?? candidates[0]
+  );
+}
+
+function parseFfprobeMediaMetadata(
+  stdout: string,
+  kind: MediaProbeKind,
+): PlaybackMediaProbeResult | null {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch {
-    return {};
+    return null;
   }
   const root = readRecord(parsed);
   if (!root) {
-    return {};
+    return null;
   }
   const format = readRecord(root.format);
-  const streams = Array.isArray(root.streams) ? root.streams : [];
-  const stream = readRecord(streams[0]);
-  const durationMs = parseDurationMs(format?.duration) ?? parseDurationMs(stream?.duration);
-  if (kind === "audio") {
-    return durationMs ? { durationMs } : {};
-  }
-  const width = parsePositiveInteger(stream?.width);
-  const height = parsePositiveInteger(stream?.height);
+  const streams = (Array.isArray(root.streams) ? root.streams : [])
+    .map(readRecord)
+    .filter((stream): stream is Record<string, unknown> => Boolean(stream));
+  const audioStream = selectPlaybackStream(streams, "audio");
+  const videoStream = selectPlaybackStream(streams, "video");
+  const selectedDurations = (kind === "video" ? [videoStream, audioStream] : [audioStream])
+    .map((stream) => parseDurationMs(stream?.duration))
+    .filter((duration): duration is number => duration !== undefined);
+  const durationMs =
+    (selectedDurations.length > 0 ? Math.max(...selectedDurations) : undefined) ??
+    parseDurationMs(format?.duration);
+  const width = parsePositiveInteger(videoStream?.width);
+  const height = parsePositiveInteger(videoStream?.height);
+  const audioCodec = normalizeCodecName(audioStream?.codec_name);
+  const videoCodec = normalizeCodecName(videoStream?.codec_name);
+  const videoPixelFormat = normalizeCodecName(videoStream?.pix_fmt);
+  const videoProfile = normalizeCodecName(videoStream?.profile);
+  const audioStreamIndex = parseStreamIndex(audioStream?.index);
+  const videoStreamIndex = parseStreamIndex(videoStream?.index);
   return {
     ...(durationMs ? { durationMs } : {}),
-    ...(width && height ? { width, height } : {}),
+    ...(kind === "video" && width && height ? { width, height } : {}),
+    ...(audioCodec ? { audioCodec } : {}),
+    ...(audioStreamIndex !== undefined ? { audioStreamIndex } : {}),
+    ...(videoCodec ? { videoCodec } : {}),
+    ...(videoPixelFormat ? { videoPixelFormat } : {}),
+    ...(videoProfile ? { videoProfile } : {}),
+    ...(videoStreamIndex !== undefined ? { videoStreamIndex } : {}),
   };
 }
 
-function buildFfprobeMetadataArgs(kind: MediaProbeKind, protocol: "fd" | "pipe"): string[] {
+function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
   const isFileDescriptor = protocol === "fd";
   return [
     "-v",
     "error",
-    "-select_streams",
-    kind === "video" ? "v:0" : "a:0",
     "-protocol_whitelist",
     protocol,
     "-show_entries",
-    "format=duration:stream=duration,width,height",
+    "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
     "-of",
     "json",
     ...(isFileDescriptor ? ["-fd", "0"] : []),
@@ -108,10 +164,10 @@ async function probeMediaSource(
   source: FfprobeSource,
   kind: MediaProbeKind,
   options: MediaProbeOptions = {},
-): Promise<MediaProbeResult> {
+): Promise<PlaybackMediaProbeResult | null> {
   const runProbe = async (protocol: "fd" | "pipe") =>
     await runFfprobe(
-      buildFfprobeMetadataArgs(kind, protocol),
+      buildFfprobeMetadataArgs(protocol),
       source.kind === "buffer"
         ? { input: source.buffer, ...options }
         : { stdinFileDescriptor: source.fd, ...options },
@@ -124,11 +180,26 @@ async function probeMediaSource(
       try {
         return parseFfprobeMediaMetadata(await runProbe("pipe"), kind);
       } catch {
-        return {};
+        return null;
       }
     }
+    return null;
+  }
+}
+
+function toMediaProbeResult(
+  result: PlaybackMediaProbeResult | null,
+  kind: MediaProbeKind,
+): MediaProbeResult {
+  if (!result) {
     return {};
   }
+  return {
+    ...(result.durationMs ? { durationMs: result.durationMs } : {}),
+    ...(kind === "video" && result.width && result.height
+      ? { width: result.width, height: result.height }
+      : {}),
+  };
 }
 
 /** Probes a local audio or video file; every failure degrades to absent fields. */
@@ -140,7 +211,10 @@ async function probeMediaFile(
   try {
     const handle = await fs.open(filePath, "r");
     try {
-      return await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, kind, options);
+      return toMediaProbeResult(
+        await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, kind, options),
+        kind,
+      );
     } finally {
       await handle.close().catch(() => {});
     }
@@ -174,12 +248,12 @@ export async function probeMediaFilesWithinBudget(
   return results;
 }
 
-/** Probes the exact file identity already validated and opened by a security boundary. */
-export async function probeMediaFileDescriptor(
+/** Probes duration and first-stream codecs from an already validated local descriptor. */
+export async function probePlaybackMediaFileDescriptor(
   fd: number,
   kind: MediaProbeKind,
   options: MediaProbeOptions = {},
-): Promise<MediaProbeResult> {
+): Promise<PlaybackMediaProbeResult | null> {
   return await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options);
 }
 
@@ -191,6 +265,6 @@ type VideoDimensions = {
 
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const { width, height } = await probeMediaSource({ kind: "buffer", buffer }, "video");
+  const { width, height } = (await probeMediaSource({ kind: "buffer", buffer }, "video")) ?? {};
   return width && height ? { width, height } : undefined;
 }

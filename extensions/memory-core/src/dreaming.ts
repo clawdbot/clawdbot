@@ -100,6 +100,11 @@ type CronServiceLike = {
   add: (input: ManagedCronJobCreate) => Promise<unknown>;
   update: (id: string, patch: ManagedCronJobPatch) => Promise<unknown>;
   remove: (id: string) => Promise<{ removed?: boolean }>;
+  removeStaleJobFamily: (family: {
+    declarationKey: string;
+    name: string;
+    ownerPluginTag: string;
+  }) => Promise<number>;
 };
 
 type ShortTermPromotionDreamingConfig = {
@@ -237,6 +242,18 @@ function isLegacyPhaseDreamingJob(job: ManagedCronJobLike): boolean {
   return name === LEGACY_REM_SLEEP_CRON_NAME && payloadText === LEGACY_REM_SLEEP_EVENT_TEXT;
 }
 
+async function removeStaleManagedDreamingRows(cron: CronServiceLike): Promise<number> {
+  // Adopt legacy pre-declaration-key jobs copied under obsolete store keys. Leaving one
+  // behind means both it and the declared replacement can run, producing duplicate sweeps.
+  return (
+    (await cron.removeStaleJobFamily({
+      declarationKey: MANAGED_DREAMING_DECLARATION_KEY,
+      name: MANAGED_DREAMING_CRON_NAME,
+      ownerPluginTag: MANAGED_DREAMING_CRON_TAG,
+    })) ?? 0
+  );
+}
+
 function compareOptionalStrings(a: string | undefined, b: string | undefined): boolean {
   return a === b;
 }
@@ -356,7 +373,8 @@ function resolveCronServiceFromCandidate(candidate: unknown): CronServiceLike | 
     typeof cron.list !== "function" ||
     typeof cron.add !== "function" ||
     typeof cron.update !== "function" ||
-    typeof cron.remove !== "function"
+    typeof cron.remove !== "function" ||
+    typeof cron.removeStaleJobFamily !== "function"
   ) {
     return null;
   }
@@ -453,6 +471,7 @@ async function reconcileShortTermDreamingCronJob(params: {
         );
       }
     }
+    removed += await removeStaleManagedDreamingRows(cron);
     if (removed > 0) {
       params.logger.info(`memory-core: removed ${removed} managed dreaming cron job(s).`);
     }
@@ -468,8 +487,9 @@ async function reconcileShortTermDreamingCronJob(params: {
       logger: params.logger,
       mode: "enabled",
     });
+    const removedStale = await removeStaleManagedDreamingRows(cron);
     params.logger.info("memory-core: created managed dreaming cron job.");
-    return { status: "added", removed: migratedLegacy };
+    return { status: "added", removed: migratedLegacy + removedStale };
   }
 
   if (!managed.some((job) => job.declarationKey === MANAGED_DREAMING_DECLARATION_KEY)) {
@@ -487,6 +507,7 @@ async function reconcileShortTermDreamingCronJob(params: {
       }
       removed += 1;
     }
+    removed += await removeStaleManagedDreamingRows(cron);
     params.logger.info("memory-core: replaced legacy managed dreaming cron job identity.");
     return { status: "added", removed };
   }
@@ -514,6 +535,7 @@ async function reconcileShortTermDreamingCronJob(params: {
       );
     }
   }
+  removed += await removeStaleManagedDreamingRows(cron);
 
   const patch = buildManagedDreamingPatch(primary, desired);
   if (!patch) {

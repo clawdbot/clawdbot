@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  probeMediaFileDescriptor,
   probeMediaFilesWithinBudget,
+  probePlaybackMediaFileDescriptor,
   probeVideoDimensions,
 } from "./media-probe.js";
 import type { MediaProbeKind, MediaProbeResult } from "./media-probe.js";
@@ -63,12 +63,10 @@ describe("probeMediaFile", () => {
       [
         "-v",
         "error",
-        "-select_streams",
-        "a:0",
         "-protocol_whitelist",
         "fd",
         "-show_entries",
-        "format=duration:stream=duration,width,height",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
         "-of",
         "json",
         "-fd",
@@ -82,13 +80,13 @@ describe("probeMediaFile", () => {
   it("returns video duration and dimensions from the selected stream", async () => {
     runFfprobe.mockResolvedValueOnce(
       JSON.stringify({
-        format: { duration: "3.25" },
-        streams: [{ duration: "3.2", width: 720, height: 1280 }],
+        format: { duration: "10" },
+        streams: [{ codec_type: "video", duration: "3.2", width: 720, height: 1280 }],
       }),
     );
 
     await expect(probeMediaFile(clipPath, "video")).resolves.toEqual({
-      durationMs: 3250,
+      durationMs: 3200,
       width: 720,
       height: 1280,
     });
@@ -98,10 +96,59 @@ describe("probeMediaFile", () => {
   it("probes an inherited descriptor through stdin", async () => {
     runFfprobe.mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-    await expect(probeMediaFileDescriptor(17, "audio")).resolves.toEqual({ durationMs: 2000 });
+    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+      durationMs: 2000,
+    });
     expect(runFfprobe).toHaveBeenCalledWith(expect.arrayContaining(["-fd", "0", "fd:"]), {
       stdinFileDescriptor: 17,
     });
+  });
+
+  it("returns duration and first audio/video codecs in one playback probe", async () => {
+    runFfprobe.mockResolvedValueOnce(
+      JSON.stringify({
+        format: { duration: "3.25" },
+        streams: [
+          {
+            index: 0,
+            codec_type: "video",
+            codec_name: "H264",
+            disposition: { default: 0, attached_pic: 1 },
+          },
+          {
+            index: 2,
+            codec_type: "video",
+            codec_name: "HEVC",
+            profile: "Main 10",
+            pix_fmt: "yuv420p10le",
+            duration: "3",
+            width: 1920,
+            height: 1080,
+            disposition: { default: 1, attached_pic: 0 },
+          },
+          {
+            index: 3,
+            codec_type: "audio",
+            codec_name: "AAC",
+            duration: "4",
+            disposition: { default: 1, attached_pic: 0 },
+          },
+        ],
+      }),
+    );
+
+    await expect(probePlaybackMediaFileDescriptor(17, "video")).resolves.toEqual({
+      durationMs: 4000,
+      width: 1920,
+      height: 1080,
+      videoCodec: "hevc",
+      videoProfile: "main 10",
+      videoPixelFormat: "yuv420p10le",
+      videoStreamIndex: 2,
+      audioCodec: "aac",
+      audioStreamIndex: 3,
+    });
+    expect(runFfprobe).toHaveBeenCalledOnce();
   });
 
   it("falls back to pipe input when older ffprobe lacks the fd protocol", async () => {
@@ -111,7 +158,9 @@ describe("probeMediaFile", () => {
       )
       .mockResolvedValueOnce(JSON.stringify({ format: { duration: "2" } }));
 
-    await expect(probeMediaFileDescriptor(17, "audio")).resolves.toEqual({ durationMs: 2000 });
+    await expect(probePlaybackMediaFileDescriptor(17, "audio")).resolves.toEqual({
+      durationMs: 2000,
+    });
     expect(runFfprobe).toHaveBeenNthCalledWith(
       2,
       expect.arrayContaining(["-protocol_whitelist", "pipe", "pipe:0"]),
@@ -120,7 +169,9 @@ describe("probeMediaFile", () => {
   });
 
   it("uses stream duration when the container duration is absent", async () => {
-    runFfprobe.mockResolvedValueOnce(JSON.stringify({ streams: [{ duration: "1.5" }] }));
+    runFfprobe.mockResolvedValueOnce(
+      JSON.stringify({ streams: [{ codec_type: "audio", duration: "1.5" }] }),
+    );
 
     await expect(probeMediaFile(voicePath, "audio")).resolves.toEqual({
       durationMs: 1500,
@@ -129,7 +180,10 @@ describe("probeMediaFile", () => {
 
   it("omits invalid fields and treats every probe failure as unknown metadata", async () => {
     runFfprobe.mockResolvedValueOnce(
-      JSON.stringify({ format: { duration: "N/A" }, streams: [{ width: 0, height: 720 }] }),
+      JSON.stringify({
+        format: { duration: "N/A" },
+        streams: [{ codec_type: "video", width: 0, height: 720 }],
+      }),
     );
     await expect(probeMediaFile(clipPath, "video")).resolves.toEqual({});
 
@@ -194,19 +248,19 @@ describe("probeMediaFilesWithinBudget", () => {
 describe("probeVideoDimensions", () => {
   it("keeps buffer callers on the canonical probe path", async () => {
     const buffer = Buffer.from("video");
-    runFfprobe.mockResolvedValueOnce(JSON.stringify({ streams: [{ width: 720, height: 1280 }] }));
+    runFfprobe.mockResolvedValueOnce(
+      JSON.stringify({ streams: [{ codec_type: "video", width: 720, height: 1280 }] }),
+    );
 
     await expect(probeVideoDimensions(buffer)).resolves.toEqual({ width: 720, height: 1280 });
     expect(runFfprobe).toHaveBeenCalledWith(
       [
         "-v",
         "error",
-        "-select_streams",
-        "v:0",
         "-protocol_whitelist",
         "pipe",
         "-show_entries",
-        "format=duration:stream=duration,width,height",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height:stream_disposition=default,attached_pic",
         "-of",
         "json",
         "pipe:0",
